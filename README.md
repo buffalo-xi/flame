@@ -28,6 +28,16 @@ Go 语言设计的企业级工作流与智能体运行环境，参照 openclaw +
 - **资产市场**：跨租户上架 / 安装资产（上架 `listed` / 下架 `delisted`）
 - **设置**：模型与连接、服务端认证（apikey / oauth）、全局变量（secret 静态加密）
 
+## 界面一览
+
+| 运行台账 · 跨实例看「谁在跑」、跑了多久，可按类型 / 耗时过滤并直接终止 | 运行历史 · 跑完落库的记录，按工作流 / 状态 / 时间段查，可导出 CSV |
+|---|---|
+| ![运行台账](docs/screenshots/01-runtime.png) | ![运行历史](docs/screenshots/02-runtime-history.png) |
+| 工作流编排 · 节点 / 连线 / 变量，带调试器、版本与发布 | 智能体 · 提示词 + 模型 + 工具 + 技能的装配面 |
+| ![工作流编排](docs/screenshots/03-flow-editor.png) | ![智能体](docs/screenshots/04-agent.png) |
+| 端点 · 把智能体 / 工作流暴露成 MCP / RPC，按租户开关对外 | 工具 · 工具目录 / 插件 / 自定义工具，三种来源统一管理 |
+| ![端点](docs/screenshots/05-endpoints.png) | ![工具](docs/screenshots/06-capabilities.png) |
+
 ## 组成
 
 | 目录 | 语言 | 作用 |
