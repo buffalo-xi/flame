@@ -1,0 +1,49 @@
+# sandboxg —— sandboxd 网关：对 nexus 暴露与 sandboxd 相同的 /v1/* 协议，
+# 对后端做负载均衡（exec/code）与粘性路由（interactive，按 session_id）。
+
+# 对 nexus 暴露的监听地址。
+listen: ":27080"
+
+# 日志目录。
+log_dir: logs
+
+# 对 nexus 的鉴权（可选，与 sandboxd 同口径：Authorization: Bearer <token>）。
+# token: ""
+
+# 拉取后端负载快照（/v1/metrics）的间隔（秒）。
+metrics_interval_sec: 2
+
+# interactive 粘性绑定的存活时长（秒）。
+#
+# 必须大于 sandboxd 的 interactive_idle_sec + 2×janitor 巡检间隔（60s）：
+#   绑定比进程先过期 → 同一 session 可能落到两个后端、各建一个进程（状态分裂）；
+#   绑定比进程晚过期 → 下次 open 落到原后端懒建新进程，只多一条会被 TTL 清掉的记录。
+# 所以宁长勿短：当前 sandboxd 是 1800 + 最多 60s 巡检延迟，取 2100。
+# kill 之后 sandboxd 会回 session_empty，网关立即解绑，不依赖这个值。
+sticky_ttl_sec: 2100
+
+# 健康检查：探后端 /healthz 的间隔（秒）与连续失败判为不健康的阈值。
+health_check_interval_sec: 5
+health_check_fail_threshold: 3
+
+# 粘性绑定的共享存储（多实例 gateway 必配；留空则退化为单机内存，仅测试用）。
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+# 所有后端共用的 token（服务发现只给地址，token 由这里统一附加）。
+# sandbox_token: ""
+
+# 服务发现（后端列表来源）。type 留空则退回静态 backends。
+discovery:
+  type: "consul"                    # consul | nacos
+  address: "localhost:8500"
+  service_name: "sandboxd"
+  interval_sec: 5
+
+# 静态 sandboxd 实例池（discovery 留空时使用；discovery 配置后作为种子/兜底）。
+# url 为 HTTP 基地址（gateway 内部自动换算 ws 与 /metrics）。
+backends:
+  - url: http://127.0.0.1:27081
+    # token: ""

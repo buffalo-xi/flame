@@ -1,0 +1,14 @@
+-- 方式 A：扁平「点号路径」key
+return {
+  ["user.name"] = "张三",
+  ["user.age"]  = 18,
+}
+
+-- 方式 B：嵌套 table（等价）
+return {
+  user = { name = "张三", age = 18 },
+}
+
+
+直接变量
+return { a = a, ok = ok, added = v }

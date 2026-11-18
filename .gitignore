@@ -1,0 +1,51 @@
+# 构建产物
+*.exe
+*.test
+bin/
+dist/
+
+# Delve 调试产物（名字是 __debug_bin.exe<数字>，不以 .exe 结尾，上面的规则拦不住）
+__debug_bin*
+
+# 交叉编译产物（无扩展名，按路径排除）
+sandboxd/sandboxd-linux
+
+# 无扩展名的可执行产物与归档包（ELF / RAR / ZIP，逐个点掉）
+/nexus_gw/main
+/desktop/dist.zip
+*.rar
+
+# 前端依赖与 IDE
+node_modules/
+.idea/
+
+# 运行时数据：租户工作区 / 会话 / 运行目录（不入库）
+nexus/data/
+downloads/
+logs/
+run/
+sandboxd/logs/
+sandboxd/run/tmp*/
+sandboxg/logs/
+
+# 日志与 Python 缓存
+*.log
+__pycache__/
+*.pyc
+
+# 根目录一次性产物
+/_sb.*
+/dev.*
+
+# 本地实际配置：含 JWT 签名密钥等真东西，不入库；模板见 nexus/config.example.yaml
+/nexus/config.yaml
+
+# 本地环境变量（模板见 desktop/.env.example）与 IDE 会话数据
+.env
+.codebuddy/
+
+# Windows 快捷方式（本机启动脚本的手工入口，不属于工程）
+*.lnk
+
+# 本机调试用的临时配置（含宿主绝对路径）
+sandboxd/tmp-*.yaml

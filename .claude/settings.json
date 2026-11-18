@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go *)",
+      "Bash(gofmt *)",
+      "Bash(govet *)",
+      "Bash(golint *)",
+      "Bash(goimports *)",
+      "Bash(npm --version)",
+      "Bash(npx vite *)",
+      "Bash(node node_modules/vite/bin/vite.js --host)",
+      "Bash(npx playwright-core *)",
+      "WebFetch(domain:localhost)",
+      "Bash(git mv *)",
+      "Bash(git -C d:/proj/flame rev-parse --show-toplevel)",
+      "Bash(xargs -0 sed -i -e 's|flame/nexus/admin/agentapikeys/repository|flame/nexus/shared/repository/agentapikeys|g' -e 's|flame/nexus/admin/agentinstancedatasets/repository|flame/nexus/shared/repository/agentinstancedatasets|g' -e 's|flame/nexus/admin/agentinstances/repository|flame/nexus/shared/repository/agentinstances|g' -e 's|flame/nexus/admin/agentmodels/repository|flame/nexus/shared/repository/agentmodels|g' -e 's|flame/nexus/admin/agentservices/repository|flame/nexus/shared/repository/agentservices|g' -e 's|flame/nexus/admin/hubchunks/repository|flame/nexus/shared/repository/hubchunks|g' -e 's|flame/nexus/admin/hubdatasets/repository|flame/nexus/shared/repository/hubdatasets|g' -e 's|flame/nexus/admin/hubdocuments/repository|flame/nexus/shared/repository/hubdocuments|g' -e 's|flame/nexus/admin/hubsegments/repository|flame/nexus/shared/repository/hubsegments|g' -e 's|flame/nexus/admin/hubsources/repository|flame/nexus/shared/repository/hubsources|g' -e 's|flame/nexus/admin/llmmodels/repository|flame/nexus/shared/repository/llmmodels|g' -e 's|flame/nexus/admin/llmsources/repository|flame/nexus/shared/repository/llmsources|g' -e 's|flame/nexus/admin/structdatasets/repository|flame/nexus/shared/repository/structdatasets|g' -e 's|flame/nexus/admin/structdocuments/repository|flame/nexus/shared/repository/structdocuments|g' -e 's|flame/nexus/admin/structfeatures/repository|flame/nexus/shared/repository/structfeatures|g' -e 's|flame/nexus/admin/wfinstances/repository|flame/nexus/shared/repository/wfinstances|g')"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | grep -E '\\.go$' >/dev/null 2>&1 && echo '{\"systemMessage\":\"Working with Go files detected. Remember to use go fmt, go vet, and follow Go idioms and best practices.\"}' || true",
+            "if": "Write|Edit"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; if [[ \"$f\" == *.go ]]; then echo \"Formatting Go file: $f\"; go fmt \"$f\" 2>/dev/null || true; fi; } 2>/dev/null || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
