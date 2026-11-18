@@ -11,9 +11,14 @@
     "tool": {
       "not_found": "Custom tool not found: {name}"
     },
+    "auth": {
+      "session_expired": "Your platform session has expired. Please sign in again."
+    },
     "common": {
       "internal": "Internal error, please try again later",
-      "invalid_params": "Invalid request parameters"
+      "invalid_params": "Invalid request parameters",
+      "network": "Network request failed: {reason}",
+      "request_failed": "Request failed"
     }
   }
 }

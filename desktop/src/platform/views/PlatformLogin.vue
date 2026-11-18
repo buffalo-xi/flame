@@ -5,29 +5,28 @@
       <!-- 登录方式切换：由外壳 AuthGate 通过插槽注入卡片右上角 -->
       <slot name="mode-switch"></slot>
 
-      <h2 class="pl-title">平台登录</h2>
+      <h2 class="pl-title">{{ $t('login.platformTitle') }}</h2>
 
       <el-form :model="form" label-width="0" label-position="top">
         <div class="input-item">
-          <el-input v-model="form.name" placeholder="账号" clearable @keyup.enter="handleLogin" />
+          <el-input v-model="form.name" :placeholder="$t('login.username')" clearable @keyup.enter="handleLogin" />
         </div>
         <div class="input-item">
-          <el-input v-model="form.password" type="password" placeholder="密码" show-password @keyup.enter="handleLogin" />
+          <el-input v-model="form.password" type="password" :placeholder="$t('login.password')" show-password @keyup.enter="handleLogin" />
         </div>
         <div class="input-item checkbox-item">
-          <el-checkbox v-model="form.rememberMe">记住我</el-checkbox>
-          <span class="pl-inline-hint">只记住账号名，不保存密码</span>
+          <el-checkbox v-model="form.rememberMe">{{ $t('login.remember') }}</el-checkbox>
+          <span class="pl-inline-hint">{{ $t('login.rememberHint') }}</span>
         </div>
         <div class="input-item">
           <el-button type="primary" class="login-btn" :loading="loading" @click="handleLogin">
-            登录管理台
+            {{ $t('login.platformSubmit') }}
           </el-button>
         </div>
       </el-form>
 
       <div class="pl-hint">
-        平台账号与租户账号相互独立，由管理员在「平台用户」里维护。
-        管理台没有自助找回：忘记密码请联系平台管理员，在「平台用户 → 重置密码」里重置。
+        {{ $t('login.platformHint') }}
       </div>
     </div>
   </div>

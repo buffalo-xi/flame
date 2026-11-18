@@ -8,11 +8,11 @@
       <h2 class="login-title">Flame Desk</h2>
       
       <el-form :model="form" label-width="0" label-position="top">
-               
+              
         <div class="input-item">
           <el-input 
             v-model="form.username" 
-            placeholder="账号"
+            :placeholder="$t('login.username')"
             clearable
           />
         </div>
@@ -21,7 +21,7 @@
           <el-input 
             v-model="form.password" 
             type="password" 
-            placeholder="密码"
+            :placeholder="$t('login.password')"
             show-password
             @keyup.enter="handleLogin"
           />
@@ -30,13 +30,13 @@
          <div class="input-item">
           <el-input 
             v-model="form.schema" 
-            placeholder="租户"
+            :placeholder="$t('login.tenant')"
             clearable
           />
         </div>
 
         <div class="input-item checkbox-item">
-          <el-checkbox v-model="form.rememberMe">记住我</el-checkbox>
+          <el-checkbox v-model="form.rememberMe">{{ $t('login.remember') }}</el-checkbox>
         </div>
         
         <div class="input-item">
@@ -46,7 +46,7 @@
             class="login-btn"
             :loading="loading"
           >
-            登录系统
+            {{ $t('login.submit') }}
           </el-button>
         </div>
       </el-form>

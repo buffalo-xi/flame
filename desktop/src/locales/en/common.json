@@ -10,5 +10,19 @@
     "loading": "Loading…",
     "empty": "No data",
     "language": "Language"
+  },
+  "login": {
+    "title": "Flame Desk",
+    "username": "Account",
+    "password": "Password",
+    "tenant": "Tenant",
+    "remember": "Remember me",
+    "rememberHint": "Only the account name is remembered, never the password",
+    "submit": "Sign in",
+    "tenantTab": "Console",
+    "platformTab": "Platform",
+    "platformTitle": "Platform sign-in",
+    "platformSubmit": "Sign in to admin",
+    "platformHint": "Platform accounts are separate from tenant accounts and are managed under Platform Users. There is no self-service reset — ask a platform administrator to reset it under Platform Users → Reset password."
   }
 }

@@ -5,8 +5,9 @@
     <Login v-if="tab === 'desk'" @login-success="onSuccess('desk')">
       <template #mode-switch>
         <div class="card-switch">
-          <button :class="{ active: tab === 'desk' }" @click="tab = 'desk'">租户登录</button>
-          <button :class="{ active: tab === 'manage' }" @click="tab = 'manage'">平台登录</button>
+          <button :class="{ active: tab === 'desk' }" @click="tab = 'desk'">{{ $t('login.tenantTab') }}</button>
+          <button :class="{ active: tab === 'manage' }" @click="tab = 'manage'">{{ $t('login.platformTab') }}</button>
+          <button class="loc" type="button" :title="$t('common.language')" @click="toggleLocale">{{ nextLocaleLabel }}</button>
         </div>
       </template>
     </Login>
@@ -14,8 +15,9 @@
     <PlatformLogin v-else @login-success="onSuccess('manage')">
       <template #mode-switch>
         <div class="card-switch">
-          <button :class="{ active: tab === 'desk' }" @click="tab = 'desk'">租户登录</button>
-          <button :class="{ active: tab === 'manage' }" @click="tab = 'manage'">平台登录</button>
+          <button :class="{ active: tab === 'desk' }" @click="tab = 'desk'">{{ $t('login.tenantTab') }}</button>
+          <button :class="{ active: tab === 'manage' }" @click="tab = 'manage'">{{ $t('login.platformTab') }}</button>
+          <button class="loc" type="button" :title="$t('common.language')" @click="toggleLocale">{{ nextLocaleLabel }}</button>
         </div>
       </template>
     </PlatformLogin>
@@ -23,9 +25,10 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import Login from './tenant/components/Login.vue'
 import PlatformLogin from './platform/views/PlatformLogin.vue'
+import { currentLocale, setLocale } from './locales'
 
 const props = defineProps({
   // 默认停在哪个 tab：跟随上次使用的模式（App.vue 传入），首次进来是租户登录
@@ -35,6 +38,10 @@ const props = defineProps({
 const emit = defineEmits(['login-success'])
 
 const tab = ref(props.initialTab === 'manage' ? 'manage' : 'desk')
+
+// 语言切换：按钮显示「将要切到」的语言，避免用户误以为当前已经是英文界面
+const nextLocaleLabel = computed(() => (currentLocale() === 'zh-CN' ? 'EN' : '中'))
+const toggleLocale = () => setLocale(currentLocale() === 'zh-CN' ? 'en' : 'zh-CN')
 
 const onSuccess = (mode) => emit('login-success', mode)
 </script>

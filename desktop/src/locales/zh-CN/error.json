@@ -11,9 +11,14 @@
     "tool": {
       "not_found": "自定义工具不存在：{name}"
     },
+    "auth": {
+      "session_expired": "平台会话已失效，请重新登录"
+    },
     "common": {
       "internal": "服务内部错误，请稍后重试",
-      "invalid_params": "请求参数不合法"
+      "invalid_params": "请求参数不合法",
+      "network": "网络请求失败：{reason}",
+      "request_failed": "请求失败"
     }
   }
 }

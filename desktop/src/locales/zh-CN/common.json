@@ -10,5 +10,19 @@
     "loading": "加载中…",
     "empty": "暂无数据",
     "language": "语言"
+  },
+  "login": {
+    "title": "Flame Desk",
+    "username": "账号",
+    "password": "密码",
+    "tenant": "租户",
+    "remember": "记住我",
+    "rememberHint": "只记住账号名，不保存密码",
+    "submit": "登录系统",
+    "tenantTab": "租户登录",
+    "platformTab": "平台登录",
+    "platformTitle": "平台登录",
+    "platformSubmit": "登录管理台",
+    "platformHint": "平台账号与租户账号相互独立，由管理员在「平台用户」里维护。管理台没有自助找回：忘记密码请联系平台管理员，在「平台用户 → 重置密码」里重置。"
   }
 }
