@@ -9,9 +9,9 @@
           <div class="panel-header">
             <div class="settings-tabs">
               <button class="settings-tab-btn" :class="{ active: settingsTab === 'relations' }"
-                      @click="switchSettingsTab('relations')">调用授权</button>
+                      @click="switchSettingsTab('relations')">{{ $t('agentSettings.tabRelations') }}</button>
               <button class="settings-tab-btn" :class="{ active: settingsTab === 'tools' }"
-                      @click="switchSettingsTab('tools')">工具配置</button>
+                      @click="switchSettingsTab('tools')">{{ $t('agentSettings.tabTools') }}</button>
             </div>
             <span class="close-icon" @click="$emit('close')">&#xd7;</span>
           </div>
@@ -19,29 +19,29 @@
             <!-- tab 1：调用授权 -->
             <template v-if="settingsTab === 'relations'">
               <div class="settings-field">
-                <div class="field-label">可使用的技能</div>
+                <div class="field-label">{{ $t('agentSettings.skillsLabel') }}</div>
                 <!-- 与「工具授权」同一交互：点按钮从左侧拉出选择面板，点一项即绑定 / 解绑（改动即时保存） -->
                 <div class="bind-row">
                   <el-button size="small" :disabled="!agentId || locked" @click="openSkillPicker">
-                    选择技能
+                    {{ $t('agentSettings.selectSkills') }}
                   </el-button>
                   <div class="bind-tags">
                     <el-tag v-for="id in boundSkillIds" :key="id" size="small"
                             :closable="!locked" :disable-transitions="true" @close="unbindSkill(id)">
                       {{ skillName(id) }}
                     </el-tag>
-                    <span v-if="!boundSkillIds.length" class="bind-tags-empty">未绑定任何技能</span>
+                    <span v-if="!boundSkillIds.length" class="bind-tags-empty">{{ $t('agentSettings.noSkills') }}</span>
                   </div>
                 </div>
                 <div class="editor-tip">
                   只有绑定给它的技能才会写进提示词（只含名字与描述，正文由 agent 按需读取）。
                   与「技能 → 可见性」是同一份数据；私有技能只对归属智能体可见，列表里仅作展示。
                 </div>
-                <div v-if="!agentId" class="editor-tip">智能体保存后才能配置技能绑定。</div>
+                <div v-if="!agentId" class="editor-tip">{{ $t('agentSettings.needSaveSkills') }}</div>
               </div>
 
               <div class="settings-field">
-                <div class="field-label">允许发现未绑定的技能</div>
+                <div class="field-label">{{ $t('agentSettings.allowDiscovery') }}</div>
                 <el-switch v-model="agent.skill_discovery"
                            :disabled="!agentId || locked"
                            @change="saveSkillDiscovery" />
@@ -49,11 +49,11 @@
                   开启后该 agent 可通过 list_skills 发现「全员可见」的共享技能并按需读取（不写进提示词）；
                   关闭时只有它自己的私有技能与被绑定给它的技能可见。
                 </div>
-                <div v-if="!agentId" class="editor-tip">智能体保存后才能配置技能发现。</div>
+                <div v-if="!agentId" class="editor-tip">{{ $t('agentSettings.needSaveDiscovery') }}</div>
               </div>
 
               <div class="settings-field">
-                <div class="field-label">超级权限（supervisor）</div>
+                <div class="field-label">{{ $t('agentSettings.supervisorLabel') }}</div>
                 <el-switch v-model="agent.is_supervisor"
                            :disabled="!agentId || locked"
                            @change="saveSupervisor" />
@@ -68,15 +68,15 @@
                   并绑定 agent-authoring / skill-authoring / custom-tool-authoring 三份技能。
                   撤销时不回滚这些（留着也执行不了管理类工具）。
                 </div>
-                <div v-if="!agentId" class="editor-tip">智能体保存后才能授予超级权限。</div>
+                <div v-if="!agentId" class="editor-tip">{{ $t('agentSettings.needSaveSupervisor') }}</div>
               </div>
 
               <!-- 两个方向共用同一个左侧面板（标题随方向变），点一项即时授权 / 收回 -->
               <div class="settings-field">
-                <div class="field-label">谁能调用它</div>
+                <div class="field-label">{{ $t('agentSettings.calledBy') }}</div>
                 <div class="bind-row">
                   <el-button size="small" :disabled="!agentId || locked" @click="openAgentPicker('in')">
-                    选择调用方
+                    {{ $t('agentSettings.selectCaller') }}
                   </el-button>
                   <div class="bind-tags">
                     <el-tag v-for="id in agent.called_by_ids" :key="id" size="small"
@@ -85,15 +85,15 @@
                             :closable="!locked" :disable-transitions="true" @close="unbindAgentCall('in', id)">
                       {{ agentName(id) }}
                     </el-tag>
-                    <span v-if="!agent.called_by_ids.length" class="bind-tags-empty">谁都不能调用它</span>
+                    <span v-if="!agent.called_by_ids.length" class="bind-tags-empty">{{ $t('agentSettings.nobodyCanCall') }}</span>
                   </div>
                 </div>
               </div>
               <div class="settings-field">
-                <div class="field-label">它能调用谁</div>
+                <div class="field-label">{{ $t('agentSettings.canCall') }}</div>
                 <div class="bind-row">
                   <el-button size="small" :disabled="!agentId || locked" @click="openAgentPicker('out')">
-                    选择被调用方
+                    {{ $t('agentSettings.selectCallee') }}
                   </el-button>
                   <div class="bind-tags">
                     <el-tag v-for="id in agent.can_call_ids" :key="id" size="small"
@@ -102,7 +102,7 @@
                             :closable="!locked" :disable-transitions="true" @close="unbindAgentCall('out', id)">
                       {{ agentName(id) }}
                     </el-tag>
-                    <span v-if="!agent.can_call_ids.length" class="bind-tags-empty">不能调用任何智能体</span>
+                    <span v-if="!agent.can_call_ids.length" class="bind-tags-empty">{{ $t('agentSettings.cannotCallAny') }}</span>
                   </div>
                 </div>
               </div>

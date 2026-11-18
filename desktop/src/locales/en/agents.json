@@ -52,5 +52,23 @@
     "hoverViewDeprecated": "Click to view the agent (deprecated, read-only)",
     "hoverEdit": "Click to edit the agent",
     "supervisorTip": "Super agent: can create, modify and delete other agents and skills, write files across domains, and holds all built-in tools by default. Every entry point (including calls from other agents or flows) reads the draft."
+  },
+  "agentSettings": {
+    "tabRelations": "Call permissions",
+    "tabTools": "Tools",
+    "skillsLabel": "Available skills",
+    "selectSkills": "Select skills",
+    "noSkills": "No skills bound",
+    "allowDiscovery": "Allow discovering unbound skills",
+    "supervisorLabel": "Super privileges (supervisor)",
+    "calledBy": "Who can call it",
+    "selectCaller": "Select callers",
+    "nobodyCanCall": "Nobody can call it",
+    "canCall": "What it can call",
+    "selectCallee": "Select callees",
+    "cannotCallAny": "Cannot call any agent",
+    "needSaveSkills": "Save the agent first to configure skill bindings.",
+    "needSaveDiscovery": "Save the agent first to configure skill discovery.",
+    "needSaveSupervisor": "Save the agent first to grant super privileges."
   }
 }

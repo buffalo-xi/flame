@@ -52,5 +52,23 @@
     "hoverViewDeprecated": "点击查看智能体（废弃·只读）",
     "hoverEdit": "点击编辑智能体",
     "supervisorTip": "超级权限智能体：可创建 / 修改 / 删除其它 agent 与 skill、跨域写文件，缺省拥有全部内置工具；任何入口（含被其它 agent / flow 调起）都读草稿"
+  },
+  "agentSettings": {
+    "tabRelations": "调用授权",
+    "tabTools": "工具配置",
+    "skillsLabel": "可使用的技能",
+    "selectSkills": "选择技能",
+    "noSkills": "未绑定任何技能",
+    "allowDiscovery": "允许发现未绑定的技能",
+    "supervisorLabel": "超级权限（supervisor）",
+    "calledBy": "谁能调用它",
+    "selectCaller": "选择调用方",
+    "nobodyCanCall": "谁都不能调用它",
+    "canCall": "它能调用谁",
+    "selectCallee": "选择被调用方",
+    "cannotCallAny": "不能调用任何智能体",
+    "needSaveSkills": "智能体保存后才能配置技能绑定。",
+    "needSaveDiscovery": "智能体保存后才能配置技能发现。",
+    "needSaveSupervisor": "智能体保存后才能授予超级权限。"
   }
 }
