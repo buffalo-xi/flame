@@ -1,0 +1,19 @@
+{
+  "error": {
+    "endpoint": {
+      "not_found": "Endpoint not found: {name}",
+      "not_exposed": "Endpoint is not exposed: {name}"
+    },
+    "asset": {
+      "not_found": "Asset not found",
+      "not_available": "This asset is not available to your tenant"
+    },
+    "tool": {
+      "not_found": "Custom tool not found: {name}"
+    },
+    "common": {
+      "internal": "Internal error, please try again later",
+      "invalid_params": "Invalid request parameters"
+    }
+  }
+}

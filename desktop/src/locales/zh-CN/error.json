@@ -1,0 +1,19 @@
+{
+  "error": {
+    "endpoint": {
+      "not_found": "服务端点不存在：{name}",
+      "not_exposed": "服务端点未对外开放：{name}"
+    },
+    "asset": {
+      "not_found": "资产不存在",
+      "not_available": "该资产未对你所在的租户开放"
+    },
+    "tool": {
+      "not_found": "自定义工具不存在：{name}"
+    },
+    "common": {
+      "internal": "服务内部错误，请稍后重试",
+      "invalid_params": "请求参数不合法"
+    }
+  }
+}

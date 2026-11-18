@@ -1,14 +1,20 @@
 <template>
-  <div class="app">
-    <!-- 外壳：未登录 → 登录页（租户/平台两个入口）；已登录 → 按 mode 渲染对应控制台 -->
-    <AuthGate v-if="!loggedIn" :initial-tab="authTab" @login-success="handleLoginSuccess" />
-    <MainWindow v-else-if="isDesk" @logout="handleLogout" />
-    <PlatformApp v-else @logout="handleLogout" @switch-console="switchToConsole" />
-  </div>
+  <!-- Element Plus 内置文案（分页 / 日期选择 / 空状态）跟随语言切换 -->
+  <el-config-provider :locale="elLocale">
+    <div class="app">
+      <!-- 外壳：未登录 → 登录页（租户/平台两个入口）；已登录 → 按 mode 渲染对应控制台 -->
+      <AuthGate v-if="!loggedIn" :initial-tab="authTab" @login-success="handleLoginSuccess" />
+      <MainWindow v-else-if="isDesk" @logout="handleLogout" />
+      <PlatformApp v-else @logout="handleLogout" @switch-console="switchToConsole" />
+    </div>
+  </el-config-provider>
 </template>
 
 <script>
 import { computed, onMounted, ref } from 'vue'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import en from 'element-plus/es/locale/lang/en'
+import i18n from './locales'
 import AuthGate from './AuthGate.vue'
 import MainWindow from './tenant/components/MainWindow.vue'
 import PlatformApp from './platform/PlatformApp.vue'
@@ -70,8 +76,13 @@ export default {
       }
     })
 
+    // Element Plus 内置文案跟随语言：zh-CN / en 两个 locale 包按需切换。
+    // 放在 return 前而不是模块顶层 —— 模板只认 setup 的返回值。
+    const elLocale = computed(() => (i18n.global.locale.value === 'en' ? en : zhCn))
+
     return {
       mode,
+      elLocale,
       loggedIn,
       isDesk,
       authTab,

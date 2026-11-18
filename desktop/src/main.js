@@ -6,6 +6,7 @@ import 'element-plus/dist/index.css'
 import './utils/message.js'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
+import i18n from './locales'
 import BreakpointMenuItem from './tenant/components/flows/flow/BreakpointMenuItem.vue'
 
 const app = createApp(App)
@@ -19,4 +20,7 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
 app.component('BreakpointMenuItem', BreakpointMenuItem)
 
 app.use(ElementPlus)
+app.use(i18n)
+// 首屏同步 <html lang>：setLocale 只在切换时设置，这里补初始值
+document.documentElement.setAttribute('lang', i18n.global.locale.value)
 app.mount('#app')
