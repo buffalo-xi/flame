@@ -138,6 +138,14 @@ func originOptions(counts map[string]int) []gin.H {
 	return out
 }
 
+// errAssetNotFound 资产不存在。
+//
+// error 编码供前端翻译；params.id 只用于定位，不进翻译模板。
+// msg 仍是中文原文 —— 日志、curl 与未升级的调用方看到的和以前一样。
+func errAssetNotFound(c *gin.Context, id string) {
+	xhttp.ErrCode(c, "asset.not_found", map[string]any{"id": id}, "资产不存在", "")
+}
+
 // GetAsset 资产详情（可安装范围）；含文件清单与依赖，供安装前确认。
 func GetAsset(c *gin.Context) {
 	info, ok := mustAuth(c)
@@ -150,7 +158,7 @@ func GetAsset(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		xhttp.ErrJSON(c, "资产不存在", nil, "")
+		errAssetNotFound(c, c.Param("id"))
 		return
 	}
 	visible, verr := sharedassets.VisibleTo(a, info.Schema)
@@ -163,7 +171,8 @@ func GetAsset(c *gin.Context) {
 	// 不能只凭 schema 就当成自己的 —— 否则草稿态的导入行能被本租户看到。
 	mine := a.SourceSchema == info.Schema && a.OriginServer == ""
 	if !mine && (!visible || a.Status != sharedassets.StatusListed) {
-		xhttp.ErrJSON(c, "该资产未对你所在的租户开放", nil, "")
+		xhttp.ErrCode(c, "asset.not_available", map[string]any{"id": a.ID},
+			"该资产未对你所在的租户开放", "")
 		return
 	}
 
@@ -218,7 +227,7 @@ func Withdraw(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		xhttp.ErrJSON(c, "资产不存在", nil, "")
+		errAssetNotFound(c, c.Param("id"))
 		return
 	}
 	// 导入行不是「我上架的」：source_schema 只是对方那台机器上的租户名，与本机撞名是巧合
@@ -265,7 +274,7 @@ func DeleteMine(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		xhttp.ErrJSON(c, "资产不存在", nil, "")
+		errAssetNotFound(c, c.Param("id"))
 		return
 	}
 	if a.SourceSchema != info.Schema || a.OriginServer != "" {

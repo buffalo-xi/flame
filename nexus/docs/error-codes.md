@@ -47,6 +47,7 @@
 | `auth` | `auth.invalid_credentials` | 登录失败（不与「用户不存在」区分） |
 | `tenant` | `tenant.not_found`、`tenant.schema_taken` | `schema_taken` 对应 409 |
 | `endpoint` | `endpoint.not_found`、`endpoint.not_exposed` | 端点域用 expose/retract 用词 |
+| `asset` | `asset.not_found`、`asset.not_available` | `not_available` = 存在但未对本租户开放 |
 | `flow` | `flow.not_released`、`flow.archived` | |
 | `agent` | `agent.call_depth_exceeded` | |
 | `quota` | `quota.session_storage_exceeded` | 对应 507 |
@@ -91,6 +92,11 @@ MCP / RPC 走 JSON-RPC，错误对象里要用**标准错误码**（`-32602` 等
 
 原因：外部客户端（Claude Desktop、第三方 MCP 宿主）只认 JSON-RPC 的错误码语义，
 把业务编码塞进 `code` 会让它们误判为协议错误。
+
+补充：**MCP 服务端不需要 `endpoint.*` 这两个编码**。它按 `protocol=mcp AND exposed=true`
+加载端点，无权目标在注册阶段就被跳过，调用根本到不了 handler，因此不存在
+「不存在 / 未开放」的运行期分支（见 `nexus/service/mcp/server/server.go`）。
+MCP 的消费方是 LLM 宿主而非本项目的界面，`data.error` 对它价值很低，不必为它改造。
 
 ## 安全约束
 
