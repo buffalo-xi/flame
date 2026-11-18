@@ -10,9 +10,11 @@ import { createI18n } from 'vue-i18n'
 import zhCommon from './zh-CN/common.json'
 import zhError from './zh-CN/error.json'
 import zhHistory from './zh-CN/history.json'
+import zhAgents from './zh-CN/agents.json'
 import enCommon from './en/common.json'
 import enError from './en/error.json'
 import enHistory from './en/history.json'
+import enAgents from './en/agents.json'
 
 // 可选语言。label 用各自语言写，切换菜单里不出现「英文」这种译文。
 export const LOCALES = [
@@ -39,8 +41,8 @@ const i18n = createI18n({
   // 回退到中文而不是英文：中文是唯一真源，英文包缺条目时至少显示可读内容
   fallbackLocale: 'zh-CN',
   messages: {
-    'zh-CN': { ...zhCommon, ...zhError, ...zhHistory },
-    en: { ...enCommon, ...enError, ...enHistory }
+    'zh-CN': { ...zhCommon, ...zhError, ...zhHistory, ...zhAgents },
+    en: { ...enCommon, ...enError, ...enHistory, ...enAgents }
   }
 })
 

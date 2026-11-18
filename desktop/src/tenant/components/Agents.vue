@@ -5,7 +5,7 @@
       <div ref="headerRef" class="full-screen-header" :class="'header--' + headerSize">
         <div class="header-actions">
           <el-button size="small" @click="handleBack">
-            <el-icon><ArrowLeft /></el-icon>返回列表
+            <el-icon><ArrowLeft /></el-icon>{{ $t('agent.back') }}
           </el-button>
         </div>
         <el-icon class="header-icon"><Cpu /></el-icon>
@@ -13,28 +13,28 @@
           <div class="header-name-wrapper" :class="{ locked: lockName, saving: renaming }">
             <el-tooltip v-if="lockName" :content="nameLockTip" placement="bottom">
               <span class="header-name">
-                {{ editForm.name || (editingId ? '编辑智能体' : '新增智能体') }}
+                {{ editForm.name || $t(editingId ? 'agent.editTitle' : 'agent.createTitle') }}
               </span>
             </el-tooltip>
             <template v-else>
               <span v-if="!isEditingName" class="header-name"
-                    :title="editForm.name || (editingId ? '编辑智能体' : '新增智能体')"
+                    :title="editForm.name || $t(editingId ? 'agent.editTitle' : 'agent.createTitle')"
                     @click="startEditName">
-                {{ editForm.name || (editingId ? '编辑智能体' : '新增智能体') }}
+                {{ editForm.name || $t(editingId ? 'agent.editTitle' : 'agent.createTitle') }}
               </span>
               <el-input v-else v-model="editName" size="small" class="header-name-input"
-                        maxlength="64" placeholder="字母数字横线，≤64"
+                        maxlength="64" :placeholder="$t('agent.namePlaceholder')"
                         @blur="saveEditName" @keyup.enter="saveEditName" ref="nameInputRef" />
             </template>
           </div>
           <div class="header-desc-wrapper" :class="{ locked: lockDesc, saving: renaming }">
             <el-tooltip v-if="lockDesc" :content="descLockTip" placement="bottom">
-              <span class="header-desc">{{ editForm.description || '作者很懒，什么都没有留下！' }}</span>
+              <span class="header-desc">{{ editForm.description || $t('agent.descEmpty') }}</span>
             </el-tooltip>
             <span v-else class="header-desc"
-                  :title="editForm.description || '作者很懒，什么都没有留下！'"
+                  :title="editForm.description || $t('agent.descEmpty')"
                   @click="openDescDialog">
-              {{ editForm.description || '作者很懒，什么都没有留下！' }}
+              {{ editForm.description || $t('agent.descEmpty') }}
             </span>
           </div>
         </div>
@@ -43,30 +43,30 @@
           <span v-if="exposedLocked" class="readonly-badge" :title="readonlyBadgeTitle">{{ readonlyBadgeText }}</span>
           <!-- 端点已对外开放：仍可编辑，但保存会立刻影响线上调用方（保存时二次确认） -->
           <span v-else-if="hasExposed" class="readonly-badge exposed-badge"
-                title="有端点已对外开放：可以继续修改，保存后立即生效">对外 · 改动即时生效</span>
+                :title="$t('agent.exposedBadgeTip')">{{ $t('agent.exposedBadge') }}</span>
           <!-- 版本：vN / 未发布 / 有改动 三态，与工作流编辑器同口径 -->
           <VersionEntry v-if="editingId" kind="agent" :target="editingId"
                         :current-version="agentVersion" :dirty="agentDirty"
                         :can-release="!exposedLocked" @applied="onVersionApplied"
                         @changed="refreshVersionState" />
           <el-button size="small" class="header-action-btn refresh-toggle-btn"
-                     :loading="refreshing" :disabled="!editingId" @click="refreshEditor">刷新</el-button>
-          <el-button size="small" class="header-action-btn settings-toggle-btn" @click="openSettings">设置</el-button>
+                     :loading="refreshing" :disabled="!editingId" @click="refreshEditor">{{ $t('agent.refresh') }}</el-button>
+          <el-button size="small" class="header-action-btn settings-toggle-btn" @click="openSettings">{{ $t('agent.settings') }}</el-button>
           <el-button size="small" type="primary" class="header-action-btn"
                     :loading="fileState.saving"
                     :disabled="exposedLocked || (editingId ? !fileState.canSave : false)"
                     @click="handleHeaderSave">
-            保存
+            {{ $t('agent.save') }}
           </el-button>
           <!-- 窄档：次要操作收进「⋯」 -->
           <el-dropdown class="header-more" trigger="click" @command="onHeaderMore">
-            <el-button size="small" class="header-action-btn more-btn" title="更多操作">
+            <el-button size="small" class="header-action-btn more-btn" :title="$t('agent.more')">
               <el-icon><MoreFilled /></el-icon>
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="refresh" :disabled="!editingId">刷新</el-dropdown-item>
-                <el-dropdown-item command="settings">设置</el-dropdown-item>
+                <el-dropdown-item command="refresh" :disabled="!editingId">{{ $t('agent.refresh') }}</el-dropdown-item>
+                <el-dropdown-item command="settings">{{ $t('agent.settings') }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -110,17 +110,17 @@
     <AssetImportDialog v-model="importVisible" kind="agent" @imported="fetchAgents" />
 
     <!-- 描述单独用大框编辑：头部那行字号只有 12px、还被单行省略，长描述在原位输入框里基本没法写 -->
-    <el-dialog v-model="descDialogVisible" title="编辑智能体描述" width="640px" append-to-body
+    <el-dialog v-model="descDialogVisible" :title="$t('agent.descDialogTitle')" width="640px" append-to-body
                :close-on-click-modal="false" class="desc-dialog">
       <el-input v-model="descDraft" type="textarea" :rows="8" resize="vertical"
-                placeholder="一句话说明这个智能体是干什么的：列表卡片、端点面板都靠它区分用途"
+                :placeholder="$t('agent.descPlaceholder')"
                 @keydown.ctrl.enter="saveEditDesc" />
       <div class="desc-dialog-hint">
-        描述会显示在智能体列表卡片上。点「确定」立即保存；Ctrl+Enter 可快速确定。
+        {{ $t('agent.descHint') }}
       </div>
       <template #footer>
-        <el-button size="small" @click="descDialogVisible = false">取消</el-button>
-        <el-button size="small" type="primary" :loading="renaming" @click="saveEditDesc">确定</el-button>
+        <el-button size="small" @click="descDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button size="small" type="primary" :loading="renaming" @click="saveEditDesc">{{ $t('common.confirm') }}</el-button>
       </template>
     </el-dialog>
   </div>

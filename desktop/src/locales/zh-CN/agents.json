@@ -1,0 +1,18 @@
+{
+  "agent": {
+    "back": "返回列表",
+    "editTitle": "编辑智能体",
+    "createTitle": "新增智能体",
+    "namePlaceholder": "字母数字横线，≤64",
+    "descEmpty": "作者很懒，什么都没有留下！",
+    "exposedBadge": "对外 · 改动即时生效",
+    "exposedBadgeTip": "有端点已对外开放：可以继续修改，保存后立即生效",
+    "refresh": "刷新",
+    "settings": "设置",
+    "save": "保存",
+    "more": "更多操作",
+    "descDialogTitle": "编辑智能体描述",
+    "descPlaceholder": "一句话说明这个智能体是干什么的：列表卡片、端点面板都靠它区分用途",
+    "descHint": "描述会显示在智能体列表卡片上。点「确定」立即保存；Ctrl+Enter 可快速确定。"
+  }
+}

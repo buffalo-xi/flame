@@ -1,0 +1,18 @@
+{
+  "agent": {
+    "back": "Back to list",
+    "editTitle": "Edit agent",
+    "createTitle": "New agent",
+    "namePlaceholder": "Letters, digits and hyphens, max 64",
+    "descEmpty": "No description yet.",
+    "exposedBadge": "Exposed · changes apply immediately",
+    "exposedBadgeTip": "An endpoint is exposed: you can keep editing, changes take effect on save",
+    "refresh": "Refresh",
+    "settings": "Settings",
+    "save": "Save",
+    "more": "More actions",
+    "descDialogTitle": "Edit agent description",
+    "descPlaceholder": "One sentence describing what this agent does — the list card and endpoint panel rely on it",
+    "descHint": "Shown on the agent list card. Click OK to save now; Ctrl+Enter also confirms."
+  }
+}
