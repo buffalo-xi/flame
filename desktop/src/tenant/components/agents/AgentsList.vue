@@ -10,15 +10,15 @@
     <div class="status-filters">
       <el-button :class="{ active: statusFilter === 'all' }" @click="setStatusFilter('all')">
         <el-icon><Refresh /></el-icon>
-        <span>全部{{ statusCounts.all ? ` (${statusCounts.all})` : '' }}</span>
+        <span>{{ $t('agent.filterAll') }}{{ statusCounts.all ? ` (${statusCounts.all})` : '' }}</span>
       </el-button>
       <el-button class="btn-enable" :class="{ active: statusFilter === 'normal' }" @click="setStatusFilter('normal')">
         <el-icon><CircleCheck /></el-icon>
-        <span>正常{{ statusCounts.normal ? ` (${statusCounts.normal})` : '' }}</span>
+        <span>{{ $t('agent.filterNormal') }}{{ statusCounts.normal ? ` (${statusCounts.normal})` : '' }}</span>
       </el-button>
       <el-button class="btn-disable" :class="{ active: statusFilter === 'deprecated' }" @click="setStatusFilter('deprecated')">
         <el-icon><CircleClose /></el-icon>
-        <span>废弃{{ statusCounts.deprecated ? ` (${statusCounts.deprecated})` : '' }}</span>
+        <span>{{ $t('agent.filterDeprecated') }}{{ statusCounts.deprecated ? ` (${statusCounts.deprecated})` : '' }}</span>
       </el-button>
     </div>
     <!-- 窄档：状态筛选合并成一个下拉 -->
@@ -41,8 +41,8 @@
          刻意用 el-switch 而不是按钮 —— 按钮的"关"态只能靠颜色/边框暗示，实测会被看成空框；
          开关是二值控件，与本页编辑模式里「允许发现未绑定的技能」那一排同一套。
          偏好存 localStorage，见 showSystem -->
-    <span class="system-toggle" title="显示/隐藏系统内置（不可删除、不可改名的那些）">
-      <span class="system-toggle-label">系统</span>
+    <span class="system-toggle" :title="$t('agent.systemTip')">
+      <span class="system-toggle-label">{{ $t('agent.system') }}</span>
       <el-switch v-model="showSystem" size="small" />
     </span>
     <!-- 搜索框 -->
@@ -50,7 +50,7 @@
       <el-input
         ref="listSearchInputRef"
         v-model="searchQuery"
-        placeholder="搜索智能体"
+        :placeholder="$t('agent.searchPlaceholder')"
         prefix-icon="Search"
         clearable
         @keydown.esc="closeListSearch"
@@ -60,26 +60,26 @@
     <el-button
       class="search-toggle"
       :class="{ active: !!searchQuery }"
-      title="搜索"
+      :title="$t('agent.search')"
       @click="toggleListSearch"
     >
       <el-icon><component :is="listSearchOpen ? Close : Search" /></el-icon>
     </el-button>
     <!-- 导入：从资产包装一个智能体。次要动作，不抢「新增」的主色 -->
-    <el-button class="header-import-btn" @click="emit('import')" round title="从资产包导入智能体">
+    <el-button class="header-import-btn" @click="emit('import')" round :title="$t('agent.importTip')">
       <el-icon><Upload /></el-icon>
-      <span>导入</span>
+      <span>{{ $t('agent.import') }}</span>
     </el-button>
     <!-- 新增智能体按钮（窄档 sm/xs 只留 +，文字由 CSS 收起；title 兜住语义） -->
-    <el-button class="header-create-btn" type="primary" @click="emit('create')" round title="新增智能体">
+    <el-button class="header-create-btn" type="primary" @click="emit('create')" round :title="$t('agent.createTip')">
       <el-icon><Plus /></el-icon>
-      <span>新增智能体</span>
+      <span>{{ $t('agent.create') }}</span>
     </el-button>
   </div>
 
   
   <div class="agents-content">
-    <div v-if="loading" class="loading">加载中...</div>
+    <div v-if="loading" class="loading">{{ $t('agent.loading') }}</div>
     <!-- 空态判据用 agentGroups 而不是 filteredAgents：关掉「系统」开关后可能一个都不剩，
          那时 filteredAgents 仍有内容、列表却是空的 -->
     <div v-else-if="agentGroups.length === 0" class="no-data">
@@ -108,7 +108,7 @@
                    盾牌必须带 tooltip：图标本身不自解释，而它代表的是能删掉别的 agent 的能力。 -->
               <el-tooltip v-if="instance.is_supervisor" placement="top" :show-after="150"
                           popper-class="supervisor-popper"
-                          content="超级权限智能体：可创建 / 修改 / 删除其它 agent 与 skill、跨域写文件，缺省拥有全部内置工具；任何入口（含被其它 agent / flow 调起）都读草稿">
+                          :content="$t('agent.supervisorTip')">
                 <span class="badge-supervisor">
                   <svg class="icon-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                        stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -127,8 +127,8 @@
               <!-- 当前发布版本：0 表示还没发布（正式调用不可用，只能调试）。
                    用原生 title 而不是 el-tooltip —— 整卡已有一个 tooltip，嵌套 popper 会打架 -->
               <el-tag size="small" effect="plain" type="info" class="tag-version"
-                      :title="instance.current_version ? `当前发布版本 v${instance.current_version}` : '尚未发布正式版本（线上不可调用）'">
-                {{ instance.current_version ? `v${instance.current_version}` : '未发布' }}
+                      :title="instance.current_version ? $t('agent.versionCurrent', { version: instance.current_version }) : $t('agent.versionNoneTip')">
+                {{ instance.current_version ? `v${instance.current_version}` : $t('agent.versionUnreleased') }}
               </el-tag>
               <template v-if="(instance.endpoints || []).length > 0">
                 <span
@@ -140,45 +140,45 @@
                   {{ (p.protocol || '').toLowerCase() }}
                 </span>
               </template>
-              <span v-else>未设置端点</span>
+              <span v-else>{{ $t('agent.noEndpoint') }}</span>
             </div>
           </div>
         </div>
         <div class="card-body">
           <div class="card-body-bottom">
             <div class="info-item">
-              <span class="info-label">描述：</span>
-              <span class="info-value description-value">{{ instance.description || '很懒，什么都没写！' }}</span>
+              <span class="info-label">{{ $t('agent.labelDescription') }}</span>
+              <span class="info-value description-value">{{ instance.description || $t('agent.descEmptyShort') }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">更新：</span>
-              <span class="info-value">{{ instance.updated_by_name || '未知' }} · {{ formatTime(instance.updated_at) }}</span>
+              <span class="info-label">{{ $t('agent.labelUpdated') }}</span>
+              <span class="info-value">{{ instance.updated_by_name || $t('agent.unknown') }} · {{ formatTime(instance.updated_at) }}</span>
             </div>
           </div>
           <!-- 操作浮层：只覆盖「卡片头下方」那块（card-body），按钮居中（与技能卡片一致） -->
           <div class="card-actions" @click.stop>
             <!-- 两态：正常(1) / 废弃(3) -->
-            <el-tooltip v-if="instance.status !== 1" content="切回正常（可修改、可运行）" placement="top">
+            <el-tooltip v-if="instance.status !== 1" :content="$t('agent.actRestore')" placement="top">
               <button class="card-action-btn" @click="emit('status', { instance, status: 1 })">
                 <el-icon><CircleCheck /></el-icon>
               </button>
             </el-tooltip>
-            <el-tooltip v-if="instance.status !== 3" content="废弃（不可修改、不可运行）" placement="top">
+            <el-tooltip v-if="instance.status !== 3" :content="$t('agent.actDeprecate')" placement="top">
               <button class="card-action-btn" @click="emit('status', { instance, status: 3 })">
                 <el-icon><CircleClose /></el-icon>
               </button>
             </el-tooltip>
-            <el-tooltip content="端点" placement="top">
+            <el-tooltip :content="$t('agent.actEndpoints')" placement="top">
               <button class="card-action-btn" @click="emit('expose', instance)">
                 <el-icon><Connection /></el-icon>
               </button>
             </el-tooltip>
-            <el-tooltip content="导出为资产包（.zip）" placement="top">
+            <el-tooltip :content="$t('agent.actExport')" placement="top">
               <button class="card-action-btn" @click="emit('export', instance)">
                 <el-icon><Download /></el-icon>
               </button>
             </el-tooltip>
-            <el-tooltip v-if="!instance.protected" content="删除" placement="top">
+            <el-tooltip v-if="!instance.protected" :content="$t('agent.actDelete')" placement="top">
               <button class="card-action-btn danger" @click="emit('delete', instance)">
                 <el-icon><Delete /></el-icon>
               </button>
@@ -194,8 +194,13 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Plus, Search, Delete, CircleCheck, CircleClose, Connection, ArrowDown, Close, Refresh, Upload, Download } from '@element-plus/icons-vue'
 import { useHeaderCompact } from '../../utils/useHeaderCompact.js'
+
+// 脚本侧文案（状态元信息、悬停提示、分组名、空态）要在切换语言后重算，
+// 所以它们都得走 t()，不能再用模块级常量存中文字符串。
+const { t } = useI18n()
 
 const props = defineProps({
   agents: { type: Array, default: () => [] },
@@ -210,11 +215,13 @@ const searchQuery = ref('')
 // 两态状态（与后端 shared/models.StatusXxx 一一对应）：
 //   1 正常：可修改、可运行（新建默认）
 //   3 废弃：不可修改、不可运行（只由手工设置）
-const STATUS_META = {
-  1: { text: '正常', tag: 'success' },
-  3: { text: '废弃', tag: 'danger' }
+// text 在调用时才取 t：这张表在模块初始化时就建好了，把中文写死进去，
+// 切换语言后卡片上的状态标签不会跟着变。
+const STATUS_TAGS = { 1: 'success', 3: 'danger' }
+const statusMeta = (status) => {
+  const s = STATUS_TAGS[status] ? status : 1
+  return { text: s === 3 ? t('agent.statusDeprecated') : t('agent.statusNormal'), tag: STATUS_TAGS[s] }
 }
-const statusMeta = (status) => STATUS_META[status] || STATUS_META[1]
 
 // 卡片名样式：废弃=红（正常态不加类）
 const titleClass = (status) => (status === 3 ? 'title-disabled' : '')
@@ -224,10 +231,9 @@ const cardHoverTip = (instance) => {
   const st = instance.status || 1
   // 两个判据语义正交，可能同时成立：main 既是系统内置（受保护名单），也是 supervisor 之一
   const head = []
-  if (instance.protected) head.push('系统内置智能体（不可删除、不可改名）')
-  if (instance.is_supervisor) head.push('超级权限（可管理其它 agent / skill）')
-  const tail = st === 3 ? '点击查看智能体（废弃·只读）'
-             : '点击编辑智能体'
+  if (instance.protected) head.push(t('agent.hoverProtected'))
+  if (instance.is_supervisor) head.push(t('agent.hoverSupervisor'))
+  const tail = st === 3 ? t('agent.hoverViewDeprecated') : t('agent.hoverEdit')
   return head.length ? `${head.join(' · ')} · ${tail}` : tail
 }
 
@@ -286,8 +292,8 @@ const agentGroups = computed(() => {
   const sys = showSystem.value ? list.filter(a => a.protected) : []
   const rest = list.filter(a => !a.protected)
   const groups = []
-  if (sys.length) groups.push({ key: 'system', label: '系统内置', items: sys })
-  if (rest.length) groups.push({ key: 'other', label: '其他智能体', items: rest })
+  if (sys.length) groups.push({ key: 'system', label: t('agent.groupSystem'), items: sys })
+  if (rest.length) groups.push({ key: 'other', label: t('agent.groupOther'), items: rest })
   // 卡片上已不再单独标「系统」，组头是它唯一的身份出口 ——
   // 只剩这一组时（租户只有 main、或筛选后只剩它）也必须画，否则标识全无
   const headed = groups.length > 1 || groups[0]?.key === 'system'
@@ -297,19 +303,16 @@ const agentGroups = computed(() => {
 // 空列表提示文案（区分「搜索无结果」与「该状态下暂无数据」）
 const emptyText = computed(() => {
   if (searchQuery.value) {
-    return '没有找到匹配的智能体'
+    return t('agent.emptySearch')
   }
   // 系统内置被开关藏起来了：说清为什么空，而不是笼统报「暂无智能体」
   if (!showSystem.value && props.agents.some(a => a.protected)) {
-    return '系统内置智能体已隐藏（点顶部「系统」可重新显示）'
-  }
-  if (statusFilter.value === 'normal') {
-    return '暂无智能体'
+    return t('agent.emptyHidden')
   }
   if (statusFilter.value === 'deprecated') {
-    return '暂无废弃的智能体'
+    return t('agent.emptyDeprecated')
   }
-  return '暂无智能体'
+  return t('agent.emptyNone')
 })
 
 // 列表头部窄屏分层降级：先把状态筛选合并为下拉，仍不够再把搜索框收成图标（点击展开为整行搜索）
@@ -326,12 +329,16 @@ const closeListSearch = () => { listSearchOpen.value = false }
 watch(listHeaderSize, (s) => { if (s !== 'xs') listSearchOpen.value = false })
 
 // 状态筛选项（紧凑下拉用；与模板里的平铺按钮一一对应）
-const STATUS_FILTERS = [
-  { key: 'all', label: '全部', icon: Refresh, cls: '' },
-  { key: 'normal', label: '正常', icon: CircleCheck, cls: 'btn-enable' },
-  { key: 'deprecated', label: '废弃', icon: CircleClose, cls: 'btn-disable' }
-]
-const activeStatus = computed(() => STATUS_FILTERS.find(o => o.key === statusFilter.value) || STATUS_FILTERS[0])
+// label 走 computed：模块级数组里写死中文，切换语言后紧凑下拉不会变
+const STATUS_FILTERS = computed(() => [
+  { key: 'all', label: t('agent.filterAll'), icon: Refresh, cls: '' },
+  { key: 'normal', label: t('agent.filterNormal'), icon: CircleCheck, cls: 'btn-enable' },
+  { key: 'deprecated', label: t('agent.filterDeprecated'), icon: CircleClose, cls: 'btn-disable' }
+])
+const activeStatus = computed(() => {
+  const opts = STATUS_FILTERS.value
+  return opts.find(o => o.key === statusFilter.value) || opts[0]
+})
 const activeStatusLabel = computed(() => {
   const o = activeStatus.value
   const n = statusCounts.value[o.key]
