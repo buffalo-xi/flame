@@ -9,16 +9,16 @@
         size="small"
         clearable
         filterable
-        placeholder="全部工作流"
+        :placeholder="$t('history.placeholderFlow')"
         @change="reload"
       >
         <el-option v-for="f in flows" :key="f.id" :label="f.name" :value="f.id" />
       </el-select>
 
-      <el-select v-model="filter.status" class="rh-status" size="small" clearable placeholder="全部状态" @change="reload">
-        <el-option label="成功" value="success" />
-        <el-option label="失败" value="failed" />
-        <el-option label="取消" value="cancelled" />
+      <el-select v-model="filter.status" class="rh-status" size="small" clearable :placeholder="$t('history.placeholderStatus')" @change="reload">
+        <el-option :label="$t('history.statusSuccess')" value="success" />
+        <el-option :label="$t('history.statusFailed')" value="failed" />
+        <el-option :label="$t('history.statusCancelled')" value="cancelled" />
       </el-select>
 
       <!-- 时间段：预设收进 shortcuts（点一下 = 从当前时刻往前推），也可以自己拖两个时间点。
@@ -31,23 +31,23 @@
         :shortcuts="TIME_SHORTCUTS"
         :default-time="DEFAULT_TIME"
         range-separator="→"
-        start-placeholder="开始时间"
-        end-placeholder="结束时间"
+        :start-placeholder="$t('history.startPlaceholder')"
+        :end-placeholder="$t('history.endPlaceholder')"
         @change="onSpanChange"
       />
 
-      <el-button size="small" :loading="loading" @click="reload">查询</el-button>
+      <el-button size="small" :loading="loading" @click="reload">{{ $t('history.query') }}</el-button>
 
       <span class="rh-total">
-        共 <strong>{{ total }}</strong> 条<template v-if="items.length && items.length < total">，已加载 {{ items.length }}</template>
+        {{ $t('history.total', { total }) }}<template v-if="items.length && items.length < total">{{ $t('history.loaded', { loaded: items.length }) }}</template>
       </span>
 
       <div class="rh-spacer" />
 
-      <el-button size="small" :disabled="!total" @click="exportCsv">导出 CSV</el-button>
+      <el-button size="small" :disabled="!total" @click="exportCsv">{{ $t('history.exportCsv') }}</el-button>
       <!-- 没选任何条件时不让点：默认那 24 小时不算条件（见 hasCondition），
            否则进页面第一眼就能一键清掉最近一天 -->
-      <el-button size="small" type="danger" plain :disabled="!total || !hasCondition()" @click="cleanup">清理</el-button>
+      <el-button size="small" type="danger" plain :disabled="!total || !hasCondition()" @click="cleanup">{{ $t('history.cleanup') }}</el-button>
     </div>
 
     <div class="rh-body">
@@ -63,35 +63,35 @@
             row-key="id"
             @row-click="openDetail"
           >
-            <el-table-column label="开始时间" width="168">
+            <el-table-column :label="$t('history.colStart')" width="168">
               <template #default="{ row }">{{ fmtTime(row.started_at) }}</template>
             </el-table-column>
 
-            <el-table-column label="工作流" min-width="180" show-overflow-tooltip>
+            <el-table-column :label="$t('history.colFlow')" min-width="180" show-overflow-tooltip>
               <template #default="{ row }">
                 <span class="rh-name">{{ row.flow_name || shortId(row.flow_id) }}</span>
               </template>
             </el-table-column>
 
-            <el-table-column label="入口" width="96">
+            <el-table-column :label="$t('history.colEntry')" width="96">
               <template #default="{ row }">{{ runTypeLabel(row.run_type) }}</template>
             </el-table-column>
 
-            <el-table-column label="状态" width="88">
+            <el-table-column :label="$t('history.colStatus')" width="88">
               <template #default="{ row }">
                 <el-tag size="small" :type="statusType(row.status)" effect="plain">{{ statusText(row.status) }}</el-tag>
               </template>
             </el-table-column>
 
-            <el-table-column label="耗时" width="96" align="right">
+            <el-table-column :label="$t('history.colDuration')" width="96" align="right">
               <template #default="{ row }">{{ fmtDuration(row.duration_ms) }}</template>
             </el-table-column>
 
-            <el-table-column label="节点" width="72" align="right">
+            <el-table-column :label="$t('history.colNodes')" width="72" align="right">
               <template #default="{ row }">{{ row.node_count }}</template>
             </el-table-column>
 
-            <el-table-column label="错误" min-width="160" show-overflow-tooltip>
+            <el-table-column :label="$t('history.colError')" min-width="160" show-overflow-tooltip>
               <template #default="{ row }">
                 <span :class="{ 'rh-err': !!row.err_msg }">{{ row.err_msg || '—' }}</span>
               </template>
@@ -99,7 +99,7 @@
 
             <el-table-column width="56" align="center">
               <template #default="{ row }">
-                <el-icon class="rh-del" title="删除这条记录" @click.stop="deleteOne(row)">
+                <el-icon class="rh-del" :title="$t('history.deleteRow')" @click.stop="deleteOne(row)">
                   <Delete />
                 </el-icon>
               </template>
@@ -111,44 +111,44 @@
 
     <div class="rh-more">
       <el-button v-if="items.length < total" size="small" :loading="loadingMore" @click="loadMore">
-        加载更多
+        {{ $t('history.loadMore') }}
       </el-button>
-      <span v-else-if="items.length" class="rh-end">没有更多了</span>
-      <span v-else-if="!loading" class="rh-end">没有符合条件的运行记录</span>
+      <span v-else-if="items.length" class="rh-end">{{ $t('history.noMore') }}</span>
+      <span v-else-if="!loading" class="rh-end">{{ $t('history.noMatch') }}</span>
     </div>
 
     <!-- 详情抽屉：只做「看清楚这次跑了什么」，节点级变量与日志在
          工作流编辑器的运行面板里看（那里有完整上下文），这里不重复造一套。 -->
-    <el-drawer v-model="detailVisible" title="运行详情" size="620px">
+    <el-drawer v-model="detailVisible" :title="$t('history.detailTitle')" size="620px">
       <div v-if="detail" class="rh-detail">
-        <div class="rh-dt-row"><span>运行 ID</span><b class="rh-mono">{{ detail.run.id }}</b></div>
-        <div class="rh-dt-row"><span>工作流</span><b>{{ detail.flowName || shortId(detail.run.flow_id) }}</b></div>
-        <div class="rh-dt-row"><span>状态</span>
+        <div class="rh-dt-row"><span>{{ $t('history.runId') }}</span><b class="rh-mono">{{ detail.run.id }}</b></div>
+        <div class="rh-dt-row"><span>{{ $t('history.colFlow') }}</span><b>{{ detail.flowName || shortId(detail.run.flow_id) }}</b></div>
+        <div class="rh-dt-row"><span>{{ $t('history.colStatus') }}</span>
           <el-tag size="small" :type="statusType(detail.run.status)" effect="plain">{{ statusText(detail.run.status) }}</el-tag>
         </div>
-        <div class="rh-dt-row"><span>入口</span><b>{{ runTypeLabel(detail.run.run_type) }}</b></div>
-        <div class="rh-dt-row"><span>开始 / 结束</span>
+        <div class="rh-dt-row"><span>{{ $t('history.colEntry') }}</span><b>{{ runTypeLabel(detail.run.run_type) }}</b></div>
+        <div class="rh-dt-row"><span>{{ $t('history.startEnd') }}</span>
           <b>{{ fmtTime(detail.run.started_at) }} → {{ detail.run.finished_at ? fmtTime(detail.run.finished_at) : '—' }}</b>
         </div>
-        <div class="rh-dt-row"><span>耗时</span><b>{{ fmtDuration(detail.run.duration_ms) }}</b></div>
-        <div v-if="detail.run.err_msg" class="rh-dt-row"><span>错误</span>
+        <div class="rh-dt-row"><span>{{ $t('history.colDuration') }}</span><b>{{ fmtDuration(detail.run.duration_ms) }}</b></div>
+        <div v-if="detail.run.err_msg" class="rh-dt-row"><span>{{ $t('history.colError') }}</span>
           <b class="rh-err">{{ detail.run.err_msg }}</b>
         </div>
 
-        <div class="rh-dt-title">节点（{{ detail.nodes.length }}）</div>
+        <div class="rh-dt-title">{{ $t('history.nodesTitle', { count: detail.nodes.length }) }}</div>
         <el-table :data="detail.nodes" size="small" max-height="420">
-          <el-table-column label="节点" min-width="120" show-overflow-tooltip>
+          <el-table-column :label="$t('history.colNodes')" min-width="120" show-overflow-tooltip>
             <template #default="{ row }">{{ row.node_id }}<span class="rh-type"> · {{ row.node_type }}</span></template>
           </el-table-column>
-          <el-table-column label="状态" width="80">
+          <el-table-column :label="$t('history.colStatus')" width="80">
             <template #default="{ row }">
               <span :class="statusClass(row.status)">{{ statusText(row.status) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="耗时" width="80" align="right">
+          <el-table-column :label="$t('history.colDuration')" width="80" align="right">
             <template #default="{ row }">{{ fmtDuration(row.duration_ms) }}</template>
           </el-table-column>
-          <el-table-column label="错误" min-width="140" show-overflow-tooltip>
+          <el-table-column :label="$t('history.colError')" min-width="140" show-overflow-tooltip>
             <template #default="{ row }">
               <span v-if="row.err_code || row.err_msg" class="rh-err">
                 {{ row.err_code || '' }}{{ row.err_code && row.err_msg ? ': ' : '' }}{{ row.err_msg || '' }}
@@ -163,40 +163,47 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete } from '@element-plus/icons-vue'
 import { getAuthHeader } from '@/tenant/utils/auth.js'
 import adminApi from '@/tenant/config/admin.js'
 
+const { t } = useI18n()
+
 const PAGE_SIZE = 20
 
 // 时间范围：预设只负责「把区间填进去」（点一下 = 从当前时刻往前推），也可以自己选两个时间点。
 // 查历史 99% 的场景是「刚才 / 今天 / 这周」，所以常用区间做成 shortcut，不逼用户手填时间戳。
-const TIME_SHORTCUTS = [
-  { text: '最近 1 小时', value: () => [new Date(Date.now() - 3600e3), new Date()] },
-  { text: '最近 24 小时', value: () => [new Date(Date.now() - 24 * 3600e3), new Date()] },
+// 用 computed 而不是常量：shortcut 的 text 是渲染文案，切换语言后要跟着变。
+const TIME_SHORTCUTS = computed(() => [
+  { text: t('history.shortcutLast1h'), value: () => [new Date(Date.now() - 3600e3), new Date()] },
+  { text: t('history.shortcutLast24h'), value: () => [new Date(Date.now() - 24 * 3600e3), new Date()] },
   {
-    text: '今天',
+    text: t('history.shortcutToday'),
     value: () => {
       const start = new Date()
       start.setHours(0, 0, 0, 0)
       return [start, new Date()]
     }
   },
-  { text: '最近 7 天', value: () => [new Date(Date.now() - 7 * 24 * 3600e3), new Date()] },
-  { text: '最近 30 天', value: () => [new Date(Date.now() - 30 * 24 * 3600e3), new Date()] }
-]
+  { text: t('history.shortcutLast7d'), value: () => [new Date(Date.now() - 7 * 24 * 3600e3), new Date()] },
+  { text: t('history.shortcutLast30d'), value: () => [new Date(Date.now() - 30 * 24 * 3600e3), new Date()] }
+])
 
 // 只选日期时给起止补默认时刻：否则「11-17 到 11-17」会变成那一刻到那一刻，等于空区间
 const DEFAULT_TIME = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]
 
 // 落库的 run_type 只有三种（见 executors.runTypeOf）：call = 正式调用（入口进线），
 // debug = 编辑页调试器（可断点/单步），preview = 试跑（跑草稿但没有调试器）
-const RUN_TYPE_LABELS = {
-  call: '正式调用', debug: '调试', preview: '试跑'
+const RUN_TYPE_KEYS = {
+  call: 'history.runTypeCall',
+  debug: 'history.runTypeDebug',
+  preview: 'history.runTypePreview'
 }
-const runTypeLabel = (t) => RUN_TYPE_LABELS[t] || t || '—'
+// 参数名不能叫 t —— 会遮蔽 useI18n 的 t，变成翻译函数调用自己
+const runTypeLabel = (v) => (RUN_TYPE_KEYS[v] ? t(RUN_TYPE_KEYS[v]) : v || '—')
 
 const filter = reactive({
   flowId: '',
@@ -221,7 +228,12 @@ const detailVisible = ref(false)
 const detail = ref(null)
 
 const shortId = (id) => (id ? String(id).slice(0, 8) : '—')
-const statusText = (s) => ({ success: '成功', failed: '失败', cancelled: '取消' }[s] || s || '-')
+const STATUS_KEYS = {
+  success: 'history.statusSuccess',
+  failed: 'history.statusFailed',
+  cancelled: 'history.statusCancelled'
+}
+const statusText = (s) => (STATUS_KEYS[s] ? t(STATUS_KEYS[s]) : s || '-')
 const statusType = (s) => ({ success: 'success', failed: 'danger', cancelled: 'info' }[s] || 'info')
 const statusClass = (s) => ({ success: 'rh-ok', failed: 'rh-err', cancelled: 'rh-cancel' }[s] || '')
 
@@ -246,7 +258,7 @@ const fmtDuration = (ms) => {
 // 不复用快捷键文案 —— 同一条「最近 24 小时」在选完之后已经是两个固定时间点，说法要跟数据一致。
 const spanText = () => {
   const [from, to] = filter.span || []
-  if (!from || !to) return '全部'
+  if (!from || !to) return t('history.all')
   return `${fmtTime(from)} → ${fmtTime(to)}`
 }
 
@@ -287,7 +299,7 @@ const fetchPage = async (reset) => {
 
   const resp = await fetch(adminApi.runningHistory(params.toString()), { headers: { ...getAuthHeader() } })
   const data = await resp.json()
-  if (data.code !== 200) throw new Error(data.msg || '查询失败')
+  if (data.code !== 200) throw new Error(data.msg || t('history.queryFailed'))
 
   const page = data.data?.items || []
   total.value = data.data?.total || 0
@@ -300,7 +312,7 @@ const reload = async () => {
   try {
     await fetchPage(true)
   } catch (e) {
-    ElMessage.error(e?.message || '查询失败')
+    ElMessage.error(e?.message || t('history.queryFailed'))
   } finally {
     loading.value = false
   }
@@ -318,7 +330,7 @@ const loadMore = async () => {
   try {
     await fetchPage(false)
   } catch (e) {
-    ElMessage.error(e?.message || '加载失败')
+    ElMessage.error(e?.message || t('history.loadFailed'))
   } finally {
     loadingMore.value = false
   }
@@ -333,18 +345,21 @@ const openDetail = async (row) => {
     if (data.code === 200) {
       detail.value = { run: data.data.run, nodes: data.data.nodes || [], flowName: row.flow_name }
     } else {
-      ElMessage.error(data.msg || '读取详情失败')
+      ElMessage.error(data.msg || t('history.detailFailed'))
     }
   } catch (e) {
-    ElMessage.error(e?.message || '读取详情失败')
+    ElMessage.error(e?.message || t('history.detailFailed'))
   }
 }
 
 const deleteOne = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `删除「${row.flow_name || shortId(row.flow_id)}」在 ${fmtTime(row.started_at)} 的这条运行记录？删除后不可恢复。`,
-      '提示', { type: 'warning' }
+      t('history.deleteConfirm', {
+        name: row.flow_name || shortId(row.flow_id),
+        time: fmtTime(row.started_at)
+      }),
+      t('history.deleteTitle'), { type: 'warning' }
     )
   } catch { return }
 
@@ -354,37 +369,41 @@ const deleteOne = async (row) => {
       headers: { ...getAuthHeader() }
     })
     const data = await resp.json()
-    if (data.code !== 200) throw new Error(data.msg || '删除失败')
+    if (data.code !== 200) throw new Error(data.msg || t('history.deleteFailed'))
 
     // 本地先剔除再回拉一页补齐：直接 reload 会把用户从列表深处弹回顶部
     items.value = items.value.filter((r) => r.id !== row.id)
     total.value = Math.max(0, total.value - 1)
     offset.value = Math.max(0, offset.value - 1)
-    ElMessage.success('已删除')
+    ElMessage.success(t('history.deleted'))
     if (items.value.length < total.value) {
       // 补一页补齐列表：失败也不该盖掉上面那条「已删除」，尾部少一条下次刷新就回来了
       fetchPage(false).catch(() => {})
     }
   } catch (e) {
-    ElMessage.error(e?.message || '删除失败')
+    ElMessage.error(e?.message || t('history.deleteFailed'))
   }
 }
 
 const cleanup = async () => {
   if (!hasCondition()) {
-    ElMessage.warning('至少要选一个筛选条件（工作流 / 状态 / 时间范围），不允许无条件清空')
+    ElMessage.warning(t('history.cleanupNoCondition'))
     return
   }
   const desc = [
-    filter.flowId ? `工作流：${flows.value.find((f) => f.id === filter.flowId)?.name || shortId(filter.flowId)}` : '工作流：全部',
-    filter.status ? `状态：${statusText(filter.status)}` : '状态：全部',
-    `时间：${spanText()}`
-  ].join('；')
+    filter.flowId
+      ? t('history.descFlow', { name: flows.value.find((f) => f.id === filter.flowId)?.name || shortId(filter.flowId) })
+      : t('history.descFlow', { name: t('history.all') }),
+    filter.status
+      ? t('history.descStatus', { name: statusText(filter.status) })
+      : t('history.descStatus', { name: t('history.all') }),
+    t('history.descTime', { value: spanText() })
+  ].join('; ')
 
   try {
     await ElMessageBox.confirm(
-      `将删除符合条件的 ${total.value} 条运行记录（${desc}），删除后不可恢复。`,
-      '清理历史运行', { type: 'warning', confirmButtonText: '删除' }
+      t('history.cleanupConfirm', { total: total.value, desc }),
+      t('history.cleanupTitle'), { type: 'warning', confirmButtonText: t('history.cleanupOk') }
     )
   } catch { return }
 
@@ -394,11 +413,11 @@ const cleanup = async () => {
       headers: { ...getAuthHeader() }
     })
     const data = await resp.json()
-    if (data.code !== 200) throw new Error(data.msg || '清理失败')
-    ElMessage.success(`已删除 ${data.data?.deleted ?? 0} 条`)
+    if (data.code !== 200) throw new Error(data.msg || t('history.cleanupFailed'))
+    ElMessage.success(t('history.cleanupDone', { count: data.data?.deleted ?? 0 }))
     reload()
   } catch (e) {
-    ElMessage.error(e?.message || '清理失败')
+    ElMessage.error(e?.message || t('history.cleanupFailed'))
   }
 }
 
@@ -412,7 +431,7 @@ const exportCsv = async () => {
     const ct = resp.headers.get('content-type') || ''
     if (!ct.includes('csv')) {
       const data = await resp.json()
-      throw new Error(data.msg || '导出失败')
+      throw new Error(data.msg || t('history.exportFailed'))
     }
     const blob = await resp.blob()
     const url = URL.createObjectURL(blob)
@@ -422,7 +441,7 @@ const exportCsv = async () => {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    ElMessage.error(e?.message || '导出失败')
+    ElMessage.error(e?.message || t('history.exportFailed'))
   }
 }
 
