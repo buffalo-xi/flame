@@ -76,7 +76,7 @@ func ListToolVersions(c *gin.Context) {
 	if err := db.DB.QueryRow(`SELECT id FROM `+info.Schema+`.custom_tools WHERE name = $1`, name).
 		Scan(&toolID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "自定义工具不存在", nil, "")
+			errToolNotFound(c)
 			return
 		}
 		xhttp.ErrJSON(c, "读取自定义工具失败: "+err.Error(), nil, "")
@@ -130,7 +130,7 @@ func ReleaseToolVersion(c *gin.Context) {
 	store := storeFor(info.Schema)
 	t, err := store.Get(info.Schema, name)
 	if errors.Is(err, sql.ErrNoRows) || t == nil {
-		xhttp.ErrJSON(c, "自定义工具不存在", nil, "")
+		errToolNotFound(c)
 		return
 	}
 	if err != nil {
@@ -188,7 +188,7 @@ func ReleaseToolVersion(c *gin.Context) {
 	if err := tx.QueryRow(`SELECT status FROM `+info.Schema+`.custom_tools WHERE id = $1 FOR UPDATE`, t.ID).
 		Scan(&status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "自定义工具不存在", nil, "")
+			errToolNotFound(c)
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -318,7 +318,7 @@ func ApplyToolVersion(c *gin.Context) {
 	if err := tx.QueryRow(`SELECT status FROM `+info.Schema+`.custom_tools WHERE name = $1 FOR UPDATE`, name).
 		Scan(&status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "自定义工具不存在", nil, "")
+			errToolNotFound(c)
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -416,7 +416,7 @@ func RollbackToolVersion(c *gin.Context) {
 	}
 	t, err := storeFor(info.Schema).Get(info.Schema, name)
 	if errors.Is(err, sql.ErrNoRows) || t == nil {
-		xhttp.ErrJSON(c, "自定义工具不存在", nil, "")
+		errToolNotFound(c)
 		return
 	}
 	if err != nil {
@@ -496,7 +496,7 @@ func DeleteToolVersion(c *gin.Context) {
 	if err := tx.QueryRow(`SELECT status FROM `+info.Schema+`.custom_tools WHERE name = $1 FOR UPDATE`, name).
 		Scan(&status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "自定义工具不存在", nil, "")
+			errToolNotFound(c)
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")

@@ -174,6 +174,15 @@ func sandboxView() gin.H {
 	}
 }
 
+// errToolNotFound 自定义工具不存在（编码 tool.not_found）。
+//
+// 名字统一从路由参数取，不要求调用方各自拼：这些 handler 的路由都带 :name，
+// 个别分支只剩实体行（如按 id 锁行后才发现没了）也在同一路由下，取得到。
+// msg 仍是中文原文，前端行为不变。
+func errToolNotFound(c *gin.Context) {
+	xhttp.ErrCode(c, "tool.not_found", map[string]any{"name": c.Param("name")}, "自定义工具不存在", "")
+}
+
 // GetCustomTool GET /customtools/:name
 func GetCustomTool(c *gin.Context) {
 	info, ok := mustAuth(c)
@@ -182,7 +191,7 @@ func GetCustomTool(c *gin.Context) {
 	}
 	t, err := storeFor(info.Schema).Get(info.Schema, c.Param("name"))
 	if err != nil {
-		xhttp.ErrJSON(c, "自定义工具不存在", nil, "")
+		errToolNotFound(c)
 		return
 	}
 	// 先合并契约再读入口文件：entry 可能只在 TOOL.json 里改过（表里还是旧的）。
@@ -309,7 +318,7 @@ func UpdateCustomTool(c *gin.Context) {
 	name := c.Param("name")
 	cur, err := storeFor(info.Schema).Get(info.Schema, name)
 	if err != nil {
-		xhttp.ErrJSON(c, "自定义工具不存在", nil, "")
+		errToolNotFound(c)
 		return
 	}
 	// 以**文件里的契约**为基线再叠加本次改动：读路径是文件优先，
@@ -445,7 +454,7 @@ func RunCustomTool(c *gin.Context) {
 	name := c.Param("name")
 	t, err := storeFor(info.Schema).Get(info.Schema, name)
 	if err != nil {
-		xhttp.ErrJSON(c, "自定义工具不存在", nil, "")
+		errToolNotFound(c)
 		return
 	}
 
