@@ -177,18 +177,22 @@ func NewRPCHandler() http.HandlerFunc {
 		ep, err := findEndpoint(ai, name)
 		if err != nil {
 			// 工具不存在：资源名（params.name）指向无效，对齐 MCP 的 InvalidParams(-32602)
-			writeRPCError(w, req.ID, errCodeInvalidParams, "%s", err.Error())
+			writeRPCErrorCode(w, req.ID, errCodeInvalidParams, "endpoint.not_found",
+				map[string]string{"name": name}, "%s", err.Error())
 			return
 		}
-		// 凭证无权调用该端点：与「不存在」用完全相同的措辞，不泄漏「存在但未授权」。
+		// 凭证无权调用该端点：与「不存在」用完全相同的措辞**和编码**，不泄漏「存在但未授权」。
+		// 编码也必须一致 —— 只对齐文案而编码不同，前端翻译后又会把两者区分开。
 		// 放在 exposed 检查之前 —— 连「未对外开放」这个事实都不该被无权调用方探到。
 		if !ai.TargetAllowedWith(ep.TargetType, ep.TargetID, ep.TargetSupervisor) {
-			writeRPCError(w, req.ID, errCodeInvalidParams, "服务端点不存在: %s", name)
+			writeRPCErrorCode(w, req.ID, errCodeInvalidParams, "endpoint.not_found",
+				map[string]string{"name": name}, "服务端点不存在: %s", name)
 			return
 		}
 		if !ep.Exposed.Bool() {
 			// 端点未对外开放：资源不可用（参数指向一个仅内部端点），对齐 MCP 归为 InvalidParams
-			writeRPCError(w, req.ID, errCodeInvalidParams, "服务端点未对外开放: %s", name)
+			writeRPCErrorCode(w, req.ID, errCodeInvalidParams, "endpoint.not_exposed",
+				map[string]string{"name": name}, "服务端点未对外开放: %s", name)
 			return
 		}
 
@@ -743,9 +747,38 @@ func sessionErrCode(err error) int {
 	}
 }
 
+// rpcErrorData 协议错误里的业务编码（放在 error.data，不动 error.code）。
+//
+// 为什么不把业务编码塞进 error.code：JSON-RPC 的 code 有标准语义（-32602 / -32603 等），
+// 外部 MCP 宿主按它区分「协议错 / 业务错」；塞业务值会让它们当成协议故障。
+// 规范见 nexus/docs/error-codes.md。
+type rpcErrorData struct {
+	Error  string            `json:"error"`
+	Params map[string]string `json:"params,omitempty"`
+}
+
+// writeRPCErrorCode 同 writeRPCError，但额外带上机器可读的业务编码与渲染参数。
+//
+// message 仍然是中文原文：curl、日志、以及未升级的客户端表现完全不变，
+// 翻译只发生在按 data.error 查表的消费方。
+func writeRPCErrorCode(w http.ResponseWriter, reqID interface{}, code int, errCode string, params map[string]string, format string, args ...interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rpcResponse{
+		Jsonrpc: "2.0",
+		ID:      reqID,
+		Error: &rpcError{
+			Code:    code,
+			Message: fmt.Sprintf(format, args...),
+			Data:    rpcErrorData{Error: errCode, Params: params},
+		},
+	})
+}
+
 // writeRPCError 写协议层错误：HTTP 始终 200，错误置于 JSON-RPC 响应体的 error 字段，
 // 与 MCP server 的工具错误返回方式对齐（MCP 中 return error 即被 SDK 包成协议 error）。
 // 仅用于「已解析为合法 JSON-RPC 请求之后」的业务错误；传输层错误仍用 xhttpErr 给 HTTP 状态码。
+//
+// 需要给前端 / 客户端一个可翻译的编码时用 writeRPCErrorCode。
 func writeRPCError(w http.ResponseWriter, reqID interface{}, code int, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	w.Header().Set("Content-Type", "application/json")

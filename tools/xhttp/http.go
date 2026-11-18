@@ -70,6 +70,29 @@ func ErrQuota(c *gin.Context, msg string, data interface{}, trace string) {
 	respond(c, codeQuota, msg, data, trace)
 }
 
+// ErrCode 业务错误 + 机器可读编码（前端据此翻译，见 nexus/docs/error-codes.md）。
+//
+// 与 ErrJSON 只差一点：多带 error（编码）与 params（渲染参数）。
+// msg 仍然返回中文原文 —— 日志、curl、旧前端都用它；翻译由前端按 error 查表完成，
+// 后端不关心 language。查不到对应语言条目时前端回退 msg，所以这个函数可以渐进替换。
+//
+// 参数名用 params 而不是复用 data：data 在既有信封里是「给对方的数据」，
+// 这里是「文案变量」（名字、数量、上限），混用会让前端误判。
+// params 只放可展示的标量，不要放内网地址、SQL 或堆栈。
+func ErrCode(c *gin.Context, errCode string, params map[string]any, msg string, trace string) {
+	if trace == "" {
+		trace = c.Request.Host + c.Request.URL.Path
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":   codeInvalid,
+		"error":  errCode,
+		"params": params,
+		"msg":    msg,
+		"data":   nil,
+		"trace":  trace,
+	})
+}
+
 // SendErrorResponse 返回传输层/路由层错误（前置校验失败时专用）。
 //
 // 与上面的业务信封不同：返回体用顶层 "error"（字符串枚举 reason）+ "message"，
