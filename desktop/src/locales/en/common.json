@@ -9,7 +9,8 @@
     "search": "Search",
     "loading": "Loading…",
     "empty": "No data",
-    "language": "Language"
+    "language": "Language",
+    "placeholder": "Content will appear here"
   },
   "login": {
     "title": "Flame Desk",
@@ -24,5 +25,33 @@
     "platformTitle": "Platform sign-in",
     "platformSubmit": "Sign in to admin",
     "platformHint": "Platform accounts are separate from tenant accounts and are managed under Platform Users. There is no self-service reset — ask a platform administrator to reset it under Platform Users → Reset password."
+  },
+  "nav": {
+    "agents": "Agents",
+    "skills": "Skills",
+    "tools": "Tools",
+    "workflows": "Workflows",
+    "running": "Running",
+    "endpoints": "Endpoints",
+    "assets": "Asset market",
+    "settings": "Settings",
+    "password": "Password",
+    "logout": "Sign out",
+    "assetsTip": "Asset market: list and install across tenants",
+    "settingsTip": "Tenant settings: models / connections / credentials / quotas",
+    "passwordTitle": "Change password"
+  },
+  "layout": {
+    "chatShow": "Open chat",
+    "chatHide": "Hide chat",
+    "wbShow": "Open workbench",
+    "wbHide": "Hide workbench (tabs kept)",
+    "wbHideAria": "Hide workbench",
+    "contentShow": "Show content (restore split view)",
+    "contentShowAria": "Show content",
+    "contentHide": "Hide content (chat and workbench take the full row)",
+    "contentHideAria": "Hide content",
+    "collapse": "Collapse content (chat full width)",
+    "expand": "Expand content"
   }
 }

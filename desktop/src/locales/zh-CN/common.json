@@ -9,7 +9,8 @@
     "search": "搜索",
     "loading": "加载中…",
     "empty": "暂无数据",
-    "language": "语言"
+    "language": "语言",
+    "placeholder": "内容将在这里显示"
   },
   "login": {
     "title": "Flame Desk",
@@ -24,5 +25,33 @@
     "platformTitle": "平台登录",
     "platformSubmit": "登录管理台",
     "platformHint": "平台账号与租户账号相互独立，由管理员在「平台用户」里维护。管理台没有自助找回：忘记密码请联系平台管理员，在「平台用户 → 重置密码」里重置。"
+  },
+  "nav": {
+    "agents": "智能体",
+    "skills": "技能",
+    "tools": "工具",
+    "workflows": "工作流",
+    "running": "运行",
+    "endpoints": "端点",
+    "assets": "资产市场",
+    "settings": "设置",
+    "password": "密码",
+    "logout": "退出",
+    "assetsTip": "资产市场：跨租户上架 / 安装",
+    "settingsTip": "租户设置：模型 / 连接 / 凭证 / 配额",
+    "passwordTitle": "修改密码"
+  },
+  "layout": {
+    "chatShow": "打开会话",
+    "chatHide": "收起会话",
+    "wbShow": "打开工作台",
+    "wbHide": "收起工作台（标签保留）",
+    "wbHideAria": "收起工作台",
+    "contentShow": "打开内容（恢复左右分栏）",
+    "contentShowAria": "打开内容",
+    "contentHide": "收起内容（对话与工作台占满整行）",
+    "contentHideAria": "收起内容",
+    "collapse": "折叠内容区（对话全宽）",
+    "expand": "展开内容区"
   }
 }

@@ -18,16 +18,16 @@
           <li class="nav-group">
             <ul>
               <li class="nav-state" :class="{ 'is-on': chatVisible }">
-                <a href="#" :title="chatVisible ? '收起会话' : '打开会话'"
-                   :aria-label="chatVisible ? '收起会话' : '打开会话'" @click.prevent="toggleChat">
+                <a href="#" :title="chatVisible ? $t('layout.chatHide') : $t('layout.chatShow')"
+                   :aria-label="chatVisible ? $t('layout.chatHide') : $t('layout.chatShow')" @click.prevent="toggleChat">
                   <span class="nav-icon">
                     <el-icon><ChatRound /></el-icon>
                   </span>
                 </a>
               </li>
               <li class="nav-state" :class="{ 'is-on': wbOpen }">
-                <a href="#" :title="wbOpen ? '收起工作台（标签保留）' : '打开工作台'"
-                   :aria-label="wbOpen ? '收起工作台' : '打开工作台'" @click.prevent="toggleWorkbench">
+                <a href="#" :title="wbOpen ? $t('layout.wbHide') : $t('layout.wbShow')"
+                   :aria-label="wbOpen ? $t('layout.wbHideAria') : $t('layout.wbShow')" @click.prevent="toggleWorkbench">
                   <span class="nav-icon">
                     <el-icon><Grid /></el-icon>
                   </span>
@@ -37,8 +37,8 @@
                    这里只是常显入口（收起后不会没有回去的路）。 -->
               <li class="nav-state" :class="{ 'is-on': !contentCollapsed }">
                 <a href="#"
-                   :title="contentCollapsed ? '打开内容（恢复左右分栏）' : '收起内容（对话与工作台占满整行）'"
-                   :aria-label="contentCollapsed ? '打开内容' : '收起内容'"
+                   :title="contentCollapsed ? $t('layout.contentShow') : $t('layout.contentHide')"
+                   :aria-label="contentCollapsed ? $t('layout.contentShowAria') : $t('layout.contentHideAria')"
                    @click.prevent="toggleContentPanel">
                   <span class="nav-icon">
                     <el-icon><Document /></el-icon>
@@ -55,7 +55,7 @@
                   <span class="nav-icon">
                     <el-icon><Cpu /></el-icon>
                   </span>
-                  <span class="nav-text">智能体</span>
+                  <span class="nav-text">{{ $t('nav.agents') }}</span>
                 </a>
               </li>
               <li :class="{ active: activeNav === 'agent-skills' }" @click="setActiveNav('agent-skills')">
@@ -63,7 +63,7 @@
                   <span class="nav-icon">
                     <el-icon><Collection /></el-icon>
                   </span>
-                  <span class="nav-text">技能</span>
+                  <span class="nav-text">{{ $t('nav.skills') }}</span>
                 </a>
               </li>
               <li :class="{ active: activeNav === 'capabilities' }" @click="setActiveNav('capabilities')">
@@ -71,7 +71,7 @@
                   <span class="nav-icon">
                     <el-icon><Tools /></el-icon>
                   </span>
-                  <span class="nav-text">工具</span>
+                  <span class="nav-text">{{ $t('nav.tools') }}</span>
                 </a>
               </li>
               <!-- 工作流排在工具之后：智能体 / 技能 / 工具是「可被组合的零件」，
@@ -81,7 +81,7 @@
                   <span class="nav-icon">
                     <el-icon><Share /></el-icon>
                   </span>
-                  <span class="nav-text">工作流</span>
+                  <span class="nav-text">{{ $t('nav.workflows') }}</span>
                 </a>
               </li>
             </ul>
@@ -96,7 +96,7 @@
                   <span class="nav-icon">
                     <el-icon><Odometer /></el-icon>
                   </span>
-                  <span class="nav-text">运行</span>
+                  <span class="nav-text">{{ $t('nav.running') }}</span>
                 </a>
               </li>
               <li :class="{ active: activeNav === 'endpoints' }" @click="setActiveNav('endpoints')">
@@ -104,7 +104,7 @@
                   <span class="nav-icon">
                     <el-icon><Promotion /></el-icon>
                   </span>
-                  <span class="nav-text">端点</span>
+                  <span class="nav-text">{{ $t('nav.endpoints') }}</span>
                 </a>
               </li>
             </ul>
@@ -122,23 +122,26 @@
              与「运行 / 端点」那种日常入口不是一个心智模型，占着主路径反而干扰。
              仍保留文字（「资产市场」纯图标不直观），当前在这一页时同导航一样变蓝。 -->
         <button class="logout-button" :class="{ 'is-active': activeNav === 'assets' }"
-                title="资产市场：跨租户上架 / 安装" @click="setActiveNav('assets')">
+                :title="$t('nav.assetsTip')" @click="setActiveNav('assets')">
           <el-icon><Shop /></el-icon>
-          <span>资产市场</span>
+          <span>{{ $t('nav.assets') }}</span>
         </button>
         <button class="logout-button" :class="{ 'is-active': activeNav === 'settings' }"
-                title="租户设置：模型 / 连接 / 凭证 / 配额" @click="setActiveNav('settings')">
+                :title="$t('nav.settingsTip')" @click="setActiveNav('settings')">
           <el-icon><Setting /></el-icon>
-          <span>设置</span>
+          <span>{{ $t('nav.settings') }}</span>
         </button>
 
+        <button class="logout-button" :title="$t('common.language')" @click="toggleLocale">
+          <span>{{ nextLocaleLabel }}</span>
+        </button>
         <button class="logout-button" @click="openPwdDialog">
           <el-icon><Lock /></el-icon>
-          <span>密码</span>
+          <span>{{ $t('nav.password') }}</span>
         </button>
         <button class="logout-button" @click="handleLogout">
           <el-icon><SwitchButton /></el-icon>
-          <span>退出</span>
+          <span>{{ $t('nav.logout') }}</span>
         </button>
       </div>
     </header>
@@ -224,6 +227,7 @@ import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Cpu, ChatRound, Setting, SwitchButton, Share, Collection, Tools, Promotion, Lock, Grid, Shop, Odometer } from '@element-plus/icons-vue'
 import apiConfig from '../config/api.js'
 import { getToken, getUser } from '../utils/auth.js'
+import { currentLocale, setLocale } from '../../locales'
 import Agents from './Agents.vue'
 import AssetMarket from './AssetMarket.vue'
 import Capabilities from './Capabilities.vue'
@@ -236,6 +240,11 @@ import Chat from './Chat.vue'
 
 const emit = defineEmits(['logout'])
 const activeNav = ref('agents')
+
+// 语言切换常驻入口：登录页那个按钮只在未登录时可见，登录后得有地方能切回来。
+// 按钮显示「将要切到」的语言，避免用户误以为当前就是英文界面。
+const nextLocaleLabel = computed(() => (currentLocale() === 'zh-CN' ? 'EN' : '中'))
+const toggleLocale = () => setLocale(currentLocale() === 'zh-CN' ? 'en' : 'zh-CN')
 // 跳进设置页时希望落在哪个页签（'' = 由 Settings 自己决定，默认 llm）
 const settingsTab = ref('')
 
