@@ -1,11 +1,27 @@
 # 构建产物
 *.exe
+*.exe~
 *.test
+*.dll
+*.so
+*.dylib
 bin/
 dist/
 
+# 覆盖率产物
+*.out
+coverage.html
+coverage.txt
+coverage.xml
+*.coverprofile
+profile.cov
+
 # Delve 调试产物（名字是 __debug_bin.exe<数字>，不以 .exe 结尾，上面的规则拦不住）
 __debug_bin*
+
+# Go workspace（本项目用 replace 串联四个 module，不依赖 go.work）
+go.work
+go.work.sum
 
 # 交叉编译产物（无扩展名，按路径排除）
 sandboxd/sandboxd-linux
