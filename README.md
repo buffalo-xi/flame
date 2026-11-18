@@ -1,8 +1,6 @@
 # flame
 
-Go 语言设计的企业级工作流与智能体运行环境，参照 openclaw + dify 的特性，一起创建吧。
-
-多租户 AI Agent 平台。把「智能体 / 技能 / 工具 / 工作流」这些构建物管起来，把它们暴露成对外可调的端点（MCP / RPC），并在一个统一的运行台账里看到所有正在跑的东西。
+Go 写的多租户 AI Agent 平台。把「智能体 / 技能 / 工具 / 工作流」这些构建物管起来，把它们暴露成对外可调的端点（MCP / RPC），并在一个统一的运行台账里看到所有正在跑的东西。
 
 配套一个 Vue 3 管理台（`desktop/`），租户端与平台端共用一套前端。
 
@@ -57,6 +55,16 @@ Go 语言设计的企业级工作流与智能体运行环境，参照 openclaw +
                               └──> sandboxg ──> sandboxd ──> 隔离单元
                                                     （docker / nsjail / none）
 ```
+
+## 设计要点
+
+几条贯穿全仓的取舍，决定了这套东西在速度和边界上的表现。细节见 [`nexus/docs/design-highlights.md`](nexus/docs/design-highlights.md)。
+
+- **端点在本租户进程内直调**：`rpc` 节点调 flow / agent 不走网络；stdio MCP 会话按连接复用子进程，配置变更才重建。
+- **防环靠深度 + 祖先链，不靠计数器**：每次跨 run 都会新建 `ExecContext`、执行计数归零，所以只能让「层数」收敛。配置成 `-1` / `0`（不限）在这里**刻意不认** —— 纯 flow 的环只有这一道闸。
+- **多租户 = 一租户一 schema + SQL 显式限定**：不依赖 `search_path`（连接池复用下不可靠）。配额与运行参数都是「系统硬顶 → 租户收紧 → 用户再收紧」的三层 clamp。
+- **端点是一行「目标 × 协议」**：`exposed` 只表达「对外可见」，租户内部直调不受它限制；授权绑的是**目标**（agent / flow），不是端点 —— 端点可以重建，目标才是稳定身份。
+- **热路径上少查一次库**：端点目录按运行快照、配置与配额走 Redis 读穿缓存（含负缓存）、运行参数在 run 开始时冻结一次。
 
 ## 环境要求
 
@@ -140,6 +148,7 @@ desktop/          Vue 3 管理台
 - `nexus/docs/terminology.md` — 术语与动作词约定（改代码前建议先读）
 - `nexus/docs/sandbox-design.md` — 沙箱隔离设计与三条执行通道
 - `nexus/docs/workspace-layout-and-supervisor-power.md` — 租户工作区布局
+- `nexus/docs/design-highlights.md` — 设计要点：调用链防环、多租户配额、端点模型
 - `AGENTS.md` — 模块地图与跨领域红线
 
 ## 安全提示
