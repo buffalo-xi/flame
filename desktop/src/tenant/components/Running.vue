@@ -4,8 +4,8 @@
          运行中 = 后端跨实例台账（Redis），活着才在，靠轮询刷新；
          运行历史 = flow_run_records（跑完才落库、长期保留），靠手动查询分页。 -->
     <el-tabs v-model="tab" class="running-tabs">
-      <el-tab-pane label="运行中" name="running" />
-      <el-tab-pane label="运行历史" name="history" />
+      <el-tab-pane :label="$t('running.tabRunning')" name="running" />
+      <el-tab-pane :label="$t('running.tabHistory')" name="history" />
     </el-tabs>
 
     <!-- 运行台账 = 租户里「正在跑什么」：agent 与 flow 都在这里。
@@ -16,16 +16,16 @@
            否则一排控件摊在灰底上、左边再飘一行小字，和其它页面不像一个站。 -->
       <div class="running-actions">
         <el-radio-group v-model="kind" size="small">
-          <el-radio-button value="">全部</el-radio-button>
-          <el-radio-button value="agent">智能体</el-radio-button>
-          <el-radio-button value="flow">工作流</el-radio-button>
+          <el-radio-button value="">{{ $t('running.filterAll') }}</el-radio-button>
+          <el-radio-button value="agent">{{ $t('running.filterAgent') }}</el-radio-button>
+          <el-radio-button value="flow">{{ $t('running.filterFlow') }}</el-radio-button>
         </el-radio-group>
 
         <!-- 排序：两个方向都在前端算（每条数据里已有 started_at），
              started_at 越小 = 跑得越久，所以「最久优先」就是升序 -->
         <el-radio-group v-model="sortOrder" size="small">
-          <el-radio-button value="longest">最久优先</el-radio-button>
-          <el-radio-button value="newest">最新优先</el-radio-button>
+          <el-radio-button value="longest">{{ $t('running.sortLongest') }}</el-radio-button>
+          <el-radio-button value="newest">{{ $t('running.sortNewest') }}</el-radio-button>
         </el-radio-group>
 
         <!-- 耗时下限：长时间挂着不结束的 run 才是异常信号，比「哪个最久」更直接 -->
@@ -33,17 +33,17 @@
           <el-option v-for="o in DURATION_FILTERS" :key="o.value" :label="o.label" :value="o.value" />
         </el-select>
 
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
+        <el-button size="small" :loading="loading" @click="load">{{ $t('running.refresh') }}</el-button>
 
         <span class="running-count">
-          共 <strong>{{ rows.length }}</strong> 条<template v-if="visibleRows.length !== rows.length">，显示 {{ visibleRows.length }}</template>
+          {{ $t('running.count', { total: rows.length }) }}<template v-if="visibleRows.length !== rows.length">{{ $t('running.countShown', { shown: visibleRows.length }) }}</template>
         </span>
 
         <span class="running-hint">
-          本租户当前在跑的智能体与工作流，跨实例汇总；默认最久优先 —— 跑得越久越该先看
+          {{ $t('running.hint') }}
         </span>
 
-        <el-switch v-model="autoRefresh" size="small" active-text="自动刷新" />
+        <el-switch v-model="autoRefresh" size="small" :active-text="$t('running.autoRefresh')" />
       </div>
 
       <!-- 台账没读全时如实说明：此时列表只剩本实例在跑的，别让「只看到一半」被当成事实 -->
@@ -53,8 +53,8 @@
         type="warning"
         :closable="false"
         show-icon
-        title="运行台账未读全（Redis 未启用或不可用）"
-        :description="`下面只包含本实例（${instance || '未知'}）在跑的运行。`"
+        :title="$t('running.alertTitle')"
+        :description="t('running.alertDesc', { instance: instance || t('running.unknown') })"
       />
 
       <div class="running-body">
@@ -95,10 +95,15 @@
 
 <script setup>
 import { ref, computed, h, watch, onUnmounted, onActivated, onDeactivated } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox, ElButton, ElTag } from 'element-plus'
 import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import RunHistory from './RunHistory.vue'
+
+// 列定义与下拉选项都要跟着语言切换重算，所以它们不是常量数组而是 computed ——
+// el-table-v2 的列是渲染函数，locale 变了不会自动重渲染，只有 data（columns）变了才会。
+const { t } = useI18n()
 
 // tab：running = 实时台账（轮询）| history = 历史运行记录（按需查询）
 const tab = ref('running')
@@ -123,12 +128,13 @@ const now = ref(Date.now())
 const sortOrder = ref('longest')  // longest | newest
 const minDuration = ref(0)        // ms，0 = 不筛
 
-const DURATION_FILTERS = [
-  { label: '全部耗时', value: 0 },
-  { label: '超过 1 分钟', value: 60 * 1000 },
-  { label: '超过 5 分钟', value: 5 * 60 * 1000 },
-  { label: '超过 30 分钟', value: 30 * 60 * 1000 }
-]
+// 下拉选项跟着语言切换重算：label 是渲染文案，value 是筛选值（不参与翻译）
+const DURATION_FILTERS = computed(() => [
+  { label: t('running.durationAll'), value: 0 },
+  { label: t('running.duration1m'), value: 60 * 1000 },
+  { label: t('running.duration5m'), value: 5 * 60 * 1000 },
+  { label: t('running.duration30m'), value: 30 * 60 * 1000 }
+])
 
 // 超过这个时长就标橙：长时间不结束的运行才是运维真正要盯的那类。
 // 与 DURATION_FILTERS 的最后一项刻意同值 —— 筛出来的一屏应该整屏都是橙的。
@@ -152,16 +158,9 @@ const authHeaders = () => ({ Authorization: `Bearer ${getToken()}` })
 const shortId = (id) => (id ? String(id).slice(0, 8) : '—')
 
 // 入口：与后端 run_type 同一套词（agent 的 call/rpc/mcp/agent；flow 的 call/rpc/mcp/flow/debug/preview）
-const RUN_TYPE_LABELS = {
-  call: '对话',
-  rpc: 'RPC',
-  mcp: 'MCP',
-  agent: '智能体调用',
-  flow: '流程调用',
-  debug: '调试',
-  preview: '试跑'
-}
-const runTypeLabel = (t) => RUN_TYPE_LABELS[t] || t || '—'
+const RUN_TYPE_KEYS = ['call', 'rpc', 'mcp', 'agent', 'flow', 'debug', 'preview']
+// 参数名不能叫 t —— 会遮蔽 useI18n 的 t，变成翻译函数调用自己
+const runTypeLabel = (v) => (RUN_TYPE_KEYS.includes(v) ? t(`running.runType.${v}`) : v || '—')
 
 const fmtDuration = (ms) => {
   if (!Number.isFinite(ms) || ms < 0) return '—'
@@ -180,7 +179,7 @@ const load = async (silent = false) => {
   try {
     const res = await fetch(adminApi.running(kind.value), { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '读取运行列表失败')
+    if (body.code !== 200) throw new Error(body.msg || t('running.loadFailed'))
     rows.value = body.data?.runs || []
     complete.value = body.data?.complete !== false
     instance.value = body.data?.instance || ''
@@ -192,7 +191,7 @@ const load = async (silent = false) => {
       schedulePoll()
     }
   } catch (e) {
-    if (!silent) ElMessage.error(e.message || '读取运行列表失败')
+    if (!silent) ElMessage.error(e.message || t('running.loadFailed'))
   } finally {
     if (!silent) loading.value = false
   }
@@ -203,9 +202,9 @@ const load = async (silent = false) => {
 const stopRun = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `终止「${row.target_name || row.target_id}」这一轮运行？已产生的输出会保留。`,
-      '终止运行',
-      { type: 'warning', confirmButtonText: '终止', cancelButtonText: '取消' }
+      t('running.stopConfirm', { name: row.target_name || row.target_id }),
+      t('running.stopTitle'),
+      { type: 'warning', confirmButtonText: t('running.stopOk'), cancelButtonText: t('common.cancel') }
     )
   } catch {
     return
@@ -218,19 +217,19 @@ const stopRun = async (row) => {
       body: JSON.stringify({ kind: row.kind, run_id: row.run_id, session_id: row.session_id })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '终止失败')
+    if (body.code !== 200) throw new Error(body.msg || t('running.stopFailed'))
 
     const reason = body.data?.reason
     if (reason === 'stopped') {
-      ElMessage.success('已终止')
+      ElMessage.success(t('running.stopResultStopped'))
     } else if (reason === 'broadcast') {
-      ElMessage.success('已广播给所有实例，运行在别处，稍后会自动消失')
+      ElMessage.success(t('running.stopResultBroadcast'))
     } else {
-      ElMessage.warning('没找到在跑的运行（可能刚结束），且广播不可用')
+      ElMessage.warning(t('running.stopResultNotFound'))
     }
     load(true)
   } catch (e) {
-    ElMessage.error(e.message || '终止失败')
+    ElMessage.error(e.message || t('running.stopFailed'))
   } finally {
     const next = { ...stopping.value }
     delete next[row.run_id]
@@ -268,15 +267,13 @@ const visibleRows = computed(() => {
 // 空态分两行（标题 + 说明），与端点页的空态同一套排版
 const emptyTitle = computed(() => {
   // 首次进来列表还是空的：先说「加载中」，别先闪一句「没有在跑的运行」
-  if (loading.value && !rows.value.length) return '加载中…'
-  return rows.value.length ? '没有符合筛选条件的运行' : '当前没有在跑的运行'
+  if (loading.value && !rows.value.length) return t('running.emptyLoading')
+  return rows.value.length ? t('running.emptyFiltered') : t('running.emptyNone')
 })
 
 const emptyTip = computed(() => {
   if (loading.value) return ''
-  return rows.value.length
-    ? '可放宽「耗时」或「类型」筛选'
-    : '本租户暂时没有执行中的智能体或工作流；有调用时会自动出现在这里'
+  return rows.value.length ? t('running.tipFiltered') : t('running.tipNone')
 })
 
 // 跑太久的行加类：左侧一条橙线，扫一眼就知道该终止哪条
@@ -284,23 +281,23 @@ const rowClass = ({ rowData }) => (rowData.elapsed >= OVERDUE_MS ? 'is-overdue' 
 
 // 列定义。v2 没有模板式列，全部用渲染函数；宽度合计约 870px，窄窗口横向滚动，
 // 操作列 fixed 在右侧 —— 终止是破坏性操作，不放行首（误触），与全站列表一致在行尾。
-const columns = [
+const columns = computed(() => [
   {
     key: 'kind',
     dataKey: 'kind',
-    title: '类型',
+    title: t('running.colKind'),
     width: 92,
     cellRenderer: ({ rowData }) =>
       h(ElTag, {
         size: 'small',
         type: rowData.kind === 'agent' ? 'primary' : 'success',
         effect: 'light'
-      }, rowData.kind === 'agent' ? '智能体' : '工作流')
+      }, rowData.kind === 'agent' ? t('running.filterAgent') : t('running.filterFlow'))
   },
   {
     key: 'name',
     dataKey: 'target_name',
-    title: '名称',
+    title: t('running.colName'),
     width: 200,
     flexGrow: 1,
     cellRenderer: ({ rowData }) =>
@@ -313,7 +310,7 @@ const columns = [
   {
     key: 'run_type',
     dataKey: 'run_type',
-    title: '入口',
+    title: t('running.colEntry'),
     width: 96,
     cellRenderer: ({ rowData }) =>
       h(ElTag, { size: 'small', type: 'info', effect: 'plain' }, runTypeLabel(rowData.run_type))
@@ -323,7 +320,7 @@ const columns = [
     // 而会话 id 只在核对时用得到，降为次要信息正合适。
     key: 'user_id',
     dataKey: 'user_id',
-    title: '用户 / 会话',
+    title: t('running.colUserSession'),
     width: 200,
     cellRenderer: ({ rowData }) =>
       h('div', { class: 'run-cell' }, [
@@ -342,7 +339,7 @@ const columns = [
     // 上行放耗时（运维最关心的信号，超时标橙），下行放实例标识（多副本时才用得上）。
     key: 'instance',
     dataKey: 'instance',
-    title: '已运行 / 实例',
+    title: t('running.colElapsedInstance'),
     width: 190,
     cellRenderer: ({ rowData }) =>
       h('div', { class: 'run-cell' }, [
@@ -350,13 +347,13 @@ const columns = [
           fmtDuration(rowData.elapsed)),
         h('div', { class: 'run-instance' }, [
           h('span', { class: 'run-sub', title: rowData.instance }, rowData.instance || '—'),
-          rowData.local ? h(ElTag, { size: 'small', effect: 'plain', class: 'run-local' }, '本机') : null
+          rowData.local ? h(ElTag, { size: 'small', effect: 'plain', class: 'run-local' }, t('running.local')) : null
         ])
       ])
   },
   {
     key: 'actions',
-    title: '操作',
+    title: t('running.colActions'),
     width: 88,
     align: 'right',
     fixed: 'right',
@@ -368,10 +365,10 @@ const columns = [
           size: 'small',
           loading: !!rowData.busy,
           onClick: () => stopRun(rowData)
-        }, '终止')
+        }, t('running.stop'))
       ])
   }
-]
+])
 
 function schedulePoll() {
   if (pollTimer) {
