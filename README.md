@@ -1,5 +1,7 @@
 # flame
 
+中文 | [English](README.en.md)
+
 Go 写的多租户 AI Agent 平台。把「智能体 / 技能 / 工具 / 工作流」这些构建物管起来，把它们暴露成对外可调的端点（MCP / RPC），并在一个统一的运行台账里看到所有正在跑的东西。
 
 配套一个 Vue 3 管理台（`desktop/`），租户端与平台端共用一套前端。
@@ -149,6 +151,8 @@ desktop/          Vue 3 管理台
 - `nexus/docs/sandbox-design.md` — 沙箱隔离设计与三条执行通道
 - `nexus/docs/workspace-layout-and-supervisor-power.md` — 租户工作区布局
 - `nexus/docs/design-highlights.md` — 设计要点：调用链防环、多租户配额、端点模型
+- `nexus/docs/i18n-plan.md` — 中英双语的分层方案、成本与坑位
+- `nexus/docs/error-codes.md` — 业务错误码规范（UI 双语的前置条件）
 - `AGENTS.md` — 模块地图与跨领域红线
 
 ## 安全提示
