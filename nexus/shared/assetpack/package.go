@@ -16,38 +16,45 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// 资产包：跨服务器搬运一份已审核快照的单一文件（zip）。
+// An asset package: one file (a zip) that carries a reviewed snapshot across servers.
 //
-// 为什么是「包」而不是「远程引用」：分发语义是复制 —— 装完的实体与来源再无关系。
-// 跨服务器同理：包里带够重建一份本地快照所需的全部东西，收下之后对端停不停机与本机无关。
+// Why a package rather than a remote reference: distribution means copying — once installed, the
+// entity has no further tie to its source. It is the same across servers: the package carries
+// everything needed to rebuild a local snapshot, so whether the peer later goes down is irrelevant
+// here.
 //
 //	package.json  { format, exported_at, origin, manifest, payload }
-//	files/<rel>   快照里的每个文件（相对路径原样保留）
+//	files/<rel>   every file of the snapshot (relative paths preserved verbatim)
 //
-// 包里刻意**不含**：租户 schema 的授权行、agent_relations（uuid 关系，跨环境无法重映射）。
-// 智能体的三个开关（is_supervisor / tools_unrestricted / skill_discovery）**在 payload 里**：
-// 它们描述「实体怎么跑」，导入端按包设置；`endpoints` 属于目标租户，不随包走。
+// The package deliberately **omits**: grant rows of the tenant schema, and agent_relations (uuid
+// relations that cannot be remapped across environments). An agent's three switches (is_supervisor
+// / tools_unrestricted / skill_discovery) **are in the payload**, because they describe how the
+// entity runs and the importing side applies them from the package; `endpoints` belong to the target
+// tenant and do not travel.
 const (
-	// PackageFormat 包格式标识。值变更 = 破坏性变更（导入端按它拒绝旧/新格式）。
+	// PackageFormat identifies the package format. A change of value is a breaking change (the
+	// importing side rejects old or new formats based on it).
 	PackageFormat = "flame-asset/1"
 
 	packageMetaName = "package.json"
 	packageFilesDir = "files"
-	// 元信息上限：payload 是实体行快照，实测几 KB；1 MiB 已经非常宽松。
+	// Metadata ceiling: the payload is a snapshot of one entity row, a few KB in practice; 1 MiB
+	// is already very generous.
 	packageMetaMax = 1 << 20
 )
 
-// PackageOrigin 导出方溯源信息。导入端只把它写进 origin_* 列做展示与去重，
-// 不构成任何运行期引用（对端删库/改名都不影响本机已导入的资产）。
+// PackageOrigin is the exporter's traceability information. The importing side only writes it into
+// the origin_* columns for display and deduplication; it is never a runtime reference (the peer
+// dropping its database or renaming does not affect assets already imported here).
 type PackageOrigin struct {
-	Server       string `json:"server"`                  // 导出方站点名（config server.name）
-	AssetID      string `json:"asset_id"`                // 导出方的 asset id（仅溯源）
-	SourceSchema string `json:"source_schema,omitempty"` // 导出方租户 schema
-	Build        int    `json:"build"`                   // 导出方那份资产的快照号
-	ListedBy     string `json:"listed_by,omitempty"`     // 上架人展示名快照
+	Server       string `json:"server"`                  // exporter site name (config server.name)
+	AssetID      string `json:"asset_id"`                // the exporter's asset id (traceability only)
+	SourceSchema string `json:"source_schema,omitempty"` // exporter tenant schema
+	Build        int    `json:"build"`                   // the snapshot number the exporter held
+	ListedBy     string `json:"listed_by,omitempty"`     // display-name snapshot of who listed it
 }
 
-// Package 包内元信息（package.json 的内容）。
+// Package is the in-package metadata (the content of package.json).
 type Package struct {
 	Format     string          `json:"format"`
 	ExportedAt time.Time       `json:"exported_at"`
@@ -56,10 +63,12 @@ type Package struct {
 	Payload    json.RawMessage `json:"payload"`
 }
 
-// WritePackage 把快照目录写成 zip 流（边读边写，不把文件读进内存）。
+// WritePackage writes a snapshot directory out as a zip stream (streamed, files are never read into
+// memory).
 //
-// snapDir 是 platform-assets/<id>/<build> 的逻辑 key；每个文件按 manifest.Files 读回，
-// 顺手核对字节数与清单一致 —— 导出的是「清单所说的那份内容」，不是目录里当前有什么。
+// snapDir is the logical key platform-assets/<id>/<build>; every file is read back according to
+// manifest.Files and its size checked against the manifest — the export is "the content the
+// manifest describes", not "whatever the directory happens to hold".
 func WritePackage(ctx context.Context, st storage.Storage, snapDir string, pkg *Package, w io.Writer) error {
 	if pkg == nil {
 		return errors.New("package is nil")
@@ -125,10 +134,13 @@ func WritePackage(ctx context.Context, st storage.Storage, snapDir string, pkg *
 	return zw.Close()
 }
 
-// ReadPackage 读回并**完整校验**一个包：体积/文件数闸、路径安全、清单与内容一一对应、sha256。
+// ReadPackage reads a package back and **fully validates** it: size / file-count gates, path
+// safety, manifest and content matching one to one, sha256.
 //
-// 校验全在这里做完，调用方拿到 (pkg, files) 后只需落盘与写库 —— 这是「不信上游」的落点：
-// 对端说包里有 3 个文件，就以包里的实际内容为准逐条比对，不一致整包拒绝（不做部分导入）。
+// All validation happens here so the caller receives (pkg, files) and only has to persist them —
+// this is where "never trust the upstream" lands: if a peer says the package holds 3 files, the
+// actual content is compared entry by entry, and any mismatch rejects the whole package (there is
+// no partial import).
 func ReadPackage(ra io.ReaderAt, size int64, lim Limits) (*Package, map[string][]byte, error) {
 	lim = lim.withDefaults()
 	if size <= 0 {
@@ -150,7 +162,7 @@ func ReadPackage(ra io.ReaderAt, size int64, lim Limits) (*Package, map[string][
 	)
 	for _, f := range zr.File {
 		name := f.Name
-		if strings.HasSuffix(name, "/") { // 目录项，跳过
+		if strings.HasSuffix(name, "/") { // a directory entry, skip
 			continue
 		}
 		switch {
@@ -210,7 +222,8 @@ func ReadPackage(ra io.ReaderAt, size int64, lim Limits) (*Package, map[string][
 	return pkg, files, nil
 }
 
-// verify 清单与实际内容一一对应：数量、字节数、sha256 三项都对上才算可信。
+// verify checks the manifest against the actual content one to one: only when count, sizes and
+// sha256 all agree is the package trustworthy.
 func (p *Package) verify(files map[string][]byte) error {
 	if len(p.Manifest.Files) == 0 {
 		return fmt.Errorf("%w: the manifest is empty", ErrNoFiles)
@@ -240,10 +253,11 @@ func (p *Package) verify(files map[string][]byte) error {
 	return nil
 }
 
-// safeRelPath 校验包内相对路径。
+// safeRelPath validates a relative path inside the package.
 //
-// 只接受「规范化后的 / 分隔相对路径」：绝对路径、含 .. 段、含反斜杠、以及
-// a/../b 这类需要 clean 才安全的写法一律拒绝 —— 这些正是解压穿越的常见手法。
+// Only "already normalised, /-separated relative paths" are accepted: absolute paths, paths
+// containing a .. segment, backslashes, and forms such as a/../b that need cleaning to be safe are
+// all rejected — those are the usual archive-slip tricks.
 func safeRelPath(rel string) (string, error) {
 	if rel == "" {
 		return "", errors.New("the package contains an empty path")
@@ -264,7 +278,8 @@ func safeRelPath(rel string) (string, error) {
 	return clean, nil
 }
 
-// readZipEntry 读一个条目，超限即报错（zip 声明的大小可造假，所以按实际读到的字节数再判一次）。
+// readZipEntry reads one entry and fails when it exceeds the limit (the size declared in the zip can
+// lie, so the bytes actually read are checked again).
 func readZipEntry(f *zip.File, max int64) ([]byte, error) {
 	rc, err := f.Open()
 	if err != nil {

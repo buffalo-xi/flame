@@ -5,10 +5,11 @@ import (
 	"testing"
 )
 
-// 两个来源都要扫到：
-//   - 输入变量的 source_type: "global"（现行写法 —— 里面连 global_vars 字样都没有，
-//     只靠正则会漏，这正是它单独一条扫描路径的原因）；
-//   - 节点模板里的 {{.global_vars.X}}（旧写法残留：虽然已经跑不起来，但删变量前仍要看见它）。
+// Both sources have to be found:
+//   - input variables with source_type: "global" (the current form — it does not even contain the
+//     text global_vars, so regexes alone would miss it, which is why it has its own scan path);
+//   - {{.global_vars.X}} in node templates (leftovers of the old form: it no longer runs, but it
+//     still has to be visible before a variable is deleted).
 func TestCollectGlobalVarRefsFromWorkflowPayload(t *testing.T) {
 	payload := map[string]any{
 		"diagram": map[string]any{
@@ -28,31 +29,33 @@ func TestCollectGlobalVarRefsFromWorkflowPayload(t *testing.T) {
 	got := CollectGlobalVarRefs(context.Background(), nil, "", payload)
 	want := []string{"CRM_API_TOKEN", "DB_HOST", "REGION"}
 	if len(got) != len(want) {
-		t.Fatalf("引用清单 = %v, want %v", got, want)
+		t.Fatalf("reference list = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("引用清单 = %v, want %v（要求去重且升序）", got, want)
+			t.Fatalf("reference list = %v, want %v (deduplicated and sorted)", got, want)
 		}
 	}
 }
 
-// 没有定义域目录时不能报错：工作流没有 srcDir，这是正常情况。
+// Having no definition-domain directory must not be an error: a workflow has no srcDir, which is
+// normal.
 func TestCollectGlobalVarRefsWithoutStorage(t *testing.T) {
 	got := CollectGlobalVarRefs(context.Background(), nil, "", map[string]any{"name": "demo"})
 	if len(got) != 0 {
-		t.Fatalf("无引用应返回空，实际 %v", got)
+		t.Fatalf("no references should return empty, got %v", got)
 	}
 }
 
-// 两种写法都要认；顺序不保证（两套正则分开扫），所以只断言集合。
+// Both forms are recognised; the order is not guaranteed (two regexes scan separately), so only the
+// set is asserted.
 func TestGlobalVarRefsInText(t *testing.T) {
 	got := GlobalVarRefsInText("a ${global_vars.A} b {{.global_vars.B}} c")
 	if len(got) != 2 {
-		t.Fatalf("GlobalVarRefsInText = %v, want 2 项", got)
+		t.Fatalf("GlobalVarRefsInText = %v, want 2 entries", got)
 	}
 	set := map[string]bool{got[0]: true, got[1]: true}
 	if !set["A"] || !set["B"] {
-		t.Fatalf("GlobalVarRefsInText = %v, want A 与 B", got)
+		t.Fatalf("GlobalVarRefsInText = %v, want A and B", got)
 	}
 }

@@ -9,28 +9,31 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// 全局变量引用的写法，与运行期注入点一一对应：
+// Syntax of a global variable reference, one form per runtime injection point:
 //
-//	config.inputs: {source_type: "global", source_key: NAME} —— 工作流（结构化，现行）
-//	${global_vars.NAME}                                     —— 智能体 / 技能文档
-//	{{.global_vars.NAME}}                                   —— 工作流的旧写法（已下线，仅用于识别残留）
+//	config.inputs: {source_type: "global", source_key: NAME} — workflows (structured, current)
+//	${global_vars.NAME}                                     — agent / skill documents
+//	{{.global_vars.NAME}}                                   — the old workflow form (retired, only used to spot leftovers)
 //
-// 三个地方共用这份正则（这里 / secrets.go 的保留判定 / 需求清单扫描），
-// 合成一处是为了避免「哪天改了语法，只改了一边」。
+// Three places share these regexes (here / the preserve decision in secrets.go / the requirement
+// list scan); keeping one copy avoids "the syntax changed and only one side was updated".
 var (
 	refTemplateRe = regexp.MustCompile(`\{\{-?\s*\.global_vars\.([A-Za-z_][A-Za-z0-9_]*)`)
 	refDocRe      = regexp.MustCompile(`\$\{global_vars\.([A-Za-z_][A-Za-z0-9_]*)`)
-	// refInputRe 节点输入引用 {{ .input.NAME }}：值不在包里（来自输入变量的来源），
-	// 脱敏时要当作引用保留，理由同 global_vars 引用。
+	// refInputRe matches a node input reference {{ .input.NAME }}: the value is not in the package
+	// (it comes from an input variable source), so redaction must keep it as a reference, for the
+	// same reason as a global_vars reference.
 	refInputRe = regexp.MustCompile(`\{\{-?\s*\.input\.([A-Za-z_][A-Za-z0-9_]*)`)
-	// globalRefExactRe 整个字符串就是一个引用（不是 "Bearer xxx" 这种混合形态）。
+	// globalRefExactRe matches a string that is exactly one reference (not a mixed form such as
+	// "Bearer xxx").
 	globalRefExactRe = regexp.MustCompile(
 		`^(?:\{\{-?\s*\.global_vars\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}` +
 			`|\$\{global_vars\.[A-Za-z_][A-Za-z0-9_]*\}` +
 			`|\{\{-?\s*\.input\.[A-Za-z_][A-Za-z0-9_]*\s*\}\})$`)
 )
 
-// GlobalVarRefsInText 抓一段文本里的全局变量引用名（去重、升序）。
+// GlobalVarRefsInText collects the global variable names referenced by a piece of text
+// (deduplicated, sorted).
 func GlobalVarRefsInText(text string) []string {
 	if text == "" {
 		return nil
@@ -45,9 +48,9 @@ func GlobalVarRefsInText(text string) []string {
 	return out
 }
 
-// GlobalVarRefsInValue 递归扫 JSON 形态的值（map / []any / string）。
+// GlobalVarRefsInValue recursively scans a JSON-shaped value (map / []any / string).
 //
-// 打包时拿它扫 payload：工作流的 env_vars 与 diagram 都在这里面。
+// Packing uses it on the payload: a workflow's env_vars and diagram both live in there.
 func GlobalVarRefsInValue(v any) []string {
 	switch val := v.(type) {
 	case string:
@@ -69,12 +72,13 @@ func GlobalVarRefsInValue(v any) []string {
 	}
 }
 
-// GlobalVarRefsInNodeInputs 读节点输入变量里的全局变量来源：
-// {source_type: "global", source_key: "引用名"}。
+// GlobalVarRefsInNodeInputs reads global variable sources from node input variables:
+// {source_type: "global", source_key: "name"}.
 //
-// 这条不能只靠正则扫 payload —— 那种写法里根本没有 {{ }} / ${}，只有 type + 名字。
-// 按 key 名 "inputs" 递归找：工作流在 diagram.nodes[].data.config.inputs，
-// 其余节点级配置结构相同，扫到就算，多算一个依赖只是预检里多一条提示。
+// Regexes alone cannot cover this — that form has no {{ }} / ${}, only a type plus a name. It
+// recurses looking for the key "inputs": a workflow has them at
+// diagram.nodes[].data.config.inputs, other node-level configs share the shape, so anything found
+// counts, and one extra dependency only adds one extra line to the pre-check.
 func GlobalVarRefsInNodeInputs(v any) []string {
 	var out []string
 	var walk func(any)
@@ -97,7 +101,7 @@ func GlobalVarRefsInNodeInputs(v any) []string {
 	return out
 }
 
-// globalRefsOfInputs 从一个 inputs 表里挑出「来源是全局变量」的名字。
+// globalRefsOfInputs picks the names "whose source is a global variable" out of one inputs table.
 func globalRefsOfInputs(inputs map[string]any) []string {
 	var out []string
 	for _, raw := range inputs {
@@ -115,24 +119,27 @@ func globalRefsOfInputs(inputs map[string]any) []string {
 	return out
 }
 
-// CollectGlobalVarRefs 汇总一份资产对全局变量的依赖。
+// CollectGlobalVarRefs sums up an asset's dependency on global variables.
 //
-// 三个来源都扫：
-//  1. 节点输入变量的结构化引用（source_type: "global"）—— 工作流的现行写法；
-//  2. payload 文本里的引用（文档写法与工作流的旧写法，主要是兼容存量包）；
-//  3. 定义域文档（*.md，AGENT.md / SKILL.md）里的 ${global_vars.X}。
+// Three sources are scanned:
+//  1. structured references in node input variables (source_type: "global") — the current workflow
+//     form;
+//  2. references in the payload text (the document form and the old workflow form, mainly for
+//     legacy packages);
+//  3. ${global_vars.X} in the definition-domain documents (*.md, AGENT.md / SKILL.md).
 //
-// 只扫文档不扫脚本：脚本走沙箱执行，运行期不做文本替换 —— 扫进去会得到
-// 「清单说要 X，实际运行时根本不读」的假依赖。
+// Documents are scanned, scripts are not: scripts run in the sandbox and are not text-substituted at
+// runtime, so scanning them would invent dependencies that the list claims and the run never reads.
 //
-// st / dir 为空时跳过第 3 步（工作流没有定义域目录）。读不到的目录不报错：
-// 依赖清单是「尽力而为」的核对信息，不该让打包失败。
+// When st / dir are empty step 3 is skipped (a workflow has no definition-domain directory).
+// An unreadable directory is not an error: the dependency list is best-effort information and must
+// not fail the packing.
 func CollectGlobalVarRefs(ctx context.Context, st storage.Storage, dir string,
 	payload map[string]any) []string {
 
-	// payload 里的 jsonb 列在生产形态下是原始字节（json.RawMessage）。
-	// 先归一成 map / []any 再扫：不归一这两步会静默扫出空清单，
-	// 导入时就永远不会提示「目标租户缺哪个变量」。
+	// In production the jsonb columns inside the payload are raw bytes (json.RawMessage). Normalise
+	// them to map / []any before scanning: without that, both steps silently produce an empty list
+	// and an import never warns about "which variable is missing in the target tenant".
 	norm := deepCopyMap(payload)
 	all := make([]string, 0, 4)
 	all = append(all, GlobalVarRefsInNodeInputs(norm)...)
@@ -157,8 +164,8 @@ func CollectGlobalVarRefs(ctx context.Context, st storage.Storage, dir string,
 	return out
 }
 
-// 文档扫描的边界：定义域目录是用户自由编辑的，深度与文件数都必须设上限，
-// 否则一个深目录能让上架卡住。
+// Bounds of the document scan: the definition-domain directory is freely edited by the user, so
+// both depth and file count need a ceiling, otherwise one deep directory could stall listing.
 const (
 	docScanMaxDepth = 3
 	docScanMaxFiles = 64

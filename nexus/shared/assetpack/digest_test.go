@@ -2,7 +2,8 @@ package assetpack
 
 import "testing"
 
-// baseManifest 一份最小的技能清单：够算指纹，不依赖任何 DB / storage。
+// baseManifest is a minimal skill manifest: enough to compute a fingerprint, with no DB or storage
+// dependency.
 func baseManifest() Manifest {
 	return Manifest{
 		Kind:  KindSkill,
@@ -15,7 +16,8 @@ func baseManifest() Manifest {
 	}
 }
 
-// 语义相同、字节不同的 payload 必须得到同一个指纹：payload 是 map，键序不稳定是常态。
+// Payloads with the same meaning but different bytes must produce the same fingerprint: the payload
+// is a map, so an unstable key order is the norm.
 func TestDigestIgnoresPayloadKeyOrder(t *testing.T) {
 	a := baseManifest()
 	b := baseManifest()
@@ -26,14 +28,15 @@ func TestDigestIgnoresPayloadKeyOrder(t *testing.T) {
 		t.Fatalf("stamp b: %v", err)
 	}
 	if a.Digest != b.Digest {
-		t.Fatalf("同一份内容得到不同指纹：%s vs %s", a.Digest, b.Digest)
+		t.Fatalf("the same content produced different fingerprints: %s vs %s", a.Digest, b.Digest)
 	}
 	if a.Spec != ManifestSpec {
-		t.Fatalf("spec = %d，期望 %d", a.Spec, ManifestSpec)
+		t.Fatalf("spec = %d, want %d", a.Spec, ManifestSpec)
 	}
 }
 
-// 文件清单顺序不同不算内容变化（目录遍历顺序不保证稳定）。
+// A different file-manifest order is not a content change (directory traversal order is not
+// guaranteed to be stable).
 func TestDigestIgnoresFileOrder(t *testing.T) {
 	a := baseManifest()
 	b := baseManifest()
@@ -46,11 +49,12 @@ func TestDigestIgnoresFileOrder(t *testing.T) {
 		t.Fatalf("stamp b: %v", err)
 	}
 	if a.Digest != b.Digest {
-		t.Fatalf("仅顺序不同却得到不同指纹：%s vs %s", a.Digest, b.Digest)
+		t.Fatalf("only the order differs but the fingerprints do: %s vs %s", a.Digest, b.Digest)
 	}
 }
 
-// 依赖声明语义上是集合：同一批依赖换个书写顺序，内容并未改变。
+// Dependency declarations are sets semantically: listing the same set in another order does not
+// change the content.
 func TestDigestIgnoresDepsOrder(t *testing.T) {
 	a := baseManifest()
 	a.Deps = Deps{
@@ -72,15 +76,15 @@ func TestDigestIgnoresDepsOrder(t *testing.T) {
 		t.Fatalf("stamp b: %v", err)
 	}
 	if a.Digest != b.Digest {
-		t.Fatalf("依赖顺序不同却得到不同指纹：%s vs %s", a.Digest, b.Digest)
+		t.Fatalf("the dependency order differs but the fingerprints do: %s vs %s", a.Digest, b.Digest)
 	}
-	// 排序只发生在副本上：不能把调用方的声明顺序改掉。
+	// Sorting only happens on a copy: the caller's declaration order must not be rewritten
 	if a.Deps.Tools[0].Ref != "custom:foo" || a.Deps.Skills[0] != "s1" {
-		t.Fatalf("manifest 的依赖顺序被就地改写了：%+v", a.Deps)
+		t.Fatalf("the manifest's dependency order was rewritten in place: %+v", a.Deps)
 	}
 }
 
-// 内容真的变了就必须变：payload、依赖、文件摘要任何一个改动都要换指纹。
+// A real content change must change it: any difference in payload, dependencies or file digests.
 func TestDigestChangesWithContent(t *testing.T) {
 	payload := []byte(`{"name":"demo"}`)
 	cases := []struct {
@@ -104,12 +108,13 @@ func TestDigestChangesWithContent(t *testing.T) {
 			t.Fatalf("%s: stamp: %v", c.name, err)
 		}
 		if m.Digest == base.Digest {
-			t.Fatalf("%s 变了但指纹没变", c.name)
+			t.Fatalf("%s changed but the fingerprint did not", c.name)
 		}
 	}
 }
 
-// 老包（没有 spec / digest）仍然能装：Stamp 只是补字段，不改变已有语义。
+// An old package (no spec / digest) is still installable: Stamp only fills fields in and does not
+// change existing semantics.
 func TestStampKeepsExplicitSpec(t *testing.T) {
 	m := baseManifest()
 	m.Spec = 7
@@ -117,7 +122,7 @@ func TestStampKeepsExplicitSpec(t *testing.T) {
 		t.Fatalf("stamp: %v", err)
 	}
 	if m.Spec != 7 {
-		t.Fatalf("spec 被覆盖成 %d，期望保留 7", m.Spec)
+		t.Fatalf("spec was overwritten to %d, want 7 kept", m.Spec)
 	}
 }
 
@@ -126,6 +131,6 @@ func TestShortDigest(t *testing.T) {
 		t.Fatalf("ShortDigest = %q", got)
 	}
 	if got := ShortDigest(""); got != "" {
-		t.Fatalf("空指纹应原样返回，得到 %q", got)
+		t.Fatalf("an empty fingerprint should be returned as is, got %q", got)
 	}
 }

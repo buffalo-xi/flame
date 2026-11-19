@@ -9,10 +9,12 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// 上架/导入路径上的精确删除：只删「刚掉出窗口」的那一个快照，当前快照绝不动。
+// The precise delete on the listing / import path: only the one snapshot that just fell out of the
+// window is removed, the current one is never touched.
 //
-// 这条不变量撑起整套「磁盘不随快照数增长」的策略：每次上架 build+1，
-// 因此每次只有一个快照掉出窗口，删一个就够，不需要扫描。
+// This invariant carries the whole "disk does not grow with the number of snapshots" policy: every
+// listing bumps build by one, so exactly one snapshot drops out each time, deleting one is enough,
+// and no scan is needed.
 func TestPruneOldBuilds(t *testing.T) {
 	st := storage.NewFilesystemStorage(t.TempDir())
 	ctx := context.Background()
@@ -20,13 +22,13 @@ func TestPruneOldBuilds(t *testing.T) {
 	mustWrite(t, st, paths.PlatformAssetKey("a1", 2)+"/SKILL.md", "x\n")
 	mustWrite(t, st, paths.PlatformAssetKey("a1", 3)+"/SKILL.md", "x\n")
 
-	// 首次上架（v1）：没有掉出窗口的快照，不该动任何目录
+	// First listing (v1): nothing has left the window, so no directory may be touched
 	if err := PruneOldBuilds(ctx, st, "a1", 1); err != nil {
 		t.Fatalf("PruneOldBuilds(v1): %v", err)
 	}
 	mustExistCase(t, st, paths.PlatformAssetKey("a1", 2), true)
 
-	// 重发到 v3：v2 掉出窗口被删，v3 留着
+	// Re-release to v3: v2 leaves the window and is deleted, v3 stays
 	if err := PruneOldBuilds(ctx, st, "a1", 3); err != nil {
 		t.Fatalf("PruneOldBuilds(v3): %v", err)
 	}
@@ -34,42 +36,44 @@ func TestPruneOldBuilds(t *testing.T) {
 	mustExistCase(t, st, paths.PlatformAssetKey("a1", 3), true)
 }
 
-// 取号必须跳过「已经有内容的快照目录」：并发重新上架、或上次写了一半崩掉，
-// 都会留下一个不该被复用的号 —— 复用会让两份内容挤在同一棵树上，而行只记住一份的清单。
+// Number allocation must skip a snapshot directory that already holds content: a concurrent
+// re-listing, or a previous run that crashed half way, leaves a number that must not be reused —
+// reuse squeezes two bodies into one tree while the row remembers only one manifest.
 func TestFreeBuildSkipsOccupied(t *testing.T) {
 	st := storage.NewFilesystemStorage(t.TempDir())
 	ctx := context.Background()
 
-	// 全新资产：没有任何目录，从起点号直接用
+	// A brand-new asset: no directory at all, so the starting number is used as is
 	if n, err := FreeBuild(ctx, st, "a2", 1); err != nil || n != 1 {
-		t.Fatalf("FreeBuild(空资产) = %d, %v, 期望 1", n, err)
+		t.Fatalf("FreeBuild(empty asset) = %d, %v, want 1", n, err)
 	}
 
-	// 1、2 已占：跳过它们拿到 3
+	// 1 and 2 are taken: skip them and get 3
 	mustWrite(t, st, paths.PlatformAssetKey("a2", 1)+"/SKILL.md", "x\n")
 	mustWrite(t, st, paths.PlatformAssetKey("a2", 2)+"/SKILL.md", "x\n")
 	if n, err := FreeBuild(ctx, st, "a2", 1); err != nil || n != 3 {
-		t.Fatalf("FreeBuild(1,2 已占) = %d, %v, 期望 3", n, err)
+		t.Fatalf("FreeBuild(1,2 taken) = %d, %v, want 3", n, err)
 	}
-	// 从中间起算：5 是空的就直接用 5，不回头重数
+	// Starting in the middle: 5 is free, so 5 is used without counting back up
 	if n, err := FreeBuild(ctx, st, "a2", 5); err != nil || n != 5 {
-		t.Fatalf("FreeBuild(from=5) = %d, %v, 期望 5", n, err)
+		t.Fatalf("FreeBuild(from=5) = %d, %v, want 5", n, err)
 	}
 
-	// 连撞到上限：报错，绝不静默复用已有目录
+	// Hitting the probe ceiling: fail, never silently reuse an existing directory
 	for i := 1; i <= maxBuildProbe; i++ {
 		mustWrite(t, st, paths.PlatformAssetKey("a3", i)+"/SKILL.md", "x\n")
 	}
 	if _, err := FreeBuild(ctx, st, "a3", 1); err == nil {
-		t.Fatal("连续占满上限时应报错，不能复用已有目录")
+		t.Fatal("allocating with every probe taken must fail instead of reusing an existing directory")
 	}
 }
 
-// 保留窗口的缺省值是「只留当前快照」。改策略时这条会先失败，
-// 提醒同步改用例与 snapshot 相关文档，而不是让磁盘悄悄多留一堆死快照。
+// The default retention window is "current snapshot only". Changing the policy breaks this test
+// first, which is the reminder to update the cases and the snapshot documentation instead of letting
+// disk quietly keep a pile of dead snapshots.
 func TestBuildsKeptDefault(t *testing.T) {
 	if BuildsKept != 1 {
-		t.Fatalf("BuildsKept = %d，期望 1", BuildsKept)
+		t.Fatalf("BuildsKept = %d, want 1", BuildsKept)
 	}
 }
 
@@ -80,6 +84,6 @@ func mustExistCase(t *testing.T, st storage.Storage, key string, want bool) {
 		t.Fatalf("Exists(%s): %v", key, err)
 	}
 	if got != want {
-		t.Fatalf("%s 存在性 = %v, 期望 %v (%s)", key, got, want, strconv.Quote(key))
+		t.Fatalf("existence of %s = %v, want %v (%s)", key, got, want, strconv.Quote(key))
 	}
 }

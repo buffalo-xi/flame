@@ -12,22 +12,25 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// PackFiles 把 srcDir 整棵拷进 dstDir，返回文件清单（按 path 升序，含 sha256）。
+// PackFiles copies the whole srcDir into dstDir and returns the file manifest (sorted by path, with
+// sha256).
 //
 //	srcDir  tenants/<source>/skills|tools|agents/<name>
 //	dstDir  platform-assets/<assetID>/<build>
 //
-// entry 非空时要求源目录里存在该文件（skill 的 SKILL.md、agent 的 AGENT.md、tool 的
-// TOOL.json entry），否则返回 ErrMissingEntry —— 「上架成功但装上去跑不了」比上架失败更糟。
+// When entry is non-empty the source directory must contain that file (SKILL.md for a skill,
+// AGENT.md for an agent, TOOL.json's entry for a tool), otherwise ErrMissingEntry is returned —
+// "listed successfully but unusable after install" is worse than a failed listing.
 //
-// 闸值先判后拷：单文件超限、文件数超限、合计超限都在**写入前**拒绝，避免把半份内容
-// 写进快照目录（调用方虽然会 DeletePrefix 兜底，但没必要制造垃圾）。
+// The gates are checked before copying: a file over the ceiling, too many files, or a total over the
+// ceiling are all rejected **before writing**, so half a body never lands in the snapshot directory
+// (the caller does DeletePrefix as a fallback, but there is no reason to create garbage).
 func PackFiles(ctx context.Context, st storage.Storage, srcDir, dstDir, entry string, lim Limits) ([]FileEntry, error) {
 	return PackFilesWith(ctx, st, srcDir, dstDir, entry, lim, PackOptions{})
 }
 
-// PackFilesWith 同 PackFiles，但可以排除若干子目录、并额外挂进若干目录树
-// （见 PackOptions）。
+// PackFilesWith is PackFiles plus the ability to skip some subdirectories and hang extra directory
+// trees in (see PackOptions).
 func PackFilesWith(ctx context.Context, st storage.Storage, srcDir, dstDir, entry string, lim Limits, opts PackOptions) ([]FileEntry, error) {
 	lim = lim.withDefaults()
 
@@ -37,8 +40,9 @@ func PackFilesWith(ctx context.Context, st storage.Storage, srcDir, dstDir, entr
 		hasEntry bool
 	)
 
-	// addTree 把一个源目录整棵拷进包内 prefix 下，同时累计体积闸与清单。
-	// prefix 为空 = 主目录（entry 只对主目录校验）。
+	// addTree copies one source directory wholesale under the in-package prefix, accumulating the
+	// size gates and the manifest. An empty prefix means the main directory (entry is only validated
+	// against it).
 	addTree := func(dir, prefix string, skipDirs []string, required bool) error {
 		ok, e := st.Exists(ctx, dir)
 		if e != nil {
@@ -119,9 +123,10 @@ func PackFilesWith(ctx context.Context, st storage.Storage, srcDir, dstDir, entr
 	return files, nil
 }
 
-// BodyFiles 从清单里摘出资产本体（去掉 _deps/ 附件）。
+// BodyFiles picks the asset body out of the manifest (dropping the _deps/ attachments).
 //
-// 安装时要分开处理：本体落进资产自己的目录，附件落进 custom_tools/。
+// Install has to handle the two separately: the body lands in the asset's own directory, the
+// attachments land in custom_tools/.
 func BodyFiles(files []FileEntry) []FileEntry {
 	out := make([]FileEntry, 0, len(files))
 	for _, f := range files {
@@ -133,10 +138,12 @@ func BodyFiles(files []FileEntry) []FileEntry {
 	return out
 }
 
-// Attachments 摘下包内附件，按「附件组名」分组（目前只有自定义工具：组名 = 工具名）。
+// Attachments extracts the in-package attachments, grouped by "attachment group name" (only custom
+// tools today: the group name is the tool name).
 //
-// 返回的 FileEntry **保留完整包内路径**（_deps/custom_tools/<name>/…）：安装时用
-// RestoreFilesUnder 配合同一个前缀落盘，不用在调用方拼路径。
+// The returned FileEntry values **keep the full in-package path** (_deps/custom_tools/<name>/…):
+// install writes them with RestoreFilesUnder using the same prefix, so callers never assemble paths
+// themselves.
 func Attachments(files []FileEntry) map[string][]FileEntry {
 	prefix := BundledToolsPrefix + "/"
 	out := map[string][]FileEntry{}
@@ -154,7 +161,7 @@ func Attachments(files []FileEntry) map[string][]FileEntry {
 	return out
 }
 
-// ToolAttachmentPrefix 某个附件工具的包内前缀（拼 RestoreFilesUnder 用）。
+// ToolAttachmentPrefix is the in-package prefix of one attachment tool (for RestoreFilesUnder).
 func ToolAttachmentPrefix(name string) string {
 	return BundledToolsPrefix + "/" + name
 }
@@ -163,20 +170,22 @@ func isAttachment(p string) bool {
 	return p == BundledToolsPrefix || strings.HasPrefix(p, BundledToolsPrefix+"/")
 }
 
-// RestoreFiles 按清单把快照目录拷到目标目录，返回清单里有、快照里没有的文件。
+// RestoreFiles copies the snapshot directory to the target directory according to the manifest and
+// returns the files the manifest lists but the snapshot lacks.
 //
-// 缺失**不返回错误**：快照可能因为历史快照或人工清理少了附属文件，只要入口文件在，
-// 装上去仍然可用；调用方把 missing 原样并入响应的 warnings 即可（不要静默吞掉）。
-// 内容与清单不一致（sha256 对不上）则报 ErrChecksum —— 那是存储损坏或并发写入，
-// 继续装只会把坏文件铺到目标租户。
+// A missing file is **not an error**: a snapshot may have lost auxiliary files to an older snapshot
+// or manual cleanup, and as long as the entry file is there the install still works; the caller
+// folds missing into the response warnings as is (never swallow it silently). A content that
+// disagrees with the manifest (sha256 mismatch) yields ErrChecksum — that is storage corruption or a
+// concurrent write, and carrying on would only spread broken files into the target tenant.
 func RestoreFiles(ctx context.Context, st storage.Storage, snapDir, dstDir string, files []FileEntry) (missing []string, err error) {
 	return RestoreFilesUnder(ctx, st, snapDir, dstDir, "", files)
 }
 
-// RestoreFilesUnder 同 RestoreFiles，但落盘前把每个清单路径的 prefix 去掉。
+// RestoreFilesUnder is RestoreFiles, but strips prefix from every manifest path before writing.
 //
-// 用于包内附件：清单里是 _deps/custom_tools/<name>/main.py，目标是 custom_tools/<name>/main.py。
-// prefix 为空等价于 RestoreFiles。
+// It is used for in-package attachments: the manifest says _deps/custom_tools/<name>/main.py while
+// the target is custom_tools/<name>/main.py. An empty prefix is equivalent to RestoreFiles.
 func RestoreFilesUnder(ctx context.Context, st storage.Storage, snapDir, dstDir, prefix string, files []FileEntry) (missing []string, err error) {
 	prefix = strings.Trim(prefix, "/")
 	if prefix != "" {
@@ -186,7 +195,7 @@ func RestoreFilesUnder(ctx context.Context, st storage.Storage, snapDir, dstDir,
 		rel := f.Path
 		if prefix != "" {
 			if !strings.HasPrefix(f.Path, prefix) {
-				continue // 不在这个前缀下：不属于本次要落的文件
+				continue // not under this prefix: not one of the files to write here
 			}
 			rel = strings.TrimPrefix(f.Path, prefix)
 		}
@@ -220,10 +229,12 @@ func RestoreFilesUnder(ctx context.Context, st storage.Storage, snapDir, dstDir,
 	return missing, nil
 }
 
-// walkFiles 递归遍历目录，回调拿到相对路径与文件大小（目录不回调）。
+// walkFiles walks a directory recursively, handing the callback the relative path and file size
+// (directories are not reported).
 //
-// 每层按名字排序，保证清单与遍历顺序稳定：manifest 进 DB、进审核页，同一份内容
-// 每次上架都该产出同一份清单（否则 diff 与「是否变化」判断全是噪音）。
+// Each level is sorted by name so the manifest and the traversal order are stable: the manifest goes
+// into the DB and onto the review page, and listing the same content twice has to produce the same
+// manifest (otherwise diffs and "did it change" decisions are pure noise).
 func walkFiles(ctx context.Context, st storage.Storage, dir, rel string, skip func(rel string) bool, fn func(rel string, size int64) error) error {
 	entries, err := st.List(ctx, dir)
 	if err != nil {

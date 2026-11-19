@@ -1,13 +1,17 @@
-// Package assetimport 把「资产包」落成一份本机快照 + 一行平台资产记录。
+// Package assetimport materialises an "asset package" into a local snapshot plus one
+// platform asset row.
 //
-// 三个入口共用这一份实现，保证「不信上游」的规则只有一处：
+// Three entry points share this implementation, so the "never trust the upstream" rules
+// live in exactly one place:
 //
-//	平台管理台  上传 zip（POST /platform/asset-imports）
-//	平台管理台  从对端拉包（POST /platform/peers/:id/import）
-//	租户资产市场 点安装时的按需拉取（POST /admin/share/pull-asset）
+//	platform admin console   upload a zip (POST /platform/asset-imports)
+//	platform admin console   pull a package from a peer (POST /platform/peers/:id/import)
+//	tenant asset marketplace on-demand pull when the user clicks install (POST /admin/share/pull-asset)
 //
-// 规则：解压后重新校验路径/体积/清单/sha256 → 重跑受保护名与脱敏 → 落 platform-assets/
-// → 写 shared_assets（默认 pending，auto 策略才 listed）。任何一步失败都不留孤儿目录。
+// Rules: unpack, then re-check path / size / manifest / sha256 -> re-run the protected-name
+// and secret-redaction passes -> write under platform-assets/ -> insert into shared_assets
+// (pending by default, listed only under the auto policy). No step may leave an orphan
+// directory behind.
 package assetimport
 
 import (
@@ -31,19 +35,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// Options 导入策略。
+// Options controls the import policy.
 type Options struct {
-	// Origin 来源站点名；空则取包里的 origin.server，再缺省 "remote"。
+	// Origin is the source site name; when empty the package's origin.server is used, falling
+	// back to "remote".
 	Origin string
-	// Force 覆盖同来源同名的既有资产（本地快照 +1，回到待审/listed 按 AutoApprove）。
+	// Force overwrites an existing asset with the same origin and name (the local snapshot
+	// advances by one and the row goes back to pending / listed according to AutoApprove).
 	Force bool
-	// AutoApprove 直接 listed（只给「安装策略 = auto」的可信对端用）。
+	// AutoApprove lists the asset straight away (only for trusted peers whose install policy is
+	// auto).
 	AutoApprove bool
-	// ImportedBy 触发者（平台管理员或租户用户）的 uuid，仅审计用。
+	// ImportedBy is the uuid of the actor (platform admin or tenant user); audit only.
 	ImportedBy string
 }
 
-// Result 导入结果。
+// Result is the outcome of an import.
 type Result struct {
 	AssetID      string
 	Kind         string
@@ -56,12 +63,15 @@ type Result struct {
 	Warnings     []string
 }
 
-// ConflictError 同来源同名的资产已存在且未允许覆盖。
+// ConflictError reports that an asset with the same origin and name already exists and
+// overwriting was not allowed.
 //
-// 带上既有行的信息，调用方可以把它变成「当前 v3，确认覆盖？」这种可操作提示，
-// 而不是一句干巴巴的冲突。怎么收口由调用方决定：平台导入弹一次确认（确认后带 force=1
-// 重试），租户远端拉取回结构化 conflict 让用户点「覆盖」。所以**文案里不要写具体操作**
-// （「勾选某复选框」之类），那属于某个界面的说法，换个入口就不成立了。
+// It carries the existing row's details so the caller can turn it into an actionable prompt
+// ("currently v3, overwrite?") instead of a bare conflict. How to settle it is the caller's
+// decision: the platform import asks for confirmation once (and retries with force=1), the
+// tenant-side remote pull returns a structured conflict so the user can click overwrite.
+// That is why the **wording must not name a specific action** ("tick some checkbox"): that
+// belongs to one screen and stops being true from another entry point.
 type ConflictError struct {
 	Origin         string
 	Name           string
@@ -79,12 +89,14 @@ var (
 	originRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	schemaRe = regexp.MustCompile(`^[a-z][a-z0-9_]{1,31}$`)
 
-	// buildMu 串行化「快照取号 → 写文件」这一段（与 admin/share 的上架各持一把）。
-	// 两处都写同一份 storage，但落点互不影响：上架只动本机原创行，导入只动导入行。
+	// buildMu serialises "allocate a snapshot number -> write the files" (listing under
+	// admin/share holds its own lock). Both write the same storage but never the same files:
+	// listing only touches locally authored rows, import only touches imported ones.
 	buildMu sync.Mutex
 )
 
-// Import 校验并落库。ra/size 是 zip 包；st 是平台存储（平台侧与租户侧都指向同一个 storage 根）。
+// Import validates and persists the package. ra/size are the zip; st is platform storage (the
+// platform side and the tenant side both point at the same storage root).
 func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Result, error) {
 	if st == nil {
 		return nil, errors.New("storage not ready")
@@ -99,7 +111,8 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 		return nil, err
 	}
 
-	// 重新脱敏：不信任上游做过的那一遍（对端可能快照更老 / 被改过 / 根本没做）
+	// Redact again: the upstream pass is not trusted (a peer may hold an older snapshot, may
+	// have been tampered with, or may not have run it at all)
 	var payload map[string]any
 	if err := json.Unmarshal(pkg.Payload, &payload); err != nil || payload == nil {
 		return nil, errors.New("the payload in the asset package is not a JSON object")
@@ -119,7 +132,8 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 
 	sourceSchema := strings.TrimSpace(pkg.Origin.SourceSchema)
 	if !schemaRe.MatchString(sourceSchema) {
-		// 远端 schema 只用于展示，本机不一定有同名租户；非法值不写进 CHECK 列
+		// The remote schema is display-only and this host need not have a tenant of that name;
+		// an invalid value must not be written into a CHECK-constrained column
 		sourceSchema = "remote"
 	}
 
@@ -146,17 +160,20 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 	}
 	if existing != nil {
 		assetID = existing.ID
-		// 本地快照单调递增：远端包的 build 可能比本地旧（重导一篇旧包），不能让它倒退
+		// Local snapshots only move forward: the remote package's build may be older than the
+		// local one (re-importing an old package), and it must not rewind the counter
 		if build <= existing.Build {
 			build = existing.Build + 1
 		}
 	}
 
 	ctx := context.Background()
-	// 取号与写文件必须串行（理由见 assetpack.FreeBuild）：并发导入各自算出同一个号，
-	// 两份内容会交错写进同一棵目录，而行只记住其中一份的清单。
-	// 覆盖导入时若目标号已有内容（同一快照重复导入 / 上次写了一半崩掉），跳过它 ——
-	// 复用别人的目录会让清单与实际内容对不上。
+	// Allocating the number and writing the files must be serialised (the reasoning is in
+	// assetpack.FreeBuild): concurrent imports each compute the same number, the two sets of
+	// content interleave inside one directory, and the row only remembers one of the two
+	// manifests. When an overwrite lands on a number that already holds content (the same
+	// snapshot imported twice, or a previous run that crashed half way), skip it — reusing
+	// someone else's directory leaves the manifest disagreeing with the actual content.
 	buildMu.Lock()
 	if existing != nil {
 		b, berr := assetpack.FreeBuild(ctx, st, assetID, build)
@@ -184,8 +201,9 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 		_ = st.DeletePrefix(ctx, dstDir)
 		return nil, fmt.Errorf("failed to serialise the payload: %w", err)
 	}
-	// 对端可能是旧版本（包里没有 spec / 指纹）：按本机口径补齐，保证本机每条资产行都带指纹，
-	// 否则「重复安装的是不是同一份内容」在对端之间永远判不了。
+	// The upstream may run an older version whose package carries no spec / digest: fill it in
+	// with this host's rules so every row here has a digest, otherwise "is a re-install the same
+	// content?" can never be answered between peers.
 	if pkg.Manifest.Digest == "" {
 		if derr := assetpack.StampManifest(&pkg.Manifest, payloadJSON); derr != nil {
 			_ = st.DeletePrefix(ctx, dstDir)
@@ -205,7 +223,7 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 		DisplayName:   asString(clean["display_name"]),
 		Description:   asString(clean["description"]),
 		SourceSchema:  sourceSchema,
-		SourceID:      assetID, // 本机实体的溯源 id；远端 id 记在 OriginAssetID
+		SourceID:      assetID, // traceability id of the local entity; the remote id lives in OriginAssetID
 		Build:         build,
 		Status:        status,
 		Visibility:    sharedassets.VisibilityAll,
@@ -219,21 +237,25 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 	}
 
 	if existing != nil {
-		// 覆盖：复用行 id（安装记录仍指向同一资产），快照与内容更新后回到指定状态
+		// Overwrite: reuse the row id (install records still point at the same asset) and move
+		// the snapshot and content to the requested status
 		err = sharedassets.UpdateImported(a)
 	} else {
 		err = sharedassets.Insert(a)
 	}
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		// 并发导入：另一路已经把行推到更高的号，这份快照没人认领（内容本身是好的，重试会拿新号）
+		// Concurrent import: another path already pushed the row to a higher number, so this
+		// snapshot is unclaimed (the content itself is fine, a retry takes a fresh number)
 		if errors.Is(err, sharedassets.ErrStaleBuild) {
 			return nil, errors.New("another import updated this asset concurrently; retry")
 		}
 		return nil, fmt.Errorf("failed to write the asset record: %w", err)
 	}
-	// 覆盖导入同样把快照推到新目录，旧快照就没有读者了（安装是复制、导出只打当前快照）。
-	// 与上架共用同一套保留窗口；删不掉不影响导入，启动清扫会再收一次。
+	// An overwriting import likewise moves the snapshot to a new directory, leaving the old one
+	// without readers (install copies, export only reads the current snapshot). The retention
+	// window is shared with listing; a failed delete does not fail the import, since the startup
+	// sweep collects it again.
 	_ = assetpack.PruneOldBuilds(ctx, st, assetID, build)
 
 	warnings := make([]string, 0, 4)
@@ -268,17 +290,21 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 	}, nil
 }
 
-// ValidatePackage 包的语义校验：类型、名字、受保护名、入口文件存在。
+// ValidatePackage is the semantic check of a package: kind, name, protected names, and the
+// presence of the entry file.
 //
-// 导出给「租户侧直接导入」（admin/share 的上传包安装）复用：那条路不落平台资产行，
-// 但「包本身是否可信」的判据必须与平台侧逐字一致，否则同一份包在两个入口有两种结论。
+// It is exported for "direct import on the tenant side" (uploading a package through
+// admin/share), which does not write a platform asset row, yet the verdict on "is this package
+// trustworthy" has to match the platform side word for word — otherwise the same package gets
+// two different answers from two entry points.
 func ValidatePackage(pkg *assetpack.Package, files map[string][]byte) (assetpack.Kind, error) {
 	kind := assetpack.Kind(pkg.Manifest.Kind)
 	if !kind.Valid() {
 		return "", fmt.Errorf("unknown asset kind: %s", pkg.Manifest.Kind)
 	}
-	// 工作流不落目录，名字只用库列，但它的措辞不同（名字是对外工具名，见
-	// assetpack.ValidateWorkflowName），字符集与其它三类一致
+	// A workflow writes no directory and only uses a database column for its name, but the
+	// wording differs (the name is the externally visible tool name, see
+	// assetpack.ValidateWorkflowName) while the character set matches the other three kinds
 	if kind == assetpack.KindWorkflow {
 		if err := assetpack.ValidateWorkflowName(pkg.Manifest.Name); err != nil {
 			return "", err
@@ -286,11 +312,14 @@ func ValidatePackage(pkg *assetpack.Package, files map[string][]byte) (assetpack
 	} else if err := assetpack.ValidateName(pkg.Manifest.Name); err != nil {
 		return "", err
 	}
-	// 不再按「受保护名」拒绝：保护名单只约束删除 / 改名，不约束搬运。名字冲突由安装时的
-	// 重名检查兜住（目标租户里 main / skill-authoring 本就存在，会走 suggested_name），
-	// 在这里拦一次只会让「自己导出的包换台机器装不回来」。
+	// Protected names are deliberately no longer a rejection reason here: the list only
+	// constrains deletion and renaming, not moving an asset. Name collisions are caught by the
+	// duplicate check at install time (main / skill-authoring already exist in the target
+	// tenant and go through suggested_name), and blocking here only means "a package exported
+	// from this machine cannot be installed on another one".
 
-	// 入口文件：skill / agent 是固定的，custom_tool 由 TOOL.json 的 entry 决定（包里必须真有它）
+	// Entry file: fixed for skill / agent, chosen by TOOL.json's entry for custom_tool (the file
+	// must actually exist in the package)
 	entry := kind.EntryFile()
 	if entry == "" {
 		entry = strings.TrimSpace(pkg.Manifest.Entry)
@@ -315,7 +344,8 @@ func uuidOrNull(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: true}
 }
 
-// asString 取 payload 里的字符串字段（值类型不对就按空处理，不报错）。
+// asString reads a string field out of the payload (a wrong value type yields the empty string
+// rather than an error).
 func asString(v any) string {
 	if s, ok := v.(string); ok {
 		return s

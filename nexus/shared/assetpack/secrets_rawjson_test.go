@@ -6,14 +6,15 @@ import (
 	"testing"
 )
 
-// 生产形态：payload 里的 jsonb 列是数据库给的原始字节（json.RawMessage），
-// 不是 map[string]any —— 上架与导出用的就是这个形状（见 admin/share/planWorkflow）。
-// 脱敏必须对这种输入同样生效，否则「包里只有引用名」只是注释里的说法。
+// The production shape: the jsonb columns in the payload are raw bytes from the database
+// (json.RawMessage) rather than map[string]any — that is exactly what listing and export work with
+// (see admin/share/planWorkflow). Redaction has to work on that input too, otherwise "the package
+// only holds reference names" is a claim that lives in a comment.
 func TestStripSecretsDecodesRawJSONB(t *testing.T) {
 	payload := map[string]any{
 		"name": "demo",
 		"env_vars": json.RawMessage(`{
-			"API_TOKEN": {"type": "secret", "value": "sk-live-leak", "description": "令牌"},
+			"API_TOKEN": {"type": "secret", "value": "sk-live-leak", "description": "token label"},
 			"REGION":    {"type": "string", "value": "cn"},
 			"TENANT":    {"type": "global", "value": "CRM_TOKEN"}
 		}`),
@@ -23,45 +24,46 @@ func TestStripSecretsDecodesRawJSONB(t *testing.T) {
 	out, warnings := StripSecrets(KindWorkflow, payload)
 	raw, err := json.Marshal(out)
 	if err != nil {
-		t.Fatalf("序列化失败: %v", err)
+		t.Fatalf("serialisation failed: %v", err)
 	}
 	body := string(raw)
 
 	if strings.Contains(body, "sk-live-leak") {
-		t.Fatalf("env_vars 的 secret 明文进了导出内容: %s", body)
+		t.Fatalf("the plaintext env_vars secret reached the export: %s", body)
 	}
 	if strings.Contains(body, "sk-node-leak") {
-		t.Fatalf("diagram 里的凭据明文进了导出内容: %s", body)
+		t.Fatalf("the plaintext credential in diagram reached the export: %s", body)
 	}
 	if len(warnings) == 0 {
-		t.Fatal("清空了值却没有 warning：审核页会以为什么都没发生")
+		t.Fatal("values were cleared without a warning: the review page would think nothing happened")
 	}
 
 	var got map[string]any
 	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("结果不是合法 JSON: %v", err)
+		t.Fatalf("the result is not valid JSON: %v", err)
 	}
 	envVars, _ := got["env_vars"].(map[string]any)
 	if token, _ := envVars["API_TOKEN"].(map[string]any); token != nil {
 		if v, _ := token["value"].(string); v != "" {
-			t.Fatalf("secret 的 value 没被清空: %q", v)
+			t.Fatalf("the secret value was not cleared: %q", v)
 		}
-		if d, _ := token["description"].(string); d != "令牌" {
-			t.Fatalf("description 应保留，实际 %q", d)
+		if d, _ := token["description"].(string); d != "token label" {
+			t.Fatalf("description should be kept, got %q", d)
 		}
 	} else {
-		t.Fatalf("env_vars 结构丢了: %v", envVars)
+		t.Fatalf("the env_vars structure was lost: %v", envVars)
 	}
-	// global 的 value 是变量名，清掉就断了引用
+	// A global value is a variable name; clearing it breaks the reference
 	if ref, _ := envVars["TENANT"].(map[string]any); ref != nil {
 		if v, _ := ref["value"].(string); v != "CRM_TOKEN" {
-			t.Fatalf("全局引用被清掉: %q", v)
+			t.Fatalf("the global reference was cleared: %q", v)
 		}
 	}
 }
 
-// 同一份 payload 的全局变量依赖也要能从原始字节里扫出来（否则导入时不会提示缺变量）。
-// 生产形态是 jsonb 原始字节：不归一化就会静默扫出空清单。
+// The global variable dependencies of the same payload must also be scannable from the raw bytes
+// (otherwise an import never reports a missing variable). The production shape is raw jsonb bytes:
+// without normalisation the scan silently returns an empty list.
 func TestCollectGlobalVarRefsDecodesRawJSONB(t *testing.T) {
 	payload := map[string]any{
 		"diagram": json.RawMessage(

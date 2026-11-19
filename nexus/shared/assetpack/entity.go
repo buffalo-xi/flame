@@ -2,15 +2,17 @@ package assetpack
 
 import "encoding/json"
 
-// PortableSkill 把 skills 行（`SELECT to_jsonb(s) FROM <schema>.skills s` 的结果）收敛成
-// 可跨租户的快照 payload。
+// PortableSkill narrows a skills row (the result of `SELECT to_jsonb(s) FROM <schema>.skills s`)
+// down to a snapshot payload that can cross tenants.
 //
-// 白名单而不是黑名单：新增列默认**不会**被带出去，漏掉一列只是功能少了，多带一列可能是
-// 身份（id / agent_id）或审计字段（created_by / 时间戳）—— 那些在目标租户必须重新生成，
-// 照搬只会让两边 id 对不上。
+// It is a whitelist rather than a blacklist: a new column is **not** carried by default, since
+// missing one loses a feature while carrying one extra may carry identity (id / agent_id) or audit
+// fields (created_by / timestamps) — those have to be regenerated in the target tenant, and copying
+// them only leaves the two sides with mismatched ids.
 //
-// status 刻意不搬：装上去是启用还是停用，由安装请求决定（默认 1），不能由源租户的状态
-// 替目标租户做主。
+// status is deliberately not carried: whether an install is enabled or disabled is decided by the
+// install request (enabled by default), and the source tenant's state must not decide for the
+// target tenant.
 func PortableSkill(row map[string]any) map[string]any {
 	out := make(map[string]any, 8)
 	for _, k := range []string{
@@ -25,10 +27,11 @@ func PortableSkill(row map[string]any) map[string]any {
 	return out
 }
 
-// EncodeJSONB 把任意值编成可直接塞进 jsonb 参数的字节串（nil → "{}"）。
+// EncodeJSONB encodes any value into bytes that can go straight into a jsonb argument (nil → "{}").
 //
-// 快照 payload / manifest 都要落 jsonb；统一走这里，避免各处对 nil 的处理不一致
-// （sql 层把 nil []byte 当 SQL NULL，而列有 NOT NULL 约束）。
+// Snapshot payloads and manifests both land in jsonb; everything goes through here so nil is handled
+// consistently everywhere (the sql layer treats a nil []byte as SQL NULL, while the column is NOT
+// NULL).
 func EncodeJSONB(v any) ([]byte, error) {
 	if v == nil {
 		return []byte("{}"), nil
@@ -36,7 +39,7 @@ func EncodeJSONB(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-// DecodeJSONB 把 jsonb 列读成 map（NULL / 空 → 空 map）。
+// DecodeJSONB decodes a jsonb column into a map (NULL / empty → empty map).
 func DecodeJSONB(raw []byte, dst any) error {
 	if len(raw) == 0 {
 		return nil

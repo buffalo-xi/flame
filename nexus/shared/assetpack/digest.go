@@ -8,21 +8,26 @@ import (
 	"sort"
 )
 
-// ManifestSpec 当前 manifest / payload 的**语义**版本。
+// ManifestSpec is the **semantic** version of the current manifest / payload.
 //
-// 与 PackageFormat 的分工：
-//   - PackageFormat（flame-asset/1）只保证「这个 zip 的容器与元信息结构能被解析」；
-//   - ManifestSpec 管「解析出来的字段我认不认识」：给 manifest 或 payload 加字段、加枚举值、
-//     改语义时都要 +1，导入端据此对「比本程序更新」的包明确拒绝，而不是把不认识的字段
-//     静默丢掉、装出一个行为不对的实体。
+// How it divides the work with PackageFormat:
+//   - PackageFormat (flame-asset/1) only guarantees "the container and metadata structure of this zip
+//     can be parsed";
+//   - ManifestSpec covers "do I understand the fields that came out of it": adding a field or an enum
+//     value to the manifest or payload, or changing its meaning, requires +1, and the importing side
+//     uses it to reject packages "newer than this program" outright instead of silently dropping
+//     fields it does not know and installing an entity that behaves wrongly.
 //
-// 判据：spec 缺省（老包没有这个字段）按 1 处理；spec > ManifestSpec → 拒绝安装。
+// The rule: a missing spec (an old package has no such field) counts as 1; spec > ManifestSpec means
+// the install is refused.
 const ManifestSpec = 1
 
-// StampManifest 补齐 Spec 与 Digest（幂等：已有的 Digest 在内容未变时保持不变）。
+// StampManifest fills in Spec and Digest (idempotent: an existing Digest stays the same while the
+// content does not change).
 //
-// 上架、导出、跨站拉取三条产出资产包的路径都必须调它 —— 否则同一个包在不同路径下
-// 指纹不一致，「内容是否相同」的判断立刻失真。
+// All three paths that produce an asset package — listing, export and the cross-site pull — must call
+// it, otherwise the same package gets different fingerprints through different paths and the "is the
+// content the same" decision is immediately wrong.
 func StampManifest(m *Manifest, payload []byte) error {
 	if m == nil {
 		return fmt.Errorf("manifest is nil")
@@ -38,12 +43,14 @@ func StampManifest(m *Manifest, payload []byte) error {
 	return nil
 }
 
-// digestOf 算内容指纹：payload（归一化 JSON）+ 依赖声明 + 文件清单（按 path 排序）。
+// digestOf computes the content fingerprint: payload (normalised JSON) plus the dependency
+// declarations plus the file manifest (sorted by path).
 //
-// 刻意把「名字 / 依赖 / 文件路径与摘要」都算进去，而**不**算时间、来源站点、build 号 ——
-// 那些一变就换指纹的话，「同一份内容重新上架」也会被当成新内容。
-// 归一化 JSON 是关键：payload 是 map，直接 Marshal 会按 Go 的键序输出，语义相同但字节不同的
-// 两份 payload 必须得到同一个指纹。
+// It deliberately includes "name / dependencies / file paths and digests" and **not** timestamps,
+// origin site or build number — if those changed the fingerprint, "the same content listed again"
+// would count as new content. Normalising the JSON is essential: the payload is a map, a plain
+// Marshal would follow Go's key order, and two payloads with the same meaning but different bytes
+// have to produce the same fingerprint.
 func digestOf(m Manifest, payload []byte) (string, error) {
 	var v any
 	if err := json.Unmarshal(payload, &v); err != nil {
@@ -64,7 +71,8 @@ func digestOf(m Manifest, payload []byte) (string, error) {
 	h.Write([]byte{0})
 	h.Write(deps)
 
-	// 文件清单按 path 排序再算：目录遍历顺序不同不代表内容不同
+	// The file manifest is sorted by path before hashing: a different directory traversal order does
+	// not mean different content
 	files := append([]FileEntry(nil), m.Files...)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	for _, f := range files {
@@ -73,8 +81,9 @@ func digestOf(m Manifest, payload []byte) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// normalizeDeps 把依赖声明排成稳定顺序：Tools / Skills / Agents / Requires 语义上都是集合，
-// 声明顺序不同不代表内容不同。只在副本上排序 —— manifest 要按原样存库与展示。
+// normalizeDeps puts the dependency declarations into a stable order: Tools / Skills / Agents /
+// Requires are all sets semantically, so a different declaration order does not mean different
+// content. Sorting only happens on a copy — the manifest is stored and displayed as declared.
 func normalizeDeps(d Deps) Deps {
 	d.Tools = append([]ToolDep(nil), d.Tools...)
 	sort.Slice(d.Tools, func(i, j int) bool {
@@ -101,7 +110,8 @@ func sortedCopy(s []string) []string {
 	return c
 }
 
-// ShortDigest 指纹的展示形态（前 8 位）。空指纹返回空串：老包没有指纹，别显示成 "00000000"。
+// ShortDigest is the display form of a fingerprint (first 8 characters). An empty fingerprint returns
+// the empty string: old packages have none, and it must not show up as "00000000".
 func ShortDigest(d string) string {
 	if len(d) < 8 {
 		return d

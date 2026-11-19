@@ -7,13 +7,15 @@ import (
 	"flame/nexus/shared/paths"
 )
 
-// MaxNameLen 名字长度上限（与 paths.ValidName 一致，也是目录名的实际上限）。
+// MaxNameLen is the name length ceiling (the same as paths.ValidName, and effectively the ceiling
+// for a directory name).
 const MaxNameLen = 64
 
-// ValidateName 校验上架/安装时的实体名。
+// ValidateName validates an entity name at listing / install time.
 //
-// 与 paths.ValidName 同一条判据（字母数字与横线、不以横线开头、≤64）：
-// 名字最终会变成目录名（tenants/<schema>/skills/<name>），宽松的名字等于给存储层留注入面。
+// It applies the same rule as paths.ValidName (letters, digits and dashes, no leading dash, ≤64):
+// the name ends up as a directory name (tenants/<schema>/skills/<name>), so a loose name leaves an
+// injection surface for the storage layer.
 func ValidateName(name string) error {
 	if !paths.ValidName(name) {
 		return fmt.Errorf("the name %q is not valid: only letters, digits and dashes, no leading dash, at most %d characters",
@@ -22,11 +24,12 @@ func ValidateName(name string) error {
 	return nil
 }
 
-// SuggestName 在已占用的名字集合里给一个不冲突的建议名：name-2、name-3 …
+// SuggestName suggests a non-conflicting name within the taken set: name-2, name-3 …
 //
-// 冲突时**不静默改名**：悄悄装成 `name-2`，用户会以为自己装的就是原来那个，之后
-// 授权、绑定、排查全对不上。正确做法是接口回 409 带上这个建议，由用户确认后用
-// name= 参数重试。
+// A conflict is **never renamed silently**: installing as `name-2` behind the user's back makes them
+// believe they installed the original, after which grants, bindings and troubleshooting all
+// disagree. The right behaviour is for the API to answer 409 with this suggestion, and the user to
+// retry with name= after confirming.
 func SuggestName(base string, taken []string) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
@@ -43,7 +46,8 @@ func SuggestName(base string, taken []string) string {
 		return base
 	}
 
-	// taken 是有限集合，所以 i 一旦越过 len(set)+1 必然有空位；上界只是防御。
+	// taken is a finite set, so a free slot exists as soon as i passes len(set)+1; the upper bound
+	// is pure defence.
 	for i := 2; i <= len(set)+2; i++ {
 		suffix := fmt.Sprintf("-%d", i)
 		stem := base
@@ -55,5 +59,5 @@ func SuggestName(base string, taken []string) string {
 			return cand
 		}
 	}
-	return base // 理论上不可达
+	return base // unreachable in practice
 }

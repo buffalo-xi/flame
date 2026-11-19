@@ -16,7 +16,8 @@ func sha(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// buildZip 手工拼一个包（用于构造「恶意/坏包」，绕开 WritePackage 的自检）。
+// buildZip assembles a package by hand (for building malicious / broken packages, bypassing
+// WritePackage's own checks).
 func buildZip(t *testing.T, entries map[string]string) ([]byte, int64) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -71,49 +72,50 @@ func TestPackageRoundTrip(t *testing.T) {
 		t.Fatalf("ReadPackage: %v", err)
 	}
 	if pkg.Manifest.Kind != KindSkill || pkg.Manifest.Name != "demo" {
-		t.Fatalf("清单未还原：%+v", pkg.Manifest)
+		t.Fatalf("the manifest was not restored: %+v", pkg.Manifest)
 	}
 	if pkg.Origin.Server != "test" || pkg.Origin.Build != 2 {
-		t.Fatalf("溯源信息未还原：%+v", pkg.Origin)
+		t.Fatalf("the origin information was not restored: %+v", pkg.Origin)
 	}
 	if string(files["SKILL.md"]) != "# demo\n" || string(files["lib/run.js"]) != "console.log(1)\n" {
-		t.Fatalf("文件内容不一致：%+v", files)
+		t.Fatalf("file content mismatch: %+v", files)
 	}
 	if !strings.Contains(string(pkg.Payload), `"name":"demo"`) {
-		t.Fatalf("payload 未还原：%s", pkg.Payload)
+		t.Fatalf("the payload was not restored: %s", pkg.Payload)
 	}
 }
 
-// 导出端就要挡住「清单与磁盘不一致」：宁可导不出去，也不要打一个内容对不上的包。
+// The export side has to stop "manifest disagreeing with disk": better to fail the export than to
+// hand out a package whose content does not match.
 func TestWritePackageRejectsSnapshotMismatch(t *testing.T) {
 	st := newStorage(t)
 	dir := "platform-assets/a1/2"
-	mustWrite(t, st, dir+"/SKILL.md", "改了内容")
+	mustWrite(t, st, dir+"/SKILL.md", "changed content")
 	mustWrite(t, st, dir+"/lib/run.js", "console.log(1)\n")
 
 	var buf bytes.Buffer
 	err := WritePackage(context.Background(), st, dir, demoPackage(), &buf)
 	if err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("期望报大小不一致，实际：%v", err)
+		t.Fatalf("want a size mismatch error, got: %v", err)
 	}
 }
 
-// 内容被改动（sha256 对不上）→ 整包拒绝。
+// Modified content (sha256 mismatch) -> the whole package is rejected.
 func TestReadPackageRejectsTamperedContent(t *testing.T) {
 	pkg := demoPackage()
 	raw, _ := json.Marshal(pkg)
 	b, size := buildZip(t, map[string]string{
 		"package.json":     string(raw),
 		"files/SKILL.md":   "# demo\n",
-		"files/lib/run.js": "console.log(2)\n", // 与清单 sha256 不符
+		"files/lib/run.js": "console.log(2)\n", // does not match the manifest sha256
 	})
 	if _, _, err := ReadPackage(bytes.NewReader(b), size, Limits{}); err == nil ||
 		!strings.Contains(err.Error(), "checksum") {
-		t.Fatalf("期望报校验和不一致，实际：%v", err)
+		t.Fatalf("want a checksum mismatch error, got: %v", err)
 	}
 }
 
-// 解压穿越：files/../x 必须拒绝，而不是写到自己根目录之外。
+// Archive slip: files/../x must be rejected rather than written outside the root.
 func TestReadPackageRejectsTraversal(t *testing.T) {
 	raw, _ := json.Marshal(demoPackage())
 	b, size := buildZip(t, map[string]string{
@@ -122,25 +124,25 @@ func TestReadPackageRejectsTraversal(t *testing.T) {
 	})
 	if _, _, err := ReadPackage(bytes.NewReader(b), size, Limits{}); err == nil ||
 		!strings.Contains(err.Error(), "invalid path") {
-		t.Fatalf("期望报非法路径，实际：%v", err)
+		t.Fatalf("want an invalid path error, got: %v", err)
 	}
 }
 
-// 缺文件 / 多文件都不接受：清单就是契约。
+// Missing and extra files are both unacceptable: the manifest is the contract.
 func TestReadPackageRejectsManifestMismatch(t *testing.T) {
 	raw, _ := json.Marshal(demoPackage())
 
-	// 少一个文件
+	// One file short
 	b, size := buildZip(t, map[string]string{
 		"package.json":   string(raw),
 		"files/SKILL.md": "# demo\n",
 	})
 	if _, _, err := ReadPackage(bytes.NewReader(b), size, Limits{}); err == nil ||
 		!strings.Contains(err.Error(), "declares") {
-		t.Fatalf("期望报数量不一致，实际：%v", err)
+		t.Fatalf("want a count mismatch error, got: %v", err)
 	}
 
-	// 多一个未声明的文件
+	// One file too many, not declared
 	b, size = buildZip(t, map[string]string{
 		"package.json":     string(raw),
 		"files/SKILL.md":   "# demo\n",
@@ -148,25 +150,26 @@ func TestReadPackageRejectsManifestMismatch(t *testing.T) {
 		"files/extra.txt":  "x",
 	})
 	if _, _, err := ReadPackage(bytes.NewReader(b), size, Limits{}); err == nil {
-		t.Fatal("期望拒绝超出清单的文件")
+		t.Fatal("want the files beyond the manifest to be rejected")
 	}
 }
 
-// 包内出现未知顶层条目 = 有人在往包里塞东西，直接拒。
+// An unknown top-level entry in the package means someone is stuffing things in: reject outright.
 func TestReadPackageRejectsUnknownEntry(t *testing.T) {
 	raw, _ := json.Marshal(demoPackage())
 	b, size := buildZip(t, map[string]string{
 		"package.json":   string(raw),
 		"files/SKILL.md": "# demo\n",
-		"README.md":      "多余的说明",
+		"README.md":      "extra notes",
 	})
 	if _, _, err := ReadPackage(bytes.NewReader(b), size, Limits{}); err == nil ||
 		!strings.Contains(err.Error(), "unknown entry") {
-		t.Fatalf("期望报未知条目，实际：%v", err)
+		t.Fatalf("want an unknown entry error, got: %v", err)
 	}
 }
 
-// 体积闸：单文件超限在读取阶段就被拦（不依赖 zip 里声明的大小）。
+// The size gate: a file over the ceiling is caught while reading (it does not trust the size declared
+// inside the zip).
 func TestReadPackageEnforcesFileSize(t *testing.T) {
 	pkg := demoPackage()
 	big := strings.Repeat("a", 2048)
@@ -178,6 +181,6 @@ func TestReadPackageEnforcesFileSize(t *testing.T) {
 	})
 	_, _, err := ReadPackage(bytes.NewReader(b), size, Limits{MaxFiles: 10, MaxFileSize: 1024, MaxTotal: 1 << 20})
 	if err == nil || !strings.Contains(err.Error(), "limit") {
-		t.Fatalf("期望报超限，实际：%v", err)
+		t.Fatalf("want an over-limit error, got: %v", err)
 	}
 }

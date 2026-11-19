@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// 依赖的自定义工具要跟着包走：清单带 _deps/ 前缀，本体与附件能干净拆开，
-// 安装时附件剥掉前缀落进 custom_tools/ 而不是资产自己的目录。
+// A dependency on a custom tool travels with the package: the manifest carries a _deps/ prefix, the
+// body and the attachments split cleanly, and install strips the prefix so attachments land in
+// custom_tools/ rather than in the asset's own directory.
 func TestPackFilesWithTreesBundlesToolAndSplitsCleanly(t *testing.T) {
 	st := newStorage(t)
 	ctx := context.Background()
@@ -24,10 +25,10 @@ func TestPackFilesWithTreesBundlesToolAndSplitsCleanly(t *testing.T) {
 			Required:  true,
 		}}})
 	if err != nil {
-		t.Fatalf("打包失败: %v", err)
+		t.Fatalf("packing failed: %v", err)
 	}
 
-	// 按 path 字典序（"_" 在 "s" 前），附件排在 skills/ 之前
+	// Lexicographic by path ("_" sorts before "s"), so attachments come before skills/
 	want := []string{
 		"AGENT.md",
 		BundledToolsPrefix + "/weather/TOOL.json",
@@ -35,40 +36,41 @@ func TestPackFilesWithTreesBundlesToolAndSplitsCleanly(t *testing.T) {
 		"skills/verse/SKILL.md",
 	}
 	if len(files) != len(want) {
-		t.Fatalf("文件数 = %d, 期望 %d: %+v", len(files), len(want), files)
+		t.Fatalf("file count = %d, want %d: %+v", len(files), len(want), files)
 	}
 	for i, p := range want {
 		if files[i].Path != p {
-			t.Fatalf("第 %d 项 = %s, 期望 %s", i, files[i].Path, p)
+			t.Fatalf("entry %d = %s, want %s", i, files[i].Path, p)
 		}
 	}
 	if got := mustRead(t, st, "platform-assets/a1/1/_deps/custom_tools/weather/main.py"); got != "print('sun')\n" {
-		t.Fatalf("附件快照内容 = %q", got)
+		t.Fatalf("attachment snapshot content = %q", got)
 	}
 
 	body := BodyFiles(files)
 	if len(body) != 2 || body[0].Path != "AGENT.md" || body[1].Path != "skills/verse/SKILL.md" {
-		t.Fatalf("本体拆分不对: %+v", body)
+		t.Fatalf("body split is wrong: %+v", body)
 	}
 	atts := Attachments(files)
 	if len(atts) != 1 || len(atts["weather"]) != 2 {
-		t.Fatalf("附件拆分不对: %+v", atts)
+		t.Fatalf("attachment split is wrong: %+v", atts)
 	}
 
 	if _, err := RestoreFilesUnder(ctx, st, "platform-assets/a1/1", "tenants/t2/tools/weather",
 		ToolAttachmentPrefix("weather"), atts["weather"]); err != nil {
-		t.Fatalf("还原附件失败: %v", err)
+		t.Fatalf("restoring the attachment failed: %v", err)
 	}
 	if got := mustRead(t, st, "tenants/t2/tools/weather/main.py"); got != "print('sun')\n" {
-		t.Fatalf("附件落盘内容 = %q", got)
+		t.Fatalf("attachment written content = %q", got)
 	}
-	// 前缀之外的清单项不该被这条路径落盘
+	// Manifest entries outside the prefix must not be written by this path
 	if ok, _ := st.Exists(ctx, "tenants/t2/tools/weather/AGENT.md"); ok {
-		t.Fatal("本体文件被附件还原带进了工具目录")
+		t.Fatal("a body file was dragged into the tool directory by the attachment restore")
 	}
 }
 
-// 声明为 Required 的附件目录不存在要报错：依赖里写了「要带本体」，静默放过就是发了个残包。
+// A tree declared Required that does not exist must fail: the dependency said "the body travels
+// along", and passing silently would ship a crippled package.
 func TestPackFilesTreeRequiredMissingFails(t *testing.T) {
 	st := newStorage(t)
 	ctx := context.Background()
@@ -81,11 +83,12 @@ func TestPackFilesTreeRequiredMissingFails(t *testing.T) {
 			Required:  true,
 		}}})
 	if !errors.Is(err, ErrNoFiles) {
-		t.Fatalf("err = %v, 期望 ErrNoFiles", err)
+		t.Fatalf("err = %v, want ErrNoFiles", err)
 	}
 }
 
-// 附件与本体同名不同位：本体在根、附件在 _deps/，判定只能看前缀，不能看文件名。
+// An attachment and a body file may share a name at different locations: the body is at the root, the
+// attachment under _deps/, so the decision can only look at the prefix, never at the file name.
 func TestBodyFilesKeepsLookalikeNames(t *testing.T) {
 	files := []FileEntry{
 		{Path: "TOOL.json"},
@@ -94,9 +97,9 @@ func TestBodyFilesKeepsLookalikeNames(t *testing.T) {
 	}
 	body := BodyFiles(files)
 	if len(body) != 2 {
-		t.Fatalf("本体项数 = %d, 期望 2: %+v", len(body), body)
+		t.Fatalf("body entry count = %d, want 2: %+v", len(body), body)
 	}
 	if got := Attachments(files); len(got) != 1 || len(got["x"]) != 1 {
-		t.Fatalf("附件分组不对: %+v", got)
+		t.Fatalf("attachment grouping is wrong: %+v", got)
 	}
 }
