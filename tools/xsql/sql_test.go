@@ -192,13 +192,6 @@ func TestJSONB(t *testing.T) {
 			t.Errorf("%s: value: %v", c.name, err)
 			continue
 		}
-		if c.want == "{}" {
-			// An empty object means "no data", so it is stored as NULL.
-			if db != nil {
-				t.Errorf("%s: value = %v, want NULL", c.name, db)
-			}
-			continue
-		}
 		if b, ok := db.([]byte); !ok || string(b) != c.want {
 			t.Errorf("%s: value = %v, want %s", c.name, db, c.want)
 		}

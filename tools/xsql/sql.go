@@ -516,8 +516,10 @@ func (j JSONB) Value() (driver.Value, error) {
 		return nil, err
 	}
 
-	// null and an empty object both mean "no data", matching Scan.
-	if string(data) == "null" || string(data) == "{}" {
+	// Only null means "no data". An empty object is still a value: NOT NULL
+	// jsonb columns (custom tool parameters / configs and friends) are filled
+	// with {} precisely so the write does not hit the constraint.
+	if string(data) == "null" {
 		return nil, nil
 	}
 	return data, nil
