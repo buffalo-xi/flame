@@ -48,24 +48,14 @@ func OkJSON(c *gin.Context, msg string, data interface{}, trace string) {
 	respond(c, codeOK, msg, data, trace)
 }
 
-// ErrJSON returns the business error envelope: HTTP 200 with body.code = 400.
-//
-// Note the HTTP status is 200, not 400 — this envelope is the frontend contract, and the frontend reads
-// body.code to decide success or failure; a check written against "HTTP 400" never fires.
-// msg: error message
-// data: data related to the error
-// trace: caller path, defaulting to Host+Path
-func ErrJSON(c *gin.Context, msg string, data interface{}, trace string) {
-	respond(c, codeInvalid, msg, data, trace)
-}
-
 // ErrQuota reports an exhausted quota (body.code = 507, HTTP still 200).
 //
-// Same HTTP 200 + body.code envelope as ErrJSON, only the code differs: the frontend uses it to tell
+// Same HTTP 200 + body.code envelope as the other business errors, only the code differs: the frontend uses it to tell
 // "storage / sessions full" apart from a plain argument error and can offer guidance such as "go clean
 // up" instead of just a red bar.
 //
-// data should carry locator information: {"scope":"session","metric":"bytes","used":..,"limit":..}
+// data should carry locator information: {"scope":"session","metric":"bytes","used":..,"limit":..}, and
+// "evicted" (the files the pre-check already deleted) when there are any.
 func ErrQuota(c *gin.Context, msg string, data interface{}, trace string) {
 	respond(c, codeQuota, msg, data, trace)
 }
@@ -74,7 +64,7 @@ func ErrQuota(c *gin.Context, msg string, data interface{}, trace string) {
 //
 // It differs from ErrQuota only in error / params: the two 507 cases (session storage full, session
 // count full) need different copy, and the frontend tells them apart by error rather than guessing from
-// body.code. data still carries scope/metric/used/limit.
+// body.code. data still carries scope/metric/used/limit, plus evicted when the pre-check deleted files before giving up.
 func ErrQuotaCode(c *gin.Context, errCode string, params map[string]any, msg string, data interface{}, trace string) {
 	if trace == "" {
 		trace = c.Request.Host + c.Request.URL.Path
@@ -92,11 +82,10 @@ func ErrQuotaCode(c *gin.Context, errCode string, params map[string]any, msg str
 // ErrCode is a business error plus a machine-readable code (the frontend translates it, see
 // nexus/docs/error-codes.md).
 //
-// Compared with ErrJSON it only adds error (the code) and params (the values to render). msg is the
-// diagnostic text (currently Chinese; the msg batch switches it to English) used by logs, curl and old
-// frontends — translation is the frontend's job through error, and the backend does not care about
-// language. When no entry is found the frontend falls back to msg, so this function can replace ErrJSON
-// incrementally.
+// On top of the plain business envelope it carries error (the code) and params (the values to render). msg
+// is the diagnostic text (English) used by logs, curl and old frontends — translation is the frontend's
+// job through error, and the backend does not care about language. When no entry is found the frontend
+// falls back to msg, which is why msg must never be the only channel for user-visible copy.
 //
 // The parameter is named params rather than reusing data: in the existing envelope data means "payload
 // for the other side", while this is "copy variables" (name, count, limit) and mixing them would
@@ -141,7 +130,7 @@ func ErrCodeData(c *gin.Context, errCode string, params map[string]any, msg stri
 //
 // Unlike the business envelopes above, the body uses a top-level "error" (a reason enum string) plus
 // "message" and does not reuse the "code" field, so it cannot be confused with the integer code of
-// OkJSON / ErrJSON or with JSON-RPC error.code. reason should be a snake_case enum: invalid_request /
+// OkJSON / ErrCode or with JSON-RPC error.code. reason should be a snake_case enum: invalid_request /
 // not_found / unauthorized / forbidden / rate_limited / internal_error.
 func SendErrorResponse(c *gin.Context, status int, reason, message string) {
 	c.JSON(status, gin.H{"error": reason, "message": message})
