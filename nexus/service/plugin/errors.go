@@ -5,18 +5,18 @@ import (
 	"fmt"
 )
 
-// 调用错误码。与 flow 的错误码口径对齐（见 service/flow/core），
-// 唯一的语义约定：**只有 CodeConfig 不触发兜底降级** ——
-// 缺 key / 实现不存在这类问题，换一家实现也不会好。
+// Call error codes, aligned with the flow error codes (see service/flow/core). The single semantic
+// rule: **only CodeConfig skips the fallback chain** — a missing key or a missing implementation
+// will not be fixed by trying another implementation.
 const (
-	CodeAuth    = "auth"    // 鉴权失败（key 错、过期、权限不足）
-	CodeQuota   = "quota"   // 限流 / 配额耗尽
-	CodeNetwork = "network" // 连不上、超时、5xx
-	CodeConfig  = "config"  // 配置不对（缺字段、地址非法、参数不合法）
+	CodeAuth    = "auth"    // authentication failed (wrong or expired key, insufficient permission)
+	CodeQuota   = "quota"   // rate limited / quota exhausted
+	CodeNetwork = "network" // cannot connect, timeout, 5xx
+	CodeConfig  = "config"  // wrong configuration (missing field, invalid URL, invalid argument)
 	CodeOther   = "other"
 )
 
-// CallError 一次插件调用失败，带可判定的错误码。
+// CallError is one failed plugin call, carrying a decidable error code.
 type CallError struct {
 	Code    string
 	Message string
@@ -26,7 +26,7 @@ func (e *CallError) Error() string {
 	return fmt.Sprintf("plugin call failed (%s): %s", e.Code, e.Message)
 }
 
-// Code 取错误的分类；非 CallError 归为 other。
+// Code returns the error's category; anything that is not a CallError counts as other.
 func Code(err error) string {
 	var ce *CallError
 	if errors.As(err, &ce) {
@@ -35,7 +35,8 @@ func Code(err error) string {
 	return CodeOther
 }
 
-// normalizeCode 把插件回报的错误码收敛到已知集合（未知一律 other）。
+// normalizeCode narrows a plugin-reported error code onto the known set (anything unknown becomes
+// other).
 func normalizeCode(code string) string {
 	switch code {
 	case CodeAuth, CodeQuota, CodeNetwork, CodeConfig:

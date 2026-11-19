@@ -13,25 +13,25 @@ import (
 func TestRegistryDiscoverAndGet(t *testing.T) {
 	r := NewRegistry(newTestHost(t, pluginRoot(t), 20*time.Second), []string{"read_file", "write_file"})
 	if err := r.Refresh(context.Background(), true); err != nil {
-		t.Fatalf("refresh 失败: %v", err)
+		t.Fatalf("refresh failed: %v", err)
 	}
 
 	m, ok := r.Get("web_search")
 	if !ok {
-		t.Fatalf("没发现 web_search：%+v", r.Snapshot())
+		t.Fatalf("web_search was not discovered: %+v", r.Snapshot())
 	}
 	if len(m.Implementations) < 3 {
-		t.Errorf("实现数 = %d，期望 >= 3", len(m.Implementations))
+		t.Errorf("implementation count = %d, want >= 3", len(m.Implementations))
 	}
 	if !r.Has("WEB_SEARCH") {
-		t.Error("Get 应当大小写不敏感")
+		t.Error("Get should be case-insensitive")
 	}
 	if r.Has("no_such_tool") {
-		t.Error("不存在的工具不该命中")
+		t.Error("a tool that does not exist must not match")
 	}
 	for _, e := range r.Snapshot().Errors {
 		if strings.Contains(e.Path, "web_search") {
-			t.Errorf("web_search 有扫描错误：%s: %s", e.Path, e.Error)
+			t.Errorf("web_search has a scan error: %s: %s", e.Path, e.Error)
 		}
 	}
 }
@@ -43,25 +43,25 @@ func TestRegistryRejectsBuiltinNameCollision(t *testing.T) {
 
 	r := NewRegistry(newTestHost(t, root, 20*time.Second), []string{"read_file"})
 	if err := r.Refresh(context.Background(), true); err != nil {
-		t.Fatalf("refresh 失败: %v", err)
+		t.Fatalf("refresh failed: %v", err)
 	}
 	if _, ok := r.Get("read_file"); ok {
-		t.Fatal("插件工具不该与内置工具重名后仍然生效（分派会含糊）")
+		t.Fatal("a plugin tool must not take effect while it clashes with a built-in tool (the dispatch would be ambiguous)")
 	}
 	if !hasErrorMentioning(r.Snapshot().Errors, "clashes") {
-		t.Errorf("没有记录重名错误：%+v", r.Snapshot().Errors)
+		t.Errorf("the name clash was not recorded: %+v", r.Snapshot().Errors)
 	}
 }
 
 func TestRegistryRejectsDuplicateName(t *testing.T) {
 	root := t.TempDir()
 	copyTree(t, pluginRoot(t), root)
-	// 第二个目录声明同一个工具名：只保留先到的那个
+	// A second directory declares the same tool name: only the first one is kept
 	writeTool(t, root, "tools", "web_search_alias", "web_search")
 
 	r := NewRegistry(newTestHost(t, root, 20*time.Second), nil)
 	if err := r.Refresh(context.Background(), true); err != nil {
-		t.Fatalf("refresh 失败: %v", err)
+		t.Fatalf("refresh failed: %v", err)
 	}
 	snap := r.Snapshot()
 	count := 0
@@ -71,10 +71,10 @@ func TestRegistryRejectsDuplicateName(t *testing.T) {
 		}
 	}
 	if count != 1 {
-		t.Fatalf("同名工具生效了 %d 份，期望 1 份", count)
+		t.Fatalf("%d copies of the same tool took effect, want 1", count)
 	}
 	if !hasErrorMentioning(snap.Errors, "duplicates") {
-		t.Errorf("没有记录重名错误：%+v", snap.Errors)
+		t.Errorf("the duplicate name was not recorded: %+v", snap.Errors)
 	}
 }
 
@@ -85,17 +85,18 @@ func TestRegistryRejectsUnsupportedKind(t *testing.T) {
 
 	r := NewRegistry(newTestHost(t, root, 20*time.Second), nil)
 	if err := r.Refresh(context.Background(), true); err != nil {
-		t.Fatalf("refresh 失败: %v", err)
+		t.Fatalf("refresh failed: %v", err)
 	}
 	if r.Has("notify") {
-		t.Fatal("未知 kind 的插件不该被加载")
+		t.Fatal("a plugin of an unknown kind must not be loaded")
 	}
 	if !hasErrorMentioning(r.Snapshot().Errors, "unsupported") {
-		t.Errorf("没有记录 kind 错误：%+v", r.Snapshot().Errors)
+		t.Errorf("the kind error was not recorded: %+v", r.Snapshot().Errors)
 	}
 }
 
-// 目录没变时不该重启 python；force=true 必须真的重扫，且失败要保留上一次的结果。
+// An unchanged directory must not restart python; force=true has to rescan for real, and a failure has
+// to keep the previous result.
 func TestRegistrySkipsUnchangedDir(t *testing.T) {
 	root := t.TempDir()
 	copyTree(t, pluginRoot(t), root)
@@ -103,28 +104,28 @@ func TestRegistrySkipsUnchangedDir(t *testing.T) {
 	host := newTestHost(t, root, 10*time.Second)
 	r := NewRegistry(host, nil)
 	if err := r.Refresh(context.Background(), true); err != nil {
-		t.Fatalf("首次 refresh 失败: %v", err)
+		t.Fatalf("the first refresh failed: %v", err)
 	}
 
 	host.Python = "definitely-not-a-python-interpreter-xyz"
 	if err := r.Refresh(context.Background(), false); err != nil {
-		t.Fatalf("目录没变却被重扫了：%v", err)
+		t.Fatalf("an unchanged directory was rescanned anyway: %v", err)
 	}
 	if err := r.Refresh(context.Background(), true); err == nil {
-		t.Fatal("force=true 应当真的重扫（这里解释器已不可用，应报错）")
+		t.Fatal("force=true should really rescan (the interpreter is unusable here, so it must fail)")
 	}
 
 	if _, ok := r.Get("web_search"); !ok {
-		t.Error("扫描失败不该清空上一次的成功结果")
+		t.Error("a failed scan must not clear the last success")
 	}
 	if r.Snapshot().Err == nil {
-		t.Error("扫描失败应记录到 Snapshot.Err")
+		t.Error("a failed scan should be recorded in Snapshot.Err")
 	}
 }
 
-// ===== 测试工具 =====
+// ===== test helpers =====
 
-// writeTool 在临时插件目录里造一个最小工具（tool.py + 一个实现）。
+// writeTool builds a minimal tool (tool.py plus one implementation) in a temporary plugin directory.
 func writeTool(t *testing.T, root, kind, dirName, toolName string) {
 	t.Helper()
 	toolDir := filepath.Join(root, kind, dirName)
@@ -133,7 +134,7 @@ func writeTool(t *testing.T, root, kind, dirName, toolName string) {
 	}
 	writeFile(t, filepath.Join(toolDir, "tool.py"), fmt.Sprintf(`from flame_plugin import tool
 
-tool(name=%q, description="测试用工具", parameters={"type": "object", "properties": {}})
+tool(name=%q, description="test fixture tool", parameters={"type": "object", "properties": {}})
 `, toolName))
 	writeFile(t, filepath.Join(toolDir, "basic", "plugin.py"), `from flame_plugin import impl
 

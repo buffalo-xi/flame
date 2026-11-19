@@ -18,28 +18,30 @@ const (
 	defaultTimeout = 30 * time.Second
 	hostScriptRel  = "_host/pluginhost.py"
 
-	// maxStdoutBytes 只防失控：结果的有效上限（12KB）由 runner 负责截断。
+	// maxStdoutBytes only guards against runaway output: the effective limit on a result (12 KB) is
+	// enforced by the runner.
 	maxStdoutBytes = 8 << 20
-	// maxStderrBytes stderr 只用来记日志，截断即可。
+	// maxStderrBytes: stderr is only used for logs, truncating is enough.
 	maxStderrBytes = 4 << 10
 )
 
-// Host 一个插件目录的宿主：起 Python 子进程跑 list / invoke。
+// Host is the host of one plugin directory: it starts Python subprocesses to run list / invoke.
 //
-// 无状态、不缓存 manifest —— 扫描与缓存归 Registry 管（见 registry.go）。
-// 每次调用一个独立进程：崩溃天然隔离，超时按进程组整组杀（sysproc_*.go）。
+// It holds no state and caches no manifest — scanning and caching belong to Registry (see
+// registry.go). Every call gets its own process: a crash is isolated by construction, and a timeout
+// kills the whole process group (sysproc_*.go).
 type Host struct {
-	Dir     string        // 插件根目录（{root_dir}/plugins）
-	Python  string        // 解释器命令；空 = python
-	Timeout time.Duration // 单次调用超时；0 = 30s
+	Dir     string        // plugin root ({root_dir}/plugins)
+	Python  string        // interpreter command; empty = python
+	Timeout time.Duration // per-call timeout; 0 = 30s
 }
 
-// NewHost 构造一个宿主。timeout <= 0 时用默认 30s。
+// NewHost builds a host. A timeout <= 0 means the default 30s.
 func NewHost(dir, python string, timeout time.Duration) *Host {
 	return &Host{Dir: dir, Python: python, Timeout: timeout}
 }
 
-// Script 返回宿主脚本路径。
+// Script returns the host script path.
 func (h *Host) Script() string {
 	return filepath.Join(h.Dir, filepath.FromSlash(hostScriptRel))
 }
@@ -58,7 +60,7 @@ func (h *Host) timeout() time.Duration {
 	return defaultTimeout
 }
 
-// List 扫描目录，返回工具清单与逐条扫描错误。
+// List scans the directory and returns the tool manifest plus per-entry scan errors.
 func (h *Host) List(ctx context.Context) (*ListResult, error) {
 	out, stderr, err := h.run(ctx, nil, "list", "--dir", h.Dir)
 	if err != nil {
@@ -68,13 +70,14 @@ func (h *Host) List(ctx context.Context) (*ListResult, error) {
 	if err := json.Unmarshal(jsonLine(out), &res); err != nil {
 		return nil, &CallError{
 			Code:    CodeOther,
-			Message: fmt.Sprintf("解析插件清单失败: %v%s", err, stderrSuffix(stderr)),
+			Message: fmt.Sprintf("failed to parse the plugin manifest: %v%s", err, stderrSuffix(stderr)),
 		}
 	}
 	return &res, nil
 }
 
-// Invoke 执行一次工具调用，返回插件给的 result（未裁剪，裁剪在 runner）。
+// Invoke runs one tool call and returns the plugin's result (untrimmed; trimming happens in the
+// runner).
 func (h *Host) Invoke(ctx context.Context, tool, impl string, payload *InvokePayload) (any, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -83,7 +86,8 @@ func (h *Host) Invoke(ctx context.Context, tool, impl string, payload *InvokePay
 	out, stderr, err := h.run(ctx, body,
 		"invoke", "--dir", h.Dir, "--tool", tool, "--impl", impl)
 	if err != nil {
-		// 进程没跑起来 / 被杀：把 stderr 尾巴带上，否则现场只剩一个 exit status
+		// The process never started or was killed: append the tail of stderr, otherwise all that is
+		// left is an exit status
 		var ce *CallError
 		if errors.As(err, &ce) {
 			ce.Message += stderrSuffix(stderr)
@@ -96,7 +100,7 @@ func (h *Host) Invoke(ctx context.Context, tool, impl string, payload *InvokePay
 	if err := json.Unmarshal(jsonLine(out), &res); err != nil {
 		return nil, &CallError{
 			Code:    CodeOther,
-			Message: fmt.Sprintf("解析插件返回失败: %v%s", err, stderrSuffix(stderr)),
+			Message: fmt.Sprintf("failed to parse the plugin response: %v%s", err, stderrSuffix(stderr)),
 		}
 	}
 	if res.Error != nil {
@@ -108,7 +112,7 @@ func (h *Host) Invoke(ctx context.Context, tool, impl string, payload *InvokePay
 	return res.Result, nil
 }
 
-// run 起一次宿主进程。stdin 为 nil 表示不喂输入。
+// run starts one host process. A nil stdin means no input is fed.
 func (h *Host) run(ctx context.Context, stdin []byte, args ...string) ([]byte, string, error) {
 	cctx, cancel := context.WithTimeout(ctx, h.timeout())
 	defer cancel()
@@ -116,10 +120,12 @@ func (h *Host) run(ctx context.Context, stdin []byte, args ...string) ([]byte, s
 	full := append([]string{h.Script()}, args...)
 	cmd := exec.CommandContext(cctx, h.python(), full...)
 	cmd.Dir = h.Dir
-	// 协议固定 UTF-8：Windows 上 Python 默认按 locale（cp936）编解码管道，
-	// 中文查询词会在 stdin 被解成 surrogate、再在 stdout 编码时炸掉。
+	// The protocol is fixed to UTF-8: on Windows Python encodes and decodes pipes with the locale
+	// (cp936) by default, so a non-ASCII query would be decoded into surrogates on stdin and blow up
+	// when stdout is encoded.
 	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
-	// 进程组：超时时整组杀，否则 python 拉起的子进程（pip、curl 之类）会残留
+	// Process group: on timeout the whole group is killed, otherwise subprocesses python started
+	// (pip, curl and the like) linger
 	setProcAttr(cmd)
 	cmd.Cancel = func() error { return killGroup(cmd) }
 	cmd.WaitDelay = 5 * time.Second
@@ -153,10 +159,11 @@ func (h *Host) run(ctx context.Context, stdin []byte, args ...string) ([]byte, s
 	return outW.Bytes(), stderr, nil
 }
 
-// jsonLine 取 stdout 里最后一行合法 JSON。
+// jsonLine takes the last line of valid JSON on stdout.
 //
-// 宿主已经保证 stdout 只有一行，但插件若在重定向生效前就 print（模块顶层代码），
-// 或者解释器自己打了警告，这里要能容忍。
+// The host already guarantees stdout holds a single line, but a plugin may print before the
+// redirection takes effect (module-level code), or the interpreter may emit a warning itself, so
+// this has to tolerate both.
 func jsonLine(out []byte) []byte {
 	b := bytes.TrimSpace(out)
 	if len(b) == 0 {
@@ -179,7 +186,7 @@ func stderrSuffix(stderr string) string {
 	if strings.TrimSpace(stderr) == "" {
 		return ""
 	}
-	return "（stderr: " + truncate(stderr, 400) + "）"
+	return " (stderr: " + truncate(stderr, 400) + ")"
 }
 
 func truncate(s string, n int) string {
@@ -189,8 +196,9 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// limitedWriter 带字节上限的缓冲：超限后丢弃多余内容但返回 len(p)，
-// 避免子进程因短写而报错（与 tools 包的同名结构同一考虑）。
+// limitedWriter is a buffer with a byte ceiling: content beyond the limit is dropped while len(p) is
+// still returned, so the child process does not fail on a short write (the same reasoning as the
+// struct of that name in the tools package).
 type limitedWriter struct {
 	buf       bytes.Buffer
 	limit     int
@@ -201,7 +209,7 @@ func newLimitedWriter(limit int) *limitedWriter { return &limitedWriter{limit: l
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
 	n := len(p)
-	if w.limit <= 0 { // <=0 表示不限
+	if w.limit <= 0 { // <=0 means unlimited
 		return w.buf.Write(p)
 	}
 	remaining := w.limit - w.buf.Len()

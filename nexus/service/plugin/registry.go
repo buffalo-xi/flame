@@ -16,40 +16,46 @@ import (
 	"flame/tools/xlog"
 )
 
-// KindTools 工具插件。当前唯一支持的 kind，也是宿主扫描与清单校验的基准值。
-// 与 repository/plugins.KindTools、pluginpolicy.KindTools 同值（三层各自声明，不互相 import）。
+// KindTools is the tools plugin kind. It is the only kind supported today and the reference value for
+// both the host scan and the manifest validation. It holds the same value as
+// repository/plugins.KindTools and pluginpolicy.KindTools (each of the three layers declares it and
+// none imports another).
 const KindTools = "tools"
 
-// SupportedKinds 当前支持的插件种类。
+// SupportedKinds is the set of plugin kinds supported today.
 //
-// 未知 kind 只记录、不加载：将来加一类插件（sources / channels ...）时，
-// 先在宿主里加对应加载器，再把 kind 放进这里 —— 已有插件与授权数据不受影响。
+// An unknown kind is only recorded, never loaded: adding a kind later (sources / channels ...) means
+// adding the loader to the host first and then putting the kind in here — existing plugins and grant
+// data are unaffected.
 var SupportedKinds = map[string]bool{KindTools: true}
 
-// Snapshot 某一时刻的插件清单。
+// Snapshot is the plugin manifest as of one moment.
 type Snapshot struct {
 	Tools  []Manifest
 	Errors []ScanError
 	At     time.Time
-	// Err 最近一次刷新整体失败的原因。非 nil 时 Tools 仍是上一次成功的结果
-	//（「保留旧结果」而不是清空：磁盘暂时读不到，不代表插件不该可用）。
+	// Err is why the latest refresh failed as a whole. While it is non-nil Tools still holds the
+	// result of the last success (keeping the old result rather than clearing it: disk being
+	// temporarily unreadable does not mean the plugins should stop working).
 	Err error
 }
 
-// Registry 插件清单的内存视图：启动拉一次，之后定期刷新（目录 mtime 变化会提前触发）。
+// Registry is the in-memory view of the plugin manifest: fetched once at startup, refreshed
+// periodically afterwards (a directory mtime change triggers a refresh earlier).
 //
-// 为什么清单不落库：磁盘是唯一真源。落库会多出一份需要同步的副本，
-// 插件升级改了 schema 还要等一轮同步；这里直接每轮重扫，最坏晚一个刷新周期。
+// Why the manifest is not persisted: disk is the only source of truth. Persisting would add a copy to
+// keep in sync, and a plugin upgrade that changed the schema would wait a whole sync round; rescanning
+// every round is at worst one refresh interval behind.
 type Registry struct {
 	host    *Host
-	builtin map[string]bool // 内置工具名（小写）：插件工具名与它重名即判废
+	builtin map[string]bool // built-in tool names (lower case): a plugin tool with the same name is rejected
 
 	mu   sync.RWMutex
 	snap Snapshot
-	sig  string // 目录签名；未变化时跳过扫描（省掉一次 python 启动）
+	sig  string // directory signature; unchanged means the scan is skipped (saving one python start)
 }
 
-// NewRegistry 构造注册表。builtinNames 传内置工具名（tools.Names()）。
+// NewRegistry builds a registry. builtinNames is the built-in tool names (tools.Names()).
 func NewRegistry(host *Host, builtinNames []string) *Registry {
 	names := make(map[string]bool, len(builtinNames))
 	for _, n := range builtinNames {
@@ -58,10 +64,11 @@ func NewRegistry(host *Host, builtinNames []string) *Registry {
 	return &Registry{host: host, builtin: names}
 }
 
-// EnsureDir 确保插件根目录存在（不存在就建空目录）。
+// EnsureDir makes sure the plugin root exists (creating an empty directory when it does not).
 //
-// 刻意不因为「目录还没建」而拒绝启动：插件是可选能力，
-// 部署时忘建目录不该让整个 nexus 起不来。
+// It deliberately does not refuse to start because "the directory has not been created yet": plugins
+// are an optional capability, and forgetting to create the directory during deployment must not keep
+// the whole nexus from starting.
 func EnsureDir(dir string) error {
 	if strings.TrimSpace(dir) == "" {
 		return fmt.Errorf("the plugin directory is empty")
@@ -79,10 +86,10 @@ func EnsureDir(dir string) error {
 	return nil
 }
 
-// Refresh 重新扫描目录。
+// Refresh rescans the directory.
 //
-// force=false 且目录签名未变时直接返回（不启动 python 子进程）。
-// 扫描失败不覆盖上一次的成功结果，只记录 Err。
+// With force=false and an unchanged directory signature it returns immediately (no python subprocess).
+// A failed scan does not overwrite the last success; it only records Err.
 func (r *Registry) Refresh(ctx context.Context, force bool) error {
 	sig := dirSignature(r.host.Dir)
 
@@ -116,12 +123,14 @@ func (r *Registry) Refresh(ctx context.Context, force bool) error {
 	return nil
 }
 
-// validate 过滤不可用/冲突的插件，并把原因记进 errors。
+// validate filters out unusable or conflicting plugins and records the reasons in errors.
 //
-// 三条硬规则（都只在加载期判定，不在调用期反复猜）：
-//  1. kind 必须在 SupportedKinds 里；
-//  2. 工具名不能与内置工具重名（否则 ExecuteTool 的分派会含糊）；
-//  3. 工具名全局唯一（跨 kind 也是）—— 授权 ref 与工具名都只用这一段名字。
+// Three hard rules, all decided at load time rather than guessed again per call:
+//  1. kind must be in SupportedKinds;
+//  2. a tool name must not clash with a built-in tool (otherwise the dispatch in ExecuteTool is
+//     ambiguous);
+//  3. a tool name must be globally unique (across kinds too) — both the grant ref and the tool name
+//     use just this one name.
 func (r *Registry) validate(res *ListResult) ([]Manifest, []ScanError) {
 	errs := make([]ScanError, 0, len(res.Errors)+2)
 	errs = append(errs, res.Errors...)
@@ -169,14 +178,14 @@ func (r *Registry) validate(res *ListResult) ([]Manifest, []ScanError) {
 	return tools, errs
 }
 
-// Snapshot 返回当前快照（切片是只读视图，调用方不要改）。
+// Snapshot returns the current snapshot (the slice is a read-only view; callers must not modify it).
 func (r *Registry) Snapshot() Snapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.snap
 }
 
-// Get 按工具名取 manifest（大小写不敏感）。
+// Get looks a manifest up by tool name (case-insensitive).
 func (r *Registry) Get(name string) (Manifest, bool) {
 	snap := r.Snapshot()
 	for _, m := range snap.Tools {
@@ -187,13 +196,13 @@ func (r *Registry) Get(name string) (Manifest, bool) {
 	return Manifest{}, false
 }
 
-// Has 判断某名字是不是已发现的插件工具。
+// Has reports whether a name is an already discovered plugin tool.
 func (r *Registry) Has(name string) bool {
 	_, ok := r.Get(name)
 	return ok
 }
 
-// Start 起后台刷新协程。interval <= 0 时用 1 分钟。
+// Start launches the background refresh goroutine. An interval <= 0 means one minute.
 func (r *Registry) Start(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Minute
@@ -212,27 +221,30 @@ func (r *Registry) Start(ctx context.Context, interval time.Duration) {
 	}()
 }
 
-// ===== 包级单例（与 tools.SetSandbox / sandboxinfo 同一套注册风格） =====
+// ===== package-level singleton (the same registration style as tools.SetSandbox / sandboxinfo) =====
 
-// Source 插件清单的只读视图。Registry 是默认实现；
-// 单测可以注入假实现，不必为了「目录里有没有插件」去起 python 子进程。
+// Source is a read-only view of the plugin manifest. Registry is the default implementation; unit
+// tests can inject a fake so they need not start a python subprocess just to answer "is there a
+// plugin in the directory".
 type Source interface {
 	Snapshot() Snapshot
 	Get(name string) (Manifest, bool)
 }
 
-// sourceBox 包一层：atomic.Value 要求存入的具体类型始终一致。
+// sourceBox wraps one level: atomic.Value requires the stored concrete type to stay the same.
 type sourceBox struct{ s Source }
 
 var defaultSource atomic.Value
 
-// currentRegistry 具体注册表（管理端刷新用）。
+// currentRegistry is the concrete registry (used by the admin refresh).
 var currentRegistry atomic.Pointer[Registry]
 
-// SetSource 注入全局插件清单来源（生产传 *Registry，测试可传假实现；传 nil 表示清空）。
+// SetSource injects the global manifest source (production passes *Registry, tests may pass a fake;
+// nil clears it).
 func SetSource(s Source) { defaultSource.Store(sourceBox{s: s}) }
 
-// DefaultSource 取全局清单来源；未注入时为 nil（工具目录里就看不到插件）。
+// DefaultSource returns the global manifest source; it is nil when nothing was injected (the tool
+// catalogue then shows no plugin).
 func DefaultSource() Source {
 	if v, ok := defaultSource.Load().(sourceBox); ok {
 		return v.s
@@ -240,20 +252,20 @@ func DefaultSource() Source {
 	return nil
 }
 
-// ===== 具体注册表的单例（管理端「刷新」需要它，接口视图不够） =====
+// ===== singleton of the concrete registry (the admin "refresh" needs it; the interface view is not enough) =====
 
-// SetDefault 注入全局注册表（main 启动时调用；同时承担 SetSource 的职责）。
+// SetDefault injects the global registry (called by main at startup; it also takes over SetSource's job).
 //
-// 顺带把清单暴露给 shared/plugininfo：平台管理台要列「可以给租户开通哪些插件」，
-// 但 nexus/platform 的边界规则禁止 import 本包（见 platform/README.md），
-// 只能通过 shared 里的最小视图转一手。
+// It additionally exposes the manifest to shared/plugininfo: the platform admin console has to list
+// "which plugins can be granted to a tenant", yet the boundary rules of nexus/platform forbid
+// importing this package (see platform/README.md), so it goes through the minimal view in shared.
 func SetDefault(r *Registry) {
 	currentRegistry.Store(r)
 	SetSource(r)
 	plugininfo.SetSource(infoAdapter{r: r})
 }
 
-// infoAdapter 把 Registry 的清单映射成 shared/plugininfo 的最小结构。
+// infoAdapter maps Registry's manifest onto the minimal shared/plugininfo structure.
 type infoAdapter struct{ r *Registry }
 
 func (a infoAdapter) Tools() []plugininfo.Tool {
@@ -279,13 +291,13 @@ func (a infoAdapter) Tools() []plugininfo.Tool {
 	return out
 }
 
-// Current 取全局注册表（*Registry）；测试注入假 Source 时为 nil。
+// Current returns the global registry (*Registry); it is nil when a test injected a fake Source.
 func Current() *Registry { return currentRegistry.Load() }
 
-// dirSignature 汇总目录树的 mtime，用来判断「有没有东西变了」。
+// dirSignature sums up the mtimes of the directory tree, to decide whether anything changed.
 //
-// 只看 kind/tool/impl 三层：更深的内容（__pycache__、插件自带的数据文件）
-// 不影响 manifest，没必要为此重启扫描。
+// Only the three levels kind/tool/impl are considered: deeper content (__pycache__, data files a
+// plugin ships) does not affect the manifest, so there is no reason to rescan for it.
 func dirSignature(dir string) string {
 	var b strings.Builder
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -297,7 +309,7 @@ func dirSignature(dir string) string {
 			return nil
 		}
 		if d.IsDir() {
-			// __pycache__ 之类整棵跳过（它只会带来噪声，不影响 manifest）
+			// Skip whole trees such as __pycache__ (they only add noise and do not affect the manifest)
 			if strings.HasPrefix(d.Name(), "__") {
 				return filepath.SkipDir
 			}
@@ -305,11 +317,12 @@ func dirSignature(dir string) string {
 			if rel != "." {
 				depth = strings.Count(rel, string(filepath.Separator)) + 1
 			}
-			if depth >= 4 { // 第 4 层（impl/子目录）以下不再关心
+			if depth >= 4 { // nothing below the fourth level (impl/subdirectory) matters
 				return filepath.SkipDir
 			}
-			// 目录只记名字、不记 mtime：Python import 会在旁边生成 __pycache__，
-			// 那会改掉上层目录的 mtime，但 manifest 没变 —— 记 mtime 会导致每轮都重扫。
+			// Directories record only their name, not their mtime: a Python import creates
+			// __pycache__ next to the file, which changes the parent directory's mtime while the
+			// manifest is unchanged — recording mtime would rescan every round.
 			b.WriteString(rel)
 			b.WriteByte('/')
 			b.WriteByte(';')

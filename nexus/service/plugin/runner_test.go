@@ -13,7 +13,7 @@ import (
 	"flame/tools/xsql"
 )
 
-// ===== 假实现（不起 python、不连 DB） =====
+// ===== fakes (no python, no DB) =====
 
 type fakeInvoker struct {
 	calls []string
@@ -41,8 +41,8 @@ func (f fakeSource) Get(name string) (Manifest, bool) {
 	return Manifest{}, false
 }
 
-// fakeRepo 只按 name 存：本包用例全部走 kind=tools 一条路径，
-// (kind, name) 的隔离由 toolgrant 的替身与真实仓储负责。
+// fakeRepo stores rows by name only: every case in this package goes through the kind=tools path, and
+// the (kind, name) isolation is covered by the toolgrant double and the real repository.
 type fakeRepo struct{ rows map[string]*models.Plugin }
 
 func (f fakeRepo) Get(_ *auth.AuthInfo, _, name string) (*models.Plugin, error) {
@@ -80,15 +80,16 @@ func runnerManifest(impls ...string) Manifest {
 	return Manifest{
 		Kind:            "tools",
 		Name:            "web_search",
-		DisplayName:     "网络搜索",
-		Description:     "搜索网络",
+		DisplayName:     "Web search",
+		Description:     "Searches the web",
 		Parameters:      map[string]any{"type": "object"},
 		Implementations: out,
 	}
 }
 
-// newRunner 用例里的执行器：平台策略默认「已开通 + 不限」（与生产缺省相反），
-// 避免每个用例都要写一遍授权；需要额度/授权相关的断言时自己 SetPolicySource 覆盖。
+// newRunner builds the runner used by the cases: the platform policy defaults to "granted and
+// unrestricted" (the opposite of the production default), so that not every case has to spell out a
+// grant; a case that asserts quotas or grants overrides it with SetPolicySource.
 func newRunner(inv Invoker, m Manifest, p *models.Plugin) *Runner {
 	rows := map[string]*models.Plugin{}
 	if p != nil {
@@ -98,7 +99,7 @@ func newRunner(inv Invoker, m Manifest, p *models.Plugin) *Runner {
 		SetPolicySource(allowAll())
 }
 
-// ===== 用例 =====
+// ===== cases =====
 
 func TestRunnerInvokePrimary(t *testing.T) {
 	inv := &fakeInvoker{fn: func(string) (any, error) {
@@ -110,24 +111,24 @@ func TestRunnerInvokePrimary(t *testing.T) {
 
 	raw, err := r.Invoke(context.Background(), "t0", "web_search", map[string]any{"query": "nexus"})
 	if err != nil {
-		t.Fatalf("invoke 失败: %v", err)
+		t.Fatalf("invoke failed: %v", err)
 	}
 	if len(inv.calls) != 1 || inv.calls[0] != "searxng" {
-		t.Fatalf("调用实现 = %v，期望只调 searxng", inv.calls)
+		t.Fatalf("implementations called = %v, want searxng only", inv.calls)
 	}
 	res, _ := raw.(map[string]any)
 	if res["provider"] != "searxng" {
 		t.Errorf("provider = %v", res["provider"])
 	}
 	if res["query"] != "nexus" {
-		t.Errorf("query 未回填: %v", res["query"])
+		t.Errorf("query was not filled in: %v", res["query"])
 	}
 }
 
 func TestRunnerFallsBackOnNetworkError(t *testing.T) {
 	inv := &fakeInvoker{fn: func(impl string) (any, error) {
 		if impl == "tavily" {
-			return nil, &CallError{Code: CodeNetwork, Message: "连不上"}
+			return nil, &CallError{Code: CodeNetwork, Message: "cannot connect"}
 		}
 		return map[string]any{"results": []any{}}, nil
 	}}
@@ -138,20 +139,20 @@ func TestRunnerFallsBackOnNetworkError(t *testing.T) {
 
 	raw, err := r.Invoke(context.Background(), "t0", "web_search", map[string]any{"query": "q"})
 	if err != nil {
-		t.Fatalf("应当降级成功，实际 %v", err)
+		t.Fatalf("the fallback should have succeeded, got %v", err)
 	}
 	if strings.Join(inv.calls, ",") != "tavily,searxng" {
-		t.Fatalf("调用顺序 = %v", inv.calls)
+		t.Fatalf("call order = %v", inv.calls)
 	}
 	res, _ := raw.(map[string]any)
 	if res["provider"] != "searxng" {
-		t.Errorf("provider = %v，期望走兜底的 searxng", res["provider"])
+		t.Errorf("provider = %v, want the fallback searxng", res["provider"])
 	}
 }
 
 func TestRunnerDoesNotFallbackOnConfigError(t *testing.T) {
 	inv := &fakeInvoker{fn: func(string) (any, error) {
-		return nil, &CallError{Code: CodeConfig, Message: "缺少 api_key"}
+		return nil, &CallError{Code: CodeConfig, Message: "api_key is missing"}
 	}}
 	r := newRunner(inv, runnerManifest("tavily", "searxng"), &models.Plugin{
 		Name: "web_search", Impl: "tavily", IsActive: true,
@@ -160,13 +161,13 @@ func TestRunnerDoesNotFallbackOnConfigError(t *testing.T) {
 
 	_, err := r.Invoke(context.Background(), "t0", "web_search", nil)
 	if err == nil {
-		t.Fatal("缺 key 应当直接报错")
+		t.Fatal("a missing key should fail right away")
 	}
 	if Code(err) != CodeConfig {
-		t.Fatalf("错误码 = %q，期望 config", Code(err))
+		t.Fatalf("error code = %q, want config", Code(err))
 	}
 	if len(inv.calls) != 1 {
-		t.Fatalf("config 错误不该降级，实际调用 %v", inv.calls)
+		t.Fatalf("a config error must not fall back, but calls were %v", inv.calls)
 	}
 }
 
@@ -177,16 +178,16 @@ func TestRunnerRejectsDisabledOrMissingConfig(t *testing.T) {
 		Name: "web_search", Impl: "searxng", IsActive: false,
 	})
 	if _, err := disabled.Invoke(context.Background(), "t0", "web_search", nil); Code(err) != CodeConfig {
-		t.Fatalf("停用插件应当报 config，实际 %v", err)
+		t.Fatalf("a disabled plugin should report config, got %v", err)
 	}
 
 	missing := newRunner(inv, runnerManifest("searxng"), nil)
 	if _, err := missing.Invoke(context.Background(), "t0", "web_search", nil); Code(err) != CodeConfig {
-		t.Fatalf("未配置插件应当报 config，实际 %v", err)
+		t.Fatalf("an unconfigured plugin should report config, got %v", err)
 	}
 
 	if len(inv.calls) != 0 {
-		t.Fatalf("不该有任何实现被调用：%v", inv.calls)
+		t.Fatalf("no implementation should have been called: %v", inv.calls)
 	}
 }
 
@@ -195,21 +196,22 @@ func TestRunnerUndiscoveredTool(t *testing.T) {
 		Name: "web_search", Impl: "searxng", IsActive: true,
 	})
 	if _, err := r.Invoke(context.Background(), "t0", "no_such_tool", nil); Code(err) != CodeConfig {
-		t.Fatalf("未知工具应当报 config，实际 %v", err)
+		t.Fatalf("an unknown tool should report config, got %v", err)
 	}
 	if r.Has("no_such_tool") {
-		t.Error("Has 不该命中未知工具")
+		t.Error("Has must not match an unknown tool")
 	}
 	if !r.Has("WEB_SEARCH") {
-		t.Error("Has 应当大小写不敏感")
+		t.Error("Has should be case-insensitive")
 	}
 }
 
-// 兜底链里写了磁盘上没有的实现：跳过它并记进 notes，而不是整条链失败。
+// The fallback chain names an implementation that is not on disk: skip it and record it in notes
+// rather than failing the whole chain.
 func TestRunnerSkipsGhostImplementation(t *testing.T) {
 	inv := &fakeInvoker{fn: func(impl string) (any, error) {
 		if impl == "tavily" {
-			return nil, &CallError{Code: CodeNetwork, Message: "连不上"}
+			return nil, &CallError{Code: CodeNetwork, Message: "cannot connect"}
 		}
 		return map[string]any{"results": []any{}}, nil
 	}}
@@ -220,21 +222,21 @@ func TestRunnerSkipsGhostImplementation(t *testing.T) {
 
 	raw, err := r.Invoke(context.Background(), "t0", "web_search", map[string]any{"query": "q"})
 	if err != nil {
-		t.Fatalf("invoke 失败: %v", err)
+		t.Fatalf("invoke failed: %v", err)
 	}
 	if strings.Join(inv.calls, ",") != "tavily,searxng" {
-		t.Fatalf("调用顺序 = %v（ghost 不该被调）", inv.calls)
+		t.Fatalf("call order = %v (ghost must not be called)", inv.calls)
 	}
 	res, _ := raw.(map[string]any)
 	notes, _ := res["notes"].([]any)
 	found := false
 	for _, n := range notes {
-		if s, _ := n.(string); strings.Contains(s, "不在插件清单") {
+		if s, _ := n.(string); strings.Contains(s, "not in the plugin manifest") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("没有说明被跳过的实现：%v", res["notes"])
+		t.Errorf("the skipped implementation was not explained: %v", res["notes"])
 	}
 }
 
@@ -242,9 +244,9 @@ func TestRunnerTruncatesLargeResult(t *testing.T) {
 	big := make([]any, 0, 100)
 	for i := 0; i < 100; i++ {
 		big = append(big, map[string]any{
-			"title":   fmt.Sprintf("标题 %03d", i),
+			"title":   fmt.Sprintf("title %03d", i),
 			"url":     fmt.Sprintf("https://example.com/%03d", i),
-			"snippet": strings.Repeat("摘要内容", 40),
+			"snippet": strings.Repeat("snippet body", 40),
 		})
 	}
 	inv := &fakeInvoker{fn: func(string) (any, error) {
@@ -256,22 +258,22 @@ func TestRunnerTruncatesLargeResult(t *testing.T) {
 
 	raw, err := r.Invoke(context.Background(), "t0", "web_search", map[string]any{"query": "q"})
 	if err != nil {
-		t.Fatalf("invoke 失败: %v", err)
+		t.Fatalf("invoke failed: %v", err)
 	}
 	res, _ := raw.(map[string]any)
 	if res["truncated"] != true {
-		t.Fatal("超限结果应当标记 truncated")
+		t.Fatal("an over-limit result should be marked truncated")
 	}
 	items, _ := res["results"].([]any)
 	if len(items) >= 100 {
-		t.Fatalf("结果没被裁掉：%d 条", len(items))
+		t.Fatalf("the result was not trimmed: %d entries", len(items))
 	}
 	b, err := json.Marshal(res)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(b) > MaxResultBytes {
-		t.Fatalf("裁剪后仍有 %d 字节，超过上限 %d", len(b), MaxResultBytes)
+		t.Fatalf("after trimming it is still %d bytes, over the %d limit", len(b), MaxResultBytes)
 	}
 }
 

@@ -16,64 +16,72 @@ import (
 	"flame/tools/xlog"
 )
 
-// Invoker 执行一次宿主调用。*Host 是生产实现；单测注入假实现就不必起 python。
+// Invoker runs one host call. *Host is the production implementation; unit tests inject a fake so no
+// python is started.
 type Invoker interface {
 	Invoke(ctx context.Context, tool, impl string, payload *InvokePayload) (any, error)
 }
 
-// MaxResultBytes 回给模型的结果字节上限。
+// MaxResultBytes is the byte ceiling on the result handed back to the model.
 //
-// 宁可截断也不让一次检索撑爆上下文：超限时从尾部丢 results，置 truncated=true。
+// Truncating beats letting one lookup blow up the context: over the ceiling, results are dropped from
+// the tail and truncated=true is set.
 const MaxResultBytes = 12 * 1024
 
-// Runner 把「工具名 + 入参」变成一次带租户配置的插件调用。
+// Runner turns "tool name + arguments" into one plugin call carrying the tenant configuration.
 //
-// 职责边界：
-//   - 选实现与兜底链（主实现 → fallbacks；config 类错误不降级）
-//   - 结果裁剪与元信息补全
-//   - 不负责发现（Registry 干）、不负责授权（ExecuteTool 干）
+// Boundaries of responsibility:
+//   - choosing the implementation and the fallback chain (primary -> fallbacks; config errors are not
+//     downgraded)
+//   - trimming the result and completing its metadata
+//   - it does not discover (Registry does) and does not authorise (ExecuteTool does)
 //
-// 结构上满足 tools.PluginRunner（Has / Invoke），但刻意不 import tools 包 ——
-// 接口是结构化的，少一条依赖就少一个环。
+// Structurally it satisfies tools.PluginRunner (Has / Invoke) but deliberately does not import the
+// tools package — the interface is structural, and one dependency less is one cycle less.
 type Runner struct {
 	host Invoker
 	repo pluginsrepo.Repository
 	src  Source
-	pol  PolicySource // 可为 nil（视为缺省 = 开放；停用要显式写行）
+	pol  PolicySource // may be nil (treated as the default = open; disabling needs an explicit row)
 }
 
-// PolicySource 读取「租户 × 插件」的平台策略（能否使用）。
+// PolicySource reads the platform policy for "tenant × plugin" (whether it may be used).
 //
-// 做成接口是为了单测：生产实现直连 platform.tenant_plugins，
-// 用例注入假实现就不必为「平台给没给授权」去连库。
+// It is an interface for the sake of unit tests: the production implementation queries
+// platform.tenant_plugins directly, while a test injects a fake and never touches the database for
+// "did the platform grant this".
 type PolicySource interface {
 	Resolve(tenantID, pluginName string) (pluginpolicy.Policy, error)
 }
 
-// policySourceFunc 让普通函数满足 PolicySource（默认实现就是 pluginpolicy.Resolve）。
+// policySourceFunc lets a plain function satisfy PolicySource (the default implementation is
+// pluginpolicy.Resolve).
 type policySourceFunc func(tenantID, pluginName string) (pluginpolicy.Policy, error)
 
 func (f policySourceFunc) Resolve(tenantID, pluginName string) (pluginpolicy.Policy, error) {
 	return f(tenantID, pluginName)
 }
 
-// NewRunner 构造执行器。host 可为 nil（此时所有调用报 config 错，便于「插件没配好」时降级）。
+// NewRunner builds a runner. host may be nil (every call then reports a config error, which is the
+// graceful degradation when "the plugin is not set up").
 func NewRunner(host Invoker, repo pluginsrepo.Repository, src Source) *Runner {
 	return &Runner{host: host, repo: repo, src: src, pol: policySourceFunc(pluginpolicy.Resolve)}
 }
 
-// SetPolicySource 替换平台策略来源（单测用；返回自身便于链式调用）。
+// SetPolicySource replaces the platform policy source (for tests; it returns the receiver so calls can
+// be chained).
 func (r *Runner) SetPolicySource(p PolicySource) *Runner {
 	r.pol = p
 	return r
 }
 
-// NewDefaultRunner 用默认仓储构造执行器（main 用它，省得再 import 仓储包）。
+// NewDefaultRunner builds a runner on the default repository (main uses it, saving an import of the
+// repository package).
 func NewDefaultRunner(host Invoker, src Source) *Runner {
 	return NewRunner(host, pluginsrepo.NewRepository(), src)
 }
 
-// Has 该名字是不是已发现的插件工具（只看 manifest）。
+// Has reports whether a name is an already discovered plugin tool (manifest only).
 func (r *Runner) Has(name string) bool {
 	if r == nil || r.src == nil {
 		return false
@@ -82,7 +90,8 @@ func (r *Runner) Has(name string) bool {
 	return ok
 }
 
-// Invoke 执行一次调用：读租户配置 → 按主实现与兜底链逐个试 → 裁剪结果。
+// Invoke runs one call: read the tenant config -> try the primary and then the fallback chain ->
+// trim the result.
 func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[string]any) (any, error) {
 	if r == nil || r.host == nil {
 		return nil, &CallError{Code: CodeConfig, Message: "the plugin runner is not initialised"}
@@ -99,29 +108,32 @@ func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[s
 		return nil, &CallError{Code: CodeConfig, Message: "plugin tool not found: " + toolName}
 	}
 
-	// 平台策略先于租户配置判定：被平台停用时的提示应当是「找平台管理员」，
-	// 而不是「去插件页启用」—— 后者启用了也调不动。
+	// The platform policy is decided before the tenant config: when the platform disabled it, the
+	// message should say "ask a platform administrator", not "enable it on the plugin page" — enabling
+	// it there changes nothing.
 	pol := pluginpolicy.Default()
 	if r.pol != nil {
 		got, perr := r.pol.Resolve(schema, manifest.Name)
 		if perr != nil {
-			// 读不出来就**不放行**：这里静默回退缺省等于授权机制失效。
-			// 表不存在多半是上线顺序错了（授权表 / 闸表没先执行），给一句可操作的线索，
-			// 否则只能看到「插件调不动」。
+			// When it cannot be read, access is **not** granted: silently falling back to the default
+			// here would defeat the whole grant mechanism. A missing table usually means the rollout
+			// order was wrong (the grant / gate tables were not run first), so give an actionable
+			// hint instead of leaving nothing but "the plugin cannot be called".
 			hint := ""
 			if strings.Contains(perr.Error(), "does not exist") {
 				hint = " - run nexus/platform/sql/tenant_plugins.sql and plugin_gates.sql first"
 			}
 			return nil, &CallError{
 				Code:    CodeOther,
-				Message: fmt.Sprintf("读取插件 %s 的租户授权失败: %v%s", manifest.Name, perr, hint),
+				Message: fmt.Sprintf("failed to read the tenant grant of plugin %s: %v%s", manifest.Name, perr, hint),
 			}
 		}
 		pol = got
 	}
 	if !pol.Allowed {
-		// 被闸拦下时说清是「全局停用」还是「只停了这一家」：
-		// 两句提示的影响面不同，能做的事也不同（等解闸 vs 找平台恢复本租户）。
+		// When a gate blocks it, say whether it is a platform-wide disable or a per-tenant one: the
+		// two messages have a different blast radius and call for different actions (wait for the gate
+		// to lift vs ask the platform to restore this tenant).
 		if pol.Blocked {
 			return nil, &CallError{
 				Code:    CodeConfig,
@@ -169,8 +181,9 @@ func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[s
 			return truncateResult(res, impl, args, notes), nil
 		}
 
-		// config 类错误（缺 key / 实现不存在）换一家也没用，直接上报；
-		// 其余（auth / quota / network / other）降级到兜底链上的下一家。
+		// A config error (missing key / implementation absent) is not fixed by trying another one, so
+		// it is reported as is; everything else (auth / quota / network / other) falls back to the next
+		// implementation on the chain.
 		if Code(err) == CodeConfig {
 			return nil, err
 		}
@@ -187,7 +200,8 @@ func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[s
 	}
 }
 
-// buildChain 组装「主实现 + 兜底链」，顺手记下被跳过的项（写进结果的 notes，模型与人都能看见）。
+// buildChain assembles "primary implementation + fallback chain", recording the skipped entries on the
+// way (they go into the result's notes, visible to both the model and people).
 func buildChain(manifest Manifest, p *models.Plugin) (impls []string, notes []string) {
 	seen := make(map[string]bool, 2)
 
@@ -202,7 +216,7 @@ func buildChain(manifest Manifest, p *models.Plugin) (impls []string, notes []st
 			return
 		}
 		if _, ok := manifest.ImplementationOf(name); !ok {
-			notes = append(notes, fmt.Sprintf("%s %q 不在插件清单里，已跳过", role, name))
+			notes = append(notes, fmt.Sprintf("%s %q is not in the plugin manifest, skipped", role, name))
 			return
 		}
 		seen[name] = true
@@ -216,10 +230,10 @@ func buildChain(manifest Manifest, p *models.Plugin) (impls []string, notes []st
 	return impls, notes
 }
 
-// truncateResult 补全元信息并做体积裁剪。
+// truncateResult completes the metadata and trims the result to the byte ceiling.
 //
-// 插件结果约定是 {results:[], answer?, notes?}；这里只保证三件事：
-// provider 有值、query 回填、总字节不超过 MaxResultBytes。
+// A plugin result is by convention {results:[], answer?, notes?}; this only guarantees three things:
+// provider is set, query is filled in, and the total stays within MaxResultBytes.
 func truncateResult(raw any, impl string, args map[string]any, notes []string) any {
 	res, ok := raw.(map[string]any)
 	if !ok {
@@ -263,7 +277,8 @@ func truncateResult(raw any, impl string, args map[string]any, notes []string) a
 
 	res["truncated"] = true
 	if b, err := json.Marshal(res); err == nil && len(b) > MaxResultBytes {
-		// 极端情况：非 results 字段（answer / notes）本身就超限，直接砍成摘要
+		// The extreme case: a non-results field (answer / notes) is over the ceiling on its own, so it
+		// is cut down to a summary
 		return map[string]any{
 			"provider":  res["provider"],
 			"query":     res["query"],
@@ -275,7 +290,7 @@ func truncateResult(raw any, impl string, args map[string]any, notes []string) a
 	return res
 }
 
-// argString 从 args 取字符串（缺省空串）；只在回填 query 用。
+// argString reads a string out of args (empty when absent); only used to fill in query.
 func argString(args map[string]any, key string) string {
 	if args == nil {
 		return ""
