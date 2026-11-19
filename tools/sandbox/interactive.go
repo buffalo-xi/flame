@@ -14,48 +14,51 @@ import (
 	"time"
 )
 
-// interactiveIdle 一段输出后多久没有新数据就认为命令结束。
+// interactiveIdle is how long without new output marks the command as finished.
 //
-// 这是「哨兵」的兜底：正常情况下命令末尾会 echo 一个唯一哨兵，读到它即知结束；
-// 但脚本可能把哨兵行一并吞掉（重定向、exec 替换等），此时靠空闲超时收尾，
-// 避免一次调用永久挂住。
+// This is the sentinel's backstop: normally the command echoes a unique sentinel at the end and reading
+// it means we are done; but a script may swallow the sentinel line (redirection, exec replacement), and
+// the idle timeout then closes the call instead of hanging forever.
 const interactiveIdle = 30 * time.Second
 
-// InteractiveSession 一次长交互调用的会话身份。
+// InteractiveSession is the session identity of one long-interactive call.
 //
-// Key 是贯穿三端的复用标识：nexus 用它定位进程、sandboxg 用它做粘性路由、
-// sandboxd 用它查 sessionSandbox。有 session 时取 SessionID，无 session 时取 RunID。
+// Key is the reuse identifier that runs through all three ends: nexus uses it to locate the process,
+// sandboxg for sticky routing, and sandboxd to look up the sessionSandbox. It is SessionID when there is
+// a session and RunID when there is not.
 type InteractiveSession struct {
 	Key       string
-	Ephemeral bool // 无 session 的临时进程：sandboxd 用短超时兜底
+	Ephemeral bool // a temporary process with no session: sandboxd applies its short timeout
 }
 
-// InteractiveResult 一次交互的结果。
+// InteractiveResult is the outcome of one interaction.
 type InteractiveResult struct {
 	Stdout    string
 	Stderr    string
 	ExitCode  int
-	Completed bool // false = 没读到哨兵（已按空闲超时返回，命令可能未结束）
+	Completed bool // false = the sentinel was never seen (returned on idle timeout; the command may still be running)
 }
 
-// InteractiveClient 长交互进程客户端（/v1/interactive）。
+// InteractiveClient is the long-interactive process client (/v1/interactive).
 //
-// 每次调用 = 开一条短 WS：open → 喂命令（带哨兵）→ 读输出到哨兵/空闲超时 → 断开。
-// 进程生命周期归 sandboxd（断开不杀，按 session_id 复用），本侧不持有任何状态。
+// Each call opens a short-lived WS: open → feed the command (with a sentinel) → read output up to the
+// sentinel or the idle timeout → disconnect. The process lifetime belongs to sandboxd (a disconnect does
+// not kill it; it is reused by session_id), and this side holds no state.
 type InteractiveClient struct {
 	endpoint string
 	token    string
 	limits   Limits
 }
 
-// NewInteractive 创建长交互客户端。endpoint 形如 ws://sandboxd:8080/v1/interactive。
+// NewInteractive creates a long-interactive client. endpoint looks like ws://sandboxd:8080/v1/interactive.
 func NewInteractive(endpoint, token string, limits Limits) *InteractiveClient {
 	return &InteractiveClient{endpoint: endpoint, token: token, limits: limits}
 }
 
-// Exec 在会话里执行一条命令。
+// Exec runs one command in the session.
 //
-// argv 只在进程首次创建时生效（sandboxd 复用已有进程时忽略它）；command 通过 stdin 喂入。
+// argv only takes effect when the process is first created (sandboxd ignores it when reusing an existing
+// process); command is fed through stdin.
 func (c *InteractiveClient) Exec(ctx context.Context, sess InteractiveSession, toolID string,
 	argv []string, command string, mounts []Mount, dir string) (InteractiveResult, error) {
 
@@ -99,14 +102,16 @@ func (c *InteractiveClient) Exec(ctx context.Context, sess InteractiveSession, t
 	return readToSentinel(ctx, conn, sentinel, interactiveIdle)
 }
 
-// Do 在长交互进程上发一行 JSON、读回一行 JSON。
+// Do sends one line of JSON to a long-interactive process and reads one line of JSON back.
 //
-// 与 Exec 的区别只有「结束条件」：shell 靠哨兵判断一条命令跑完，而浏览器宿主
-// 是严格的「一问一答」—— 发一行、收一行，不需要包哨兵。
+// The only difference from Exec is the completion condition: a shell needs a sentinel to know a command
+// finished, while a browser host is strictly request/response — send a line, receive a line, no sentinel
+// needed.
 //
-// 按 id 匹配是必要的容错：上一次调用超时后，它的响应可能在下一次调用时才到达；
-// 若把它当成这次的结果，模型会拿到一个完全错位的页面状态。反过来说，正因为
-// 能按 id 丢弃迟到响应，超时之后**不必杀掉浏览器**（cookie / 标签页都还在）。
+// Matching by id is necessary fault tolerance: if a previous call timed out, its response may arrive
+// during the next one; taking it as this call's result would hand the model a completely misaligned page
+// state. Conversely, because late responses can be discarded by id, a timeout **does not require killing
+// the browser** (cookies and tabs survive).
 func (c *InteractiveClient) Do(ctx context.Context, sess InteractiveSession, toolID string,
 	argv []string, req []byte, mounts []Mount, dir string) ([]byte, error) {
 
@@ -155,10 +160,10 @@ func (c *InteractiveClient) Do(ctx context.Context, sess InteractiveSession, too
 	return readJSONLine(ctx, conn, wantID)
 }
 
-// readJSONLine 从连接里读出一行 JSON（按 id 匹配）。
+// readJSONLine reads one line of JSON from the connection, matching by id.
 //
-// 缓冲区有上限：浏览器宿主的响应本来就有 max_bytes 预算，超过这个量级
-// 只可能是协议坏了，继续攒下去会把 nexus 的内存吃掉。
+// The buffer is capped: a browser host's response already has a max_bytes budget, so exceeding it means
+// the protocol is broken, and keeping on accumulating would eat nexus's memory.
 func readJSONLine(ctx context.Context, conn *Conn, wantID int) ([]byte, error) {
 	const maxLine = 8 << 20
 
@@ -178,7 +183,7 @@ func readJSONLine(ctx context.Context, conn *Conn, wantID int) ([]byte, error) {
 			}
 			if data != nil {
 				if data[0] != ChanStdout {
-					continue // stderr 不参与协议
+					continue // stderr takes no part in the protocol
 				}
 				buf = append(buf, data[1:]...)
 				for {
@@ -196,7 +201,7 @@ func readJSONLine(ctx context.Context, conn *Conn, wantID int) ([]byte, error) {
 							ID int `json:"id"`
 						}
 						if json.Unmarshal(line, &env) == nil && env.ID != wantID {
-							continue // 上次调用迟到的响应，丢掉
+							continue // a late response from an earlier call: drop it
 						}
 					}
 					done <- outcome{line: append([]byte{}, line...)}
@@ -224,10 +229,10 @@ func readJSONLine(ctx context.Context, conn *Conn, wantID int) ([]byte, error) {
 	}
 }
 
-// Kill 显式销毁会话进程（run 结束快路径，或工具的 kill 参数）。
+// Kill explicitly destroys a session process (the fast path at run end, or a tool's kill parameter).
 //
-// 幂等：进程不存在时不会真的创建（open 不带 Spec，空 argv 会让 spawn 直接失败），
-// 存在则被 removeTool 杀掉。
+// It is idempotent: when the process does not exist nothing is created (open carries no Spec, and an
+// empty argv makes spawn fail immediately); when it exists, removeTool kills it.
 func (c *InteractiveClient) Kill(ctx context.Context, sess InteractiveSession, toolID string) error {
 	conn, err := Dial(ctx, c.endpoint, c.token)
 	if err != nil {
@@ -244,10 +249,11 @@ func (c *InteractiveClient) Kill(ctx context.Context, sess InteractiveSession, t
 		return err
 	}
 
-	// 等 ready：进程存在才会 ready；不存在时服务端回 error —— 幂等，直接当已销毁。
+	// Wait for ready: the server reports ready only when the process exists; otherwise it returns an
+	// error — idempotent, so treat that as already destroyed.
 	f, _, err := conn.Recv()
 	if err != nil {
-		return nil // 连接已断，视为已销毁
+		return nil // the connection is gone, which means it is already destroyed
 	}
 	if f.Type != FrameReady {
 		return nil
@@ -255,19 +261,21 @@ func (c *InteractiveClient) Kill(ctx context.Context, sess InteractiveSession, t
 	if err := conn.SendFrame(&Frame{Type: FrameKill}); err != nil {
 		return err
 	}
-	// 等服务端 removeTool 后关闭连接（读到错误/关闭即处理完毕）。
+	// Wait for the server to removeTool and close the connection (an error or a close means it is done).
 	_, _, _ = conn.Recv()
 	return nil
 }
 
-// wrapWithSentinel 把命令包成「执行 + 输出唯一哨兵 + 退出码」，按 shell 类型选分隔符。
+// wrapWithSentinel wraps a command as "run + echo a unique sentinel + exit code", choosing the separator
+// by shell type.
 func wrapWithSentinel(command, sentinel, shellBin string) string {
 	base := strings.ToLower(filepath.Base(shellBin))
 	switch {
 	case base == "cmd" || base == "cmd.exe":
-		// 分成两条物理行：cmd 解析整行时就会把 %errorlevel% 展开掉，写在同一行拿到
-		// 的是「上一条命令」的退出码 —— 症状是任何命令都报 0。分行喂，第二行在
-		// 第一行执行完才被解析，%errorlevel% 才是本条命令的。
+		// Split across two physical lines: cmd expands %errorlevel% while parsing the whole line, so
+		// writing it on one line yields the exit code of the *previous* command — the symptom being that
+		// every command reports 0. Feeding it as two lines means the second is parsed only after the first
+		// has run, so %errorlevel% is this command's.
 		return command + "\necho " + sentinel + "%errorlevel%"
 	case strings.HasPrefix(base, "powershell") || base == "pwsh":
 		return command + "; echo \"" + sentinel + "$LASTEXITCODE\""
@@ -276,9 +284,10 @@ func wrapWithSentinel(command, sentinel, shellBin string) string {
 	}
 }
 
-// readToSentinel 读 stdout 直到哨兵出现；idle 内无新输出则兜底返回。
+// readToSentinel reads stdout until the sentinel appears; with no new output for idle it returns anyway.
 //
-// 哨兵前的内容是命令输出，哨兵后紧跟退出码；stderr 单独收集、不参与判定。
+// Everything before the sentinel is command output; the exit code follows the sentinel. stderr is
+// collected separately and takes no part in the decision.
 func readToSentinel(ctx context.Context, conn *Conn, sentinel string, idle time.Duration) (InteractiveResult, error) {
 	var (
 		mu     sync.Mutex
@@ -286,9 +295,9 @@ func readToSentinel(ctx context.Context, conn *Conn, sentinel string, idle time.
 		stderr bytes.Buffer
 	)
 
-	found := make(chan sentinelHit, 1) // 哨兵命中：退出码 + 位置
+	found := make(chan sentinelHit, 1) // sentinel hit: exit code + position
 	readErr := make(chan error, 1)
-	activity := make(chan struct{}, 1) // 有输出（用于重置空闲计时）
+	activity := make(chan struct{}, 1) // there was output (resets the idle timer)
 
 	go func() {
 		for {
@@ -321,7 +330,7 @@ func readToSentinel(ctx context.Context, conn *Conn, sentinel string, idle time.
 			}
 			switch f.Type {
 			case FrameExit:
-				// 进程退出（如命令是 exit）：以已读输出收尾
+				// The process exited (a command like exit): finish with what has been read.
 				mu.Lock()
 				hit := parseSentinel(stdout.Bytes(), sentinel)
 				mu.Unlock()
@@ -371,8 +380,8 @@ func readToSentinel(ctx context.Context, conn *Conn, sentinel string, idle time.
 			}
 			timer.Reset(idle)
 		case <-timer.C:
-			// 没解析到哨兵：输出原样返回（此时若去"删哨兵行"，最容易删掉的是
-			// cmd 回显出来的那行命令，把真正的输出也带走了）。
+			// No sentinel parsed: return the output as is (trying to "delete the sentinel line" here
+			// would most likely delete the command line cmd echoed, taking the real output with it).
 			out, errOut := snapshot()
 			return InteractiveResult{
 				Stdout:    out,
@@ -387,22 +396,26 @@ func readToSentinel(ctx context.Context, conn *Conn, sentinel string, idle time.
 	}
 }
 
-// sentinelHit 一次哨兵命中：退出码 + 哨兵在输出中的字节位置（删行时要用同一处）。
+// sentinelHit is one sentinel match: exit code + the byte position of the sentinel in the output (which
+// the line removal must reuse).
 type sentinelHit struct {
 	code int
 	at   int
 	ok   bool
 }
 
-// parseSentinel 在输出里找哨兵并解析其后的退出码。
-// 哨兵已出现但退出码还没到（分片）时返回 ok=false，由调用方继续累积。
+// parseSentinel finds the sentinel in the output and parses the exit code that follows it.
+// When the sentinel has appeared but the exit code has not arrived yet (splitting), it returns ok=false
+// and the caller keeps accumulating.
 //
-// 为什么不能只认第一次出现：cmd 会把喂进去的整行原样回显（管道下默认 echo on），
-// 于是输出里第一处哨兵来自回显 —— 它后面跟的是未展开的 %errorlevel%，不是数字。
-// 只认第一次会让 Windows 上的每次 shell 调用都等到空闲超时才返回（Completed=false,
-// exit=-1），看起来像"命令卡住了"。PowerShell/bash 不回声，这里也不会因此多做事。
+// Why not simply take the first occurrence: cmd echoes the whole fed line back (echo is on by default
+// under a pipe), so the first sentinel in the output comes from that echo — what follows it is an
+// unexpanded %errorlevel%, not a number. Taking only the first occurrence makes every shell call on
+// Windows wait for the idle timeout (Completed=false, exit=-1), looking like "the command hung".
+// PowerShell/bash do not echo, and this costs them nothing.
 //
-// 判据改成「后面能解析出整数的那一处」：回显处跳过，真正的输出处命中。
+// The criterion is therefore "the occurrence followed by a parseable integer": skip the echo, hit the
+// real output.
 func parseSentinel(b []byte, sentinel string) sentinelHit {
 	needle := []byte(sentinel)
 	for off := 0; off <= len(b); {
@@ -423,8 +436,9 @@ func parseSentinel(b []byte, sentinel string) sentinelHit {
 	return sentinelHit{}
 }
 
-// stripSentinelAt 删掉命中位置 at 所在的整行（哨兵及其后的退出码），保留其余输出。
-// at 必须来自 parseSentinel —— 行可能以提示符/回显开头，重新搜一遍会删错行。
+// stripSentinelAt removes the whole line containing position at (the sentinel and the exit code after it)
+// and keeps the rest of the output. at must come from parseSentinel — a line may start with a prompt or
+// an echo, and searching again would remove the wrong line.
 func stripSentinelAt(s string, at int) string {
 	if at < 0 || at > len(s) {
 		return s
@@ -437,7 +451,7 @@ func stripSentinelAt(s string, at int) string {
 	return s[:lineStart] + s[at+lineEnd+1:]
 }
 
-// randHex 生成 n 字节随机数的十六进制串（哨兵唯一化）。
+// randHex returns the hex string of n random bytes (to make a sentinel unique).
 func randHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
