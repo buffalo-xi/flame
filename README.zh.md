@@ -147,7 +147,7 @@ desktop/          Vue 3 管理台
 
 ## 文档
 
-- `nexus/docs/terminology.md` — 术语与动作词约定（改代码前建议先读）
+- `nexus/docs/terminology.md` — 术语与动作词约定（改代码前建议先读）（[中文版](nexus/docs/terminology.zh.md)）
 - `nexus/docs/sandbox-design.md` — 沙箱隔离设计与三条执行通道
 - `nexus/docs/workspace-layout-and-supervisor-power.md` — 租户工作区布局
 - `nexus/docs/design-highlights.md` — 设计要点：调用链防环、多租户配额、端点模型（[中文版](nexus/docs/design-highlights.zh.md)）

@@ -158,6 +158,7 @@ desktop/          Vue 3 admin console
 ## Docs
 
 - `nexus/docs/terminology.md` — terminology and verb conventions (read this before changing code)
+  ([中文](nexus/docs/terminology.zh.md))
 - `nexus/docs/sandbox-design.md` — sandbox isolation design and the three execution channels
 - `nexus/docs/workspace-layout-and-supervisor-power.md` — tenant workspace layout
 - `nexus/docs/design-highlights.md` — design highlights: call-chain recursion, multi-tenant quotas, endpoint model

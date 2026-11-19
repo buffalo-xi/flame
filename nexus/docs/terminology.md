@@ -1,134 +1,149 @@
-# 术语表：界面、代码、数据库三处必须同词
+# Terminology: the UI, the code and the database must use the same word
 
-改代码前先看这张表。三个领域各有一套动作词，**不要跨领域借词**，也不要为了「更顺口」在某一层换说法 ——
-之前资产市场就吃过一次亏：界面叫「发布」，端点也叫「发布」，代码里还有第三套 `publish`，谁也说不清指的是哪个。
+[中文](terminology.zh.md) | English
 
-## 1. 资产市场（跨租户分发）
+Read this table before changing code. Each domain has its own set of action verbs — **do not borrow across domains**, and do
+not rephrase at one layer just to sound smoother. The asset market already paid for this once: the UI said "publish", the
+endpoint domain also said "publish", and the code carried a third set of `publish` — nobody could tell which one was meant.
 
-| 概念 | 界面 | 代码 | 数据库 |
+## 1. Asset market (cross-tenant distribution)
+
+| Concept | UI | Code | Database |
 |---|---|---|---|
-| 上架（动作） | 上架 | `share.CreateListing`、`listingPlan` | — |
-| 上架记录 | 我的资产 | `listing*`、`POST /admin/share/listings` | `platform.shared_assets` 一行 |
-| 已上架（状态） | 已上架 | `sharedassets.StatusListed` | `status = 'listed'` |
-| 下架（动作） | 下架 | `action: 'delist'` | — |
-| 已下架（状态） | 已下架 | `sharedassets.StatusDelisted` | `status = 'delisted'` |
-| 上架人 | 提供方 | `Asset.ListedBy/ListedByName` | `listed_by` / `listed_by_name` |
-| 上架审核策略 | 上架策略 | `shared/listingpolicy`、`/platform/listing-policy` | `platform.listing_settings` / `listing_policies` |
+| List (action) | List | `share.CreateListing`, `listingPlan` | — |
+| Listing record | My assets | `listing*`, `POST /admin/share/listings` | one row in `platform.shared_assets` |
+| Listed (state) | Listed | `sharedassets.StatusListed` | `status = 'listed'` |
+| Delist (action) | Delist | `action: 'delist'` | — |
+| Delisted (state) | Delisted | `sharedassets.StatusDelisted` | `status = 'delisted'` |
+| Listed by | Provider | `Asset.ListedBy/ListedByName` | `listed_by` / `listed_by_name` |
+| Listing review policy | Listing policy | `shared/listingpolicy`, `/platform/listing-policy` | `platform.listing_settings` / `listing_policies` |
 
-完整状态机：`draft → pending → listed | rejected → delisted`（撤回是 `pending → draft`）。
+Full state machine: `draft → pending → listed | rejected → delisted` (withdrawing is `pending → draft`).
 
-### 快照序号 `build`
+### Snapshot number `build`
 
-| 概念 | 界面 | 代码 | 数据库 |
+| Concept | UI | Code | Database |
 |---|---|---|---|
-| 第几次打包上架 | 快照 v2 | `Asset.Build`、`PackageOrigin.Build` | `shared_assets.build` |
-| 装的是哪一份快照 | 已安装 v2 | `Install.Build` | `shared_asset_installs.build` |
+| Which packaging run this is | Snapshot v2 | `Asset.Build`, `PackageOrigin.Build` | `shared_assets.build` |
+| Which snapshot is installed | Installed v2 | `Install.Build` | `shared_asset_installs.build` |
 
-`build` 是**打包序号**：每次上架产出一份快照目录 `platform-assets/<id>/<build>/`，序号 +1，
-与实体内容改过几次无关。它不是实体的版本号（实体修订方案尚未落地，届时另立词，别复用 `build`）。
+`build` is the **packaging sequence number**: every listing produces one snapshot directory `platform-assets/<id>/<build>/`
+and increments the number, regardless of how many times the entity content changed. It is not the entity's version number
+(entity revisions are not shipped yet; they will need their own word — do not reuse `build`).
 
-**别用**：`publish` / `published` / `offline` / `publisher`；资产侧的 `version`
-（旧的 `shared_assets.version` 已改名 `build`，见 `nexus/platform/sql/asset_build_rename.sql`）。
+**Do not use**: `publish` / `published` / `offline` / `publisher`; `version` on the asset side (the old `shared_assets.version`
+was renamed to `build`, see `nexus/platform/sql/asset_build_rename.sql`).
 
-## 2. 端点（对外接口）
+## 2. Endpoints (external interface)
 
-| 概念 | 界面 | 代码 | 数据库 |
+| Concept | UI | Code | Database |
 |---|---|---|---|
-| 对外开放 | 对外开放 | `Expose`、`SvcEndpoint.Exposed` | `svc_endpoints.exposed` |
-| 单个端点切换 | 开关 | `UpdateExposed(bool)` | 同上 |
-| 收回对外 | 收回对外 | `Retract`、`RetractByTarget` / `RetractSvcEndpoints` | 同上置 `false` |
-| 镜像 JSON 键 | — | `EndpointProtocol.Exposed` | `agents.endpoints` / `flows.endpoints` 里的 `{"exposed":true}` |
+| Expose | Expose | `Expose`, `SvcEndpoint.Exposed` | `svc_endpoints.exposed` |
+| Toggling a single endpoint | switch | `UpdateExposed(bool)` | the same column |
+| Retract | Retract | `Retract`, `RetractByTarget` / `RetractSvcEndpoints` | the same column set to `false` |
+| Mirror JSON key | — | `EndpointProtocol.Exposed` | `{"exposed":true}` inside `agents.endpoints` / `flows.endpoints` |
 
-镜像列是 `svc_endpoints` 的派生副本，改键名必须两边一起改，否则界面显示「未对外开放」。
+The mirror column is a derived copy of `svc_endpoints`; renaming the key requires changing both sides, otherwise the UI shows
+"not exposed".
 
-**别用**：`publish` / `published` / `unpublish`（端点域已全部改掉）；
-`revoke`（留给第 4 节的授权撤销）；`hide`（那是可见性，端点是可调用性）。
+**Do not use**: `publish` / `published` / `unpublish` (the endpoint domain has been fully converted); `revoke` (reserved for
+grant revocation, section 4); `hide` (that is visibility — an endpoint is about callability).
 
-## 3. 版本 / 部署（部分落地）
+## 3. Version / deployment (partially shipped)
 
-| 概念 | 用词 |
+| Concept | Wording |
 |---|---|
-| 把某个版本推到线上 | **发布**（`release` / `deploy`） |
-| 线上切到某个历史版本（不动草稿） | **回滚**（`rollback`） |
-| 把某个历史版本写回草稿（不动线上） | **载入**（`apply`） |
-| 灰度 | 灰度 |
+| Push a version to production | **release** (`release` / `deploy`) |
+| Switch production to a historical version (draft untouched) | **rollback** (`rollback`) |
+| Load a historical version back into the draft (production untouched) | **load** (`apply`) |
+| Canary | canary |
 
-工作流版本已按这套用词落地：`ReleaseFlowVersion` / `ErrNoReleasedVersion`，库里的标记是
-`is_current`（唯一指向线上那一版）。删除历史版本（`DeleteFlowVersion`）只清历史、
-不动线上；当前版本拒绝删除 —— 停服是另一个动作，不要塞进删除里。
+Workflow versions are already shipped with this wording: `ReleaseFlowVersion` / `ErrNoReleasedVersion`, and the flag in the
+database is `is_current` (the single pointer to the production version). Deleting a historical version
+(`DeleteFlowVersion`) only clears history and leaves production alone; the current version refuses deletion — stopping
+service is a different action, do not smuggle it into delete.
 
-### 实体版本（智能体 / 技能 / 自定义工具）
+### Entity versions (agents / skills / custom tools)
 
-三条与流程不同的规则，改代码前先对齐：
+Three rules that differ from workflows; align before changing code:
 
-1. **版本号跟着「实体根目录」走，不跟着子目录走。** 私有技能没有独立版本号：它在
-   `agents/<a>/skills/**` 里，版本号就是所属 agent 的版本号。技能域里只有**租户级**
-   技能有独立版本（`skill_versions`）。
-2. **草稿域与版本域平级，不嵌套。** 草稿是 `agents|skills|tools/<name>/`，版本是
-   `versions/{agents|skills|tools}/<name>/v<n>/`（租户根下一级，不加点开头 —— 它是正式
-   数据，备份要能带走）。放实体目录里会让「草稿目录只装草稿」这句话不成立，快照还会套娃。
-3. **授权不冻结，声明冻结。** 版本里冻结的是定义（正文 + 描述 / 可见性 / 工具依赖声明 /
-   智能体的 `tools_unrestricted`、`skill_discovery` 两个开关 —— 它们决定运行时口径，属定义）；
-   `agent_tool_grants` / `agent_skill_bindings` / `agent_relations`（调用授权）这类授权永远取当前
-   —— `revoke` 必须立即生效，所以 `rollback` 不动它们，`apply` 也不回写它们。
-   推论：正式运行读的是**当前版本**里的这两个开关（`versioning.AgentCurrentSwitches`），
-   不是 `agents` 表里的当前值；载入旧版本会按版本回写这两列。
+1. **The version number follows the "entity root directory", not the subdirectories.** A private skill has no version of its
+   own: it lives under `agents/<a>/skills/**`, so its version number is the owning agent's. Only **tenant-level** skills have
+   independent versions in the skill domain (`skill_versions`).
+2. **The draft domain and the version domain are siblings, not nested.** Drafts live in `agents|skills|tools/<name>/`,
+   versions in `versions/{agents|skills|tools}/<name>/v<n>/` (one level under the tenant root, no leading dot — it is real
+   data and must survive a backup). Putting it inside the entity directory would break the sentence "the draft directory
+   holds drafts only", and snapshots would nest inside each other.
+3. **Grants are never frozen, declarations are.** What a version freezes is the definition (body + description / visibility /
+   tool dependency declarations / the agent's two switches `tools_unrestricted` and `skill_discovery` — they set the runtime
+   contract, so they are definition); grants such as `agent_tool_grants` / `agent_skill_bindings` / `agent_relations` always
+   read the current row — `revoke` must take effect immediately, so `rollback` leaves them alone and `apply` does not write
+   them back.
+   Corollary: production runs read those two switches from the **current version**
+   (`versioning.AgentCurrentSwitches`), not from the current value in the `agents` table; loading an old version writes both
+   columns back according to that version.
 
-   自定义工具同理：正式运行的工具清单与契约（`TOOL.json`：参数 / 入口 / 语言 / 超时 / 出网）
-   取当前版本（`customtoolstore.ListReleased / Released`），只有 `status` 与 `configs` 取当前表行；
-   没有当前版本的工具**不进入正式清单**，也不退回草稿定义。草稿视图只给管理端与编辑页调试用。
+   Custom tools behave the same: the production tool catalog and contract (`TOOL.json`: arguments / entry / language /
+   timeout / egress) come from the current version (`customtoolstore.ListReleased / Released`), and only `status` and
+   `configs` come from the current table row; a tool with no current version **does not enter the production catalog** and
+   does not fall back to the draft definition. The draft view exists for admin screens and editor debugging only.
 
-   技能同理：正式运行的常驻清单只列当前版本里有的技能（`skillMetaReader.runtimeMeta`），
-   与 `read_skill` / `use_skill` 的读取路径、`run_skill_script` 的 `/skill` 挂载同源；
-   版本里没有的技能不出现（正文与脚本同样不在版本目录里）。
-4. **回滚是纯指针操作，与载入分开。** `rollback` 只把 `is_current` 切到目标版本（线上立刻生效，
-   不新增版本、**不动草稿**）；`apply` 把该版本写回草稿（**不动线上**）。四个域同一套语义
-   （`RollbackFlowVersion` / `RollbackAgentVersion` / `RollbackSkillVersion` / `RollbackToolVersion`）。
-   少了 rollback，回退就只能「载入草稿 → 再发布」，既覆盖正在改的草稿，又凭空多一个版本号。
+   Skills likewise: the production resident catalog lists only skills present in the current version
+   (`skillMetaReader.runtimeMeta`), the same source as the `read_skill` / `use_skill` read path and the `/skill` mount of
+   `run_skill_script`; a skill missing from the version does not appear (its body and scripts are not in the version
+   directory either).
+4. **Rollback is a pure pointer operation, separate from loading.** `rollback` only flips `is_current` to the target version
+   (effective in production immediately, no new version, **draft untouched**); `apply` writes that version back into the
+   draft (**production untouched**). The four domains share this semantics (`RollbackFlowVersion` /
+   `RollbackAgentVersion` / `RollbackSkillVersion` / `RollbackToolVersion`). Without rollback, going back would mean "load
+   into the draft → release again", which both overwrites the draft being edited and invents an extra version number.
 
-代码里避免再出现 `Publish`：资产域已改用 `listing`，端点域已改用 `expose`，版本域用 `release` / `deploy`。
-例外：工作流试运行（草稿试跑）的 `published` 是调试范围（`draft` / `published`）的对外取值，属既有契约，不改。
+Avoid `Publish` in code: the asset domain uses `listing`, the endpoint domain uses `expose`, the version domain uses
+`release` / `deploy`. Exception: `published` in a workflow test run (draft trial) is the external value of the debug scope
+(`draft` / `published`) — an existing contract, leave it alone.
 
-## 4. 授权 / 凭证（保持不动）
+## 4. Grants / credentials (unchanged)
 
-| 概念 | 用词 |
+| Concept | Wording |
 |---|---|
-| 撤销某条工具或调用授权 | **revoke**（`revoke_agent_tool` / `revoke_agent_call`） |
-| 吊销市场令牌 | **revoke** |
+| Revoke a tool or call grant | **revoke** (`revoke_agent_tool` / `revoke_agent_call`) |
+| Revoke a market token | **revoke** |
 
-`revoke` 只用于授权与凭证，不要拿来表示「收回端点对外」。
+`revoke` is for grants and credentials only; never use it for "taking an endpoint back from outside".
 
-## 5. 变量（三个作用域，别混）
+## 5. Variables (three scopes, do not mix)
 
-同一个词根、不同 scope：`<scope>_vars`。三个都叫「…变量」，作用域从左到右收窄。
+Same root, different scope: `<scope>_vars`. All three are called "… variables"; the scope narrows from left to right.
 
-| 概念 | 界面 | 代码 / 表 | 作用域 | 运行期可变 |
+| Concept | UI | Code / table | Scope | Mutable at runtime |
 |---|---|---|---|---|
-| 全局变量 | 全局变量 | `global_vars` / `shared/globalvars` / 节点输入 `source_type: "global"` / 文档 `${global_vars.X}` | 整个租户 | 否（运行快照） |
-| 环境变量 | 环境变量 | `flows.env_vars` / `EnvVars` / 节点输入 `source_type: "env"`；type 只有 string / number / secret | 单个流程 | 否（启动快照） |
-| 流程变量 | 流程变量 | `flows.flow_vars` / `FlowVars` | 单个流程 | 是（节点写） |
+| Global variable | Global variable | `global_vars` / `shared/globalvars` / node input `source_type: "global"` / docs `${global_vars.X}` | whole tenant | no (run snapshot) |
+| Environment variable | Environment variable | `flows.env_vars` / `EnvVars` / node input `source_type: "env"`; type is only string / number / secret | one flow | no (start snapshot) |
+| Flow variable | Flow variable | `flows.flow_vars` / `FlowVars` | one flow | yes (written by nodes) |
 
-- **全局 = 本租户内全局，不跨租户**。每个租户一个 schema，值永远不出租户。
-- 资产（工作流 / 智能体 / 技能）导出时只带**引用名**，不带值：工作流在节点
-  `config.inputs` 里写 `{source_type: "global", source_key: "变量名"}`、模板里写
-  `{{ .input.变量名 }}`；定义域文档（`AGENT.md` / `SKILL.md`）写 `${global_vars.变量名}`。
-- **两处已下线**，别再写：模板级的 `{{.global_vars.X}}`（流程载入即报错，见
-  `executors.rejectLegacyGlobalRefs`）、环境变量指向全局变量的 `{type: "global", ...}`
-  （运行期报「已废弃的类型 global」，见 `core.GetEnvVar`）。全局变量与环境变量现在**平级**，
-  都是节点输入变量的来源，谁也不借道谁。
-- 引用取不到时**硬失败**，错误带变量名；不要退化成空串 —— 空串会让「没配置也能跑」
-  变成线上现实，排查成本远高于直接报错。
-- `secret` 类型的值只在运行期取，接口一律掩码；不要写进 `AGENT.md` / `SKILL.md`
-  （会进模型上下文与运行记录）。
-- 存量资产包里若还有 `{type: "global"}`，`assetpack.StripSecrets` 会**保留**它的值并记一条
-  迁移提示（清空就看不出原本指向谁了）。这是兼容存量，不是支持该写法。
+- **Global means global within this tenant, never across tenants.** Each tenant has its own schema, and values never leave
+  it.
+- Exporting an asset (workflow / agent / skill) carries only the **reference name**, never the value: a workflow writes
+  `{source_type: "global", source_key: "name"}` in node `config.inputs` and `{{ .input.name }}` in templates; definition-domain
+  documents (`AGENT.md` / `SKILL.md`) write `${global_vars.name}`.
+- **Two forms are retired**, do not write them: the template-level `{{.global_vars.X}}` (a flow fails on load, see
+  `executors.rejectLegacyGlobalRefs`), and an environment variable pointing at a global one with `{type: "global", ...}`
+  (runtime reports "deprecated type global", see `core.GetEnvVar`). Global and environment variables are now **siblings**,
+  both sources of node input variables, neither routed through the other.
+- A missing reference **fails hard**, with the variable name in the error; do not degrade to an empty string — empty strings
+  turn "it runs even when unconfigured" into production reality, and debugging costs far more than a direct error.
+- `secret` values are resolved at runtime only and are always masked by the API; never write them into `AGENT.md` /
+  `SKILL.md` (they would enter the model context and the run records).
+- If an existing asset package still contains `{type: "global"}`, `assetpack.StripSecrets` **keeps** its value and logs a
+  migration hint (clearing it would erase what it pointed at). That is compatibility with existing packages, not support for
+  the form.
 
-**别用**：`tenant_variables`（作用域已由 schema 表达）、`shared_vars`（`share` 专指跨租户分发，
-会撞词）、`vars` 作为表名（与 `env_vars` / `flow_vars` 的词根对不齐）。
+**Do not use**: `tenant_variables` (the scope is already expressed by the schema), `shared_vars` (`share` means cross-tenant
+distribution, it would collide), `vars` as a table name (it does not align with the `env_vars` / `flow_vars` root).
 
-## 6. 生效范围
+## 6. Scope of application
 
-- 新增文案、接口、表：按上表取词；
-- 存量标识符若与上表冲突，以本表为准，改的时候连带迁移脚本一起提；
-- 状态值（`'listed'` 等）是 DB CHECK 约束的一部分，改它必须同时改
-  `nexus/platform/sql/shared_assets.sql`、迁移脚本与前后端。
+- New copy, APIs and tables take their words from the table above;
+- if an existing identifier conflicts with the table, the table wins; change it together with a migration script;
+- state values (`'listed'` and friends) are part of DB CHECK constraints; changing one requires updating
+  `nexus/platform/sql/shared_assets.sql`, the migration scripts and both the frontend and the backend.
