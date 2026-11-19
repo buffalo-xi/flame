@@ -1,15 +1,15 @@
 package agents
 
-// 智能体的版本：{schema}.agent_versions。
+// Agent versions: {schema}.agent_versions.
 //
-// 与 flow / skill / tool 的差别（决定了这里的快照要多做三件事）：
-//  1. agent 目录里还有私有技能（agents/<a>/skills/**）—— 它们没有独立版本号，
-//     随这一份 agent 版本一起冻结（见 nexus/docs/terminology.md）；
-//  2. 私有技能的**元数据**（描述 / 是否用户可调用 / 可见性 / 工具依赖）也要进快照，
-//     否则「只改描述不发布」就改变了模型看到的技能清单口径 —— 正文冻结、元数据不冻结
-//     是自相矛盾的；
-//  3. 已废弃（status=3）的私有技能不进快照：留着正文等于给废弃技能留了条复活路径，
-//     正式运行时模型在 /agent 里 cat 到就会照样用。
+// What differs from flow / skill / tool (and why this snapshot does three extra things):
+//  1. the agent directory also holds private skills (agents/<a>/skills/**) - they have no version
+//     number of their own and are frozen with this agent version (see nexus/docs/terminology.md);
+//  2. the **metadata** of a private skill (description / callable by users / visibility / tool
+//     dependencies) goes into the snapshot as well, otherwise "edit the description without
+//     releasing" changes what the model sees - freezing the body but not the metadata contradicts itself;
+//  3. deprecated private skills (status=3) stay out of the snapshot: keeping the body would leave a
+//     way back in - at run time the model cats it under /agent and uses it regardless.
 
 import (
 	"context"
@@ -34,7 +34,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// agentVersionView 列表项（不含 files 正文，只给汇总）。
+// agentVersionView is a list item: summary only, no file bodies.
 type agentVersionView struct {
 	Version       int       `json:"version"`
 	Name          string    `json:"name"`
@@ -46,7 +46,7 @@ type agentVersionView struct {
 	CreatedAt     xsql.Time `json:"created_at"`
 	FilesCount    int       `json:"files_count"`
 	TotalBytes    int64     `json:"total_bytes"`
-	PrivateSkills int       `json:"private_skills"` // 快照里的私有技能条数
+	PrivateSkills int       `json:"private_skills"` // number of private skills in the snapshot
 }
 
 func agentVersionTable(schema string) string { return schema + ".agent_versions" }
@@ -72,7 +72,7 @@ func ListAgentVersions(c *gin.Context) {
 		WHERE v.agent_id = $1
 		ORDER BY v.version DESC`, inst.ID)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the version history: "+err.Error(), "")
 		return
 	}
 	defer rows.Close()
@@ -83,13 +83,13 @@ func ListAgentVersions(c *gin.Context) {
 		if err := rows.Scan(&v.Version, &v.Name, &v.Description, &v.IsCurrent, &v.Note,
 			&v.CreatedBy, &v.CreatedByName, &v.CreatedAt, &v.FilesCount, &v.TotalBytes,
 			&v.PrivateSkills); err != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to read the version history: "+err.Error(), "")
 			return
 		}
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the version history: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"versions": out}, "")
@@ -106,7 +106,7 @@ func ReleaseAgentVersion(c *gin.Context) {
 		return
 	}
 	if !inst.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能发布版本（如需发布请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot release a version (switch it back to Active first)", "")
 		return
 	}
 
@@ -131,7 +131,7 @@ func ReleaseAgentVersion(c *gin.Context) {
 	}
 	srcKey := paths.AgentsKey(info.Schema, inst.Name)
 
-	// 废弃的私有技能不进快照（正文仍留在草稿里，但正式版本不该带着它）
+	// Deprecated private skills stay out of the snapshot: the body remains in the draft, but a released version must not carry it.
 	skip, skerr := versioning.DeprecatedPrivateSkillDirs(info.Schema, inst.ID)
 	if skerr != nil {
 		xhttp.ErrJSON(c, skerr.Error(), nil, "")
@@ -161,7 +161,7 @@ func ReleaseAgentVersion(c *gin.Context) {
 		return
 	}
 	if !models.IsModifiable(status) {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能发布版本（如需发布请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot release a version (switch it back to Active first)", "")
 		return
 	}
 
@@ -180,7 +180,7 @@ func ReleaseAgentVersion(c *gin.Context) {
 	files, err := versions.Snapshot(ctx, st, srcKey, dstKey, paths.AgentEntryFile, skip)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrCode(c, "common.internal", nil, "冻结版本失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to freeze the version: "+err.Error(), "")
 		return
 	}
 	rawFiles, err := versions.Encode(files)
@@ -228,12 +228,12 @@ func ReleaseAgentVersion(c *gin.Context) {
 
 // ApplyAgentVersion POST /agents/:id/versions/:version/apply
 //
-// 载入 = 把该版本的定义文件写回草稿，不动 is_current。
+// Apply = write this version's definition files back to the draft, leaving is_current alone.
 //
-// 与 skill / tool 的关键差别：**不清空 skills/**。
-//   - 私有技能是独立实体（skills 表有行），版本里没有它可能只是「发布之后新建的」；
-//     清掉目录会让它变成「有行、没正文」的空技能；
-//   - 版本里有的私有技能由清单覆盖；版本里没有的原样保留，并在 warnings 里点名。
+// The key difference from skill / tool: **skills/ is not wiped**.
+//   - a private skill is an entity of its own (it has a row in the skills table), so one missing
+//     from the version may simply have been created after the release: wiping the directory would
+//     leave an empty skill (a row without a body). The ones the version has come from the manifest.
 func ApplyAgentVersion(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -244,7 +244,7 @@ func ApplyAgentVersion(c *gin.Context) {
 		return
 	}
 	if !inst.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能载入版本（如需操作请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot apply a version (switch it back to Active first)", "")
 		return
 	}
 	target, perr := strconv.Atoi(c.Param("version"))
@@ -274,11 +274,11 @@ func ApplyAgentVersion(c *gin.Context) {
 		return
 	}
 	if !models.IsModifiable(status) {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能载入版本（如需操作请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot apply a version (switch it back to Active first)", "")
 		return
 	}
 
-	// 载入 = 整份定义回草稿：AGENT.md 之外，agent 元数据与私有技能元数据/依赖也在版本里
+	// Apply = the whole definition back to the draft: besides AGENT.md the version also holds the agent metadata and the private skill metadata and dependencies.
 	var (
 		rawFiles, rawSkills, rawConfig []byte
 		desc                           string
@@ -306,9 +306,9 @@ func ApplyAgentVersion(c *gin.Context) {
 	draftKey := paths.AgentsKey(info.Schema, inst.Name)
 	srcKey := paths.VersionKey(info.Schema, paths.VersionAgents, inst.Name, target)
 
-	// 清掉草稿里「非 skills/」的内容：AGENT.md 与附属文件按版本重建，
-	// skills/ 整棵保留（见函数头注释）。
-	// 目录不存在（或列举失败）时按「没什么可清」处理：真正的错误交给后面的还原去暴露
+	// Clear everything outside skills/ in the draft: AGENT.md and its sibling files are rebuilt from
+	// the version, while the whole skills/ tree is kept (see the function comment).
+	// A missing directory (or a failed listing) means "nothing to clear": the real error surfaces in the restore step below.
 	entries, _ := st.List(ctx, draftKey)
 	for _, e := range entries {
 		if e.IsDir && e.Name == "skills" {
@@ -321,21 +321,21 @@ func ApplyAgentVersion(c *gin.Context) {
 
 	missing, err := assetpack.RestoreFiles(ctx, st, srcKey, draftKey, files)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "载入版本失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to apply the version: "+err.Error(), "")
 		return
 	}
-	// 元数据回写：只铺正文的话，载入完还会显示「有改动」（描述 / 配置 / 私有技能元数据仍不同）
+	// Metadata write-back: with the bodies alone the UI would still show "modified", because the description / config / private skill metadata would still differ.
 	if _, err := tx.Exec(`UPDATE `+info.Schema+`.agents
 		SET description = $2, config = $3, tools_unrestricted = $4, skill_discovery = $5,
 		    updated_at = now()
 		WHERE id = $1`,
 		inst.ID, desc, rawConfig, toolsUnrestricted, discovery); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "写回 agent 元数据失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the agent metadata back: "+err.Error(), "")
 		return
 	}
-	// 私有技能：只回写版本里有的那些（快照里没有的说明是发布之后新建的，保持原样）
+	// Private skills: write back only the ones this version has (one missing from the snapshot was created after the release, leave it alone).
 	if err := versioning.RestoreAgentPrivateSkills(tx, info.Schema, inst.ID, rawSkills); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "写回私有技能元数据失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the private skill metadata back: "+err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -345,12 +345,12 @@ func ApplyAgentVersion(c *gin.Context) {
 
 	warnings := make([]string, 0, len(missing))
 	for _, p := range missing {
-		warnings = append(warnings, "快照里缺少文件："+p)
+		warnings = append(warnings, "file missing from the snapshot: "+p)
 	}
-	// 草稿里有、该版本里没有的私有技能：保留并点名（它们是独立实体，删了就是空技能）
+	// A private skill present in the draft but not in this version is kept and named in the warnings (it is an entity of its own; deleting it would leave an empty skill).
 	if kept, kerr := versioning.KeptPrivateSkills(ctx, st, draftKey, rawSkills); kerr == nil {
 		for _, name := range kept {
-			warnings = append(warnings, fmt.Sprintf("私有技能 %q 不在该版本里，草稿内容已保留（未删除）", name))
+			warnings = append(warnings, fmt.Sprintf("private skill %q is not part of this version; the draft copy was kept (not deleted)", name))
 		}
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target, "warnings": warnings}, "")
@@ -358,11 +358,11 @@ func ApplyAgentVersion(c *gin.Context) {
 
 // RollbackAgentVersion POST /agents/:id/versions/:version/rollback
 //
-// 把「正在使用的版本」切到该历史版本，线上立刻生效。
+// Point "the version in use" at this historical version; production changes immediately.
 //
-// 与 apply 的分工（和工作流一致）：rollback 只切 is_current，不新增版本、**不动草稿**；
-// apply 是把该版本写回草稿（不动线上），想基于旧版本继续改就用它。
-// 少了 rollback，回退只能「载入草稿 → 再发布」，既会覆盖正在改的草稿，又会凭空多一个版本号。
+// Division of labour with apply (same as flows): rollback only flips is_current, adds no version and
+// **leaves the draft alone**; apply writes the version back to the draft (production untouched), which
+// is what you want when continuing from an old version. Without rollback, a revert would have to be "apply then release", overwriting the draft in progress and inventing a version number.
 func RollbackAgentVersion(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -372,9 +372,9 @@ func RollbackAgentVersion(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// 切版本会改线上行为，与发布同口径：废弃的 agent 不允许
+	// Switching a version changes production behaviour, so it follows the release rule: a deprecated agent cannot do it.
 	if !inst.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能切换版本（如需切换请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot switch versions (switch it back to Active first)", "")
 		return
 	}
 	target, err := strconv.Atoi(c.Param("version"))
@@ -390,7 +390,7 @@ func RollbackAgentVersion(c *gin.Context) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// 目标版本行加锁：与并发发布串行，避免「刚切过去又被发布覆盖」
+	// Lock the target version row: this serialises against a concurrent release, so a rollback that just happened is not overwritten by it.
 	var one int
 	if err := tx.QueryRow(`SELECT 1 FROM `+agentVersionTable(info.Schema)+`
 		WHERE agent_id = $1 AND version = $2 FOR UPDATE`, inst.ID, target).Scan(&one); err != nil {
@@ -429,7 +429,7 @@ func DeleteAgentVersion(c *gin.Context) {
 		return
 	}
 	if !inst.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能删除版本（如需操作请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot delete a version (switch it back to Active first)", "")
 		return
 	}
 	target, perr := strconv.Atoi(c.Param("version"))
@@ -471,7 +471,7 @@ func DeleteAgentVersion(c *gin.Context) {
 			return
 		}
 		if total <= 1 {
-			xhttp.ErrCode(c, "agent.last_version_undeletable", gin.H{"version": target}, fmt.Sprintf("v%d 是唯一的版本，不能删除；如需清理历史请先发布一个新版本", target), "")
+			xhttp.ErrCode(c, "agent.last_version_undeletable", gin.H{"version": target}, fmt.Sprintf("v%d is the only version and cannot be deleted; release a new version before cleaning up history", target), "")
 			return
 		}
 		xhttp.ErrJSON(c, versions.ErrCannotDeleteCurrentVersion.Error(), nil, "")
@@ -479,7 +479,7 @@ func DeleteAgentVersion(c *gin.Context) {
 	}
 
 	if err := st.DeletePrefix(ctx, paths.VersionKey(info.Schema, paths.VersionAgents, inst.Name, target)); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "删除版本目录失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to delete the version directory: "+err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`DELETE FROM `+agentVersionTable(info.Schema)+`
@@ -494,7 +494,7 @@ func DeleteAgentVersion(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
 }
 
-// ===== 内部小工具 =====
+// ===== internal helpers =====
 
 func authOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
