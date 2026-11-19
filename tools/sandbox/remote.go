@@ -8,31 +8,33 @@ import (
 	"sync"
 )
 
-// RemoteOptions 远端沙箱客户端的构造参数。
+// RemoteOptions configures the remote sandbox client.
 type RemoteOptions struct {
-	// Endpoint 单工执行端点，形如 ws://sandboxd:8080/v1/exec。
+	// Endpoint is the one-shot execution endpoint, e.g. ws://sandboxd:8080/v1/exec.
 	Endpoint string
-	// Token 可选：作为 Bearer 令牌随握手发送。
+	// Token is optional: sent as a Bearer token during the handshake.
 	Token string
-	// Limits 默认资源上限；Spec.Limits 中的非零字段会覆盖它。
+	// Limits are the default resource caps; non-zero fields in Spec.Limits override them.
 	Limits Limits
 }
 
-// RemoteSandbox 通过 WebSocket 把「每次新建进程」的执行委托给远端沙箱服务（sandboxd）。
+// RemoteSandbox delegates "start a process for each call" to the remote sandbox service (sandboxd) over
+// WebSocket.
 //
-// 只承载单工（exec）语义：一条连接对应一个进程，Start → 写 stdin → 读 stdout → Wait。
-// 这里的「单工」指不池化、不带回调，**不是**单向或短命 —— 协议同样是完整双向流
-// （stdin / stdout / stderr + 半关闭 + kill），且服务端没有内建硬超时，
-// 是否限时完全取决于 Spec.Limits / 服务端 limits.timeout_sec。
-// 托管代码片段（/v1/code、走池并受 code_max_sec 约束）请用 code.Client。
+// It carries one-shot (exec) semantics only: one connection per process, Start → write stdin → read
+// stdout → Wait. "One-shot" here means unpooled and without callbacks — **not** one-directional or
+// short-lived: the protocol is a full duplex stream (stdin / stdout / stderr + half close + kill) and
+// the server has no built-in hard timeout, so whether time is bounded depends entirely on
+// Spec.Limits / the server's limits.timeout_sec. For managed code snippets (/v1/code, pooled and bounded
+// by code_max_sec) use code.Client.
 //
-// 注意：Spec.Mounts 中的 Host 是宿主绝对路径，要求 nexus 与 sandboxd
-// 共享同一份存储且挂载路径一致；sandboxd 会用 workspace_root 做白名单校验。
+// Note: Mounts' Host is an absolute host path, which requires nexus and sandboxd to share the same
+// storage with identical mount paths; sandboxd validates it against workspace_root as an allowlist.
 type RemoteSandbox struct {
 	opts RemoteOptions
 }
 
-// NewRemote 创建远端单工沙箱。Endpoint 必填。
+// NewRemote creates a remote one-shot sandbox. Endpoint is required.
 func NewRemote(opts RemoteOptions) (*RemoteSandbox, error) {
 	if opts.Endpoint == "" {
 		return nil, errors.New("sandbox: remote endpoint is required")
@@ -40,16 +42,17 @@ func NewRemote(opts RemoteOptions) (*RemoteSandbox, error) {
 	return &RemoteSandbox{opts: opts}, nil
 }
 
-// Name 实现标识。
+// Name is the implementation identifier.
 func (r *RemoteSandbox) Name() string { return "remote" }
 
-// Start 在远端启动一个进程，返回桥接到网络的进程句柄。
+// Start starts a process on the remote side and returns a handle bridged onto the network.
 func (r *RemoteSandbox) Start(ctx context.Context, spec *Spec) (Process, error) {
-	// 启动意图二选一，与 sandboxd 的 buildExecArgv 同口径：
-	//   - 语言路径（Lang 非空）：只说「哪个语言的哪个脚本」，解释器入口由 sandboxd
-	//     按当前 mode 解析 —— 本侧不拼 argv（拼了就等于硬编码一份「镜像里叫什么」）；
-	//   - 直传路径（Lang 为空）：argv 必须完整。
-	// 两条判据都在 Dial 之前生效：意图不对就不该占用一次远端连接。
+	// The start intent is one of two, matching sandboxd's buildExecArgv:
+	//   - language path (Lang non-empty): say only "this script of this language"; sandboxd resolves the
+	//     interpreter entry point for the current mode — this side never assembles argv (doing so would
+	//     hard-code one belief about "what it is called inside the image");
+	//   - direct path (Lang empty): argv must be complete.
+	// Both checks run before Dial: a wrong intent should not consume a remote connection.
 	if spec.Lang != "" {
 		if len(spec.Argv) > 0 {
 			return nil, fmt.Errorf("sandbox: lang %q and argv are mutually exclusive", spec.Lang)
@@ -69,8 +72,9 @@ func (r *RemoteSandbox) Start(ctx context.Context, spec *Spec) (Process, error) 
 		return nil, err
 	}
 
-	// 语言名走 Frame.Lang（与双工同一个字段），脚本与参数在 WireSpec 里 ——
-	// spec.Lang 为空即直传模式，sandboxd 侧行为与从前完全一致。
+	// The language name travels in Frame.Lang (the same field the duplex channel uses) and the script and
+	// arguments live in WireSpec — an empty spec.Lang means direct mode, and sandboxd behaves exactly as
+	// before.
 	if err := conn.SendFrame(&Frame{Type: FrameOpen, Lang: spec.Lang, Spec: wire}); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -97,7 +101,7 @@ func (r *RemoteSandbox) Start(ctx context.Context, spec *Spec) (Process, error) 
 	return p, nil
 }
 
-// connWriter 把 Write 转成二进制帧（按通道标记）。
+// connWriter turns Write into binary frames (tagged by channel).
 type connWriter struct {
 	c  *Conn
 	ch byte
@@ -110,7 +114,7 @@ func (w *connWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// remoteProcess 远端进程句柄：把 WS 帧桥接成 io 读写。
+// remoteProcess is a handle to a remote process: it bridges WS frames into io reads and writes.
 type remoteProcess struct {
 	conn *Conn
 
@@ -145,7 +149,7 @@ func newRemoteProcess(conn *Conn, stderr io.Writer) *remoteProcess {
 func (p *remoteProcess) Stdin() io.WriteCloser { return p.stdinW }
 func (p *remoteProcess) Stdout() io.ReadCloser { return p.stdoutR }
 
-// monitor 驱动整条会话：转发 stdin、读取输出、监听 ctx 取消。
+// monitor drives the whole session: forward stdin, read output, watch for ctx cancellation.
 func (p *remoteProcess) monitor(ctx context.Context) {
 	defer close(p.done)
 	defer p.conn.Close()
@@ -165,18 +169,18 @@ func (p *remoteProcess) monitor(ctx context.Context) {
 	close(stop)
 }
 
-// forwardStdin 把调用方写入的 stdin 转发给远端；管道关闭即发 stdin_eof。
+// forwardStdin forwards what the caller writes to stdin; closing the pipe sends stdin_eof.
 func (p *remoteProcess) forwardStdin() {
 	_, _ = io.Copy(&connWriter{c: p.conn, ch: ChanStdin}, p.stdinR)
 	_ = p.conn.SendFrame(&Frame{Type: FrameStdinEOF})
 }
 
-// readLoop 读取远端消息：输出写入管道，exit/error 结束进程。
+// readLoop reads remote messages: output goes into the pipes, exit/error ends the process.
 func (p *remoteProcess) readLoop(ctx context.Context) {
 	for {
 		f, data, err := p.conn.Recv()
 		if err != nil {
-			// ctx 取消 / Kill 导致的断开，不算异常
+			// A disconnect caused by ctx cancellation or Kill is not an anomaly.
 			if ctx.Err() != nil {
 				p.finish(ctx.Err())
 			} else {
@@ -210,7 +214,7 @@ func (p *remoteProcess) readLoop(ctx context.Context) {
 	}
 }
 
-// finish 记录退出结果并关闭 stdout（让读取方收到 EOF）。
+// finish records the exit outcome and closes stdout (so readers see EOF).
 func (p *remoteProcess) finish(err error) {
 	p.mu.Lock()
 	if p.err == nil {
@@ -220,7 +224,7 @@ func (p *remoteProcess) finish(err error) {
 	_ = p.stdoutW.Close()
 }
 
-// Wait 等待进程结束。
+// Wait waits for the process to end.
 func (p *remoteProcess) Wait() error {
 	<-p.done
 	p.mu.Lock()
@@ -228,7 +232,7 @@ func (p *remoteProcess) Wait() error {
 	return p.err
 }
 
-// Kill 强杀远端进程。
+// Kill force-kills the remote process.
 func (p *remoteProcess) Kill() error {
 	_ = p.conn.SendFrame(&Frame{Type: FrameKill})
 	return p.conn.Close()

@@ -12,46 +12,47 @@ import (
 )
 
 // ============================================================================
-// 与 sandboxd 之间的线协议（两端共享）
+// Wire protocol with sandboxd (shared by both ends)
 //
-//   文本帧 = JSON 控制帧（Frame）
-//   二进制帧 = [1 字节通道标记][原始字节]
+//   text frame     = JSON control frame (Frame)
+//   binary frame   = [1-byte channel tag][raw bytes]
 //
-// 用二进制帧承载 stdout/stderr/stdin，避免 base64 带来的 33% 膨胀与额外分配。
+// stdout/stderr/stdin travel in binary frames, avoiding the 33% bloat and extra allocations of base64.
 // ============================================================================
 
-// 二进制帧的通道标记（首字节）。
+// Binary frame channel tags (first byte).
 const (
 	ChanStdout byte = 1
 	ChanStderr byte = 2
 	ChanStdin  byte = 3
 )
 
-// 控制帧类型。
+// Control frame types.
 const (
-	FrameOpen     = "open"      // 客户端 → 服务端：开始（单工可带 Spec，含可选 Lang；双工只带 Lang）
-	FrameReady    = "ready"     // 服务端 → 客户端：已就绪
-	FrameExec     = "exec"      // 客户端 → 服务端：执行脚本（双工）
-	FrameDone     = "done"      // 服务端 → 客户端：脚本执行完成
-	FrameStdinEOF = "stdin_eof" // 客户端 → 服务端：输入结束（半关闭）
-	FrameExit     = "exit"      // 服务端 → 客户端：进程退出
-	FrameKill     = "kill"      // 客户端 → 服务端：强杀
-	FrameClose    = "close"     // 客户端 → 服务端：正常结束（允许归还池）
-	FrameError    = "error"     // 服务端 → 客户端：错误
+	FrameOpen     = "open"      // client → server: start (one-shot may carry a Spec, including an optional Lang; duplex carries Lang only)
+	FrameReady    = "ready"     // server → client: ready
+	FrameExec     = "exec"      // client → server: execute the script (duplex)
+	FrameDone     = "done"      // server → client: script finished
+	FrameStdinEOF = "stdin_eof" // client → server: end of input (half close)
+	FrameExit     = "exit"      // server → client: process exited
+	FrameKill     = "kill"      // client → server: force kill
+	FrameClose    = "close"     // client → server: normal end (the worker may go back to the pool)
+	FrameError    = "error"     // server → client: error
 
-	// FrameSessionEmpty 服务端 → 客户端：该 session 已无任何长交互工具。
+	// FrameSessionEmpty is server → client: this session has no long-running interactive tool left.
 	//
-	// 只在 kill 路径上发（那条连接还在）。一个 session 可以同时有多个长交互工具，
-	// 注册表里是 tools map —— 杀掉其中一个不代表会话作废，所以判据是「杀完之后
-	// 还剩几个」，只有全没了才发这一帧。进程自退 / janitor 空闲回收都没有连接的
-	// 上下文，那两条路径的粘性绑定仍靠 TTL 兜底。
+	// It is only sent on the kill path (that connection is still alive). A session may own several
+	// long-running tools at once, held in the registry as a tools map — killing one does not invalidate
+	// the session, so the test is "how many are left afterwards", and the frame goes out only when none
+	// remain. A process exiting on its own or being reclaimed by the idle janitor has no connection
+	// context, and those two paths still rely on the TTL for the sticky binding.
 	FrameSessionEmpty = "session_empty"
 )
 
-// maxFrameBytes 单条消息上限（大输出场景预留）。
+// maxFrameBytes caps a single message (headroom for large output).
 const maxFrameBytes = 32 << 20 // 32 MiB
 
-// WireLimits Limits 的可序列化形态（Timeout 用秒，便于人工排查协议）。
+// WireLimits is the serialisable form of Limits (Timeout in seconds, which is easier to inspect by hand).
 type WireLimits struct {
 	MemoryMB       int     `json:"memory_mb,omitempty"`
 	CPUCount       int     `json:"cpu_count,omitempty"`
@@ -61,7 +62,7 @@ type WireLimits struct {
 	MaxOutputBytes int64   `json:"max_output_bytes,omitempty"`
 }
 
-// Wire 转成可序列化形态。
+// Wire converts to the serialisable form.
 func (l Limits) Wire() WireLimits {
 	w := WireLimits{
 		MemoryMB:       l.MemoryMB,
@@ -76,7 +77,7 @@ func (l Limits) Wire() WireLimits {
 	return w
 }
 
-// Limits 转回内部形态。
+// Limits converts back to the internal form.
 func (w WireLimits) Limits() Limits {
 	l := Limits{
 		MemoryMB:       w.MemoryMB,
@@ -91,13 +92,13 @@ func (w WireLimits) Limits() Limits {
 	return l
 }
 
-// WireSpec Spec 的可序列化形态（去掉 Stderr 这类本地 IO）。
+// WireSpec is the serialisable form of Spec (local IO such as Stderr is dropped).
 //
-// 注意：Spec.Argv / Spec.Dir / Mounts 中的路径均为「沙箱内」语义；
-// Mounts 的 Host 是宿主绝对路径，要求 nexus 与 sandboxd 共享同一份存储。
+// Note: paths in Spec.Argv / Spec.Dir / Mounts are all "sandbox-internal"; Mounts' Host is an absolute
+// host path, which requires nexus and sandboxd to share the same storage.
 type WireSpec struct {
-	// Script / Args 配合 Frame.Lang 使用（单工的语言路径）：
-	// 语言名走 Frame.Lang（与双工同一个字段），脚本与参数在这里。
+	// Script / Args go together with Frame.Lang (the one-shot language path): the language name travels
+	// in Frame.Lang (the same field the duplex channel uses), the script and its arguments live here.
 	Script string     `json:"script,omitempty"`
 	Args   []string   `json:"args,omitempty"`
 	Argv   []string   `json:"argv,omitempty"`
@@ -105,15 +106,17 @@ type WireSpec struct {
 	Env    []string   `json:"env,omitempty"`
 	Mounts []Mount    `json:"mounts,omitempty"`
 	Limits WireLimits `json:"limits,omitempty"`
-	// Egress 请求出网。nil = 没表态（按部署默认），false = 明确要断网，true = 要出网。
+	// Egress requests outbound network. nil = no opinion (deployment default), false = explicitly
+	// offline, true = wants outbound network.
 	//
-	// 这是**请求意图**，不是结果：sandboxd 会按部署上限裁决后才落到隔离参数上
-	// （network=off 时 true 会被拒）。只对单工有效 —— 双工复用建好的隔离单元，
-	// 网络在建单元时写死，且双工的 open 帧根本不带 Spec。
+	// This is a **request**, not an outcome: sandboxd decides against the deployment ceiling before it
+	// becomes an isolation argument (with network=off, true is rejected). One-shot only — the duplex
+	// channel reuses an existing unit whose network was fixed at creation, and its open frame carries no
+	// Spec at all.
 	Egress *bool `json:"egress,omitempty"`
 }
 
-// Wire 转成可序列化形态。
+// Wire converts to the serialisable form.
 func (s *Spec) Wire() *WireSpec {
 	if s == nil {
 		return nil
@@ -130,7 +133,7 @@ func (s *Spec) Wire() *WireSpec {
 	}
 }
 
-// Spec 转回内部形态。
+// Spec converts back to the internal form.
 func (w *WireSpec) Spec() *Spec {
 	if w == nil {
 		return nil
@@ -147,14 +150,15 @@ func (w *WireSpec) Spec() *Spec {
 	}
 }
 
-// Frame 控制帧。按 Type 使用不同字段，未用字段省略。
+// Frame is a control frame. Fields are used per Type; unused ones are omitted.
 type Frame struct {
 	Type string `json:"type"`
 
 	// ready
 	//
-	// ScriptID 本次脚本会话的 ID（sandboxd 侧的 worker ID）。它是两端日志对账的 join key：
-	// 容器身份只有 sandboxd 知道，它把这个 ID 回传，本侧记下它出现的时刻。
+	// ScriptID is the ID of this script session (the sandboxd-side worker ID). It is the join key between
+	// the two logs: only sandboxd knows the container identity, it sends this ID back, and this side
+	// records when it appeared.
 	ScriptID string `json:"script_id,omitempty"`
 	Reused   bool   `json:"reused,omitempty"`
 
@@ -162,14 +166,16 @@ type Frame struct {
 	Lang string    `json:"lang,omitempty"`
 	Spec *WireSpec `json:"spec,omitempty"`
 
-	// interactive open：长交互会话身份与工具标识（/v1/interactive 专用）
+	// interactive open: long-lived interactive session identity and tool identifier (/v1/interactive only)
 	SessionID string `json:"session_id,omitempty"`
 	ToolID    string `json:"tool_id,omitempty"`
 
-	// Ephemeral 临时进程（无 session 的调用）：sandboxd 用它选短兜底超时。
+	// Ephemeral marks a temporary process (a call without a session): sandboxd uses it to pick the short
+	// fallback timeout.
 	//
-	// 进程仍可被同一 session_id 的后续调用复用（run 内的多次工具调用），销毁靠
-	// nexus 在 run 结束时显式 kill（快路径）或短超时兜底 —— 缺省 false = 持久保留。
+	// The process can still be reused by later calls with the same session_id (several tool calls within
+	// one run); destruction relies on nexus killing it explicitly when the run ends (fast path) or on the
+	// short timeout. The default false means "kept permanently".
 	Ephemeral bool `json:"ephemeral,omitempty"`
 
 	// exec
@@ -179,7 +185,7 @@ type Frame struct {
 	// done
 	Result any `json:"result,omitempty"`
 
-	// done / error 共用：脚本 stderr（print 输出 / 错误 traceback），可能被截断。
+	// done / error share this: script stderr (print output / error traceback), possibly truncated.
 	Logs string `json:"logs,omitempty"`
 
 	// exit / error
@@ -189,16 +195,16 @@ type Frame struct {
 }
 
 // ============================================================================
-// Conn：一条到 sandboxd 的 WS 连接
+// Conn: one WS connection to sandboxd
 // ============================================================================
 
-// Conn 帧读写封装。写操作串行化（gorilla 不允许并发写）。
+// Conn wraps frame reading and writing. Writes are serialised (gorilla does not allow concurrent writes).
 type Conn struct {
 	ws *websocket.Conn
 	mu sync.Mutex
 }
 
-// Dial 建立到 sandboxd 的连接。
+// Dial opens a connection to sandboxd.
 func Dial(ctx context.Context, endpoint, token string) (*Conn, error) {
 	h := http.Header{}
 	if token != "" {
@@ -216,13 +222,13 @@ func Dial(ctx context.Context, endpoint, token string) (*Conn, error) {
 	return &Conn{ws: ws}, nil
 }
 
-// NewConn 用一条已建立的 WebSocket 连接创建 Conn（服务端使用）。
+// NewConn builds a Conn from an established WebSocket connection (server side).
 func NewConn(ws *websocket.Conn) *Conn {
 	ws.SetReadLimit(maxFrameBytes)
 	return &Conn{ws: ws}
 }
 
-// SendFrame 发送控制帧（文本帧）。
+// SendFrame sends a control frame (text frame).
 func (c *Conn) SendFrame(f *Frame) error {
 	b, err := json.Marshal(f)
 	if err != nil {
@@ -233,7 +239,7 @@ func (c *Conn) SendFrame(f *Frame) error {
 	return c.ws.WriteMessage(websocket.TextMessage, b)
 }
 
-// SendData 发送一段原始字节（ch 为通道标记）。
+// SendData sends a chunk of raw bytes (ch is the channel tag).
 func (c *Conn) SendData(ch byte, p []byte) error {
 	buf := make([]byte, 1+len(p))
 	buf[0] = ch
@@ -243,8 +249,8 @@ func (c *Conn) SendData(ch byte, p []byte) error {
 	return c.ws.WriteMessage(websocket.BinaryMessage, buf)
 }
 
-// Recv 读取下一条消息，返回互斥的控制帧或原始字节。
-// data 非 nil 时，data[0] 是通道标记，data[1:] 是负载。
+// Recv reads the next message and returns either a control frame or raw bytes.
+// When data is non-nil, data[0] is the channel tag and data[1:] is the payload.
 func (c *Conn) Recv() (*Frame, []byte, error) {
 	for {
 		typ, data, err := c.ws.ReadMessage()
@@ -269,5 +275,5 @@ func (c *Conn) Recv() (*Frame, []byte, error) {
 	}
 }
 
-// Close 关闭连接。
+// Close closes the connection.
 func (c *Conn) Close() error { return c.ws.Close() }
