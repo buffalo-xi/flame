@@ -35,7 +35,7 @@ func FreeBuild(ctx context.Context, st storage.Storage, assetID string, from int
 			return n, nil
 		}
 	}
-	return 0, fmt.Errorf("快照目录连续 %d 个号都已被占用（资产 %s，从 v%d 起），请稍后重试",
+	return 0, fmt.Errorf("%d consecutive snapshot numbers are taken (asset %s, starting at v%d); retry later",
 		maxBuildProbe, assetID, from)
 }
 

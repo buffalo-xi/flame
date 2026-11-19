@@ -48,7 +48,7 @@ func TestRegistryRejectsBuiltinNameCollision(t *testing.T) {
 	if _, ok := r.Get("read_file"); ok {
 		t.Fatal("插件工具不该与内置工具重名后仍然生效（分派会含糊）")
 	}
-	if !hasErrorMentioning(r.Snapshot().Errors, "重名") {
+	if !hasErrorMentioning(r.Snapshot().Errors, "clashes") {
 		t.Errorf("没有记录重名错误：%+v", r.Snapshot().Errors)
 	}
 }
@@ -73,7 +73,7 @@ func TestRegistryRejectsDuplicateName(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("同名工具生效了 %d 份，期望 1 份", count)
 	}
-	if !hasErrorMentioning(snap.Errors, "重复") {
+	if !hasErrorMentioning(snap.Errors, "duplicates") {
 		t.Errorf("没有记录重名错误：%+v", snap.Errors)
 	}
 }
@@ -90,7 +90,7 @@ func TestRegistryRejectsUnsupportedKind(t *testing.T) {
 	if r.Has("notify") {
 		t.Fatal("未知 kind 的插件不该被加载")
 	}
-	if !hasErrorMentioning(r.Snapshot().Errors, "不支持") {
+	if !hasErrorMentioning(r.Snapshot().Errors, "unsupported") {
 		t.Errorf("没有记录 kind 错误：%+v", r.Snapshot().Errors)
 	}
 }

@@ -72,10 +72,10 @@ func runEndpoint(
 	// 端点一律按名字定位：名字在租户内唯一、改名会跟着变；id 在导出导入后会重新生成
 	ep, err := findRpcEndpoint(authInfo, endpointName)
 	if err != nil {
-		return "", false, fmt.Errorf("查询 RPC 端点失败: %w", err)
+		return "", false, fmt.Errorf("failed to look up the RPC endpoint: %w", err)
 	}
 	if ep == nil {
-		return "", false, fmt.Errorf("RPC 端点不存在: %s", endpointName)
+		return "", false, fmt.Errorf("RPC endpoint not found: %s", endpointName)
 	}
 
 	// 调用深度护栏：agent → 本地 flow 端点 → rpc 节点 → agent 端点 → … 会成环，
@@ -90,7 +90,7 @@ func runEndpoint(
 	next := callDepth + 1
 	if maxDepth := resolveEndpointDepthLimit(authInfo.Schema); next > maxDepth {
 		return "", false, fmt.Errorf(
-			"调用深度超限（第 %d 层，上限 %d）：拒绝继续调用端点 %q，请检查 agent 与 flow 是否互相调用",
+			"call depth exceeded (level %d, limit %d): refusing to call endpoint %q - check whether an agent and a flow call each other",
 			next, maxDepth, ep.Name)
 	}
 
@@ -99,7 +99,7 @@ func runEndpoint(
 	// 平级扇出不受影响：同一 flow 的多个 rpc 节点读到的是同一条链，且都只含祖先。
 	self := callchain.Key(ep.TargetType, ep.TargetID)
 	if callchain.Contains(callChain, self) {
-		return "", false, fmt.Errorf("检测到循环调用：%s 已在本调用链中（%s）", self, callchain.Format(callChain))
+		return "", false, fmt.Errorf("circular call detected: %s is already in this call chain (%s)", self, callchain.Format(callChain))
 	}
 	nextChain := callchain.Append(callChain, self)
 
@@ -110,7 +110,7 @@ func runEndpoint(
 	case "flow":
 		return runFlowEndpoint(ctx, authInfo, sessionID, next, nextChain, ep.TargetID, arguments, wantProgress, scope, onProgress)
 	default:
-		return "", false, fmt.Errorf("不支持的 target_type %q", ep.TargetType)
+		return "", false, fmt.Errorf("unsupported target_type %q", ep.TargetType)
 	}
 }
 
@@ -153,12 +153,12 @@ func runFlowEndpoint(ctx context.Context, authInfo *auth.AuthInfo, sessionID str
 	// 先读实体行：状态与名字从这里来；定义列再按「草稿 or 正式版本」选。
 	Instance, err := repo.GetFlow(authInfo, flowId)
 	if err != nil {
-		return "", false, fmt.Errorf("获取 flow 实例失败: %w", err)
+		return "", false, fmt.Errorf("failed to get the flow instance: %w", err)
 	}
 	// 废弃的 flow 不可运行：内部调用（RPC 节点的本租户直调）走的正是这里，
 	// 而 runEndpoint 明确**不校验 exposed**，所以这是唯一的无条件拦截点。
 	if !models.IsRunnable(int(Instance.Status)) {
-		return "", false, fmt.Errorf("flow %q 已废弃，不可调用", Instance.Name)
+		return "", false, fmt.Errorf("flow %q is deprecated and cannot be called", Instance.Name)
 	}
 
 	// 「调试跑草稿、正式跑正式版」唯一的分叉点：
@@ -166,15 +166,15 @@ func runFlowEndpoint(ctx context.Context, authInfo *auth.AuthInfo, sessionID str
 	//   - 没有 scope（MCP / RPC / agent 的 local__ 等正式入口）：必须读正式版本，
 	//     没有正式版本就拒绝 —— 不能悄悄退回草稿，否则「正式」二字就没了。
 	if scope.Enabled() {
-		scope.RecordDraft("flow", flowId, Instance.Name, "调试会话跟随草稿")
+		scope.RecordDraft("flow", flowId, Instance.Name, "the debug session follows the draft")
 	} else {
 		released, perr := repo.GetCurrentFlowVersion(authInfo, flowId)
 		if errors.Is(perr, flows.ErrNoReleasedVersion) {
 			return "", false, fmt.Errorf(
-				"flow %q 尚未发布正式版本：正式调用只运行已发布的版本，请在编辑页发布后再试", Instance.Name)
+				"flow %q has no released version yet: a production call only runs released versions, so release it from the editor and retry", Instance.Name)
 		}
 		if perr != nil {
-			return "", false, fmt.Errorf("获取 flow %q 正式版本失败: %w", Instance.Name, perr)
+			return "", false, fmt.Errorf("failed to get the released version of flow %q: %w", Instance.Name, perr)
 		}
 		Instance = released
 	}
@@ -203,7 +203,7 @@ func runFlowEndpoint(ctx context.Context, authInfo *auth.AuthInfo, sessionID str
 
 	execCtx, err := NewFlow(Instance, flowInput, conv.ToString(nil), uuid.Must(uuid.NewV7()).String(), authInfo.Schema, authInfo.ID, ctx)
 	if err != nil {
-		return "", false, fmt.Errorf("初始化 flow 执行失败: %w", err)
+		return "", false, fmt.Errorf("failed to initialise the flow run: %w", err)
 	}
 	// 作用域继续往下传：子流程里的 rpc 节点要按同一个 scope 决定它的子调用读哪份
 	execCtx.DebugScope = scope
@@ -257,11 +257,11 @@ loop:
 func runAgentEndpoint(ctx context.Context, authInfo *auth.AuthInfo, sessionID string, callDepth int, callChain []string, agentID string, input map[string]interface{}, wantProgress bool, scope *flow.DebugScope, onProgress func(p rpcEndpointProgress)) (string, bool, error) {
 	agentInst, err := agents.NewRepository().GetAgent(authInfo, agentID)
 	if err != nil {
-		return "", false, fmt.Errorf("获取 agent 实例失败: %w", err)
+		return "", false, fmt.Errorf("failed to get the agent instance: %w", err)
 	}
 	// 废弃的 agent 不可运行（同 runFlowEndpoint：本租户直调不校验 exposed）
 	if !models.IsRunnable(int(agentInst.Status)) {
-		return "", false, fmt.Errorf("agent %q 已废弃，不可调用", agentInst.Name)
+		return "", false, fmt.Errorf("agent %q is deprecated and cannot be called", agentInst.Name)
 	}
 	// 超级智能体照常可被 flow 调起，不在这里拦：它的能力不该因调用者而打折
 	// （管理面就是改草稿，读发布版等于让它看不见自己刚建的东西）。
@@ -295,7 +295,7 @@ func runAgentEndpoint(ctx context.Context, authInfo *auth.AuthInfo, sessionID st
 	// 草稿是否继续往它调起的 agent / flow 扩散，应当由这里的 scope 决定，
 	// 而不是由「那边缺省是 true」这条隐式约定兜住（缺省将来一改就是静默行为漂移）。
 	if scope.Enabled() {
-		scope.RecordDraft("agent", agentID, agentInst.Name, "调试会话跟随草稿")
+		scope.RecordDraft("agent", agentID, agentInst.Name, "the debug session follows the draft")
 		agent.SetDraftMode(agentArguments)
 		agent.SetFollowDrafts(agentArguments, true)
 	} else {
@@ -304,17 +304,17 @@ func runAgentEndpoint(ctx context.Context, authInfo *auth.AuthInfo, sessionID st
 	}
 	inst, err := agent.NewAgent(agentInst, authInfo.Schema, agentArguments)
 	if err != nil {
-		return "", false, fmt.Errorf("初始化 agent 失败: %w", err)
+		return "", false, fmt.Errorf("failed to initialise the agent: %w", err)
 	}
 	if inst == nil {
-		return "", false, fmt.Errorf("agent %s 不支持或不存在", agentID)
+		return "", false, fmt.Errorf("agent %s is unsupported or does not exist", agentID)
 	}
 	defer inst.Close()
 
 	if !wantProgress {
 		// 同步执行：不消费事件通道，只取最终答案
 		if runErr := inst.Stream(context.Background()); runErr != nil {
-			return "", false, fmt.Errorf("运行 agent 失败: %w", runErr)
+			return "", false, fmt.Errorf("failed to run the agent: %w", runErr)
 		}
 		inst.CloseChans()
 		return endpointAgentResult(inst)

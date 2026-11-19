@@ -220,7 +220,7 @@ func WarnSecretPromptRefs(nr *flow.NodeResult, cfg map[string]any, texts ...stri
 				continue
 			}
 			nr.WarnOnce("secret-prompt:"+inputName,
-				"提示词引用了密钥类型的全局变量 %s（输入变量 %s）：渲染结果会进模型上下文与运行记录，密钥建议只用于连接 / 工具配置",
+				"the prompt references the secret global variable %s (input variable %s): the rendered text reaches the model context and the run records, so secrets should only be used in connection / tool config",
 				globalName, inputName)
 			break
 		}

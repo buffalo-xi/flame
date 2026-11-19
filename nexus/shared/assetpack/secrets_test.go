@@ -80,7 +80,7 @@ func TestStripSecretsKeepsGlobalVarRefs(t *testing.T) {
 	// 混合场景要留一条 warning 提示人工确认，不能静默保留
 	found := false
 	for _, w := range warnings {
-		if strings.Contains(w, "authorization") && strings.Contains(w, "全局变量") {
+		if strings.Contains(w, "authorization") && strings.Contains(w, "global variable") {
 			found = true
 			break
 		}
@@ -147,7 +147,7 @@ func TestStripSecretsKeepsInputRefs(t *testing.T) {
 
 	found := false
 	for _, w := range warnings {
-		if strings.Contains(w, "authorization") && strings.Contains(w, "引用") {
+		if strings.Contains(w, "authorization") && strings.Contains(w, "reference") {
 			found = true
 			break
 		}

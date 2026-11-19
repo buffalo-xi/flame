@@ -41,7 +41,7 @@ func (e *CodeExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 
 	mapResult, ok := scriptResult.(map[string]interface{})
 	if !ok {
-		return failf(nr, flow.ErrCodeScript, "不正确的返回类型: "+xjson.MarshalJSON(scriptResult))
+		return failf(nr, flow.ErrCodeScript, "unexpected return type: "+xjson.MarshalJSON(scriptResult))
 	}
 
 	if err := applyScriptResult(nr, mapResult); err != nil {

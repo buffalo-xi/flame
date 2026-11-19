@@ -95,14 +95,14 @@ func (e *CallExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 		}
 	}
 	if err := ctx.RecordNodeExecution(childPID, funcNode.ID, funcNR); err != nil {
-		return failf(nr, flow.ErrCodeInternal, "记录节点执行失败: "+err.Error())
+		return failf(nr, flow.ErrCodeInternal, "failed to record the node run: "+err.Error())
 	}
 
 	label := targetID
 	if funcNode.Data != nil && funcNode.Data.Label != "" {
 		label = funcNode.Data.Label
 	}
-	nr.AddLog(fmt.Sprintf("调用函数 %s(%s)", label, funcNode.ID))
+	nr.AddLog(fmt.Sprintf("calling function %s(%s)", label, funcNode.ID))
 
 	// 8. 复用 FunctionExecutor 执行（function.go 已改为 FunctionResult 为 nil 时才创建，
 	//    因此这里预注入的参数不会被覆盖）

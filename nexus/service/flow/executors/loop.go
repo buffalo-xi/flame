@@ -121,19 +121,19 @@ func (e *LoopExecutor) executeLoopEach(node *flow.Node, ctx *flow.ExecContext,
 	inputVars := nr.GetInputVars()
 	arrayData, exists := inputVars[sourceKey]
 	if !exists {
-		return failf(nr, flow.ErrCodeConfig, "each 数据源在 inputs 中不存在: "+sourceKey)
+		return failf(nr, flow.ErrCodeConfig, "the each source is not in inputs: "+sourceKey)
 	}
 
 	items := toSlice(arrayData)
 	if items == nil && arrayData != nil {
-		return failf(nr, flow.ErrCodeConfig, "each 数据源不是数组类型: "+sourceKey)
+		return failf(nr, flow.ErrCodeConfig, "the each source is not an array: "+sourceKey)
 	}
 	if sysMax := ctx.ResolveMaxLoopTimes(); sysMax > 0 && len(items) > sysMax {
-		nr.AddLogf("数组长度 %d 超过系统上限 %d，已截断", len(items), sysMax)
+		nr.AddLogf("array length %d exceeds the system limit %d, truncated", len(items), sysMax)
 		items = items[:sysMax]
 	}
 	if breakOnEmpty && len(items) == 0 {
-		nr.AddLog("数据源为空，跳过循环")
+		nr.AddLog("the data source is empty, skipping the loop")
 		nr.Finish(flow.StatusSuccess, "", "")
 		return nil
 	}
@@ -145,7 +145,7 @@ func (e *LoopExecutor) executeLoopEach(node *flow.Node, ctx *flow.ExecContext,
 		}
 
 		if breakOnEmpty && item == nil {
-			nr.AddLogf("第 %d 项为空，中断循环", i)
+			nr.AddLogf("item %d is empty, aborting the loop", i)
 			break
 		}
 
@@ -189,11 +189,11 @@ func (e *LoopExecutor) executeLoopWhile(node *flow.Node, ctx *flow.ExecContext,
 
 		ok, errScript := evaluateCondition(ctx, nr, lc)
 		if errScript != nil {
-			nr.Finish(flow.StatusFailed, flow.ErrCodeScript, "执行条件脚本失败: "+errScript.Error())
+			nr.Finish(flow.StatusFailed, flow.ErrCodeScript, "failed to run the condition script: "+errScript.Error())
 			return errScript
 		}
 		if !ok {
-			nr.AddLogf("条件不满足，循环结束（共 %d 轮）", i+1)
+			nr.AddLogf("condition not met, loop finished after %d round(s)", i+1)
 			break
 		}
 
@@ -247,11 +247,11 @@ func (e *LoopExecutor) executeLoopDoWhile(node *flow.Node, ctx *flow.ExecContext
 		// 后判断条件
 		ok, errScript := evaluateCondition(ctx, nr, lc)
 		if errScript != nil {
-			nr.Finish(flow.StatusFailed, flow.ErrCodeScript, "执行条件脚本失败: "+errScript.Error())
+			nr.Finish(flow.StatusFailed, flow.ErrCodeScript, "failed to run the condition script: "+errScript.Error())
 			return errScript
 		}
 		if !ok {
-			nr.AddLogf("条件不满足，循环结束（共 %d 轮）", i+1)
+			nr.AddLogf("condition not met, loop finished after %d round(s)", i+1)
 			break
 		}
 	}
@@ -270,11 +270,11 @@ func (e *LoopExecutor) executeLoopDoWhile(node *flow.Node, ctx *flow.ExecContext
 //   - retErr!=nil 调用方直接返回该错误
 func handleIterationError(ctx *flow.ExecContext, nr *flow.NodeResult, i int, err error) (stop bool, retErr error) {
 	if errors.Is(err, SignalBreak) {
-		nr.AddLogf("第 %d 轮 break", i)
+		nr.AddLogf("break on round %d", i)
 		return true, nil
 	}
 	if errors.Is(err, SignalContinue) {
-		nr.AddLogf("第 %d 轮 continue", i)
+		nr.AddLogf("continue on round %d", i)
 		return false, nil
 	}
 	if errors.Is(err, SignalReturn) {
@@ -282,7 +282,7 @@ func handleIterationError(ctx *flow.ExecContext, nr *flow.NodeResult, i int, err
 		return true, err
 	}
 	if errors.Is(err, SignalExit) {
-		nr.AddLogf("第 %d 轮 exit，终止循环", i)
+		nr.AddLogf("exit on round %d, terminating the loop", i)
 		nr.Finish(flow.StatusSuccess, "", "")
 		return true, err
 	}
@@ -340,7 +340,7 @@ func evaluateCondition(ctx *flow.ExecContext,
 
 	result, err := ExecuteScript(ctx.StdCtx, lang, condition, inputs, nr, timeout)
 	if err != nil {
-		nr.AddLogf("条件评估失败: %v", err)
+		nr.AddLogf("condition evaluation failed: %v", err)
 		// 归 script 而不是 internal：条件脚本写错属于用户可修复的问题，
 		// 归 internal 会被 shouldBypassOnError 直接终止，on_error 永远配不上。
 		return false, newExecError(flow.ErrCodeScript, "evaluate condition: "+err.Error())
@@ -369,7 +369,7 @@ func parseCountInt(lc map[string]interface{}, key string) (int, error) {
 		return int(v), nil
 	default:
 		return 0, newExecError(flow.ErrCodeConfig,
-			fmt.Sprintf("循环配置 %s 必须是数字，实际是 %T", key, raw))
+			fmt.Sprintf("loop config %s must be a number, got %T", key, raw))
 	}
 }
 

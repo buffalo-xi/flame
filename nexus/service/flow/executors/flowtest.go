@@ -40,10 +40,10 @@ func runFlowForTest(
 ) (*tools.FlowRunResult, error) {
 	instance, err := flows.NewRepository().GetFlow(authInfo, flowID)
 	if err != nil {
-		return nil, fmt.Errorf("获取工作流失败: %w", err)
+		return nil, fmt.Errorf("failed to get the flow: %w", err)
 	}
 	if instance == nil {
-		return nil, fmt.Errorf("工作流不存在: %s", flowID)
+		return nil, fmt.Errorf("flow not found: %s", flowID)
 	}
 
 	// 入参复制后注入两个保留键（NewFlow 会剥离，不污染业务参数）：
@@ -69,7 +69,7 @@ func runFlowForTest(
 	start := time.Now()
 	execCtx, err := NewFlow(instance, input, "", runID, authInfo.Schema, authInfo.ID, ctx)
 	if err != nil {
-		return nil, fmt.Errorf("初始化工作流执行失败: %w", err)
+		return nil, fmt.Errorf("failed to initialise the flow run: %w", err)
 	}
 	// 试跑属于调试：本次运行读的是当前工作副本。它调起的子流程默认也跟草稿 ——
 	// 否则「改 A、改 B、一起看效果」就得先把 B 发布一遍（发布=上线，见 releaseFlowVersionTx 的注释）。

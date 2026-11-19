@@ -68,10 +68,10 @@ func WritePackage(ctx context.Context, st storage.Storage, snapDir string, pkg *
 		pkg.Format = PackageFormat
 	}
 	if pkg.Format != PackageFormat {
-		return fmt.Errorf("不支持的包格式：%s", pkg.Format)
+		return fmt.Errorf("unsupported package format: %s", pkg.Format)
 	}
 	if len(pkg.Manifest.Files) == 0 {
-		return fmt.Errorf("%w：清单为空", ErrNoFiles)
+		return fmt.Errorf("%w: the manifest is empty", ErrNoFiles)
 	}
 	if len(pkg.Payload) == 0 {
 		pkg.Payload = json.RawMessage(`{}`)
@@ -82,7 +82,7 @@ func WritePackage(ctx context.Context, st storage.Storage, snapDir string, pkg *
 
 	meta, err := json.Marshal(pkg)
 	if err != nil {
-		return fmt.Errorf("序列化包元信息失败: %w", err)
+		return fmt.Errorf("failed to serialise the package metadata: %w", err)
 	}
 
 	zw := zip.NewWriter(w)
@@ -104,7 +104,7 @@ func WritePackage(ctx context.Context, st storage.Storage, snapDir string, pkg *
 		}
 		rc, oerr := st.ReadStream(ctx, path.Join(snapDir, rel))
 		if oerr != nil {
-			return fmt.Errorf("读取快照文件 %s: %w", rel, oerr)
+			return fmt.Errorf("failed to read the snapshot file %s: %w", rel, oerr)
 		}
 		entry, cerr := zw.CreateHeader(&zip.FileHeader{
 			Name: packageFilesDir + "/" + rel, Method: zip.Deflate, Modified: now,
@@ -116,10 +116,10 @@ func WritePackage(ctx context.Context, st storage.Storage, snapDir string, pkg *
 		n, cpErr := io.Copy(entry, rc)
 		_ = rc.Close()
 		if cpErr != nil {
-			return fmt.Errorf("写入包内文件 %s: %w", rel, cpErr)
+			return fmt.Errorf("failed to write the package entry %s: %w", rel, cpErr)
 		}
 		if n != f.Size {
-			return fmt.Errorf("快照文件 %s 与清单不一致（清单 %d 字节，实际 %d）", rel, f.Size, n)
+			return fmt.Errorf("the snapshot file %s does not match the manifest (manifest %d bytes, actual %d)", rel, f.Size, n)
 		}
 	}
 	return zw.Close()
@@ -132,15 +132,15 @@ func WritePackage(ctx context.Context, st storage.Storage, snapDir string, pkg *
 func ReadPackage(ra io.ReaderAt, size int64, lim Limits) (*Package, map[string][]byte, error) {
 	lim = lim.withDefaults()
 	if size <= 0 {
-		return nil, nil, errors.New("资产包为空")
+		return nil, nil, errors.New("the asset package is empty")
 	}
 
 	zr, err := zip.NewReader(ra, size)
 	if err != nil {
-		return nil, nil, fmt.Errorf("不是合法的 zip 包: %w", err)
+		return nil, nil, fmt.Errorf("not a valid zip archive: %w", err)
 	}
 	if len(zr.File) > lim.MaxFiles+1 { // +1 = package.json
-		return nil, nil, fmt.Errorf("%w（上限 %d 个）", ErrTooManyFiles, lim.MaxFiles)
+		return nil, nil, fmt.Errorf("%w (limit %d files)", ErrTooManyFiles, lim.MaxFiles)
 	}
 
 	var (
@@ -161,7 +161,7 @@ func ReadPackage(ra io.ReaderAt, size int64, lim Limits) (*Package, map[string][
 			}
 			var p Package
 			if jerr := json.Unmarshal(b, &p); jerr != nil {
-				return nil, nil, fmt.Errorf("%s 解析失败: %w", packageMetaName, jerr)
+				return nil, nil, fmt.Errorf("failed to parse %s: %w", packageMetaName, jerr)
 			}
 			pkg = &p
 
@@ -171,18 +171,18 @@ func ReadPackage(ra io.ReaderAt, size int64, lim Limits) (*Package, map[string][
 				return nil, nil, rerr
 			}
 			if _, dup := files[rel]; dup {
-				return nil, nil, fmt.Errorf("包内文件重复：%s", rel)
+				return nil, nil, fmt.Errorf("duplicate file in the package: %s", rel)
 			}
 			if len(files) >= lim.MaxFiles {
-				return nil, nil, fmt.Errorf("%w（上限 %d 个）", ErrTooManyFiles, lim.MaxFiles)
+				return nil, nil, fmt.Errorf("%w (limit %d files)", ErrTooManyFiles, lim.MaxFiles)
 			}
 			if int64(f.UncompressedSize64) > lim.MaxFileSize {
-				return nil, nil, fmt.Errorf("%w：%s（%d 字节，上限 %d）",
+				return nil, nil, fmt.Errorf("%w: %s (%d bytes, limit %d)",
 					ErrFileTooLarge, rel, f.UncompressedSize64, lim.MaxFileSize)
 			}
 			total += int64(f.UncompressedSize64)
 			if total > lim.MaxTotal {
-				return nil, nil, fmt.Errorf("包体超过合计上限（%d 字节，上限 %d）", total, lim.MaxTotal)
+				return nil, nil, fmt.Errorf("the package exceeds the total limit (%d bytes, limit %d)", total, lim.MaxTotal)
 			}
 			b, rerr := readZipEntry(f, lim.MaxFileSize)
 			if rerr != nil {
@@ -191,15 +191,15 @@ func ReadPackage(ra io.ReaderAt, size int64, lim Limits) (*Package, map[string][
 			files[rel] = b
 
 		default:
-			return nil, nil, fmt.Errorf("包内出现未知条目：%s", name)
+			return nil, nil, fmt.Errorf("unknown entry in the package: %s", name)
 		}
 	}
 
 	if pkg == nil {
-		return nil, nil, fmt.Errorf("包内缺少 %s", packageMetaName)
+		return nil, nil, fmt.Errorf("the package is missing %s", packageMetaName)
 	}
 	if pkg.Format != PackageFormat {
-		return nil, nil, fmt.Errorf("不支持的包格式：%s（当前支持 %s）", pkg.Format, PackageFormat)
+		return nil, nil, fmt.Errorf("unsupported package format: %s (this build supports %s)", pkg.Format, PackageFormat)
 	}
 	if len(pkg.Payload) == 0 {
 		pkg.Payload = json.RawMessage(`{}`)
@@ -213,10 +213,10 @@ func ReadPackage(ra io.ReaderAt, size int64, lim Limits) (*Package, map[string][
 // verify 清单与实际内容一一对应：数量、字节数、sha256 三项都对上才算可信。
 func (p *Package) verify(files map[string][]byte) error {
 	if len(p.Manifest.Files) == 0 {
-		return fmt.Errorf("%w：清单为空", ErrNoFiles)
+		return fmt.Errorf("%w: the manifest is empty", ErrNoFiles)
 	}
 	if len(p.Manifest.Files) != len(files) {
-		return fmt.Errorf("清单声明 %d 个文件，包内实际 %d 个", len(p.Manifest.Files), len(files))
+		return fmt.Errorf("the manifest declares %d file(s), the package holds %d", len(p.Manifest.Files), len(files))
 	}
 	for _, f := range p.Manifest.Files {
 		rel, err := safeRelPath(f.Path)
@@ -225,15 +225,15 @@ func (p *Package) verify(files map[string][]byte) error {
 		}
 		data, ok := files[rel]
 		if !ok {
-			return fmt.Errorf("清单里的文件在包内不存在：%s", rel)
+			return fmt.Errorf("a file listed in the manifest is missing from the package: %s", rel)
 		}
 		if int64(len(data)) != f.Size {
-			return fmt.Errorf("文件 %s 大小与清单不一致（清单 %d，实际 %d）", rel, f.Size, len(data))
+			return fmt.Errorf("the size of %s does not match the manifest (manifest %d, actual %d)", rel, f.Size, len(data))
 		}
 		if f.SHA256 != "" {
 			sum := sha256.Sum256(data)
 			if !strings.EqualFold(hex.EncodeToString(sum[:]), f.SHA256) {
-				return fmt.Errorf("文件 %s 校验和不一致（包内容被改动过？）", rel)
+				return fmt.Errorf("the checksum of %s does not match (was the package modified?)", rel)
 			}
 		}
 	}
@@ -246,20 +246,20 @@ func (p *Package) verify(files map[string][]byte) error {
 // a/../b 这类需要 clean 才安全的写法一律拒绝 —— 这些正是解压穿越的常见手法。
 func safeRelPath(rel string) (string, error) {
 	if rel == "" {
-		return "", errors.New("包内出现空路径")
+		return "", errors.New("the package contains an empty path")
 	}
 	if strings.ContainsAny(rel, "\\\x00") {
-		return "", fmt.Errorf("非法路径（含反斜杠或空字节）：%s", rel)
+		return "", fmt.Errorf("invalid path (backslash or NUL byte): %s", rel)
 	}
 	if strings.HasPrefix(rel, "/") {
-		return "", fmt.Errorf("非法路径（绝对路径）：%s", rel)
+		return "", fmt.Errorf("invalid path (absolute): %s", rel)
 	}
 	clean := path.Clean(rel)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-		return "", fmt.Errorf("非法路径（越出根目录）：%s", rel)
+		return "", fmt.Errorf("invalid path (escapes the root): %s", rel)
 	}
 	if clean != rel {
-		return "", fmt.Errorf("非法路径（未规范化）：%s", rel)
+		return "", fmt.Errorf("invalid path (not cleaned): %s", rel)
 	}
 	return clean, nil
 }
@@ -268,15 +268,15 @@ func safeRelPath(rel string) (string, error) {
 func readZipEntry(f *zip.File, max int64) ([]byte, error) {
 	rc, err := f.Open()
 	if err != nil {
-		return nil, fmt.Errorf("读取包内条目 %s: %w", f.Name, err)
+		return nil, fmt.Errorf("failed to read the package entry %s: %w", f.Name, err)
 	}
 	defer rc.Close()
 	b, err := io.ReadAll(io.LimitReader(rc, max+1))
 	if err != nil {
-		return nil, fmt.Errorf("读取包内条目 %s: %w", f.Name, err)
+		return nil, fmt.Errorf("failed to read the package entry %s: %w", f.Name, err)
 	}
 	if int64(len(b)) > max {
-		return nil, fmt.Errorf("包内条目过大：%s（上限 %d 字节）", f.Name, max)
+		return nil, fmt.Errorf("package entry too large: %s (limit %d bytes)", f.Name, max)
 	}
 	return b, nil
 }

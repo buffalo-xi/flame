@@ -71,7 +71,7 @@ type ConflictError struct {
 }
 
 func (e *ConflictError) Error() string {
-	return fmt.Sprintf("来源「%s」已有同类同名资产：%s（当前 v%d）",
+	return fmt.Sprintf("origin %s already has an asset with the same kind and name: %s (currently v%d)",
 		e.Origin, e.Name, e.ExistingBuild)
 }
 
@@ -91,7 +91,7 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 	}
 	pkg, files, err := assetpack.ReadPackage(ra, size, assetpack.DefaultLimits())
 	if err != nil {
-		return nil, fmt.Errorf("资产包校验失败: %w", err)
+		return nil, fmt.Errorf("asset package validation failed: %w", err)
 	}
 
 	kind, err := ValidatePackage(pkg, files)
@@ -102,7 +102,7 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 	// 重新脱敏：不信任上游做过的那一遍（对端可能快照更老 / 被改过 / 根本没做）
 	var payload map[string]any
 	if err := json.Unmarshal(pkg.Payload, &payload); err != nil || payload == nil {
-		return nil, errors.New("资产包里的 payload 不是 JSON 对象")
+		return nil, errors.New("the payload in the asset package is not a JSON object")
 	}
 	clean, secretWarnings := assetpack.StripSecrets(kind, payload)
 
@@ -114,7 +114,7 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 		origin = "remote"
 	}
 	if !originRe.MatchString(origin) {
-		return nil, errors.New("来源站点名只允许字母、数字、点、下划线、横线，长度 ≤64")
+		return nil, errors.New("the origin site name allows only letters, digits, dot, underscore and dash, at most 64 characters")
 	}
 
 	sourceSchema := strings.TrimSpace(pkg.Origin.SourceSchema)
@@ -125,7 +125,7 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 
 	existing, err := sharedassets.FindByOriginName(origin, string(kind), sourceSchema, pkg.Manifest.Name)
 	if err != nil {
-		return nil, fmt.Errorf("查询既有导入失败: %w", err)
+		return nil, fmt.Errorf("failed to query the existing import: %w", err)
 	}
 	if existing != nil && !opt.Force {
 		return nil, &ConflictError{
@@ -176,26 +176,26 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 	buildMu.Unlock()
 	if werr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		return nil, fmt.Errorf("写入资产文件失败: %w", werr)
+		return nil, fmt.Errorf("failed to write the asset files: %w", werr)
 	}
 
 	payloadJSON, err := json.Marshal(clean)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		return nil, fmt.Errorf("序列化 payload 失败: %w", err)
+		return nil, fmt.Errorf("failed to serialise the payload: %w", err)
 	}
 	// 对端可能是旧版本（包里没有 spec / 指纹）：按本机口径补齐，保证本机每条资产行都带指纹，
 	// 否则「重复安装的是不是同一份内容」在对端之间永远判不了。
 	if pkg.Manifest.Digest == "" {
 		if derr := assetpack.StampManifest(&pkg.Manifest, payloadJSON); derr != nil {
 			_ = st.DeletePrefix(ctx, dstDir)
-			return nil, fmt.Errorf("计算内容指纹失败: %w", derr)
+			return nil, fmt.Errorf("failed to compute the content digest: %w", derr)
 		}
 	}
 	manifestJSON, err := json.Marshal(pkg.Manifest)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		return nil, fmt.Errorf("序列化清单失败: %w", err)
+		return nil, fmt.Errorf("failed to serialise the manifest: %w", err)
 	}
 
 	a := &sharedassets.Asset{
@@ -228,9 +228,9 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 		_ = st.DeletePrefix(ctx, dstDir)
 		// 并发导入：另一路已经把行推到更高的号，这份快照没人认领（内容本身是好的，重试会拿新号）
 		if errors.Is(err, sharedassets.ErrStaleBuild) {
-			return nil, errors.New("该资产刚被另一次导入更新（并发），请重试")
+			return nil, errors.New("another import updated this asset concurrently; retry")
 		}
-		return nil, fmt.Errorf("写入资产记录失败: %w", err)
+		return nil, fmt.Errorf("failed to write the asset record: %w", err)
 	}
 	// 覆盖导入同样把快照推到新目录，旧快照就没有读者了（安装是复制、导出只打当前快照）。
 	// 与上架共用同一套保留窗口；删不掉不影响导入，启动清扫会再收一次。
@@ -239,26 +239,26 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 	warnings := make([]string, 0, 4)
 	warnings = append(warnings, secretWarnings...)
 	if existing != nil {
-		warnings = append(warnings, fmt.Sprintf("已覆盖来源「%s」的同名资产，本地快照升到 v%d", origin, build))
+		warnings = append(warnings, fmt.Sprintf("overwrote the asset from origin %s; the local snapshot moved to v%d", origin, build))
 	}
 	if pkg.Origin.Build > 0 && pkg.Origin.Build != build {
-		warnings = append(warnings, fmt.Sprintf("包的原始快照是 v%d，本地记录为 v%d（本地快照只增不减）",
+		warnings = append(warnings, fmt.Sprintf("the package snapshot is v%d, the local record is v%d (local snapshots only move forward)",
 			pkg.Origin.Build, build))
 	}
 	if kind == assetpack.KindAgent {
-		warnings = append(warnings, "智能体的超级权限 / 工具不限 / 技能发现不随包迁移，装上均为关闭；"+
-			"「谁能调用该智能体」需要在目标租户重新配置")
+		warnings = append(warnings, "super powers / unrestricted tools / skill discovery do not travel with the package and stay off after install; "+
+			"who may call this agent has to be configured again in the target tenant")
 	}
 	if kind == assetpack.KindWorkflow {
-		warnings = append(warnings, "工作流只有一个 FLOW.json（定义在库里）：装上后是编辑态，"+
-			"图里的模型 / 工具 / 子流程引用需要在目标租户重新配置，凭据类变量已在上架时清空")
+		warnings = append(warnings, "a workflow ships only a FLOW.json (the definition lives in the database): after install it is a draft, "+
+			"the model / tool / sub-flow references in the graph have to be configured again in the target tenant, and credential variables were cleared when the asset was listed")
 	}
 	if len(pkg.Manifest.Deps.Skills) > 0 {
 		warnings = append(warnings, fmt.Sprintf(
-			"该资产声明了 %d 个技能依赖，安装时按名字在目标租户匹配（缺失只记 warning）", len(pkg.Manifest.Deps.Skills)))
+			"the asset declares %d skill dependencies; install matches them by name in the target tenant (a missing one is only a warning)", len(pkg.Manifest.Deps.Skills)))
 	}
 	if opt.AutoApprove {
-		warnings = append(warnings, "该来源已开启「自动通过」，本次导入直接 listed（仍记 imported_by 可追溯）")
+		warnings = append(warnings, "this origin has auto-approve on, so the import is listed directly (imported_by is still recorded for traceability)")
 	}
 
 	return &Result{
@@ -275,7 +275,7 @@ func Import(ra io.ReaderAt, size int64, st storage.Storage, opt Options) (*Resul
 func ValidatePackage(pkg *assetpack.Package, files map[string][]byte) (assetpack.Kind, error) {
 	kind := assetpack.Kind(pkg.Manifest.Kind)
 	if !kind.Valid() {
-		return "", fmt.Errorf("未知的资产类型：%s", pkg.Manifest.Kind)
+		return "", fmt.Errorf("unknown asset kind: %s", pkg.Manifest.Kind)
 	}
 	// 工作流不落目录，名字只用库列，但它的措辞不同（名字是对外工具名，见
 	// assetpack.ValidateWorkflowName），字符集与其它三类一致
@@ -295,11 +295,11 @@ func ValidatePackage(pkg *assetpack.Package, files map[string][]byte) (assetpack
 	if entry == "" {
 		entry = strings.TrimSpace(pkg.Manifest.Entry)
 		if entry == "" {
-			return "", errors.New("自定义工具包里没有声明入口文件（entry）")
+			return "", errors.New("the custom tool package declares no entry file")
 		}
 	}
 	if _, ok := files[entry]; !ok {
-		return "", fmt.Errorf("包里缺少入口文件：%s", entry)
+		return "", fmt.Errorf("the package is missing the entry file: %s", entry)
 	}
 	return kind, nil
 }

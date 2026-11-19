@@ -33,17 +33,17 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 	// ── 1. 解析配置 ──
 	config := node.Data.Config
 	if config == nil {
-		return failf(nr, flow.ErrCodeConfig, "意图节点缺少配置")
+		return failf(nr, flow.ErrCodeConfig, "intent node is missing its configuration")
 	}
 
 	children, ok := config["children"].([]interface{})
 	if !ok || len(children) == 0 {
-		return failf(nr, flow.ErrCodeConfig, "意图节点没有配置任何分支")
+		return failf(nr, flow.ErrCodeConfig, "intent node configures no branch")
 	}
 
 	branches := parseIntentBranches(children)
 	if len(branches) == 0 {
-		return failf(nr, flow.ErrCodeConfig, "解析意图分支配置失败")
+		return failf(nr, flow.ErrCodeConfig, "failed to parse the intent branch config")
 	}
 
 	// 初始化输出变量（固定 intent / index，可被 config.outputs 覆盖类型）
@@ -76,16 +76,16 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 	modelInput := buildModelInput(llmCfg, model)
 
 	if gateway.Current == nil {
-		return failf(nr, flow.ErrCodeConnection, "LLM 网关未初始化")
+		return failf(nr, flow.ErrCodeConnection, "the LLM gateway is not initialised")
 	}
 
 	// ── 4. 调用大模型分类 ──
-	nr.AddLogf("调用大模型进行意图分类，共 %d 个分支", len(branches))
+	nr.AddLogf("classifying the intent with the LLM, %d branch(es)", len(branches))
 	resp, genErr := gateway.Current.Generate(ctx.StdCtx, *modelInput, messages, nil)
 	if genErr != nil {
-		return failf(nr, flow.ErrCodeConnection, fmt.Sprintf("意图分类 LLM 调用失败: %v", genErr))
+		return failf(nr, flow.ErrCodeConnection, fmt.Sprintf("the intent classification LLM call failed: %v", genErr))
 	}
-	nr.AddLogf("LLM 返回: %s", strings.TrimSpace(resp.Content))
+	nr.AddLogf("LLM returned: %s", strings.TrimSpace(resp.Content))
 
 	// ── 5. 解析命中分支并执行 ──
 	idx := parseIntentIndex(resp.Content, len(branches))
@@ -93,12 +93,12 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 
 	if idx >= 0 && idx < len(branches) {
 		b := branches[idx]
-		nr.AddLogf("命中分支 [%d] %s(%s)", idx, b.label, b.id)
+		nr.AddLogf("matched branch [%d] %s(%s)", idx, b.label, b.id)
 		if werr := nr.SetOutputVarWithFire("intent", b.label); werr != nil {
-			nr.AddLogf("写入 intent 失败: %v", werr)
+			nr.AddLogf("failed to write intent: %v", werr)
 		}
 		if werr := nr.SetOutputVarWithFire("index", idx); werr != nil {
-			nr.AddLogf("写入 index 失败: %v", werr)
+			nr.AddLogf("failed to write index: %v", werr)
 		}
 		result := branchExec.executeBranch(node, ctx, processID, nr, b.id, b.label)
 		if result != nil {
@@ -106,13 +106,13 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 		}
 	} else {
 		// 未命中：走默认分支
-		nr.AddLogf("LLM 未命中任何意图（index=%d），走默认分支", idx)
+		nr.AddLogf("the LLM matched no intent (index=%d), taking the default branch", idx)
 
 		if werr := nr.SetOutputVarWithFire("intent", ""); werr != nil {
-			nr.AddLogf("写入 intent 失败: %v", werr)
+			nr.AddLogf("failed to write intent: %v", werr)
 		}
 		if werr := nr.SetOutputVarWithFire("index", -1); werr != nil {
-			nr.AddLogf("写入 index 失败: %v", werr)
+			nr.AddLogf("failed to write index: %v", werr)
 		}
 
 		defaultEdge := findBranchEdge(node, node.ID)
@@ -122,7 +122,7 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 				return result
 			}
 		} else {
-			nr.AddLog("没有默认分支出边")
+			nr.AddLog("no outgoing edge from the default branch")
 		}
 	}
 
@@ -189,7 +189,7 @@ func buildIntentMessages(nr *flow.NodeResult, nodeCfg map[string]interface{},
 		tmplCtx := map[string]interface{}{"input": inputVars}
 		rendered, err := RenderTemplate(systemPrompt, tmplCtx)
 		if err != nil {
-			return nil, fmt.Errorf("system_prompt 模板渲染失败: %w", err)
+			return nil, fmt.Errorf("failed to render the system_prompt template: %w", err)
 		}
 		renderedPrompt = strings.TrimSpace(rendered)
 	}
@@ -199,7 +199,7 @@ func buildIntentMessages(nr *flow.NodeResult, nodeCfg map[string]interface{},
 		sb.WriteString(renderedPrompt)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString("可选意图列表（序号从 0 开始）：\n")
+	sb.WriteString("Available intents (0-based index):\n")
 	for i, b := range branches {
 		line := fmt.Sprintf("%d. %s", i, b.label)
 		if strings.TrimSpace(b.description) != "" {
@@ -207,8 +207,8 @@ func buildIntentMessages(nr *flow.NodeResult, nodeCfg map[string]interface{},
 		}
 		sb.WriteString(line + "\n")
 	}
-	sb.WriteString("\n请判断用户输入最匹配哪个意图，只输出 JSON，不要输出任何其他内容：{\"index\": <序号>}\n")
-	sb.WriteString("若都不匹配，输出 {\"index\": -1}")
+	sb.WriteString("\nDecide which intent best matches the user input. Output JSON only, nothing else: {\"index\": <number>}\n")
+	sb.WriteString("If none matches, output {\"index\": -1}")
 
 	// userContent, err := json.Marshal(inputVars)
 	// if err != nil {

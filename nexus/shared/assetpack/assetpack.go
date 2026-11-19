@@ -184,17 +184,17 @@ func (m Manifest) TotalSize() int64 {
 // 打包/还原时的错误。调用方用 errors.Is 判，映射成 400（资产内容不合法）而不是 500。
 var (
 	// ErrNoFiles 源目录不存在或为空。
-	ErrNoFiles = errors.New("资产目录为空")
+	ErrNoFiles = errors.New("the asset directory is empty")
 	// ErrTooManyFiles 文件数超限。
-	ErrTooManyFiles = errors.New("文件数量超限")
+	ErrTooManyFiles = errors.New("too many files")
 	// ErrFileTooLarge 单文件超限。
-	ErrFileTooLarge = errors.New("单文件体积超限")
+	ErrFileTooLarge = errors.New("a single file is too large")
 	// ErrTotalTooLarge 合计体积超限。
-	ErrTotalTooLarge = errors.New("合计体积超限")
+	ErrTotalTooLarge = errors.New("the total size is too large")
 	// ErrMissingEntry 缺入口文件。
-	ErrMissingEntry = errors.New("缺少入口文件")
+	ErrMissingEntry = errors.New("the entry file is missing")
 	// ErrChecksum 快照内容与清单不符（存储被改动或写入不完整）。
-	ErrChecksum = errors.New("快照内容与清单不一致")
+	ErrChecksum = errors.New("the snapshot does not match the manifest")
 )
 
 // warn 造一条给前端看的提示（与契约 warnings、目录 issues 同一口径：中文、指名到文件/字段）。

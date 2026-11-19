@@ -40,7 +40,7 @@ func (e *WaitExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 	timeout = ctx.ResolveTimeout(timeout)
 
 	nr.WaitResult.ForkNodeID = forkNodeID
-	nr.AddLogf("等待并发组: %s, 超时: %ds", forkNodeID, timeout)
+	nr.AddLogf("waiting for concurrent group %s, timeout %ds", forkNodeID, timeout)
 	completed, err := forkNR.ForkResult.WaitTimeoutCtx(ctx.StdCtx, timeout)
 	if err != nil {
 		// ctx 取消/超时：交由上层按取消处理，不当作 wait 节点自身失败
@@ -49,23 +49,23 @@ func (e *WaitExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 			return ctxErr
 		}
 		// 状态异常：fork 已被 wait 过（重复 wait）
-		nr.AddLog(fmt.Sprintf("等待异常: %v", err))
+		nr.AddLog(fmt.Sprintf("wait failed: %v", err))
 		// 同一个 fork 被 wait 两次是图结构错误（不是平台故障）
 		return failf(nr, flow.ErrCodeConfig, err.Error())
 	}
 	if completed {
-		nr.AddLog("等待结束: 所有并发任务已完成")
+		nr.AddLog("wait finished: every concurrent task completed")
 		// 扫描同 fork 组成员状态：任一失败则 wait 失败（fail-fast）
 		// 注意：扫描的是节点状态而非输出变量，不违反"wait 后不引用并发分支结果"约束
 		failed := scanForkMembersFailed(ctx, forkNR.ForkResult)
 		if failed != "" {
-			nr.AddLog("并发分支失败: " + failed)
-			return failf(nr, flow.ErrCodeOther, "并发分支失败: "+failed)
+			nr.AddLog("concurrent branch failed: " + failed)
+			return failf(nr, flow.ErrCodeOther, "concurrent branch failed: "+failed)
 		}
 	} else {
 		// 真正的超时：部分并发任务未完成，交由 onError 规则决定 skip/retry/terminate
-		nr.AddLog("等待超时: 部分并发任务未完成")
-		return failf(nr, flow.ErrCodeTimeout, "等待超时: 部分并发任务未完成")
+		nr.AddLog("wait timed out: some concurrent tasks did not finish")
+		return failf(nr, flow.ErrCodeTimeout, "wait timed out: some concurrent tasks did not finish")
 	}
 
 	nr.Finish(flow.StatusSuccess, "", "")

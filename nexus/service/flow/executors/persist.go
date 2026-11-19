@@ -33,7 +33,7 @@ func persistRun(execCtx *flow.ExecContext, flowErr error) {
 	}
 
 	if err := flowruns.NewRepository().SaveRun(execCtx.Schema, run, nodes, maxRecords); err != nil {
-		execCtx.LogError("落库运行记录失败: " + err.Error())
+		execCtx.LogError("failed to persist the run records: " + err.Error())
 	}
 }
 

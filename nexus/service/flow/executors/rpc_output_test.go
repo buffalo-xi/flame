@@ -50,7 +50,7 @@ func TestApplyHandlerAppendWarnsOncePerVar(t *testing.T) {
 
 	warned := 0
 	for _, line := range nr.GetLogs() {
-		if strings.Contains(line, "已忽略") {
+		if strings.Contains(line, "ignored") {
 			warned++
 		}
 	}

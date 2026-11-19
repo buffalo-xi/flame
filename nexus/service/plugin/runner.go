@@ -85,18 +85,18 @@ func (r *Runner) Has(name string) bool {
 // Invoke 执行一次调用：读租户配置 → 按主实现与兜底链逐个试 → 裁剪结果。
 func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[string]any) (any, error) {
 	if r == nil || r.host == nil {
-		return nil, &CallError{Code: CodeConfig, Message: "插件执行器未初始化"}
+		return nil, &CallError{Code: CodeConfig, Message: "the plugin runner is not initialised"}
 	}
 	if r.src == nil {
-		return nil, &CallError{Code: CodeConfig, Message: "插件清单为空（未发现任何插件）"}
+		return nil, &CallError{Code: CodeConfig, Message: "the plugin manifest list is empty (no plugin was found)"}
 	}
 	if strings.TrimSpace(schema) == "" {
-		return nil, &CallError{Code: CodeConfig, Message: "缺少租户上下文，无法定位插件配置"}
+		return nil, &CallError{Code: CodeConfig, Message: "the tenant context is missing, so the plugin config cannot be located"}
 	}
 
 	manifest, ok := r.src.Get(toolName)
 	if !ok {
-		return nil, &CallError{Code: CodeConfig, Message: "插件工具不存在：" + toolName}
+		return nil, &CallError{Code: CodeConfig, Message: "plugin tool not found: " + toolName}
 	}
 
 	// 平台策略先于租户配置判定：被平台停用时的提示应当是「找平台管理员」，
@@ -110,7 +110,7 @@ func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[s
 			// 否则只能看到「插件调不动」。
 			hint := ""
 			if strings.Contains(perr.Error(), "does not exist") {
-				hint = " —— 请先执行 nexus/platform/sql/tenant_plugins.sql 与 plugin_gates.sql"
+				hint = " - run nexus/platform/sql/tenant_plugins.sql and plugin_gates.sql first"
 			}
 			return nil, &CallError{
 				Code:    CodeOther,
@@ -125,12 +125,12 @@ func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[s
 		if pol.Blocked {
 			return nil, &CallError{
 				Code:    CodeConfig,
-				Message: fmt.Sprintf("插件 %s 已被平台全局停用", manifest.Name),
+				Message: fmt.Sprintf("plugin %s is disabled platform-wide", manifest.Name),
 			}
 		}
 		return nil, &CallError{
 			Code:    CodeConfig,
-			Message: fmt.Sprintf("插件 %s 已被平台对本租户停用（请联系平台管理员恢复）", manifest.Name),
+			Message: fmt.Sprintf("plugin %s is disabled by the platform for this tenant (ask a platform administrator to restore it)", manifest.Name),
 		}
 	}
 
@@ -139,20 +139,20 @@ func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[s
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, &CallError{
 			Code:    CodeConfig,
-			Message: fmt.Sprintf("插件 %s 未启用（请在管理端「插件」页启用并配置实现）", manifest.Name),
+			Message: fmt.Sprintf("plugin %s is not enabled (enable it and configure an implementation on the admin Plugins page)", manifest.Name),
 		}
 	case err != nil:
 		return nil, err
 	}
 	if !p.IsActive {
-		return nil, &CallError{Code: CodeConfig, Message: fmt.Sprintf("插件 %s 已停用", manifest.Name)}
+		return nil, &CallError{Code: CodeConfig, Message: fmt.Sprintf("plugin %s is disabled", manifest.Name)}
 	}
 
 	chain, notes := buildChain(manifest, p)
 	if len(chain) == 0 {
 		return nil, &CallError{
 			Code:    CodeConfig,
-			Message: fmt.Sprintf("插件 %s 没有可用的实现（主实现 %q 不在磁盘上）", manifest.Name, p.Impl),
+			Message: fmt.Sprintf("plugin %s has no usable implementation (the primary implementation %q is not on disk)", manifest.Name, p.Impl),
 		}
 	}
 
@@ -165,7 +165,7 @@ func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[s
 			Args:   args,
 		})
 		if err == nil {
-			xlog.Info("插件调用 tool=%s impl=%s schema=%s 耗时=%s", manifest.Name, impl, schema, time.Since(started))
+			xlog.Info("plugin call tool=%s impl=%s schema=%s took=%s", manifest.Name, impl, schema, time.Since(started))
 			return truncateResult(res, impl, args, notes), nil
 		}
 
@@ -174,7 +174,7 @@ func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[s
 		if Code(err) == CodeConfig {
 			return nil, err
 		}
-		xlog.Error("插件调用失败 tool=%s impl=%s schema=%s: %v", manifest.Name, impl, schema, err)
+		xlog.Error("plugin call failed tool=%s impl=%s schema=%s: %v", manifest.Name, impl, schema, err)
 		failures = append(failures, impl+": "+err.Error())
 		if ctx.Err() != nil {
 			break
@@ -183,7 +183,7 @@ func (r *Runner) Invoke(ctx context.Context, schema, toolName string, args map[s
 
 	return nil, &CallError{
 		Code:    CodeOther,
-		Message: fmt.Sprintf("插件 %s 的所有实现均失败 —— %s", manifest.Name, strings.Join(failures, "；")),
+		Message: fmt.Sprintf("every implementation of plugin %s failed - %s", manifest.Name, strings.Join(failures, "; ")),
 	}
 }
 
@@ -194,11 +194,11 @@ func buildChain(manifest Manifest, p *models.Plugin) (impls []string, notes []st
 	add := func(name, role string) {
 		name = strings.TrimSpace(name)
 		if name == "" {
-			notes = append(notes, role+"为空，已跳过")
+			notes = append(notes, role+" is empty, skipped")
 			return
 		}
 		if seen[name] {
-			notes = append(notes, "重复的"+role+"已忽略："+name)
+			notes = append(notes, "duplicate "+role+" ignored: "+name)
 			return
 		}
 		if _, ok := manifest.ImplementationOf(name); !ok {
@@ -209,9 +209,9 @@ func buildChain(manifest Manifest, p *models.Plugin) (impls []string, notes []st
 		impls = append(impls, name)
 	}
 
-	add(p.Impl, "主实现")
+	add(p.Impl, "primary implementation")
 	for _, fb := range p.FallbackImpls() {
-		add(fb, "兜底实现")
+		add(fb, "fallback implementation")
 	}
 	return impls, notes
 }
@@ -269,7 +269,7 @@ func truncateResult(raw any, impl string, args map[string]any, notes []string) a
 			"query":     res["query"],
 			"results":   []any{},
 			"truncated": true,
-			"notes":     []any{fmt.Sprintf("结果超过 %d 字节，已丢弃正文", MaxResultBytes)},
+			"notes":     []any{fmt.Sprintf("the result exceeded %d bytes, the body was dropped", MaxResultBytes)},
 		}
 	}
 	return res

@@ -93,7 +93,7 @@ func TestWritePackageRejectsSnapshotMismatch(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := WritePackage(context.Background(), st, dir, demoPackage(), &buf)
-	if err == nil || !strings.Contains(err.Error(), "不一致") {
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("期望报大小不一致，实际：%v", err)
 	}
 }
@@ -108,7 +108,7 @@ func TestReadPackageRejectsTamperedContent(t *testing.T) {
 		"files/lib/run.js": "console.log(2)\n", // 与清单 sha256 不符
 	})
 	if _, _, err := ReadPackage(bytes.NewReader(b), size, Limits{}); err == nil ||
-		!strings.Contains(err.Error(), "校验和不一致") {
+		!strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("期望报校验和不一致，实际：%v", err)
 	}
 }
@@ -121,7 +121,7 @@ func TestReadPackageRejectsTraversal(t *testing.T) {
 		"files/../../evil.md": "x",
 	})
 	if _, _, err := ReadPackage(bytes.NewReader(b), size, Limits{}); err == nil ||
-		!strings.Contains(err.Error(), "非法路径") {
+		!strings.Contains(err.Error(), "invalid path") {
 		t.Fatalf("期望报非法路径，实际：%v", err)
 	}
 }
@@ -136,7 +136,7 @@ func TestReadPackageRejectsManifestMismatch(t *testing.T) {
 		"files/SKILL.md": "# demo\n",
 	})
 	if _, _, err := ReadPackage(bytes.NewReader(b), size, Limits{}); err == nil ||
-		!strings.Contains(err.Error(), "实际") {
+		!strings.Contains(err.Error(), "declares") {
 		t.Fatalf("期望报数量不一致，实际：%v", err)
 	}
 
@@ -161,7 +161,7 @@ func TestReadPackageRejectsUnknownEntry(t *testing.T) {
 		"README.md":      "多余的说明",
 	})
 	if _, _, err := ReadPackage(bytes.NewReader(b), size, Limits{}); err == nil ||
-		!strings.Contains(err.Error(), "未知条目") {
+		!strings.Contains(err.Error(), "unknown entry") {
 		t.Fatalf("期望报未知条目，实际：%v", err)
 	}
 }
@@ -177,7 +177,7 @@ func TestReadPackageEnforcesFileSize(t *testing.T) {
 		"files/SKILL.md": big,
 	})
 	_, _, err := ReadPackage(bytes.NewReader(b), size, Limits{MaxFiles: 10, MaxFileSize: 1024, MaxTotal: 1 << 20})
-	if err == nil || !strings.Contains(err.Error(), "上限") {
+	if err == nil || !strings.Contains(err.Error(), "limit") {
 		t.Fatalf("期望报超限，实际：%v", err)
 	}
 }

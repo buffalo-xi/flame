@@ -42,13 +42,13 @@ func PackFilesWith(ctx context.Context, st storage.Storage, srcDir, dstDir, entr
 	addTree := func(dir, prefix string, skipDirs []string, required bool) error {
 		ok, e := st.Exists(ctx, dir)
 		if e != nil {
-			return fmt.Errorf("检查资产目录失败: %w", e)
+			return fmt.Errorf("failed to scan the asset directory: %w", e)
 		}
 		if !ok {
 			if !required {
 				return nil
 			}
-			return fmt.Errorf("%w：%s", ErrNoFiles, dir)
+			return fmt.Errorf("%w: %s", ErrNoFiles, dir)
 		}
 
 		skip := func(rel string) bool {
@@ -67,22 +67,22 @@ func PackFilesWith(ctx context.Context, st storage.Storage, srcDir, dstDir, entr
 				outRel = path.Join(prefix, rel)
 			}
 			if size > lim.MaxFileSize {
-				return fmt.Errorf("%w：%s（%d 字节，上限 %d）", ErrFileTooLarge, outRel, size, lim.MaxFileSize)
+				return fmt.Errorf("%w: %s (%d bytes, limit %d)", ErrFileTooLarge, outRel, size, lim.MaxFileSize)
 			}
 			if len(files) >= lim.MaxFiles {
-				return fmt.Errorf("%w（已有 %d 个，上限 %d 个）", ErrTooManyFiles, len(files), lim.MaxFiles)
+				return fmt.Errorf("%w (already %d files, limit %d)", ErrTooManyFiles, len(files), lim.MaxFiles)
 			}
 			if total+size > lim.MaxTotal {
-				return fmt.Errorf("%w（已累计 %d 字节，本文件 %d 字节，上限 %d 字节）",
+				return fmt.Errorf("%w (%d bytes so far, this file %d bytes, limit %d bytes)",
 					ErrTotalTooLarge, total, size, lim.MaxTotal)
 			}
 
 			data, rerr := st.ReadFile(ctx, path.Join(dir, rel))
 			if rerr != nil {
-				return fmt.Errorf("读取 %s 失败: %w", rel, rerr)
+				return fmt.Errorf("failed to read %s: %w", rel, rerr)
 			}
 			if werr := st.WriteFile(ctx, path.Join(dstDir, outRel), data); werr != nil {
-				return fmt.Errorf("写入快照 %s 失败: %w", outRel, werr)
+				return fmt.Errorf("failed to write the snapshot %s: %w", outRel, werr)
 			}
 
 			sum := sha256.Sum256(data)
@@ -109,10 +109,10 @@ func PackFilesWith(ctx context.Context, st storage.Storage, srcDir, dstDir, entr
 	}
 
 	if len(files) == 0 {
-		return nil, fmt.Errorf("%w：%s", ErrNoFiles, srcDir)
+		return nil, fmt.Errorf("%w: %s", ErrNoFiles, srcDir)
 	}
 	if entry != "" && !hasEntry {
-		return nil, fmt.Errorf("%w：%s 下没有 %s", ErrMissingEntry, srcDir, entry)
+		return nil, fmt.Errorf("%w: %s has no %s", ErrMissingEntry, srcDir, entry)
 	}
 
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
@@ -196,7 +196,7 @@ func RestoreFilesUnder(ctx context.Context, st storage.Storage, snapDir, dstDir,
 		src := path.Join(snapDir, f.Path)
 		ok, e := st.Exists(ctx, src)
 		if e != nil {
-			return missing, fmt.Errorf("检查快照 %s 失败: %w", f.Path, e)
+			return missing, fmt.Errorf("failed to check the snapshot %s: %w", f.Path, e)
 		}
 		if !ok {
 			missing = append(missing, f.Path)
@@ -205,16 +205,16 @@ func RestoreFilesUnder(ctx context.Context, st storage.Storage, snapDir, dstDir,
 
 		data, e := st.ReadFile(ctx, src)
 		if e != nil {
-			return missing, fmt.Errorf("读取快照 %s 失败: %w", f.Path, e)
+			return missing, fmt.Errorf("failed to read the snapshot %s: %w", f.Path, e)
 		}
 		if f.SHA256 != "" {
 			sum := sha256.Sum256(data)
 			if hex.EncodeToString(sum[:]) != f.SHA256 {
-				return missing, fmt.Errorf("%w：%s", ErrChecksum, f.Path)
+				return missing, fmt.Errorf("%w: %s", ErrChecksum, f.Path)
 			}
 		}
 		if e := st.WriteFile(ctx, path.Join(dstDir, rel), data); e != nil {
-			return missing, fmt.Errorf("写入 %s 失败: %w", rel, e)
+			return missing, fmt.Errorf("failed to write %s: %w", rel, e)
 		}
 	}
 	return missing, nil
@@ -227,7 +227,7 @@ func RestoreFilesUnder(ctx context.Context, st storage.Storage, snapDir, dstDir,
 func walkFiles(ctx context.Context, st storage.Storage, dir, rel string, skip func(rel string) bool, fn func(rel string, size int64) error) error {
 	entries, err := st.List(ctx, dir)
 	if err != nil {
-		return fmt.Errorf("列目录 %s 失败: %w", dir, err)
+		return fmt.Errorf("failed to list the directory %s: %w", dir, err)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 

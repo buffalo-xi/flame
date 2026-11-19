@@ -60,13 +60,13 @@ func (e *FunctionExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proce
 
 		if errors.Is(err, SignalReturn) {
 			nr.Finish(flow.StatusSuccess, "", "")
-			nr.AddLog("收到 return 信号，function 正常返回")
+			nr.AddLog("received the return signal, the function returns normally")
 			return nil
 		}
 
 		if errors.Is(err, SignalExit) {
 			nr.Finish(flow.StatusSuccess, "", "")
-			nr.AddLog("收到 exit 信号，退出整个工作流")
+			nr.AddLog("received the exit signal, exiting the whole flow")
 			return err // 传播 SignalExit 到上层
 		}
 
@@ -74,7 +74,7 @@ func (e *FunctionExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proce
 		// 泄漏到 function 说明子链里存在 loop 外部的 break/continue 节点
 		if errors.Is(err, SignalBreak) || errors.Is(err, SignalContinue) {
 			return failf(nr, flow.ErrCodeConfig,
-				fmt.Sprintf("break/continue 不能出现在 function(node %s) 子链的 loop 外部", node.ID))
+				fmt.Sprintf("break/continue cannot appear outside a loop of the function(node %s) child chain", node.ID))
 		}
 
 		// 2. stdCtx 取消（超时/中断）：置当前节点 cancel，逐层退出

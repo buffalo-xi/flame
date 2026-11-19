@@ -112,21 +112,21 @@ func (e *RpcExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 	// 7. 解析 connection_id 与 tool_name
 	connectionID, _ := rpcCfg["connection_id"].(string)
 	if strings.TrimSpace(connectionID) == "" {
-		return failf(nr, flow.ErrCodeConfig, "rpc connection_id 不能为空")
+		return failf(nr, flow.ErrCodeConfig, "rpc connection_id must not be empty")
 	}
 	toolName, _ := rpcCfg["tool_name"].(string)
 	if strings.TrimSpace(toolName) == "" {
-		return failf(nr, flow.ErrCodeConfig, "rpc tool_name 不能为空")
+		return failf(nr, flow.ErrCodeConfig, "rpc tool_name must not be empty")
 	}
 
 	// 8. 查询连接
 	authInfo := &auth.AuthInfo{Schema: ctx.Schema}
 	conn, connErr := rpcconnrepo.NewRepository().GetByID(authInfo, connectionID)
 	if connErr != nil {
-		return failf(nr, flow.ErrCodeNotFound, fmt.Sprintf("RPC 连接不存在: %v", connErr))
+		return failf(nr, flow.ErrCodeNotFound, fmt.Sprintf("RPC connection not found: %v", connErr))
 	}
 	if !conn.IsActive {
-		return failf(nr, flow.ErrCodeConfig, "RPC 连接未启用")
+		return failf(nr, flow.ErrCodeConfig, "the RPC connection is not enabled")
 	}
 
 	// 9. 收集器 + onProgress 回调
@@ -150,7 +150,7 @@ func (e *RpcExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 			scriptInput := mergeInputs(nr, inputArgs, eventData)
 			if err := e.executeHandlerScript(ctx, nr, handlerLang, handlerScript, scriptInput, handlerTimeout); err != nil {
 				// 逐条 handler 执行错误：记录日志但不中断调用（progress 属基础设施输出）
-				nr.AddLogf("progress handler 执行失败: %s", err.ErrMsg)
+				nr.AddLogf("the progress handler failed: %s", err.ErrMsg)
 			}
 		}
 	}
@@ -209,7 +209,7 @@ func (e *RpcExecutor) executeEndpoint(
 ) error {
 	endpointName, _ := rpcCfg["endpoint"].(string)
 	if strings.TrimSpace(endpointName) == "" {
-		return failf(nr, flow.ErrCodeConfig, "rpc endpoint 未配置（应填端点名）")
+		return failf(nr, flow.ErrCodeConfig, "rpc endpoint is not configured (fill in the endpoint name)")
 	}
 
 	coll := &rpcProgressCollector{}
@@ -236,7 +236,7 @@ func (e *RpcExecutor) executeEndpoint(
 			}
 			scriptInput := mergeInputs(nr, inputArgs, eventData)
 			if err := e.executeHandlerScript(ctx, nr, handlerLang, handlerScript, scriptInput, handlerTimeout); err != nil {
-				nr.AddLogf("progress handler 执行失败: %s", err.ErrMsg)
+				nr.AddLogf("the progress handler failed: %s", err.ErrMsg)
 			}
 		}
 	}
@@ -325,7 +325,7 @@ func (e *RpcExecutor) executeHandlerScript(
 	if err != nil {
 		return &scriptExecError{
 			ErrCode: scriptErrCode(err),
-			ErrMsg:  fmt.Sprintf("handler 脚本执行失败: %v", err),
+			ErrMsg:  fmt.Sprintf("failed to run the handler script: %v", err),
 		}
 	}
 
@@ -335,7 +335,7 @@ func (e *RpcExecutor) executeHandlerScript(
 		if err := applyHandlerAppend(nr, scriptResult, rpcReservedOutputVars); err != nil {
 			return &scriptExecError{
 				ErrCode: flow.ErrCodeVar,
-				ErrMsg:  fmt.Sprintf("handler 脚本返回值写入失败: %v", err),
+				ErrMsg:  fmt.Sprintf("failed to write the handler script result: %v", err),
 			}
 		}
 	}

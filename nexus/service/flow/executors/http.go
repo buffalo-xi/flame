@@ -110,7 +110,7 @@ func (e *HttpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 
 	// 存 mode 输出变量（两种响应模式都写，handler 内部不再重复写）
 	if err := nr.SetOutputVarWithFire("mode", mode); err != nil {
-		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("写入 mode 失败: %v", err))
+		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("failed to write mode: %v", err))
 	}
 
 	// 记录响应状态码到 HttpResult
@@ -143,7 +143,7 @@ func (e *HttpExecutor) handleComplete(
 	// 读取全部 body
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return failf(nr, flow.ErrCodeConnection, fmt.Sprintf("读取响应body失败: %v", err))
+		return failf(nr, flow.ErrCodeConnection, fmt.Sprintf("failed to read the response body: %v", err))
 	}
 
 	bodyStr := bodyToString(bodyBytes, resp.Header.Get("Content-Type"))
@@ -154,16 +154,16 @@ func (e *HttpExecutor) handleComplete(
 
 	// 1. 固定输出变量一律由执行器写（有没有 handler 都一样）；mode 已在 Execute 里写过
 	if err := nr.SetOutputVarWithFire("status", float64(resp.StatusCode)); err != nil {
-		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("写入 status 失败: %v", err))
+		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("failed to write status: %v", err))
 	}
 	if err := nr.SetOutputVarWithFire("headers", headersStr); err != nil {
-		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("写入 headers 失败: %v", err))
+		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("failed to write headers: %v", err))
 	}
 	if err := nr.SetOutputVarWithFire("body", bodyStr); err != nil {
-		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("写入 body 失败: %v", err))
+		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("failed to write body: %v", err))
 	}
 	if err := nr.SetOutputVarWithFire("stream_finished", true); err != nil {
-		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("写入 stream_finished 失败: %v", err))
+		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("failed to write stream_finished: %v", err))
 	}
 
 	// 2. 脚本可选后处理：return 固定变量会被拦下并记日志，脚本只写自定义变量
@@ -196,10 +196,10 @@ func (e *HttpExecutor) handleSSEStream(
 	// 响应元数据由执行器写；mode 已在 Execute 里写过，这里不再重复
 	headersJSON, _ := json.Marshal(resp.Header)
 	if err := nr.SetOutputVarWithFire("status", float64(resp.StatusCode)); err != nil {
-		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("写入 status 失败: %v", err))
+		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("failed to write status: %v", err))
 	}
 	if err := nr.SetOutputVarWithFire("headers", string(headersJSON)); err != nil {
-		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("写入 headers 失败: %v", err))
+		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("failed to write headers: %v", err))
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -272,16 +272,16 @@ func (e *HttpExecutor) handleSSEStream(
 
 	// 扫描错误
 	if err := scanner.Err(); err != nil {
-		return failf(nr, flow.ErrCodeConnection, fmt.Sprintf("SSE 读取错误: %v", err))
+		return failf(nr, flow.ErrCodeConnection, fmt.Sprintf("SSE read error: %v", err))
 	}
 
 	// 强制 SSE 但没有收到任何 data 帧 -> 报错
 	if eventCount == 0 {
-		return failf(nr, flow.ErrCodeConfig, "response_mode 强制为 sse_stream 但未收到任何 SSE data 帧")
+		return failf(nr, flow.ErrCodeConfig, "response_mode is forced to sse_stream but no SSE data frame arrived")
 	}
 
 	if err := nr.SetOutputVar("sse_events", collectedEvents); err != nil {
-		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("写入 sse_events 失败: %v", err))
+		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("failed to write sse_events: %v", err))
 	}
 
 	if handlerScript != "" {
@@ -299,7 +299,7 @@ func (e *HttpExecutor) handleSSEStream(
 	}
 
 	if err := nr.SetOutputVarWithFire("stream_finished", true); err != nil {
-		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("写入 stream_finished 失败: %v", err))
+		return failf(nr, flow.ErrCodeVar, fmt.Sprintf("failed to write stream_finished: %v", err))
 	}
 	nr.Finish(flow.StatusSuccess, "", "")
 	return nil
@@ -314,7 +314,7 @@ func (e *HttpExecutor) executeHandlerScript(
 	if err != nil {
 		return &scriptExecError{
 			ErrCode: scriptErrCode(err),
-			ErrMsg:  fmt.Sprintf("handler 脚本执行失败: %v", err),
+			ErrMsg:  fmt.Sprintf("failed to run the handler script: %v", err),
 		}
 	}
 
@@ -324,7 +324,7 @@ func (e *HttpExecutor) executeHandlerScript(
 		if err := applyHandlerAppend(nr, scriptResult, httpReservedOutputVars); err != nil {
 			return &scriptExecError{
 				ErrCode: flow.ErrCodeVar,
-				ErrMsg:  fmt.Sprintf("handler 脚本返回值写入失败: %v", err),
+				ErrMsg:  fmt.Sprintf("failed to write the handler script result: %v", err),
 			}
 		}
 	}
@@ -392,13 +392,13 @@ func buildHTTPRequest(httpCfg map[string]interface{}, tmplCtx map[string]interfa
 	}
 	renderedURL, err := RenderTemplate(rawURL, tmplCtx)
 	if err != nil {
-		return nil, fmt.Errorf("url 模板渲染失败: %w", err)
+		return nil, fmt.Errorf("failed to render the url template: %w", err)
 	}
 
 	// 解析并追加 query params
 	parsedURL, err := url.Parse(strings.TrimSpace(renderedURL))
 	if err != nil {
-		return nil, fmt.Errorf("url 解析失败: %w", err)
+		return nil, fmt.Errorf("failed to parse the url: %w", err)
 	}
 
 	params := parseKeyValuePairs(httpCfg, "params", tmplCtx)
@@ -420,7 +420,7 @@ func buildHTTPRequest(httpCfg map[string]interface{}, tmplCtx map[string]interfa
 	if bodyStr != "" {
 		renderedBody, err := RenderTemplate(bodyStr, tmplCtx)
 		if err != nil {
-			return nil, fmt.Errorf("body 模板渲染失败: %w", err)
+			return nil, fmt.Errorf("failed to render the body template: %w", err)
 		}
 		reqBody = strings.NewReader(renderedBody)
 	}
@@ -433,7 +433,7 @@ func buildHTTPRequest(httpCfg map[string]interface{}, tmplCtx map[string]interfa
 
 	req, err := http.NewRequest(method, parsedURL.String(), reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
+		return nil, fmt.Errorf("failed to build the request: %w", err)
 	}
 
 	// Headers
@@ -504,7 +504,7 @@ func determineResponseMode(httpCfg map[string]interface{}, resp *http.Response) 
 		case "complete", "sse_stream":
 			return forced, nil
 		default:
-			return "", fmt.Errorf("不支持的 response_mode: %s，有效值为 complete 或 sse_stream", forced)
+			return "", fmt.Errorf("unsupported response_mode: %s (expected complete or sse_stream)", forced)
 		}
 	}
 
@@ -569,7 +569,7 @@ func parseHandler(httpCfg map[string]interface{}, ctx *flow.ExecContext) (script
 		lang = "lua"
 	}
 	if lang == "template" {
-		return "", "", 0, fmt.Errorf("handler 不支持 template 语言")
+		return "", "", 0, fmt.Errorf("the handler does not support the template language")
 	}
 
 	timeout = -1

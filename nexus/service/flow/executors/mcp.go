@@ -85,11 +85,11 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 	// 4. 解析 connection_id 与 tool_name
 	connectionID, _ := mcpCfg["connection_id"].(string)
 	if strings.TrimSpace(connectionID) == "" {
-		return failf(nr, flow.ErrCodeConfig, "mcp connection_id 不能为空")
+		return failf(nr, flow.ErrCodeConfig, "mcp connection_id must not be empty")
 	}
 	toolName, _ := mcpCfg["tool_name"].(string)
 	if strings.TrimSpace(toolName) == "" {
-		return failf(nr, flow.ErrCodeConfig, "mcp tool_name 不能为空")
+		return failf(nr, flow.ErrCodeConfig, "mcp tool_name must not be empty")
 	}
 
 	// 5. 解析 handler 配置（校验非 template）
@@ -114,10 +114,10 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 	authInfo := &auth.AuthInfo{Schema: ctx.Schema}
 	conn, connErr := mcpconnrepo.NewRepository().GetByID(authInfo, connectionID)
 	if connErr != nil {
-		return failf(nr, flow.ErrCodeNotFound, fmt.Sprintf("MCP 连接不存在: %v", connErr))
+		return failf(nr, flow.ErrCodeNotFound, fmt.Sprintf("MCP connection not found: %v", connErr))
 	}
 	if !conn.IsActive {
-		return failf(nr, flow.ErrCodeConfig, "MCP 连接未启用")
+		return failf(nr, flow.ErrCodeConfig, "the MCP connection is not enabled")
 	}
 
 	// 8. 收集器 + onProgress 回调
@@ -141,7 +141,7 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 			scriptInput := mergeInputs(nr, inputArgs, eventData)
 			if err := e.executeHandlerScript(ctx, nr, handlerLang, handlerScript, scriptInput, handlerTimeout); err != nil {
 				// 逐条 handler 执行错误：记录日志但不中断调用（progress 属基础设施输出）
-				nr.AddLogf("progress handler 执行失败: %s", err.ErrMsg)
+				nr.AddLogf("the progress handler failed: %s", err.ErrMsg)
 			}
 		}
 	}
@@ -274,19 +274,19 @@ func renderMcpArguments(mcpCfg map[string]interface{}, tmplCtx map[string]interf
 	if str, ok := raw.(string); ok {
 		rendered, err := RenderTemplate(str, tmplCtx)
 		if err != nil {
-			return nil, fmt.Errorf("arguments 模板渲染失败: %w", err)
+			return nil, fmt.Errorf("failed to render the arguments template: %w", err)
 		}
 		if strings.TrimSpace(rendered) == "" {
 			return map[string]interface{}{}, nil
 		}
 		var out map[string]interface{}
 		if err := json.Unmarshal([]byte(rendered), &out); err != nil {
-			return nil, fmt.Errorf("arguments JSON 解码失败: %w", err)
+			return nil, fmt.Errorf("failed to decode the arguments JSON: %w", err)
 		}
 		return out, nil
 	}
 
-	return nil, fmt.Errorf("arguments 配置格式非法，应为 JSON 对象或对象字符串")
+	return nil, fmt.Errorf("the arguments config is malformed; expected a JSON object or an object string")
 }
 
 // renderMcpArgumentsMap 递归渲染对象内字符串值的模板。
@@ -332,7 +332,7 @@ func (e *McpExecutor) executeHandlerScript(
 	if err != nil {
 		return &scriptExecError{
 			ErrCode: scriptErrCode(err),
-			ErrMsg:  fmt.Sprintf("handler 脚本执行失败: %v", err),
+			ErrMsg:  fmt.Sprintf("failed to run the handler script: %v", err),
 		}
 	}
 
@@ -342,7 +342,7 @@ func (e *McpExecutor) executeHandlerScript(
 		if err := applyHandlerAppend(nr, scriptResult, mcpReservedOutputVars); err != nil {
 			return &scriptExecError{
 				ErrCode: flow.ErrCodeVar,
-				ErrMsg:  fmt.Sprintf("handler 脚本返回值写入失败: %v", err),
+				ErrMsg:  fmt.Sprintf("failed to write the handler script result: %v", err),
 			}
 		}
 	}

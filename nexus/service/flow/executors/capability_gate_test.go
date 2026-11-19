@@ -30,7 +30,7 @@ func TestEnsureCodeCapability(t *testing.T) {
 	if !strings.Contains(err.Error(), capability.Code) {
 		t.Errorf("错误信息应指出缺哪一档能力，got %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), "插件与能力") {
+	if !strings.Contains(err.Error(), "Plugins & capabilities") {
 		t.Errorf("错误信息应说明去哪里开通，got %q", err.Error())
 	}
 	if got := scriptErrCode(err); got != flow.ErrCodeCapability {

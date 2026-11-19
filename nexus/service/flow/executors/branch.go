@@ -28,7 +28,7 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 	// ── 1. 解析配置 ──
 	config := node.Data.Config
 	if config == nil {
-		return failf(nr, flow.ErrCodeConfig, "分支节点缺少配置")
+		return failf(nr, flow.ErrCodeConfig, "branch node is missing its configuration")
 	}
 
 	// 脚本相关配置统一放在 config.branch 块：{lang, timeout}
@@ -44,12 +44,12 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 
 	children, ok := config["children"].([]interface{})
 	if !ok || len(children) == 0 {
-		return failf(nr, flow.ErrCodeConfig, "分支节点没有配置任何分支")
+		return failf(nr, flow.ErrCodeConfig, "branch node configures no branch")
 	}
 
 	branches, err := parseBranchChildren(children)
 	if err != nil {
-		return failf(nr, flow.ErrCodeConfig, "解析分支配置失败: "+err.Error())
+		return failf(nr, flow.ErrCodeConfig, "failed to parse the branch config: "+err.Error())
 	}
 
 	// 获取输入变量（config 顶层，所有分支共用）
@@ -57,14 +57,14 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 	if inputsConfig, ok := config["inputs"].(map[string]interface{}); ok {
 		vars, err := ctx.GetVariables(inputsConfig, processID)
 		if err != nil {
-			nr.AddLogf("获取输入变量失败: %v", err)
+			nr.AddLogf("failed to read the input variables: %v", err)
 		} else {
 			inputVars = vars
 		}
 	}
 	nr.SetInputVars(inputVars)
 
-	nr.AddLogf("共 %d 个普通分支", len(branches))
+	nr.AddLogf("%d plain branch(es) in total", len(branches))
 
 	// ── 2. 遍历普通分支 ──
 	for _, branch := range branches {
@@ -74,17 +74,17 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 		}
 
 		if branch.condition == "" {
-			nr.AddLogf("分支 %s(%s) 没有条件脚本，跳过", branch.label, branch.id)
+			nr.AddLogf("branch %s(%s) has no condition script, skipped", branch.label, branch.id)
 			continue
 		}
 
 		matched, evalErr := evaluateBranchCondition(ctx, nr, branch, lang, timeout, inputVars)
 		if evalErr != nil {
-			nr.AddLogf("分支 %s(%s) 条件执行失败: %v", branch.label, branch.id, evalErr)
-			return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("分支 %s(%s) 条件执行失败: %v", branch.label, branch.id, evalErr))
+			nr.AddLogf("branch %s(%s) condition failed: %v", branch.label, branch.id, evalErr)
+			return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("branch %s(%s) condition failed: %v", branch.label, branch.id, evalErr))
 		}
 		if !matched {
-			nr.AddLogf("分支 %s(%s) 条件不满足", branch.label, branch.id)
+			nr.AddLogf("branch %s(%s) condition not met", branch.label, branch.id)
 			continue
 		}
 
@@ -96,12 +96,12 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 
 		// 排他分支：命中并执行完成后，停止尝试后续分支与默认分支，结束 branch 节点
 		if branch.exclusive {
-			nr.AddLogf("分支 %s(%s) 命中并执行完成（排他），停止后续分支尝试", branch.label, branch.id)
+			nr.AddLogf("branch %s(%s) matched and completed (exclusive), no further branches are tried", branch.label, branch.id)
 			nr.Finish(flow.StatusSuccess, "", "")
 			return nil
 		}
 
-		nr.AddLogf("分支 %s(%s) 正常完成，继续检查下一个分支", branch.label, branch.id)
+		nr.AddLogf("branch %s(%s) completed normally, checking the next branch", branch.label, branch.id)
 	}
 
 	// ── 3. 默认分支 ──
@@ -112,14 +112,14 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 
 	defaultEdge := findBranchEdge(node, node.ID)
 	if defaultEdge != nil {
-		nr.AddLog("执行默认分支")
+		nr.AddLog("running the default branch")
 		result := e.executeBranch(node, ctx, processID, nr, node.ID, "default")
 		if result != nil {
 			return result
 		}
-		nr.AddLog("默认分支正常完成")
+		nr.AddLog("the default branch completed normally")
 	} else {
-		nr.AddLog("没有默认分支出边")
+		nr.AddLog("no outgoing edge from the default branch")
 	}
 
 	nr.Finish(flow.StatusSuccess, "", "")
@@ -132,14 +132,14 @@ func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 
 	targetEdge := findBranchEdge(node, edgeKey)
 	if targetEdge == nil {
-		nr.AddLogf("分支 %s 没有出边，跳过", label)
+		nr.AddLogf("branch %s has no outgoing edge, skipped", label)
 		return nil
 	}
 
 	targetNode := GetNodeByID(ctx.Flow, targetEdge.Target)
 	if targetNode == nil {
-		nr.AddLogf("分支 %s 目标节点 %s 不存在，错误返回", label, targetEdge.Target)
-		return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("分支 %s 目标节点 %s 不存在，错误返回", label, targetEdge.Target))
+		nr.AddLogf("branch %s points at a missing target node %s, returning an error", label, targetEdge.Target)
+		return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("branch %s points at a missing target node %s, returning an error", label, targetEdge.Target))
 	}
 
 	// 记录执行的分支 id
@@ -147,10 +147,10 @@ func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 
 	childPID, err := ctx.ProcessManager.NewProcess(processID, nil)
 	if err != nil {
-		return failf(nr, flow.ErrCodeInternal, fmt.Sprintf("创建分支 %s 子进程失败: %v", label, err))
+		return failf(nr, flow.ErrCodeInternal, fmt.Sprintf("failed to start the child run for branch %s: %v", label, err))
 	}
 
-	nr.AddLogf("执行分支 %s → 节点 %s(%s)", label, targetNode.Data.Label, targetNode.ID)
+	nr.AddLogf("running branch %s → node %s(%s)", label, targetNode.Data.Label, targetNode.ID)
 	execErr := execute(targetNode, ctx, childPID, 0)
 
 	// 正常完成
@@ -160,7 +160,7 @@ func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 
 	// 控制信号（break/continue/return/exit）→ 节点成功，向上传播
 	if isControlSignal(execErr) {
-		nr.AddLogf("分支 %s 返回控制信号 %s，节点成功", label, execErr.Error())
+		nr.AddLogf("branch %s returned control signal %s, node succeeded", label, execErr.Error())
 		nr.Finish(flow.StatusSuccess, "", "")
 		return execErr
 	}
@@ -185,9 +185,9 @@ func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 	if errors.As(execErr, &ee) {
 		code = ee.Code
 	}
-	nr.AddLogf("分支 %s 子链执行失败，错误向上透传: %v", label, execErr)
+	nr.AddLogf("branch %s child chain failed, propagating the error: %v", label, execErr)
 	nr.Finish(flow.StatusSuccess, "", "")
-	return newExecError(code, fmt.Sprintf("分支 %s 执行失败: %v", label, execErr))
+	return newExecError(code, fmt.Sprintf("branch %s failed: %v", label, execErr))
 }
 
 // parseBranchChildren 解析 children 配置为 branchConfig 切片（只解析普通分支）
@@ -233,7 +233,7 @@ func parseBranchChildren(children []interface{}) ([]branchConfig, error) {
 	}
 
 	if len(branches) == 0 {
-		return nil, fmt.Errorf("没有有效的分支配置")
+		return nil, fmt.Errorf("no valid branch configuration")
 	}
 
 	return branches, nil
@@ -245,7 +245,7 @@ func evaluateBranchCondition(ctx *flow.ExecContext, nr *flow.NodeResult, branch 
 
 	result, err := ExecuteScript(ctx.StdCtx, lang, branch.condition, inputVars, nr, timeout)
 	if err != nil {
-		return false, fmt.Errorf("执行条件脚本失败: %v", err)
+		return false, fmt.Errorf("failed to run the condition script: %v", err)
 	}
 
 	return isConditionTrue(result), nil

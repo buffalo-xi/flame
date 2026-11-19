@@ -261,7 +261,7 @@ func TestValidateWorkflowName(t *testing.T) {
 			t.Fatalf("非法工作流名 %q 通过了校验", bad)
 		}
 	}
-	if err := ValidateWorkflowName("每日简报"); err == nil || !strings.Contains(err.Error(), "描述") {
+	if err := ValidateWorkflowName("每日简报"); err == nil || !strings.Contains(err.Error(), "description field") {
 		t.Fatalf("中文名报错应指出「中文写描述」: %v", err)
 	}
 }

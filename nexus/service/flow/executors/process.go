@@ -42,14 +42,14 @@ func (e *ProcessExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proces
 		return failf(nr, flow.ErrCodeConfig,
 			fmt.Sprintf("process node %s: body entry node not found", node.ID))
 	}
-	nr.AddLog("入口节点: " + entryNode.ID)
+	nr.AddLog("entry node: " + entryNode.ID)
 
 	// 创建子 process，隔离子流程变量并区分调试调用栈层级
 	childPID, err := ctx.ProcessManager.NewProcess(processID, nil)
 	if err != nil {
 		return failf(nr, flow.ErrCodeInternal, err.Error())
 	}
-	nr.AddLog("子流程 processID: " + childPID)
+	nr.AddLog("child processID: " + childPID)
 
 	// 执行子节点（depth 传 0 即可，实际深度由调试栈 CurrentDepth 决定）
 	err = execute(entryNode, ctx, childPID, 0)
@@ -57,7 +57,7 @@ func (e *ProcessExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proces
 
 		if isControlSignal(err) {
 			nr.Finish(flow.StatusSuccess, "", "")
-			nr.AddLog("收到控制信号" + err.Error() + "，process 正常结束")
+			nr.AddLog("received control signal " + err.Error() + ", the process finished normally")
 			return err
 		}
 

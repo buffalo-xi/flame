@@ -58,7 +58,7 @@ func StripSecrets(kind Kind, payload map[string]any) (map[string]any, []string) 
 			out["configs"] = map[string]any{}
 			if had > 0 {
 				warnings = append(warnings, warn(
-					"已清空 %d 项配置值：config_fields 声明保留，安装后需在目标租户重新填写", had))
+					"cleared %d config value(s): the config_fields declarations stay, but they have to be filled in again in the target tenant after install", had))
 			}
 		}
 	case KindAgent:
@@ -148,13 +148,13 @@ func stripEnvVars(envVars map[string]any, warnings *[]string) {
 			if s, _ := item["value"].(string); s != "" {
 				item["value"] = ""
 				*warnings = append(*warnings,
-					warn("env_vars.%s 是内联密钥，已清空（安装后需重新填写）", name))
+					warn("env_vars.%s is an inline secret and was cleared (fill it in again after install)", name))
 			}
 		case "global":
 			// 已废弃的类型（全局变量改成节点输入的来源了）：value 仍是变量名、不是值，
 			// 所以不清空 —— 清掉只会让老包连「原本指向谁」都看不出来。
 			*warnings = append(*warnings,
-				warn("env_vars.%s 使用已废弃的类型 global，导入后需改成节点输入变量的全局变量来源", name))
+				warn("env_vars.%s uses the deprecated type global; after import switch it to a global-variable input source", name))
 		}
 	}
 }
@@ -194,7 +194,7 @@ func stripSecretKeys(m map[string]any, prefix string, warnings *[]string) {
 				// 保留但记 warning，让审核的人自己判断里面有没有内联凭据。
 				if containsDeferredRef(s) {
 					*warnings = append(*warnings,
-						warn("%s 含引用（输入变量 / 全局变量），已保留（请确认其中没有内联凭据）", key))
+						warn("%s contains references (input / global variables) and was kept (make sure it holds no inline credential)", key))
 					continue
 				}
 				if s == "" {

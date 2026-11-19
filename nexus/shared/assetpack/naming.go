@@ -16,7 +16,7 @@ const MaxNameLen = 64
 // 名字最终会变成目录名（tenants/<schema>/skills/<name>），宽松的名字等于给存储层留注入面。
 func ValidateName(name string) error {
 	if !paths.ValidName(name) {
-		return fmt.Errorf("名字 %q 不合法：只允许字母、数字与横线，不以横线开头，且不超过 %d 字符",
+		return fmt.Errorf("the name %q is not valid: only letters, digits and dashes, no leading dash, at most %d characters",
 			name, MaxNameLen)
 	}
 	return nil

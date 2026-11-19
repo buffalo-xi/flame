@@ -43,8 +43,8 @@ func rejectLegacyGlobalRefs(nodes []*flow.Node) error {
 		if !ok {
 			continue
 		}
-		return fmt.Errorf("节点 %s 的配置里仍在用 {{ .global_vars.%s }}：全局变量已改为节点输入变量的来源，"+
-			"请在该节点的输入变量里新增一项（来源选「全局变量」），模板改用 {{ .input.<变量名> }}", node.Label(), name)
+		return fmt.Errorf("the config of node %s still uses {{ .global_vars.%s }}: global variables are now only a source of node input "+
+			"variables; add an input variable on that node (source: global variable) and switch the template to {{ .input.<name> }}", node.Label(), name)
 	}
 	return nil
 }
@@ -266,7 +266,7 @@ func ensureSession(execCtx *flow.ExecContext) {
 		execCtx.UserID,
 		"",
 	); err != nil {
-		execCtx.LogError("写入会话记录失败: " + err.Error())
+		execCtx.LogError("failed to write the session record: " + err.Error())
 	}
 }
 
@@ -395,7 +395,7 @@ func persistSessionMemory(execCtx *flow.ExecContext, runErr error) {
 		Error:     errMsg,
 	}
 	if err := sessionrecords.NewRepository().Append(execCtx.Schema, mem, maxN); err != nil {
-		execCtx.LogError("写入会话记忆失败: " + err.Error())
+		execCtx.LogError("failed to write the session memory: " + err.Error())
 	}
 }
 
@@ -424,8 +424,8 @@ func runFlow(execCtx *flow.ExecContext) (err error) {
 	}
 	currentProcess, err := execCtx.ProcessManager.NewProcess("", nil)
 	if err != nil {
-		execCtx.LogError("创建process错误：" + err.Error())
-		return errors.New("创建process错误：" + err.Error())
+		execCtx.LogError("failed to create the process: " + err.Error())
+		return errors.New("failed to create the process: " + err.Error())
 	}
 	err = execute(startNode, execCtx, currentProcess, 0)
 	if err != nil {
@@ -433,12 +433,12 @@ func runFlow(execCtx *flow.ExecContext) (err error) {
 			err = nil // return/exit 信号：正常流程终止
 		} else if errors.Is(err, SignalBreak) {
 			// break 泄漏到顶层说明全程没有 loop 消费它，属于配置错误
-			msg := "break 节点不在任何 loop 内部，属于配置错误"
+			msg := "a break node outside any loop is a config error"
 			execCtx.LogError(msg)
 			err = errors.New(msg)
 		} else if errors.Is(err, SignalContinue) {
 			// continue 泄漏到顶层说明全程没有 loop 消费它，属于配置错误
-			msg := "continue 节点不在任何 loop 内部，属于配置错误"
+			msg := "a continue node outside any loop is a config error"
 			execCtx.LogError(msg)
 			err = errors.New(msg)
 		} else {
@@ -483,10 +483,10 @@ func execute(node *flow.Node, execCtx *flow.ExecContext, processID string, depth
 		// 并发节点：派发到 goroutine + 子 process，主流程不执行、不沿出边继续
 		if concurrency := getConcurrency(currentNode); concurrency != nil {
 			if err := dispatchConcurrent(currentNode, execCtx, processID, concurrency); err != nil {
-				execCtx.LogError(fmt.Sprintf("派发并发节点失败: %s: %v", currentNode.ID, err))
+				execCtx.LogError(fmt.Sprintf("failed to dispatch the concurrent node: %s: %v", currentNode.ID, err))
 				return err
 			}
-			execCtx.LogInfo("派发并发节点: " + currentNode.ID)
+			execCtx.LogInfo("dispatching concurrent node: " + currentNode.ID)
 		} else {
 			err := executeNode(currentNode, execCtx, processID)
 			if err != nil {
@@ -511,7 +511,7 @@ func execute(node *flow.Node, execCtx *flow.ExecContext, processID string, depth
 		// 正常连线造不出多条，所以这里主要拦导入的资产包与直接调 API 保存的 diagram。
 		if len(currentNode.OutEdges) > 1 {
 			return newExecError(flow.ErrCodeConfig, fmt.Sprintf(
-				"节点 %s(%s) 有 %d 条出边，该类型只允许一条；请删除多余的连线",
+				"node %s(%s) has %d outgoing edges; this type allows only one - remove the extra edges",
 				currentNode.ID, currentNode.Type, len(currentNode.OutEdges)))
 		}
 
@@ -666,7 +666,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 		nr := flow.NewNodeResult(node, processID, ctx)
 
 		if recordErr := ctx.RecordNodeExecution(processID, node.ID, nr); recordErr != nil {
-			return failf(nr, flow.ErrCodeInternal, "记录节点执行失败: "+recordErr.Error())
+			return failf(nr, flow.ErrCodeInternal, "failed to record the node run: "+recordErr.Error())
 		}
 
 		// 根据取消类型设置正确的状态和错误码
@@ -682,7 +682,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 	nr := flow.NewNodeResult(node, processID, ctx)
 
 	if err := ctx.RecordNodeExecution(processID, node.ID, nr); err != nil {
-		return failf(nr, flow.ErrCodeInternal, "记录节点执行失败: "+err.Error())
+		return failf(nr, flow.ErrCodeInternal, "failed to record the node run: "+err.Error())
 	}
 
 	executor, exists := GetExecutor(node.Type)
@@ -691,7 +691,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 		// （如 knowledge，前端只为渲染老图保留）。报 internal 会让人以为是服务坏了，
 		// 而这是用户能改的配置问题。
 		return failf(nr, flow.ErrCodeConfig,
-			fmt.Sprintf("节点类型 %q 没有执行器：该类型可能已下线（如 knowledge），请替换该节点后重试", node.Type))
+			fmt.Sprintf("node type %q has no executor: the type may have been retired (for example knowledge); replace the node and try again", node.Type))
 	}
 	currentErr := executor.Execute(node, ctx, processID, nr)
 	if currentErr == nil {
@@ -701,7 +701,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 	// 兜底检查：如果 executor 没有正确设置 nr.Status，这里补充设置
 	if nr.Status == flow.StatusRunning {
 		nr.Finish(flow.StatusFailed, flow.ErrCodeInternal,
-			fmt.Sprintf("节点 %s(%s) 的 executor 未正确设置节点状态: %v", node.Label(), node.ID, currentErr))
+			fmt.Sprintf("the executor of node %s(%s) did not set the node status: %v", node.Label(), node.ID, currentErr))
 	}
 
 	// 控制信号 / ctx 取消 / 内部错误 / 配置错误 / 非 Failed 状态：不走 on_error，直接返回
@@ -713,10 +713,10 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 	// 空 ErrorCodes 表示不校验（容器节点透传子链错误码）；非空才校验
 	caps := executor.Capabilities()
 	if len(caps.ErrorCodes) > 0 && !containsString(caps.ErrorCodes, nr.ErrCode) {
-		nr.AddLogf("警告: errCode %s 不在节点 %s 的能力声明中，降级为 other", nr.ErrCode, node.Type)
+		nr.AddLogf("warning: errCode %s is not declared by node %s, downgraded to other", nr.ErrCode, node.Type)
 		// 把原始码写进文案：否则用户只看到 other，不知道节点本来报的是什么，
 		// 而他们按原始码配的 on_error 一定匹配不上。
-		nr.ErrMsg = fmt.Sprintf("%s (原始错误码 %s)", nr.ErrMsg, nr.ErrCode)
+		nr.ErrMsg = fmt.Sprintf("%s (original error code %s)", nr.ErrMsg, nr.ErrCode)
 		nr.ErrCode = flow.ErrCodeOther
 	}
 
@@ -725,15 +725,15 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 	// 前端面板按 Capabilities.Actions 渲染，后端若照单全收，手写 diagram 就能绕过面板限制
 	// （例如给 intent 配 skip、给 branch 配 retry），声明也就失去意义。
 	if cfg.Retry != nil && !containsAction(caps.Actions, flow.ErrorActionRetry) {
-		nr.AddLogf("警告: 节点 %s 未声明 retry 动作，该配置被忽略", node.Type)
+		nr.AddLogf("warning: node %s does not declare a retry action, ignoring that config", node.Type)
 		cfg.Retry = nil
 	}
 	if cfg.Skip != nil && !containsAction(caps.Actions, flow.ErrorActionSkip) {
-		nr.AddLogf("警告: 节点 %s 未声明 skip 动作，该配置被忽略", node.Type)
+		nr.AddLogf("warning: node %s does not declare a skip action, ignoring that config", node.Type)
 		cfg.Skip = nil
 	}
 	if cfg.Handler != nil && !containsAction(caps.Actions, flow.ErrorActionHandler) {
-		nr.AddLogf("警告: 节点 %s 未声明 handler 动作，该配置被忽略", node.Type)
+		nr.AddLogf("warning: node %s does not declare a handler action, ignoring that config", node.Type)
 		cfg.Handler = nil
 	}
 	// 节点未声明 HasPost 时，忽略配置中的 post，保证前后端语义一致
@@ -758,7 +758,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 				retryCount++
 				if cfg.Retry.DelayMs > 0 {
 					// 记在当前这次尝试上（首次或上一次重试），不要永远记在第一条记录里
-					activeNR.AddLogf("第 %d 次重试，%dms 后执行", retryCount, cfg.Retry.DelayMs)
+					activeNR.AddLogf("retry #%d, running in %dms", retryCount, cfg.Retry.DelayMs)
 					select {
 					case <-time.After(time.Duration(cfg.Retry.DelayMs) * time.Millisecond):
 					case <-ctx.StdCtx.Done():
@@ -770,7 +770,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 				retryNR.RetryCount = retryCount
 
 				if err := ctx.RecordNodeExecution(processID, node.ID, retryNR); err != nil {
-					retryNR.Finish(flow.StatusFailed, flow.ErrCodeInternal, "记录节点执行失败: "+err.Error())
+					retryNR.Finish(flow.StatusFailed, flow.ErrCodeInternal, "failed to record the node run: "+err.Error())
 					return newExecError(retryNR.ErrCode, retryNR.ErrMsg)
 				}
 
@@ -788,7 +788,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 
 				// 校验 errCode 合法性（与首次执行一致）
 				if len(caps.ErrorCodes) > 0 && !containsString(caps.ErrorCodes, retryNR.ErrCode) {
-					retryNR.AddLogf("警告: 重试 errCode %s 不在节点 %s 的能力声明中，降级为 other", retryNR.ErrCode, node.Type)
+					retryNR.AddLogf("warning: retry errCode %s is not declared by node %s, downgraded to other", retryNR.ErrCode, node.Type)
 					retryNR.ErrCode = flow.ErrCodeOther
 				}
 
@@ -815,7 +815,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 		if cfg.Handler != nil && matchCodes(cfg.Handler.Codes, currentCode, currentMsg, cfg.Handler.Patterns) {
 			action, handlerErr := runHandlerScript(ctx, cfg.Handler, node, activeNR)
 			if handlerErr != nil {
-				activeNR.AddLogf("handler 脚本执行失败: %v", handlerErr)
+				activeNR.AddLogf("failed to run the handler script: %v", handlerErr)
 				//applyPost(activeNR, cfg.Post)
 				return newExecError(activeNR.ErrCode, activeNR.ErrMsg)
 			}
@@ -1069,11 +1069,11 @@ func applyPost(nr *flow.NodeResult, post *PostConfig) {
 		inputs["retry_count"] = nr.RetryCount
 		result, err := ExecuteScript(nr.Ctx.StdCtx, post.Handler.Lang, post.Handler.Script, inputs, nr, 10)
 		if err != nil {
-			nr.AddLogf("执行 post 处理脚本失败: %v", err)
+			nr.AddLogf("failed to run the post-processing script: %v", err)
 			nr.PostError = err.Error()
 		} else if result != nil {
 			if aerr := applyScriptResult(nr, result); aerr != nil {
-				nr.AddLogf("post 处理脚本返回值写入失败: %v", aerr)
+				nr.AddLogf("failed to write the post-processing script result: %v", aerr)
 				nr.PostError = aerr.Error()
 			}
 		}

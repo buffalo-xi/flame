@@ -33,11 +33,11 @@ const WorkflowFileName = "FLOW.json"
 func ValidateWorkflowName(name string) error {
 	n := strings.TrimSpace(name)
 	if n == "" {
-		return errors.New("工作流名为空")
+		return errors.New("the workflow name is empty")
 	}
 	if !paths.ValidName(n) {
-		return fmt.Errorf("工作流名 %q 不合法：只能用字母、数字与横线（不能以横线开头，≤%d）。"+
-			"它会作为对外工具名 local__<name> 暴露给模型，中文说明请写进「描述」", n, MaxNameLen)
+		return fmt.Errorf("the workflow name %q is not valid: only letters, digits and dashes, no leading dash, at most %d characters. "+
+			"It is exposed to the model as the tool name local__<name>, so put the human-readable description in the description field", n, MaxNameLen)
 	}
 	return nil
 }

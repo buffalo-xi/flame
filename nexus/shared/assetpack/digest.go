@@ -47,15 +47,15 @@ func StampManifest(m *Manifest, payload []byte) error {
 func digestOf(m Manifest, payload []byte) (string, error) {
 	var v any
 	if err := json.Unmarshal(payload, &v); err != nil {
-		return "", fmt.Errorf("payload 不是合法 JSON: %w", err)
+		return "", fmt.Errorf("payload is not valid JSON: %w", err)
 	}
 	canonical, err := json.Marshal(v)
 	if err != nil {
-		return "", fmt.Errorf("payload 归一化失败: %w", err)
+		return "", fmt.Errorf("failed to normalise the payload: %w", err)
 	}
 	deps, err := json.Marshal(normalizeDeps(m.Deps))
 	if err != nil {
-		return "", fmt.Errorf("依赖声明序列化失败: %w", err)
+		return "", fmt.Errorf("failed to serialise the dependency declarations: %w", err)
 	}
 
 	h := sha256.New()

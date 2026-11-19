@@ -64,18 +64,18 @@ func NewRegistry(host *Host, builtinNames []string) *Registry {
 // 部署时忘建目录不该让整个 nexus 起不来。
 func EnsureDir(dir string) error {
 	if strings.TrimSpace(dir) == "" {
-		return fmt.Errorf("插件目录为空")
+		return fmt.Errorf("the plugin directory is empty")
 	}
 	if fi, err := os.Stat(dir); err == nil {
 		if !fi.IsDir() {
-			return fmt.Errorf("插件目录不是目录：%s", dir)
+			return fmt.Errorf("the plugin path is not a directory: %s", dir)
 		}
 		return nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("创建插件目录失败 %s: %w", dir, err)
+		return fmt.Errorf("failed to create the plugin directory %s: %w", dir, err)
 	}
-	xlog.Info("插件目录不存在，已创建空目录：%s", dir)
+	xlog.Info("the plugin directory did not exist; created an empty one: %s", dir)
 	return nil
 }
 
@@ -98,13 +98,13 @@ func (r *Registry) Refresh(ctx context.Context, force bool) error {
 		r.mu.Lock()
 		r.snap.Err = err
 		r.mu.Unlock()
-		xlog.Error("插件清单扫描失败 dir=%s: %v", r.host.Dir, err)
+		xlog.Error("plugin manifest scan failed dir=%s: %v", r.host.Dir, err)
 		return err
 	}
 
 	tools, errs := r.validate(res)
 	for _, e := range errs {
-		xlog.Error("插件清单问题 %s: %s", e.Path, e.Error)
+		xlog.Error("plugin manifest issue %s: %s", e.Path, e.Error)
 	}
 
 	r.mu.Lock()
@@ -112,7 +112,7 @@ func (r *Registry) Refresh(ctx context.Context, force bool) error {
 	r.sig = sig
 	r.mu.Unlock()
 
-	xlog.Info("插件清单已刷新 dir=%s tools=%d errors=%d", r.host.Dir, len(tools), len(errs))
+	xlog.Info("plugin manifests refreshed dir=%s tools=%d errors=%d", r.host.Dir, len(tools), len(errs))
 	return nil
 }
 
@@ -136,16 +136,16 @@ func (r *Registry) validate(res *ListResult) ([]Manifest, []ScanError) {
 		case !SupportedKinds[m.Kind]:
 			errs = append(errs, ScanError{
 				Path:  path,
-				Error: fmt.Sprintf("不支持的插件类型 %q（当前只支持 tools），已跳过", m.Kind),
+				Error: fmt.Sprintf("unsupported plugin kind %q (only tools is supported), skipped", m.Kind),
 			})
 			continue
 		case name == "":
-			errs = append(errs, ScanError{Path: path, Error: "工具名为空，已跳过"})
+			errs = append(errs, ScanError{Path: path, Error: "empty tool name, skipped"})
 			continue
 		case r.builtin[strings.ToLower(name)]:
 			errs = append(errs, ScanError{
 				Path:  path,
-				Error: fmt.Sprintf("工具名 %q 与内置工具重名，已跳过（请给插件改名）", name),
+				Error: fmt.Sprintf("tool name %q clashes with a builtin tool, skipped (rename the plugin)", name),
 			})
 			continue
 		}
@@ -153,7 +153,7 @@ func (r *Registry) validate(res *ListResult) ([]Manifest, []ScanError) {
 		if prev, dup := seen[key]; dup {
 			errs = append(errs, ScanError{
 				Path:  path,
-				Error: fmt.Sprintf("工具名 %q 与 %s 重复，已跳过（工具名必须全局唯一）", name, prev),
+				Error: fmt.Sprintf("tool name %q duplicates %s, skipped (tool names must be globally unique)", name, prev),
 			})
 			continue
 		}

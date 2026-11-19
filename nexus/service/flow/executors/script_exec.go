@@ -36,8 +36,8 @@ type capabilityError struct{ capability string }
 func (e *capabilityError) Error() string {
 	// 流程节点报错属于执行层，用 ShortLabel：不把「工作流 code 节点 / 分支 / binding」
 	// 这类场景枚举塞进报错（见 capability.go 的 Label 注释）。
-	return "平台未给本租户开通能力 " + e.capability +
-		"（" + capability.ShortLabel(e.capability) + "），需平台管理员在「插件与能力」中开通"
+	return "the platform has not granted capability " + e.capability +
+		" (" + capability.ShortLabel(e.capability) + ") to this tenant; a platform administrator has to enable it under Plugins & capabilities"
 }
 
 // ensureCodeCapability 工作流 code 节点的平台能力准入。
@@ -246,13 +246,13 @@ func ExecuteScript(ctx context.Context, lang, scriptTxt string,
 		// 错误时的完整 stderr（含 traceback）也进节点日志，不进 agent 上下文。
 		var se *code.Error
 		if errors.As(err, &se) && se.Logs != "" {
-			nr.AddLogf("脚本错误输出:\n%s", se.Logs)
+			nr.AddLogf("script stderr:\n%s", se.Logs)
 		}
 		return nil, err
 	}
 	// print 输出进节点日志；机器要的数据仍走 return（r.Value）。
 	if r != nil && r.Logs != "" {
-		nr.AddLogf("脚本输出:\n%s", r.Logs)
+		nr.AddLogf("script output:\n%s", r.Logs)
 	}
 	return r.Value, nil
 }
@@ -306,13 +306,13 @@ func targetDecls(nr *flow.NodeResult) map[string]bool {
 // checkDeclConflict 三份声明的变量名必须两两不相交。
 func checkDeclConflict(outs, targets, locals map[string]bool) error {
 	if c := intersect(outs, targets); len(c) > 0 {
-		return fmt.Errorf("变量同时声明在 outputs 和 targets: %v", c)
+		return fmt.Errorf("the variable is declared in both outputs and targets: %v", c)
 	}
 	if c := intersect(outs, locals); len(c) > 0 {
-		return fmt.Errorf("变量同时声明在 outputs 和 locals: %v", c)
+		return fmt.Errorf("the variable is declared in both outputs and locals: %v", c)
 	}
 	if c := intersect(targets, locals); len(c) > 0 {
-		return fmt.Errorf("变量同时声明在 targets 和 locals: %v", c)
+		return fmt.Errorf("the variable is declared in both targets and locals: %v", c)
 	}
 	return nil
 }
@@ -334,7 +334,7 @@ func intersect(a, b map[string]bool) []string {
 func applyScriptResult(nr *flow.NodeResult, result any) error {
 	m, ok := result.(map[string]any)
 	if !ok {
-		return fmt.Errorf("脚本须返回 map，得到 %T", result)
+		return fmt.Errorf("the script must return a map, got %T", result)
 	}
 	outs, targets, locals := outputDecls(nr), targetDecls(nr), localDecls(nr)
 	if err := checkDeclConflict(outs, targets, locals); err != nil {
@@ -356,7 +356,7 @@ func applyScriptResult(nr *flow.NodeResult, result any) error {
 				return err
 			}
 		default:
-			return fmt.Errorf("脚本返回了未声明的变量: %s", key)
+			return fmt.Errorf("the script returned an undeclared variable: %s", key)
 		}
 	}
 	return nil
@@ -398,13 +398,13 @@ func applyTargetVar(nr *flow.NodeResult, path string, value any) error {
 func applyHandlerAppend(nr *flow.NodeResult, result any, deny map[string]struct{}) error {
 	m, ok := result.(map[string]any)
 	if !ok {
-		return fmt.Errorf("handler 脚本须返回 map，得到 %T", result)
+		return fmt.Errorf("the handler script must return a map, got %T", result)
 	}
 	for k, v := range m {
 		if _, fixed := deny[k]; fixed {
 			// 逐帧调用会反复命中同一条，用 WarnOnce 收成一条，避免刷屏。
 			nr.WarnOnce("handler-fixed-output:"+k,
-				"handler 返回了固定输出变量 %s，已忽略（该变量由节点自动写入，脚本只能写自定义变量）", k)
+				"the handler returned the fixed output variable %s, ignored (the node writes it automatically; scripts may only write custom variables)", k)
 			continue
 		}
 		if err := nr.AppendOutputVarWithFire(k, v); err != nil {

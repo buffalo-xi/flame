@@ -78,7 +78,7 @@ func (h *Host) List(ctx context.Context) (*ListResult, error) {
 func (h *Host) Invoke(ctx context.Context, tool, impl string, payload *InvokePayload) (any, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, &CallError{Code: CodeConfig, Message: fmt.Sprintf("序列化调用参数失败: %v", err)}
+		return nil, &CallError{Code: CodeConfig, Message: fmt.Sprintf("failed to serialise the call arguments: %v", err)}
 	}
 	out, stderr, err := h.run(ctx, body,
 		"invoke", "--dir", h.Dir, "--tool", tool, "--impl", impl)
@@ -103,7 +103,7 @@ func (h *Host) Invoke(ctx context.Context, tool, impl string, payload *InvokePay
 		return nil, &CallError{Code: normalizeCode(res.Error.Code), Message: res.Error.Message}
 	}
 	if !res.OK {
-		return nil, &CallError{Code: CodeOther, Message: "插件返回 ok=false 但没带错误信息"}
+		return nil, &CallError{Code: CodeOther, Message: "the plugin returned ok=false without an error message"}
 	}
 	return res.Result, nil
 }
@@ -139,15 +139,15 @@ func (h *Host) run(ctx context.Context, stdin []byte, args ...string) ([]byte, s
 		if errors.Is(cctx.Err(), context.DeadlineExceeded) {
 			return nil, stderr, &CallError{
 				Code:    CodeNetwork,
-				Message: fmt.Sprintf("插件调用超时（%s）", h.timeout()),
+				Message: fmt.Sprintf("the plugin call timed out (%s)", h.timeout()),
 			}
 		}
 		if errors.Is(cctx.Err(), context.Canceled) {
-			return nil, stderr, &CallError{Code: CodeNetwork, Message: "插件调用被取消"}
+			return nil, stderr, &CallError{Code: CodeNetwork, Message: "the plugin call was cancelled"}
 		}
 		return nil, stderr, &CallError{
 			Code:    CodeOther,
-			Message: fmt.Sprintf("插件宿主执行失败: %v", err),
+			Message: fmt.Sprintf("the plugin host failed: %v", err),
 		}
 	}
 	return outW.Bytes(), stderr, nil
