@@ -61,6 +61,19 @@ or `hide`.
 Scope of the rule: the **commit message** only. Go source comments and internal error strings stay Chinese (see above), and
 history is not rewritten — commits made before this rule keep their original language.
 
+## Documentation is English-primary, with a Chinese mirror
+
+`README.md` is the English primary and `README.zh.md` the Chinese mirror; the same pattern applies to technical documents
+under `nexus/docs/`: the primary file is `<name>.md` (English) and the Chinese mirror is `<name>.zh.md` in the same
+directory. Both versions carry a language switch on line 3 (`[中文](<name>.zh.md) | English` / `中文 | [English](<name>.md)`)
+and both `README` files link to them.
+
+English is the source: write the English version first, then align the Chinese mirror. Editing one version obliges you to
+update the other in the same commit — a half-updated pair is worse than a single language.
+
+Documents not yet migrated (`terminology.md`, `sandbox-design.md`, `workspace-layout-and-supervisor-power.md`,
+`i18n-plan.md`, `error-codes.md`) stay Chinese until they are translated; do not half-translate a file in place.
+
 ## Module map
 
 Four Go modules wired together with `replace`, no `go.work`:

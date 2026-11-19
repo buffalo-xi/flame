@@ -161,6 +161,7 @@ desktop/          Vue 3 admin console
 - `nexus/docs/sandbox-design.md` — sandbox isolation design and the three execution channels
 - `nexus/docs/workspace-layout-and-supervisor-power.md` — tenant workspace layout
 - `nexus/docs/design-highlights.md` — design highlights: call-chain recursion, multi-tenant quotas, endpoint model
+  ([中文](nexus/docs/design-highlights.zh.md))
 - `nexus/docs/i18n-plan.md` — the layered bilingual plan, its costs and pitfalls
 - `nexus/docs/error-codes.md` — business error-code conventions (a prerequisite for a bilingual UI)
 - `AGENTS.md` — module map and cross-domain ground rules

@@ -1,5 +1,7 @@
 # Design highlights
 
+[中文](design-highlights.zh.md) | English
+
 This document is only about **why it is designed this way**, not how to use it. Every claim is followed by where it lives in
 the code, so it can be checked.
 

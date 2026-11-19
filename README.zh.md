@@ -150,7 +150,7 @@ desktop/          Vue 3 管理台
 - `nexus/docs/terminology.md` — 术语与动作词约定（改代码前建议先读）
 - `nexus/docs/sandbox-design.md` — 沙箱隔离设计与三条执行通道
 - `nexus/docs/workspace-layout-and-supervisor-power.md` — 租户工作区布局
-- `nexus/docs/design-highlights.md` — 设计要点：调用链防环、多租户配额、端点模型
+- `nexus/docs/design-highlights.md` — 设计要点：调用链防环、多租户配额、端点模型（[中文版](nexus/docs/design-highlights.zh.md)）
 - `nexus/docs/i18n-plan.md` — 中英双语的分层方案、成本与坑位
 - `nexus/docs/error-codes.md` — 业务错误码规范（UI 双语的前置条件）
 - `AGENTS.md` — 模块地图与跨领域红线
