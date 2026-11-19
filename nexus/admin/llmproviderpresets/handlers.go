@@ -14,7 +14,7 @@ var repo = repository.NewRepository()
 func ListLLMProviderPresets(c *gin.Context) {
 	presets, err := repo.ListAll()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 

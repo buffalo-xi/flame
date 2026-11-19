@@ -20,31 +20,38 @@ import (
 )
 
 // ============================================================================
-// 引用面检查：删掉一个全局变量之前，先扫出还有哪些地方在引用它。
+// Reference-surface check: before deleting a global variable, find out what
+// still references it.
 //
-// 为什么值得单独扫一遍：变量被删后，引用它的节点/文档要到运行期才失败，
-// 而那可能是几天后的一次定时任务。删的那一刻是唯一能把「你会坏掉什么」
-// 摆在人面前的时机。
+// Why a dedicated scan is worth it: once the variable is gone, the nodes and
+// documents that reference it only fail at run time, possibly days later in a
+// scheduled task. The moment of deletion is the only chance to put "what you
+// are about to break" in front of a person.
 //
-// 扫的两半：
-//   1) 库里的结构化引用 —— flows.diagram / flows.env_vars / agents.config / skills.metadata；
-//   2) 磁盘上的文档引用 —— AGENT.md / SKILL.md 里的 ${global_vars.X}。
-// 只扫库会得出「没人用，放心删」的假结论，因为文档引用根本不在库里。
+// The two halves of the scan:
+//   1) structured references in the database - flows.diagram / flows.env_vars /
+//      agents.config / skills.metadata;
+//   2) document references on disk - ${global_vars.X} inside AGENT.md / SKILL.md.
+// Scanning only the database yields the false conclusion "nobody uses it, safe to
+// delete", because document references are not in the database at all.
 //
-// 文档与智能体配置按子串 "global_vars.<名字>" 扫：${...} 与 {{.global_vars.X}} 都含这一段，
-// 不必分别写正则。工作流不能这么扫 —— 它的现行写法（节点输入的 global 来源）里没有这段子串，
-// 必须解析 diagram 看 inputs，否则会得出「没人用，放心删」的假结论。
+// Documents and agent configs are scanned for the substring "global_vars.<name>":
+// both ${...} and {{.global_vars.X}} contain it, so no separate regex is needed.
+// Flows cannot be scanned that way - their current form (a node input's global
+// source) does not contain that substring, so the diagram has to be parsed and its
+// inputs inspected, otherwise the same false conclusion comes back.
 // ============================================================================
 
-// UsageHit 一处引用。
+// UsageHit is one reference site.
 type UsageHit struct {
 	Kind string `json:"kind"` // flow / agent / skill / agent_doc / skill_doc
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name"`
 }
 
-// maxDocScanBytes 单个文档只读这么多。文档是给人看的说明，不是数据文件；
-// 超过这个量的既不该是 .md，也不值得为一次删除检查全读进内存。
+// maxDocScanBytes bounds how much of a single document is read. Documents are prose for
+// humans, not data files; anything larger is not a .md worth loading into memory for a
+// deletion check.
 const maxDocScanBytes = 1 << 20
 
 var (
@@ -60,45 +67,47 @@ func usageStorage() (storage.Storage, error) {
 	return usageStore, usageStoreErr
 }
 
-// ScanUsage 扫出引用某全局变量的地方。
+// ScanUsage finds the places that reference a global variable.
 //
-// 出错就整体失败（不返回「扫到一半」的结果）：调用方要靠它决定「能不能删」，
-// 一次不完整的扫描给出的「没有引用」比不扫更危险。
+// Any error fails the whole call (no partial result): the caller relies on it to decide
+// "can this be deleted", and an incomplete scan's "no references" is more dangerous than
+// no scan at all.
 func ScanUsage(schema, name string) ([]UsageHit, error) {
 	if schema == "" || name == "" {
-		return nil, fmt.Errorf("缺少租户或变量名")
+		return nil, fmt.Errorf("missing tenant or variable name")
 	}
 	needle := "global_vars." + name
 
 	hits := make([]UsageHit, 0, 4)
 
-	// 1) 工作流：节点输入变量的 global 来源（结构化）与文本里的旧写法。
-	//    全局变量改成输入来源之后，库里已经不含 "global_vars.<名字>" 这段子串，
-	//    只按子串扫会得出「没人用，放心删」的假结论 —— 必须解析 diagram 看 inputs。
+	// 1) Flows: the global source of a node input variable (structured) and the legacy text form.
+	//    Since global variables became an input source, the database no longer contains the
+	//    substring "global_vars.<name>"; a substring-only scan would conclude "nobody uses it,
+	//    safe to delete" - the diagram must be parsed and its inputs inspected.
 	flowHits, err := scanFlows(schema, name, needle)
 	if err != nil {
-		return nil, fmt.Errorf("扫描工作流失败: %w", err)
+		return nil, fmt.Errorf("failed to scan flows: %w", err)
 	}
 	hits = append(hits, flowHits...)
 
-	// 2) 智能体：config 里可能有 agent 级的工具/模型配置
+	// 2) Agents: config may hold agent-level tool or model settings
 	agentHits, err := scanRows(schema, "agent", `SELECT id::text, name FROM `+schema+`.agents
 		WHERE strpos(COALESCE(config::text, ''), $1) > 0`, needle)
 	if err != nil {
-		return nil, fmt.Errorf("扫描智能体失败: %w", err)
+		return nil, fmt.Errorf("failed to scan agents: %w", err)
 	}
 	hits = append(hits, agentHits...)
 
-	// 3) 技能：描述与元数据
+	// 3) Skills: description and metadata
 	skillHits, err := scanRows(schema, "skill", `SELECT id::text, name FROM `+schema+`.skills
 		WHERE strpos(COALESCE(metadata::text, ''), $1) > 0
 		   OR strpos(COALESCE(description, ''), $1) > 0`, needle)
 	if err != nil {
-		return nil, fmt.Errorf("扫描技能失败: %w", err)
+		return nil, fmt.Errorf("failed to scan skills: %w", err)
 	}
 	hits = append(hits, skillHits...)
 
-	// 4) 文档：AGENT.md / SKILL.md（含 agent 私有技能）
+	// 4) Documents: AGENT.md / SKILL.md (including agent-private skills)
 	docHits, err := scanDocs(schema, needle)
 	if err != nil {
 		return nil, err
@@ -108,10 +117,12 @@ func ScanUsage(schema, name string) ([]UsageHit, error) {
 	return hits, nil
 }
 
-// scanFlows 扫工作流：输入变量的 global 来源（现行写法）+ 文本里的旧写法。
+// scanFlows scans flows: the global source of input variables (current form) plus the legacy
+// text form.
 //
-// 先用 SQL 粗筛（含 "global" 或含旧写法子串的行），再在 Go 侧解析 diagram 认真判：
-// 把全部 diagram 拉出来解析的代价随流程数线性增长，粗筛能挡掉绝大多数行。
+// It pre-filters in SQL (rows containing "global" or the legacy substring) and then parses the
+// diagrams in Go to decide: loading and parsing every diagram costs time linear in the number
+// of flows, and the filter removes the vast majority of rows.
 func scanFlows(schema, name, needle string) ([]UsageHit, error) {
 	rows, err := db.DB.Query(`SELECT id::text, name, COALESCE(diagram::text, '') FROM `+schema+`.flows
 		WHERE strpos(COALESCE(diagram::text, ''), '"global"') > 0
@@ -134,10 +145,11 @@ func scanFlows(schema, name, needle string) ([]UsageHit, error) {
 	return out, rows.Err()
 }
 
-// flowRefsGlobalVar 判断一份 diagram 是否引用了名为 name 的全局变量。
+// flowRefsGlobalVar reports whether a diagram references the global variable called name.
 //
-// 两条判定：输入变量的 global 来源（现行），以及文本里残留的旧写法
-// {{.global_vars.NAME}} —— 旧写法已经跑不起来了，但删掉变量同样会让它更坏。
+// Two checks: the global source of an input variable (current form), and the legacy
+// {{.global_vars.NAME}} text still left in the diagram - that form no longer runs, but
+// deleting the variable would still make it worse.
 func flowRefsGlobalVar(diagram, name string) bool {
 	if diagram == "" {
 		return false
@@ -178,18 +190,19 @@ func scanRows(schema, kind, query, needle string) ([]UsageHit, error) {
 	return out, rows.Err()
 }
 
-// scanDocs 走存储抽象扫租户定义域里的 .md。
+// scanDocs walks the tenant definition domain through the storage abstraction looking for .md files.
 //
-// 只扫 agents/ 与 skills/ 两棵树：versions/ 下是历史快照，引用它不等于「现在还在用」，
-// 把它算进来会让删除提示永远带着一堆早就发布过的旧副本。
+// Only the agents/ and skills/ trees are scanned: versions/ holds historical snapshots, and
+// referencing a snapshot does not mean "still in use"; counting them would attach a pile of
+// long-released old copies to every deletion prompt forever.
 func scanDocs(schema, needle string) ([]UsageHit, error) {
 	st, err := usageStorage()
 	if err != nil {
-		return nil, fmt.Errorf("打开存储失败，文档引用未纳入检查: %w", err)
+		return nil, fmt.Errorf("failed to open storage, document references were not checked: %w", err)
 	}
 	walker, ok := st.(storage.Walker)
 	if !ok {
-		return nil, fmt.Errorf("当前存储后端不支持遍历，文档里的引用未纳入检查")
+		return nil, fmt.Errorf("the current storage backend does not support walking, document references were not checked")
 	}
 
 	ctx := context.Background()
@@ -206,7 +219,7 @@ func scanDocs(schema, needle string) ([]UsageHit, error) {
 			}
 			data, rerr := st.ReadFile(ctx, rel)
 			if rerr != nil {
-				return nil // 遍历到读之间被删掉了：跳过，别让一次删除检查因此失败
+				return nil // deleted between the walk and the read: skip it rather than failing a deletion check
 			}
 			if strings.Contains(string(data), needle) {
 				out = append(out, UsageHit{Kind: docKind(rel), Name: rel})
@@ -214,7 +227,7 @@ func scanDocs(schema, needle string) ([]UsageHit, error) {
 			return nil
 		})
 		if werr != nil {
-			return nil, fmt.Errorf("扫描文档失败: %w", werr)
+			return nil, fmt.Errorf("failed to scan documents: %w", werr)
 		}
 	}
 	return out, nil
@@ -227,7 +240,8 @@ func docKind(rel string) string {
 	return "skill_doc"
 }
 
-// GlobalVarUsage 查询某个全局变量的引用面（删除前的确认框用它）。
+// GlobalVarUsage reports the reference surface of a global variable (used by the confirmation
+// dialog before deletion).
 func GlobalVarUsage(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
@@ -235,45 +249,46 @@ func GlobalVarUsage(c *gin.Context) {
 	}
 	name := strings.TrimSpace(c.Param("name"))
 	if name == "" {
-		xhttp.ErrCode(c, "globalvar.name_required", nil, "变量名不能为空", "")
+		xhttp.ErrCode(c, "globalvar.name_required", nil, "the variable name cannot be empty", "")
 		return
 	}
 
 	hits, err := ScanUsage(info.Schema, name)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"items": hits, "total": len(hits)}, "")
 }
 
-// describeHits 把引用面压成一句话：变量名 + 前几处位置，避免错误信息过长。
+// describeHits squeezes the reference surface into one sentence: the variable name plus the
+// first few positions, so the error message stays short.
 func describeHits(hits []UsageHit) string {
 	const limit = 5
 	parts := make([]string, 0, limit)
 	for i, h := range hits {
 		if i >= limit {
-			parts = append(parts, fmt.Sprintf("…等 %d 处", len(hits)))
+			parts = append(parts, fmt.Sprintf("... and %d more", len(hits)))
 			break
 		}
 		parts = append(parts, h.KindLabel()+h.Name)
 	}
-	return strings.Join(parts, "、")
+	return strings.Join(parts, ", ")
 }
 
-// KindLabel 引用类型的中文说法（出错信息里直接用）。
+// KindLabel is the reference-kind wording used directly in error messages.
 func (h UsageHit) KindLabel() string {
 	switch h.Kind {
 	case "flow":
-		return "工作流 "
+		return "flow "
 	case "agent":
-		return "智能体 "
+		return "agent "
 	case "skill":
-		return "技能 "
+		return "skill "
 	case "agent_doc":
-		return "文档 "
+		return "doc "
 	case "skill_doc":
-		return "文档 "
+		return "doc "
 	default:
 		return ""
 	}

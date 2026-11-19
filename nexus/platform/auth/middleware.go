@@ -9,10 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// contextKey 平台身份在 gin.Context 中的键（与租户侧的 "authInfo" 区分开）。
+// contextKey is the gin.Context key for the platform identity (kept apart from the tenant side's "authInfo").
 const contextKey = "platformAuthInfo"
 
-// FromContext 取出当前请求的平台身份（未认证时 ok=false）。
+// FromContext reads the current request's platform identity (ok=false when unauthenticated).
 func FromContext(c *gin.Context) (*PlatformAuthInfo, bool) {
 	v, exist := c.Get(contextKey)
 	if !exist {
@@ -22,7 +22,7 @@ func FromContext(c *gin.Context) (*PlatformAuthInfo, bool) {
 	return info, ok
 }
 
-// bearerToken 从 Authorization: Bearer <token> 中取 token。
+// bearerToken extracts the token from Authorization: Bearer <token>.
 func bearerToken(c *gin.Context) string {
 	h := c.GetHeader("Authorization")
 	const prefix = "Bearer "
@@ -32,19 +32,19 @@ func bearerToken(c *gin.Context) string {
 	return ""
 }
 
-// PlatformAuthMiddleware 平台身份校验：必须是 scope=platform 的有效 token。
-// 失败返回 401（传输层语义，与业务错误码 400 区分）。
+// PlatformAuthMiddleware validates the platform identity: a valid token with scope=platform is required.
+// Failure returns 401 (transport-level semantics, kept apart from the 400 business error codes).
 func PlatformAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := bearerToken(c)
 		if token == "" {
-			xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台访问令牌")
+			xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform access token")
 			c.Abort()
 			return
 		}
 		info, err := ParseToken(token)
 		if err != nil {
-			xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "平台访问令牌无效或已过期")
+			xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "the platform access token is invalid or expired")
 			c.Abort()
 			return
 		}
@@ -53,18 +53,18 @@ func PlatformAuthMiddleware() gin.HandlerFunc {
 	}
 }
 
-// RequirePlatformAdmin 要求管理员身份（/platform/tenants*、/platform/users* 用）。
-// 失败返回 403 —— 身份是有效的平台身份，但权限不足。
+// RequirePlatformAdmin requires the administrator role (used by /platform/tenants* and /platform/users*).
+// Failure returns 403 - the identity is a valid platform identity, but lacks permission.
 func RequirePlatformAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		info, ok := FromContext(c)
 		if !ok {
-			xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+			xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 			c.Abort()
 			return
 		}
 		if !info.IsAdmin() {
-			xhttp.SendErrorResponse(c, http.StatusForbidden, "forbidden", "需要平台管理员权限")
+			xhttp.SendErrorResponse(c, http.StatusForbidden, "forbidden", "platform administrator permission is required")
 			c.Abort()
 			return
 		}

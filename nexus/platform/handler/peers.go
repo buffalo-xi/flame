@@ -25,20 +25,23 @@ import (
 	"github.com/lib/pq"
 )
 
-// 跨服务器市场的两侧配置（仅平台管理员）：
+// Both sides of the cross-server market configuration (platform administrators only):
 //
-//	/platform/peers*        —— 我去拉的那一端（地址 + 出站 token）
-//	/platform/market-tokens* —— 允许谁来拉我（只存 sha256，明文只在创建时回一次）
+//	/platform/peers*         - the end I pull from (address plus outbound token)
+//	/platform/market-tokens* - who may pull from me (only the sha256 is stored; the plain token is returned once at creation)
 //
-// 拉取流程刻意分两步：先看目录（PeerCatalog），再逐条导入（ImportFromPeer）。
-// 批量拉取会把「对面发了一堆东西」变成一个不可撤销的动作，而逐个导入每次都能看清 warnings。
+// Pulling is deliberately two steps: see the catalog first (PeerCatalog), then import one by one
+// (ImportFromPeer).
+// A bulk pull turns "the other side sent a pile of things" into one irreversible action, while
+// importing one by one always shows the warnings of each item.
 
 const (
 	peerHTTPTimeout = 30 * time.Second
 
-	// peerCatalogMax 目录响应体上限（与租户侧 remoteCatalogMax 同量级）。
-	// 必须配「多读一个字节再判超限」：io.ReadAll(io.LimitReader(...)) 读满上限就 EOF、
-	// err 仍为 nil，于是半截 JSON 进 Unmarshal，把「目录太大」说成「响应不合法」。
+	// peerCatalogMax caps the catalog response body (same order of magnitude as remoteCatalogMax on the tenant side).
+	// It must be paired with "read one byte past the limit": io.ReadAll(io.LimitReader(...)) returns EOF with a nil
+	// error once the limit is reached, so a truncated JSON would reach Unmarshal and report "catalog too large" as
+	// "invalid response".
 	peerCatalogMax = 4 << 20
 )
 
@@ -46,29 +49,31 @@ var peerClient = &http.Client{Timeout: peerHTTPTimeout}
 
 var (
 	tokenNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	// schemaNameRe 与 platform.tenants 的 CHECK 同口径（对端可见名单里存的是租户 schema）
+	// schemaNameRe matches the CHECK on platform.tenants (the peer's visible list holds tenant schemas)
 	schemaNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{1,31}$`)
-	// originRe 来源站点名（进 varchar(64)，同时参与唯一键，格式先收一道）
+	// originRe is the origin site name (goes into varchar(64) and takes part in a unique key, so the format is enforced first)
 	originRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 )
 
-// schemaErrMsg 把「表/列缺失」翻成一句能照做的话。
+// schemaErrMsg turns "missing table/column" into a sentence the reader can act on.
 //
-// platform 下的建表/迁移脚本是手工执行的（见 platform/README.md），表结构落后于代码时
-// 报的是 pq 原文（column "visible_to" does not exist），第一次部署的人只能去翻文档。
-// 42703 = undefined_column，42P01 = undefined_table。
+// The DDL and migration scripts under platform are run by hand (see platform/README.md); when the table
+// schema is behind the code, the raw pq text (column "visible_to" does not exist) is what comes back, and a
+// first-time deployer has nothing to go on but the docs.
+// 42703 = undefined_column, 42P01 = undefined_table.
 func schemaErrMsg(prefix, script string, err error) string {
 	if err == nil {
 		return prefix
 	}
 	var pe *pq.Error
 	if errors.As(err, &pe) && (pe.Code == "42P01" || pe.Code == "42703") {
-		return prefix + ": " + err.Error() + "（表结构落后于代码，请执行 nexus/platform/sql/" + script + "）"
+		return prefix + ": " + err.Error() + " (the schema is behind the code; run nexus/platform/sql/" + script + ")"
 	}
 	return prefix + ": " + err.Error()
 }
 
-// peerView 对端视图：不回 token 明文（列表刷新一次漏一次），只回「有没有配」。
+// peerView is the peer view: the plain token is never returned (a single list refresh would leak it each time),
+// only whether one is configured.
 func peerView(p *peers.Peer) gin.H {
 	v := gin.H{
 		"id":             p.ID,
@@ -80,8 +85,8 @@ func peerView(p *peers.Peer) gin.H {
 		"install_policy": p.InstallPolicy,
 		"last_error":     p.LastError,
 		"has_token":      strings.TrimSpace(p.Token) != "",
-		// auth_mode 是推导值（token 空 = none），前端据此回填下拉；
-		// 保留 has_token 是因为老前端只认它。
+		// auth_mode is a derived value (an empty token means none), which the frontend uses to preselect the dropdown;
+		// has_token is kept because an older frontend only knows that field.
 		"auth_mode":  p.AuthMode(),
 		"created_at": p.CreatedAt,
 		"updated_at": p.UpdatedAt,
@@ -96,7 +101,7 @@ func peerView(p *peers.Peer) gin.H {
 func ListPeers(c *gin.Context) {
 	list, err := peers.ListPeers()
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to query peers", "peer_market.sql", err), "")
 		return
 	}
 	items := make([]gin.H, 0, len(list))
@@ -110,10 +115,10 @@ type peerRequest struct {
 	Name          string   `json:"name"`
 	BaseURL       string   `json:"base_url"`
 	Token         string   `json:"token"`
-	AuthMode      string   `json:"auth_mode"` // token（默认）| none
+	AuthMode      string   `json:"auth_mode"` // token (default) | none
 	Enabled       *bool    `json:"enabled"`
 	VisibleTo     string   `json:"visible_to"`     // all | allowlist
-	TenantSchemas []string `json:"tenant_schemas"` // allowlist 名单
+	TenantSchemas []string `json:"tenant_schemas"` // allowlist entries
 	InstallPolicy string   `json:"install_policy"` // review | auto
 }
 
@@ -122,21 +127,21 @@ func (r *peerRequest) normalize() error {
 	r.BaseURL = strings.TrimRight(strings.TrimSpace(r.BaseURL), "/")
 	r.Token = strings.TrimSpace(r.Token)
 	if !originRe.MatchString(r.Name) {
-		return errors.New("站点名只允许字母、数字、点、下划线、横线，长度 ≤64")
+		return errors.New("a site name may contain letters, digits, dots, underscores and hyphens, up to 64 characters")
 	}
 	if r.BaseURL == "" {
-		return errors.New("请填写对端地址（例如 https://test.example.com）")
+		return errors.New("please fill in the peer address (for example https://test.example.com)")
 	}
 	u, err := url.Parse(r.BaseURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return errors.New("对端地址必须是 http(s):// 开头且带主机名")
+		return errors.New("the peer address must start with http(s):// and include a host name")
 	}
 	if u.Path != "" && u.Path != "/" {
-		return errors.New("对端地址不要带路径（只填到主机名/端口，/platform 会自动拼）")
+		return errors.New("the peer address must not include a path (host name and port only; /platform is appended automatically)")
 	}
 
-	// 认证方式：对端市场可以公开（market.open: true），这时不需要令牌。
-	// 不传 auth_mode 时按「有没有令牌」推断，兼容只传 token 的旧调用方。
+	// Auth mode: a peer market can be public (market.open: true), in which case no token is needed.
+	// When auth_mode is absent it is inferred from whether a token is present, for older callers that only send token.
 	r.AuthMode = strings.TrimSpace(r.AuthMode)
 	switch r.AuthMode {
 	case "":
@@ -146,24 +151,24 @@ func (r *peerRequest) normalize() error {
 			r.AuthMode = peers.AuthModeToken
 		}
 	case peers.AuthModeNone:
-		// 公开市场：不留残令牌。留着的旧值会在对端重新开启令牌校验时变成一个
-		// 「看起来配过、其实早就该删」的凭据。
+		// Public market: leave no leftover token. A stale value would become a credential that "looks configured
+		// but should have been deleted long ago" once the peer re-enables token checking.
 		r.Token = ""
 	case peers.AuthModeToken:
 		if r.Token == "" {
-			return errors.New("选择「市场令牌」时必须填对端给你的 flmt_… 令牌；对端市场公开时请选「公开（不带令牌）」")
+			return errors.New("choosing \"market token\" requires the flmt_... token the peer gave you; for a public peer market choose \"public (no token)\"")
 		}
 	default:
-		return errors.New("认证方式只能是 token（市场令牌）或 none（公开市场）")
+		return errors.New("the auth mode must be token (market token) or none (public market)")
 	}
 
-	// 可见范围：all = 所有租户都能在自己的资产市场里看到这个远端；allowlist = 只给名单里的
+	// Visibility: all = every tenant sees this remote in its own asset market; allowlist = only the listed tenants
 	r.VisibleTo = strings.TrimSpace(r.VisibleTo)
 	if r.VisibleTo == "" {
 		r.VisibleTo = peers.VisibleAll
 	}
 	if r.VisibleTo != peers.VisibleAll && r.VisibleTo != peers.VisibleAllowlist {
-		return errors.New("可见范围只能是 all（所有租户）或 allowlist（指定租户）")
+		return errors.New("visibility must be all (every tenant) or allowlist (selected tenants)")
 	}
 	schemas := make([]string, 0, len(r.TenantSchemas))
 	for _, s := range r.TenantSchemas {
@@ -172,22 +177,22 @@ func (r *peerRequest) normalize() error {
 			continue
 		}
 		if !schemaNameRe.MatchString(v) {
-			return fmt.Errorf("租户 schema 不合法：%s", v)
+			return fmt.Errorf("invalid tenant schema: %s", v)
 		}
 		schemas = append(schemas, v)
 	}
 	if r.VisibleTo == peers.VisibleAllowlist && len(schemas) == 0 {
-		return errors.New("选择「指定租户」时至少要勾一个租户，否则谁都看不到这个市场")
+		return errors.New("choosing \"selected tenants\" requires at least one tenant, otherwise nobody can see this market")
 	}
 	r.TenantSchemas = schemas
 
-	// 安装策略：review = 拉下来待审（默认）；auto = 直接装到发起租户
+	// Install policy: review = pull it into review (default); auto = install straight into the requesting tenant
 	r.InstallPolicy = strings.TrimSpace(r.InstallPolicy)
 	if r.InstallPolicy == "" {
 		r.InstallPolicy = peers.InstallPolicyReview
 	}
 	if r.InstallPolicy != peers.InstallPolicyReview && r.InstallPolicy != peers.InstallPolicyAuto {
-		return errors.New("安装策略只能是 review（先审核）或 auto（直接安装）")
+		return errors.New("the install policy must be review (review first) or auto (install directly)")
 	}
 	return nil
 }
@@ -196,20 +201,20 @@ func (r *peerRequest) normalize() error {
 func CreatePeer(c *gin.Context) {
 	var req peerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid parameters: "+err.Error(), "")
 		return
 	}
 	if err := req.normalize(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	exist, err := peers.ExistsPeerName(req.Name, "")
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to query peers", "peer_market.sql", err), "")
 		return
 	}
 	if exist {
-		xhttp.ErrCode(c, "peer.name_taken", gin.H{"name": req.Name}, "同名对端已存在："+req.Name, "")
+		xhttp.ErrCode(c, "peer.name_taken", gin.H{"name": req.Name}, "a peer with this name already exists: "+req.Name, "")
 		return
 	}
 	enabled := true
@@ -222,7 +227,7 @@ func CreatePeer(c *gin.Context) {
 		InstallPolicy: req.InstallPolicy,
 	}
 	if err := peers.InsertPeer(p); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("新建对端失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to create the peer", "peer_market.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"peer": peerView(p)}, "")
@@ -232,35 +237,35 @@ func CreatePeer(c *gin.Context) {
 func UpdatePeer(c *gin.Context) {
 	p, err := peers.GetPeer(c.Param("id"))
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to query peers", "peer_market.sql", err), "")
 		return
 	}
 	if p == nil {
-		xhttp.ErrCode(c, "peer.not_found", gin.H{"id": c.Param("id")}, "对端不存在", "")
+		xhttp.ErrCode(c, "peer.not_found", gin.H{"id": c.Param("id")}, "peer not found", "")
 		return
 	}
 	var req peerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid parameters: "+err.Error(), "")
 		return
 	}
-	// 认证方式优先于「留空 = 不改」：
-	//   auth_mode=none → 明确切成公开市场，把旧令牌清掉（要能主动删，否则切不回去）；
-	//   其余（含不传 auth_mode）→ 令牌留空表示不改，沿用旧值。
+	// The auth mode takes priority over "empty means unchanged":
+	//   auth_mode=none -> explicitly switch to a public market and clear the old token (it must be removable, or the switch cannot be undone);
+	//   anything else (including an absent auth_mode) -> an empty token means unchanged, so keep the old value.
 	if strings.TrimSpace(req.AuthMode) != peers.AuthModeNone && strings.TrimSpace(req.Token) == "" {
 		req.Token = p.Token
 	}
 	if err := req.normalize(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	exist, err := peers.ExistsPeerName(req.Name, p.ID)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to query peers", "peer_market.sql", err), "")
 		return
 	}
 	if exist {
-		xhttp.ErrCode(c, "peer.name_taken", gin.H{"name": req.Name}, "同名对端已存在："+req.Name, "")
+		xhttp.ErrCode(c, "peer.name_taken", gin.H{"name": req.Name}, "a peer with this name already exists: "+req.Name, "")
 		return
 	}
 	p.Name, p.BaseURL, p.Token = req.Name, req.BaseURL, req.Token
@@ -269,7 +274,7 @@ func UpdatePeer(c *gin.Context) {
 		p.Enabled = *req.Enabled
 	}
 	if err := peers.UpdatePeer(p); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("更新对端失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to update the peer", "peer_market.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"peer": peerView(p)}, "")
@@ -278,7 +283,7 @@ func UpdatePeer(c *gin.Context) {
 // DeletePeer DELETE /platform/peers/:id
 func DeletePeer(c *gin.Context) {
 	if err := peers.DeletePeer(c.Param("id")); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("删除对端失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to delete the peer", "peer_market.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{}, "")
@@ -286,8 +291,8 @@ func DeletePeer(c *gin.Context) {
 
 // PeerCatalog GET /platform/peers/:id/catalog?kind=
 //
-// 代理对端的只读目录，并标注「本机是否已经从该站点导入过 / 本地快照」——
-// 前端据此决定按钮是「导入」还是「覆盖导入」。
+// Proxies the peer's read-only catalog and marks "already imported from that site / local snapshot", which the
+// frontend uses to label the button "import" or "import and overwrite".
 func PeerCatalog(c *gin.Context) {
 	p, ok := mustPeer(c)
 	if !ok {
@@ -300,25 +305,26 @@ func PeerCatalog(c *gin.Context) {
 	resp, err := peerGet(p, pathQS)
 	if err != nil {
 		_ = peers.TouchPeer(p.ID, err.Error())
-		xhttp.ErrCode(c, "peer.unreachable", gin.H{"peer": p.Name}, "连接对端失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "peer.unreachable", gin.H{"peer": p.Name}, "failed to reach the peer: "+err.Error(), "")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	// 多读一个字节：读满上限说明响应被截断，直接报「目录太大」而不是让 JSON 解码去背锅
+	// Read one byte past the limit: hitting it means the response was truncated, so report "catalog too large"
+	// instead of letting the JSON decoder take the blame
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, peerCatalogMax+1))
 	if resp.StatusCode != http.StatusOK {
-		msg := fmt.Sprintf("对端返回 %d：%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		msg := fmt.Sprintf("the peer returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		_ = peers.TouchPeer(p.ID, msg)
-		xhttp.ErrJSON(c, msg, nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, msg, "")
 		return
 	}
 	if len(body) > peerCatalogMax {
 		msg := fmt.Sprintf(
-			"对端目录超过 %d MiB 上限，响应已被截断（不是格式问题）。请在对端减少已上架资产，或按类型分批拉取（?kind=skill / custom_tool / agent / workflow）",
+			"the peer catalog exceeds the %d MiB limit and the response was truncated (not a format problem). Ask the peer to list fewer assets, or pull by kind in batches (?kind=skill / custom_tool / agent / workflow)",
 			peerCatalogMax>>20,
 		)
 		_ = peers.TouchPeer(p.ID, msg)
-		xhttp.ErrJSON(c, msg, nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, msg, "")
 		return
 	}
 
@@ -329,16 +335,16 @@ func PeerCatalog(c *gin.Context) {
 		} `json:"data"`
 	}
 	if jerr := json.Unmarshal(body, &payload); jerr != nil {
-		_ = peers.TouchPeer(p.ID, "对端响应不是合法 JSON")
+		_ = peers.TouchPeer(p.ID, "the peer response is not valid JSON")
 		xhttp.ErrCodeData(c, "peer.invalid_response", gin.H{"peer": p.Name},
-			"对端响应不是合法 JSON（对端快照过旧或地址填错？）", body, "")
+			"the peer response is not valid JSON (is the peer's snapshot too old, or the address wrong?)", body, "")
 		return
 	}
 
-	// 本机已从该站点导入过的资产：origin_asset_id → 本地快照
+	// Assets already imported from that site: origin_asset_id -> local snapshot
 	imported, err := sharedassets.List(sharedassets.Filter{OriginServer: p.Name})
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "查询本机导入失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to query local imports: "+err.Error(), "")
 		return
 	}
 	local := make(map[string]gin.H, len(imported))
@@ -372,8 +378,9 @@ func PeerCatalog(c *gin.Context) {
 
 // ImportFromPeer POST /platform/peers/:id/import  body: {asset_id, force}
 //
-// 拉包 → 走与人工上传完全相同的导入管线（校验/脱敏/落盘/写库）。
-// auto_approve 的对端才直接 listed，否则一律 pending。
+// Pull the package, then run the exact same import pipeline as a manual upload (validate / scrub / write files /
+// write rows).
+// Only an auto_approve peer lands listed directly; everything else goes to pending.
 func ImportFromPeer(c *gin.Context) {
 	p, ok := mustPeer(c)
 	if !ok {
@@ -381,7 +388,7 @@ func ImportFromPeer(c *gin.Context) {
 	}
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 	var req struct {
@@ -389,40 +396,40 @@ func ImportFromPeer(c *gin.Context) {
 		Force   bool   `json:"force"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.AssetID) == "" {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "请提供要导入的资产 id", "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "provide the asset id to import", "")
 		return
 	}
 
 	resp, err := peerGet(p, "/market/assets/"+url.PathEscape(req.AssetID)+"/package")
 	if err != nil {
 		_ = peers.TouchPeer(p.ID, err.Error())
-		xhttp.ErrCode(c, "peer.unreachable", gin.H{"peer": p.Name}, "连接对端失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "peer.unreachable", gin.H{"peer": p.Name}, "failed to reach the peer: "+err.Error(), "")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		msg := fmt.Sprintf("对端返回 %d：%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		msg := fmt.Sprintf("the peer returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		_ = peers.TouchPeer(p.ID, msg)
-		xhttp.ErrJSON(c, msg, nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, msg, "")
 		return
 	}
 
 	data, rerr := io.ReadAll(io.LimitReader(resp.Body, maxPackageUpload+1))
 	if rerr != nil {
-		xhttp.ErrCode(c, "peer.invalid_response", gin.H{"peer": p.Name}, "读取对端资产包失败: "+rerr.Error(), "")
+		xhttp.ErrCode(c, "peer.invalid_response", gin.H{"peer": p.Name}, "failed to read the peer asset package: "+rerr.Error(), "")
 		return
 	}
 	if len(data) > maxPackageUpload {
 		xhttp.ErrCode(c, "asset.package_too_large", gin.H{"limit_mb": maxPackageUpload >> 20},
-			fmt.Sprintf("对端的包超过上限（%d MiB）", maxPackageUpload>>20), "")
+			fmt.Sprintf("the peer package exceeds the limit (%d MiB)", maxPackageUpload>>20), "")
 		return
 	}
 
 	st, serr := packageStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 	res, ierr := assetimport.Import(bytes.NewReader(data), int64(len(data)), st, assetimport.Options{
@@ -435,12 +442,12 @@ func ImportFromPeer(c *gin.Context) {
 		_ = peers.TouchPeer(p.ID, ierr.Error())
 		var ce *assetimport.ConflictError
 		if errors.As(ierr, &ce) {
-			xhttp.ErrJSON(c, ce.Error(), gin.H{"existing": gin.H{
+			xhttp.ErrCodeData(c, "asset.build_conflict", gin.H{"build": ce.ExistingBuild}, ce.Error(), gin.H{"existing": gin.H{
 				"id": ce.ExistingID, "build": ce.ExistingBuild, "status": ce.ExistingStatus,
 			}}, "")
 			return
 		}
-		xhttp.ErrJSON(c, ierr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, ierr.Error(), "")
 		return
 	}
 	_ = peers.TouchPeer(p.ID, "")
@@ -458,21 +465,21 @@ func ImportFromPeer(c *gin.Context) {
 func mustPeer(c *gin.Context) (*peers.Peer, bool) {
 	p, err := peers.GetPeer(c.Param("id"))
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to query peers", "peer_market.sql", err), "")
 		return nil, false
 	}
 	if p == nil {
-		xhttp.ErrCode(c, "peer.not_found", gin.H{"id": c.Param("id")}, "对端不存在", "")
+		xhttp.ErrCode(c, "peer.not_found", gin.H{"id": c.Param("id")}, "peer not found", "")
 		return nil, false
 	}
 	if !p.Enabled {
-		xhttp.ErrCode(c, "peer.disabled", gin.H{"name": p.Name}, "对端已停用："+p.Name, "")
+		xhttp.ErrCode(c, "peer.disabled", gin.H{"name": p.Name}, "the peer is disabled: "+p.Name, "")
 		return nil, false
 	}
 	return p, true
 }
 
-// peerGet 向对端发一个只读请求（地址带 /platform 前缀，令牌走 Authorization）。
+// peerGet sends a read-only request to the peer (the address carries the /platform prefix, the token goes in Authorization).
 func peerGet(p *peers.Peer, path string) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(p.BaseURL, "/")+"/platform"+path, nil)
 	if err != nil {
@@ -484,15 +491,15 @@ func peerGet(p *peers.Peer, path string) (*http.Response, error) {
 	return peerClient.Do(req)
 }
 
-// ===== 市场出口策略（要不要校验令牌） =====
+// ===== Market egress policy (whether to check tokens) =====
 
 // GetMarketSettings GET /platform/market-settings
 //
-// 没有行 = 要求令牌（open=false）：这是 fail-closed 的默认值，不靠种子数据物化。
+// No row means a token is required (open=false): that is the fail-closed default and is not materialised by seed data.
 func GetMarketSettings(c *gin.Context) {
 	s, err := peers.GetMarketSetting()
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询市场设置失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to query the market settings", "peer_market.sql", err), "")
 		return
 	}
 	v := gin.H{"open": s.Open}
@@ -507,30 +514,31 @@ func GetMarketSettings(c *gin.Context) {
 
 // SetMarketSettings PUT /platform/market-settings  body: {open}
 //
-// 打开 = 任何人拿到本机地址就能读已通过审核的目录与资产包。这是治理决定，
-// 由平台管理员在管理端做，不走配置文件（写文件意味着要登机器改 + 重启）。
-// 带令牌但无效的请求仍然 401 —— 开放不等于不校验。
+// Open = anyone with this server's address can read the reviewed catalog and asset packages. That is a governance
+// decision made by a platform administrator in the console, not through a config file (editing a file would mean
+// logging into the machine and restarting).
+// A request carrying an invalid token still gets 401 - open does not mean unvalidated.
 func SetMarketSettings(c *gin.Context) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 	var req struct {
 		Open *bool `json:"open"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Open == nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: body 需要 {\"open\": true|false}", "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid parameters: the body must be {\"open\": true|false}", "")
 		return
 	}
 	if err := peers.SetMarketOpen(*req.Open, info.ID); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("保存市场设置失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to save the market settings", "peer_market.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"open": *req.Open}, "")
 }
 
-// ===== 市场出口令牌 =====
+// ===== Market egress tokens =====
 
 func marketTokenView(t *peers.MarketToken) gin.H {
 	v := gin.H{
@@ -549,7 +557,7 @@ func marketTokenView(t *peers.MarketToken) gin.H {
 func ListMarketTokens(c *gin.Context) {
 	list, err := peers.ListMarketTokens()
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询市场令牌失败", "peer_market.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to query market tokens", "peer_market.sql", err), "")
 		return
 	}
 	items := make([]gin.H, 0, len(list))
@@ -561,29 +569,30 @@ func ListMarketTokens(c *gin.Context) {
 
 // CreateMarketToken POST /platform/market-tokens  body: {name}
 //
-// 明文令牌**只在这里返回一次**，库里只有 sha256；丢了就删掉重建。
+// The plain token is returned **only once, here**; the database keeps the sha256 only. Lose it and delete and
+// recreate the token.
 func CreateMarketToken(c *gin.Context) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 	var req struct {
 		Name string `json:"name"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid parameters: "+err.Error(), "")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if !tokenNameRe.MatchString(req.Name) {
-		xhttp.ErrCode(c, "peer.invalid_token_name", nil, "令牌名只允许字母、数字、点、下划线、横线，长度 ≤64", "")
+		xhttp.ErrCode(c, "peer.invalid_token_name", nil, "a token name may contain letters, digits, dots, underscores and hyphens, up to 64 characters", "")
 		return
 	}
 
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "生成令牌失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to generate the token: "+err.Error(), "")
 		return
 	}
 	plain := "flmt_" + hex.EncodeToString(raw)
@@ -599,7 +608,7 @@ func CreateMarketToken(c *gin.Context) {
 		t.CreatedBy.Valid = true
 	}
 	if err := peers.InsertMarketToken(t); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "新建市场令牌失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to create the market token: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"token": marketTokenView(t), "plain": plain}, "")
@@ -611,11 +620,11 @@ func SetMarketToken(c *gin.Context) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid parameters: "+err.Error(), "")
 		return
 	}
 	if err := peers.SetMarketTokenEnabled(c.Param("id"), req.Enabled); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "更新市场令牌失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to update the market token: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"enabled": req.Enabled}, "")
@@ -624,7 +633,7 @@ func SetMarketToken(c *gin.Context) {
 // DeleteMarketToken DELETE /platform/market-tokens/:id
 func DeleteMarketToken(c *gin.Context) {
 	if err := peers.DeleteMarketToken(c.Param("id")); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "删除市场令牌失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to delete the market token: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{}, "")

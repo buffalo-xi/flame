@@ -13,10 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// LoginRequest 平台登录请求。
+// LoginRequest is the platform login request.
 //
-// **没有租户字段**：身份完全由 platform.users 决定（管理员 / 用户两种角色都在同一张表）。
-// 前端按响应里的 role 决定进「管理员页」还是「用户页」。
+// **There is no tenant field**: the identity is decided entirely by platform.users (both the admin
+// and the user role live in that one table). The frontend uses the role in the response to decide
+// whether to enter the admin pages or the user pages.
 type LoginRequest struct {
 	Name     string `json:"name" binding:"required"`
 	Password string `json:"password"`
@@ -31,8 +32,8 @@ func Login(c *gin.Context) {
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		// 不区分「账号不存在」与「密码错误」，避免账号枚举
-		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
+		// "no such account" and "wrong password" are not distinguished, to prevent account enumeration
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "invalid user name or password", "")
 		return
 	}
 	if !db.IsConnected() {
@@ -42,33 +43,34 @@ func Login(c *gin.Context) {
 
 	u, err := pmusers.GetByName(name)
 	if err != nil {
-		// 表未建 / 未执行迁移等情况如实报出，便于排查（与租户侧登录同一风格）
+		// A missing table or unapplied migration is reported as it is, for diagnosis (same style as tenant login)
 		xhttp.ErrCode(c, "common.internal", nil, "Failed to load platform user: "+err.Error(), "")
 		return
 	}
 	if u == nil {
-		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "invalid user name or password", "")
 		return
 	}
 
-	// 密码校验：bcrypt 优先，兼容历史 MD5（空值一律不通过）
+	// Password check: bcrypt first, legacy MD5 still accepted (an empty value never passes)
 	ok, needRehash := account.VerifyPassword(u.Password, req.Password)
 	if !ok {
-		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "invalid user name or password", "")
 		return
 	}
 	if needRehash {
-		// 平台用户理应是新建的 bcrypt 账号；命中 MD5 只记日志，不自动改库（避免登录流程写出意外值）
+		// Platform users should be freshly created bcrypt accounts; on an MD5 hit only log it and never
+		// rewrite the row here (so the login flow cannot write unexpected values)
 		xlog.Info("[platform-login] user %s password hash is legacy MD5, please reset it", u.Name)
 	}
 
-	// 状态校验：停用 / 锁定都拒绝
+	// Status check: both disabled and locked are rejected
 	if u.Status != account.StatusActive {
 		if u.Status == account.StatusLocked {
-			xhttp.ErrCode(c, "auth.account_locked", nil, "该账号已被锁定，请联系管理员解锁", "")
+			xhttp.ErrCode(c, "auth.account_locked", nil, "this account is locked; ask an administrator to unlock it", "")
 			return
 		}
-		xhttp.ErrCode(c, "auth.account_disabled", nil, "该账号已被停用，请联系管理员", "")
+		xhttp.ErrCode(c, "auth.account_disabled", nil, "this account is disabled; ask an administrator", "")
 		return
 	}
 
@@ -78,7 +80,7 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// 与租户登录同形态：{token, user}；user 里带 role，前端据此分流
+	// Same shape as tenant login: {token, user}; user carries the role, which the frontend branches on
 	xhttp.OkJSON(c, "", gin.H{
 		"token": token,
 		"user":  userView(u),

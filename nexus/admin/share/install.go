@@ -34,34 +34,34 @@ import (
 
 type installRequest struct {
 	AssetID string `json:"asset_id"`
-	Name    string `json:"name"`   // 空 = 沿用资产名
-	Status  *int   `json:"status"` // 空 = 1（四类都默认启用；自定义工具不再默认为停用）
-	// Overwrite 目标租户已有同名实体时覆盖它（而不是让用户改名）。
-	// 四类都支持（见各 installXxx）：覆盖只替换包里带来的内容，身份 / 授权 / 对外暴露配置 /
-	// 版本历史一律保留。
+	Name    string `json:"name"`   // empty = keep the asset name
+	Status  *int   `json:"status"` // empty = 1 (all four kinds default to enabled; custom tools are no longer disabled by default)
+	// Overwrite replaces a same-named entity the target tenant already has (instead of asking for a rename).
+	// All four kinds support it (see the installXxx helpers): an overwrite replaces only the content the bundle
+	// brings; identity, grants, exposure configuration and version history are all kept.
 	Overwrite bool `json:"overwrite"`
 }
 
-// installSource 一次安装的内容来源。
+// installSource is where one install reads its content from.
 //
-// 两个入口共用这份结构：从平台资产安装（snapDir = platform-assets/<id>/<ver>，带 asset 行）
-// 与直接上传资产包导入（包内容已铺进本租户的临时目录，asset 为 nil）。冲突处理、配额、能力
-// 预检、默认状态、warnings 全部一致，差别只有「文件从哪个目录读」与「要不要写安装流水」。
+// Both entry points share it: installing from a platform asset (snapDir = platform-assets/<id>/<ver>, with an
+// asset row) and importing an uploaded bundle (its content already laid out in a tenant temp directory,
+// asset nil). Conflict handling, quota, capability checks, default status and warnings are identical; only
 type installSource struct {
 	kind     assetpack.Kind
 	manifest assetpack.Manifest
 	payload  map[string]any
 	snapDir  string
-	asset    *sharedassets.Asset // nil = 不是平台资产（直接导入的包），不写安装流水
-	notices  []string            // 入口附带的提示（如导入包里被清空的凭据），并入回包 warnings
-	// overwritten 本次是覆盖既有实体（由各 installXxx 在真的走了覆盖分支时置位），回包带给前端。
+	asset    *sharedassets.Asset // nil = not a platform asset (an uploaded bundle); no install record
+	notices  []string            // notes from the entry point (e.g. blanked credentials in an uploaded bundle), merged into the response warnings
+	// overwritten is set by the installXxx helpers when the overwrite branch actually ran; returned to the front end.
 	overwritten bool
 }
 
-// Install 把平台资产复制成本租户的实体。
+// Install copies a platform asset into an entity of this tenant.
 //
-// 顺序刻意是「先文件、后 DB」：文件删除是幂等的，DB 回滚更贵；任一步失败都尽量把
-// 已经铺出去的文件收掉，不留下没有行指向的孤儿目录。
+// The order is deliberately "files first, DB second": deleting files is idempotent and a DB rollback costs
+// more; any failed step tries to remove the files already laid out, leaving no orphan directory behind.
 func Install(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -75,7 +75,7 @@ func Install(c *gin.Context) {
 	}
 	asset, m, kind, name, rerr := resolveInstallTarget(info, req.AssetID, req.Name)
 	if rerr != nil {
-		xhttp.ErrJSON(c, rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, rerr.Error(), "")
 		return
 	}
 
@@ -88,17 +88,17 @@ func Install(c *gin.Context) {
 	}, name, req)
 }
 
-// resolveInstallTarget 校验「这份资产能不能装、装成什么名字」。
+// resolveInstallTarget validates "can this asset be installed, and under what name".
 //
-// Install 与 InspectAsset 共用这一份：预检与真装必须按同一套规矩判，
-// 否则会出现「预检说过、点安装被拒」这种最让人恼火的错位。
-// 返回的 error 就是直接给用户看的那句话。
+// Install and InspectAsset share it: the preflight and the real install must apply the same rules, or
+// the most annoying mismatch appears - "the preflight said yes, install was rejected".
+// The returned error is the sentence shown to the user.
 func resolveInstallTarget(info *auth.AuthInfo, assetID, wantName string) (asset *sharedassets.Asset,
 	m assetpack.Manifest, kind assetpack.Kind, name string, err error) {
 
 	assetID = strings.TrimSpace(assetID)
 	if assetID == "" {
-		return nil, m, kind, name, errors.New("缺少 asset_id")
+		return nil, m, kind, name, errors.New("asset_id is required")
 	}
 
 	asset, err = sharedassets.Get(assetID)
@@ -106,27 +106,27 @@ func resolveInstallTarget(info *auth.AuthInfo, assetID, wantName string) (asset 
 		return nil, m, kind, name, errors.New(assetErrMsg("query asset", err))
 	}
 	if asset == nil {
-		return nil, m, kind, name, errors.New("资产不存在")
+		return nil, m, kind, name, errors.New("asset not found")
 	}
 	if asset.Status != sharedassets.StatusListed {
-		return nil, m, kind, name, errors.New("该资产尚未通过审核（当前状态：" + asset.Status + "）")
+		return nil, m, kind, name, errors.New("this asset has not passed review yet (current status: " + asset.Status + ")")
 	}
 	visible, verr := sharedassets.VisibleTo(asset, info.Schema)
 	if verr != nil {
 		return nil, m, kind, name, errors.New("check visibility: " + verr.Error())
 	}
 	if !visible {
-		return nil, m, kind, name, errors.New("该资产未对你所在的租户开放")
+		return nil, m, kind, name, errors.New("this asset is not open to your tenant")
 	}
 
 	if len(asset.Manifest) > 0 {
 		if uerr := json.Unmarshal(asset.Manifest, &m); uerr != nil {
-			return nil, m, kind, name, errors.New("资产清单损坏: " + uerr.Error())
+			return nil, m, kind, name, errors.New("the asset manifest is corrupt: " + uerr.Error())
 		}
 	}
-	// 没有文件清单就没有内容可装：只写一行记录会得到一个「存在但打不开」的实体
+	// No file list means no content to install: a row alone gives an entity that exists but cannot be opened
 	if len(m.Files) == 0 {
-		return nil, m, kind, name, errors.New("资产没有文件清单，无法安装（请让提供方重新上架）")
+		return nil, m, kind, name, errors.New("the asset has no file list and cannot be installed (ask the provider to list it again)")
 	}
 
 	kind = assetpack.Kind(asset.Kind)
@@ -134,14 +134,14 @@ func resolveInstallTarget(info *auth.AuthInfo, assetID, wantName string) (asset 
 	if name == "" {
 		name = asset.Name
 	}
-	// 与上架 / 导出同一判据：工作流名的措辞不同（它是对外工具名），字符集一样
+	// The same test as listing / export: workflow names use different wording (the name is the public tool name) but the same character set
 	if verr := validatePlanName(kind, name); verr != nil {
 		return nil, m, kind, name, verr
 	}
 	return asset, m, kind, name, nil
 }
 
-// payloadFromAsset 把资产行里的 payload 解成 map（坏数据当空对象：展示字段缺失不影响安装）。
+// payloadFromAsset decodes the payload of an asset row into a map (bad data becomes an empty object: missing display fields do not block an install).
 func payloadFromAsset(a *sharedassets.Asset) map[string]any {
 	payload := map[string]any{}
 	if a != nil && len(a.Payload) > 0 {
@@ -153,17 +153,17 @@ func payloadFromAsset(a *sharedassets.Asset) map[string]any {
 	return payload
 }
 
-// installFrom 按类型分发安装（平台资产与上传包共用）。
+// installFrom dispatches the install by kind (shared by platform assets and uploaded bundles).
 func installFrom(c *gin.Context, info *auth.AuthInfo, src *installSource, name string, req installRequest) {
-	// spec 闸放在分发之前：四类共用一道，不认识的清单语义直接拒绝。
-	// 把不认识的字段静默丢掉，装出来的是「能跑但行为不对」的实体，比装不上更难排查。
-	// 老包没有 spec（=0）按 1 处理，不受影响。
+	// The spec gate sits before the dispatch: one gate for all four kinds, and an unknown manifest version
+	// is rejected outright. Silently dropping unknown fields installs an entity that runs but behaves
+	// wrongly, which is harder to diagnose than a failed install. Old bundles without a spec (=0) count as 1.
 	if src.manifest.Spec > assetpack.ManifestSpec {
 		xhttp.ErrCode(c, "asset.package_too_new", map[string]any{
 			"spec":      src.manifest.Spec,
 			"supported": assetpack.ManifestSpec,
 		}, fmt.Sprintf(
-			"该资产包使用了更新版本的清单格式（spec %d，本程序支持到 %d）：请升级 Nexus 后再安装",
+			"this bundle uses a newer manifest format (spec %d, this build supports up to %d): upgrade Nexus and install again",
 			src.manifest.Spec, assetpack.ManifestSpec), "")
 		return
 	}
@@ -179,36 +179,36 @@ func installFrom(c *gin.Context, info *auth.AuthInfo, src *installSource, name s
 		installWorkflow(c, info, src, name, req)
 	default:
 		xhttp.ErrCode(c, "asset.invalid_kind", map[string]any{"kind": string(src.kind)},
-			"未知的资产类型："+string(src.kind), "")
+			"unknown asset kind: "+string(src.kind), "")
 	}
 }
 
-// ===== 技能 =====
+// ===== Skills =====
 
-// installSkill 安装技能（落点恒为租户级技能，agent_id 为 NULL）。
+// installSkill installs a skill (always as a tenant-level skill, agent_id NULL).
 //
-// 同名冲突有两种收口：默认给建议名让用户改名（不动既有实体）；req.Overwrite 时
-// **覆盖既有技能**——文件整棵重铺、description / metadata / 命令配置按包替换、
-// 工具依赖按包全量替换。刻意不随包走的三项：
+// A name clash has two resolutions: by default a suggested name so the user renames (leaving the existing entity alone);
+// entity alone); with req.Overwrite it **overwrites the existing skill** - the whole directory is laid down
+// again, description / metadata / command settings come from the bundle and tool dependencies are replaced
 //
-//	restricted + agent_skill_bindings  可见性属于目标租户的授权配置（白名单无法跨租户重映射）
-//	status                             生命周期状态（覆盖的是内容，不是这个技能的存在方式）
-//	versions/skills/<name>/            发布历史属于被覆盖的这个实体自己
+//	wholesale. Three things deliberately do not travel:
+//	restricted + agent_skill_bindings  visibility belongs to the target tenant's grant setup (an allowlist cannot be remapped across tenants)
+//	status                             lifecycle state (an overwrite replaces content, not the way the skill exists)
 func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name string, req installRequest) {
-	// 不再判「受保护名」：保护只约束删除 / 改名，不约束安装。占位靠的是重名冲突 ——
-	// 目标租户里 skill-authoring 本来就存在，装同名会走下面的重名处理，用户确认后覆盖它。
+	// No "protected name" check any more: protection constrains delete / rename only, never install.
+	// Placing a protected name relies on the clash path - skill-authoring already exists in the target tenant,
 	exist, ferr := skillRepo.FindByName(info.Schema, name, "")
 	if ferr != nil {
-		xhttp.ErrJSON(c, ferr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, ferr.Error(), "")
 		return
 	}
 	var prev *models.Skill
 	if exist != nil {
 		if !req.Overwrite {
-			// 冲突不静默：can_overwrite 让前端把它变成「确认覆盖」而不是只提示改名 ——
-			// 覆盖会丢弃该技能未发布的草稿改动，必须由用户点过确认再带 overwrite=1 重试。
+			// so installing the same name goes through the clash handling below and the user confirms the overwrite.
+			// A clash is never silent: can_overwrite turns it into "confirm overwrite" rather than a rename hint -
 			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "skill", "name": name},
-				"本租户已有同名技能："+name, gin.H{
+				"this tenant already has a skill named "+name, gin.H{
 					"suggested_name": suggestFreeSkillName(info.Schema, name),
 					"can_overwrite":  true,
 				}, "")
@@ -216,52 +216,56 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		}
 		prev = exist
 	}
-	// 私有技能不算冲突：FindByName(agentID="") 只认租户级（agent_id IS NULL）。
+	// Private skills are not a clash: FindByName(agentID="") only sees tenant-level rows (agent_id IS NULL).
 
-	// 配额预检：覆盖不新增实体，跳过 —— 否则顶到上限的租户连更新自己已有的技能都做不到。
+	// Quota preflight: an overwrite adds no entity, so skip it - otherwise a tenant at the limit could not even update its own skill.
 	if prev == nil {
-		if msg, qok := skillQuotaLeft(info.Schema); !qok {
-			xhttp.ErrJSON(c, msg, nil, "")
+		if cnt, qerr := quota.CountSkills(info.Schema); qerr != nil {
+			xhttp.ErrCode(c, "common.internal", nil, "failed to count skills: "+qerr.Error(), "")
+			return
+		} else if qerr := models.CheckQuota("skill", cnt, quota.Resolve(info.Schema).MaxSkills); qerr != nil {
+			le := qerr.(*models.LimitError)
+			xhttp.ErrCode(c, "quota.skill_limit_reached", le.Params(), qerr.Error(), "")
 			return
 		}
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 
 	ctx := context.Background()
 	dstDir := paths.SkillsKey(info.Schema) + "/" + name
 	if prev != nil {
-		// 覆盖：整棵目录先删再铺。直接往上叠会把旧版独有、包里没有的文件留在原地
-		// （删掉的引用文档会「复活」，还会被下次导出一起打进去）。
+		// Overwrite: delete the whole directory, then lay it down. Stacking on top leaves files only the old version
+		// version had (a removed reference document "comes back" and is packed into the next export).
 		if derr := st.DeletePrefix(ctx, dstDir); derr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "清理既有技能目录失败: "+derr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to clean the existing skill directory: "+derr.Error(), "")
 			return
 		}
 	} else {
-		// 新建：清同名残留的版本域 —— 目标租户里若还留着同名技能的旧版本目录（历史删除只删了
-		// SKILL.md、或删除路径没清干净），装进来的这份草稿首次发布 v1 就会撞上它，
-		// EnsureAbsent 报 version exists，错误信息完全指不到「是安装带进来的」。
-		// 覆盖时不清：那份历史属于这个被覆盖的实体自己。
+		// New: clear a leftover version area for the same name. If the target tenant still holds an old version
+		// directory of a same-named skill (an old delete removed only SKILL.md, or the path was not cleaned up),
+		// the first release of this draft as v1 hits it and EnsureAbsent reports "version exists" - an error
+		// pointing nowhere near the install. Not cleared on overwrite: that history belongs to the entity itself.
 		if verr := st.DeletePrefix(ctx, paths.VersionEntityKey(info.Schema, paths.VersionSkills, name)); verr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "清理同名技能的旧版本目录失败: "+verr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to clear the old version directory of the same-named skill: "+verr.Error(), "")
 			return
 		}
 	}
-	// 只落本体：_deps/ 是依赖的自定义工具，装到 custom_tools/ 而不是技能目录里
+	// Only the body: _deps/ holds dependent custom tools, which install under custom_tools/, not inside the skill directory
 	missing, rerr := assetpack.RestoreFiles(ctx, st, src.snapDir, dstDir, assetpack.BodyFiles(src.manifest.Files))
 	if rerr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		xhttp.ErrCode(c, "common.internal", nil, "写入技能文件失败: "+rerr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the skill files: "+rerr.Error(), "")
 		return
 	}
 
-	// 只允许「正常 / 废弃」两种落点（skill 只有两态）。覆盖时缺省沿用目标既有状态：
-	// 覆盖的是内容，不是生命周期 —— 把已废弃技能悄悄改回「正常」会让它在列表与授权里
-	// 突然重新可用。
+	// Only "normal / deprecated" are valid landing states (a skill has just two). On overwrite the default is
+	// the target's existing state: an overwrite replaces content, not lifecycle - quietly turning a deprecated
+	// skill back to normal makes it suddenly usable again in lists and grants.
 	status := models.StatusNormal
 	if prev != nil {
 		status = int(prev.Status)
@@ -273,9 +277,9 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 	warnings := missingWarnings(missing)
 	var id string
 	if prev != nil {
-		// Update 只写 name / description / metadata / updated_by / user_invocable / command_*：
-		// restricted 与 status 各有专用入口（白名单由 bind 维护，不能拿 SetVisibility 代劳 ——
-		// 它会在事务里 DELETE 整张 agent_skill_bindings 再重建）。
+		// Update writes only name / description / metadata / updated_by / user_invocable / command_*:
+		// restricted and status have dedicated entry points (the allowlist is maintained by bind; SetVisibility
+		// cannot stand in - it DELETE all of agent_skill_bindings inside a transaction and rebuilds it).
 		meta := xsql.JSONB{Data: map[string]any{}}
 		if md, ok := src.payload["metadata"].(map[string]any); ok && len(md) > 0 {
 			meta = xsql.JSONB{Data: md}
@@ -291,10 +295,10 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 			UpdatedBy:       xsql.UUID(info.ID),
 		}
 		if uerr := skillRepo.Update(info.Schema, upd); uerr != nil {
-			// 目录已被新内容替换：这里**不删**它。行是旧的、文件是新的，技能至少还能打开，
-			// 补一次导入即可对齐；删掉反而会留下「有行、没文件」的坏实体，比不一致更糟。
+			// The directory already holds the new content, so it is **not** deleted here. With an old row and new
+			// files the skill still opens, and one more import aligns them; deleting would leave a "row without
 			xhttp.ErrCode(c, "asset.record_write_failed", map[string]any{"kind": "skill", "name": name},
-				"覆盖技能记录失败（文件已写入，请重试导入）: "+uerr.Error(), "")
+				"failed to overwrite the skill record (files were written; retry the import): "+uerr.Error(), "")
 			return
 		}
 		id = string(prev.ID)
@@ -302,38 +306,38 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 
 		if int(prev.Status) != status {
 			if sterr := skillRepo.UpdateStatus(info.Schema, id, status); sterr != nil {
-				warnings = append(warnings, "状态未能改成目标值，已保留原状态："+sterr.Error())
+				warnings = append(warnings, "the status could not be changed to the target value; the original is kept: "+sterr.Error())
 			}
 		}
-		// 可见性（restricted + 白名单）成对保留目标既有配置。唯一的修补：目标本身就是
-		// 「restricted=true 但一条绑定都没有」——那它对谁都不可见（visibleCond 两条都不成立），
-		// 覆盖时顺手自愈成全员可见，别把这个坏组合原样留着。
+		// Visibility (restricted + allowlist) keeps the target's existing configuration as a pair. The one repair:
+		// a target that is itself "restricted=true with no binding at all" is invisible to everyone (both
+		// visibleCond arms fail), so an overwrite heals it to visible-to-everyone instead of keeping the broken pair.
 		if bool(prev.Restricted) {
 			if bindings, berr := skillRepo.ListBindings(info.Schema, id); berr != nil {
-				warnings = append(warnings, "校验技能可见性失败："+berr.Error())
+				warnings = append(warnings, "failed to check skill visibility: "+berr.Error())
 			} else if len(bindings) == 0 {
 				if rerr := skillRepo.SetRestricted(info.Schema, id, false, info.ID); rerr != nil {
-					warnings = append(warnings, "技能可见性自愈失败（它现在对任何智能体都不可见）："+rerr.Error())
+					warnings = append(warnings, "failed to repair skill visibility (it is now invisible to every agent): "+rerr.Error())
 				} else {
-					warnings = append(warnings, "该技能原本是「仅授权可见」但一条授权都没有（谁都发现不了），已改为全员可见")
+					warnings = append(warnings, "the skill was set to \"visible to grantees only\" with no grant at all (nobody could find it); it is now visible to everyone")
 				}
 			}
 		}
 		if models.IsProtectedSkill(name) {
-			warnings = append(warnings, "覆盖的是系统内置技能（受保护名）：内容按包替换，受保护身份由名字决定")
+			warnings = append(warnings, "this overwrites a built-in skill (protected name): the content comes from the bundle, while protection follows the name")
 		}
-		warnings = append(warnings, "覆盖不会改动该技能在目标租户的可见性授权（哪些智能体可用）；如需调整请到「技能授权」里改")
+		warnings = append(warnings, "an overwrite does not touch the skill's visibility grants in the target tenant (which agents may use it); adjust them under skill grants")
 	} else {
 		var ierr error
 		id, ierr = insertInstalledSkill(info, name, status, src.payload)
 		if ierr != nil {
 			_ = st.DeletePrefix(ctx, dstDir)
-			xhttp.ErrCode(c, "common.internal", nil, "写入技能记录失败: "+ierr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to write the skill record: "+ierr.Error(), "")
 			return
 		}
 	}
 
-	// 先装随包带过来的工具，再写依赖 —— 顺序反了授权行会指向还不存在的工具
+	// Install the tools the bundle brings first, then write the dependencies - reversed, the grant rows point at tools that do not exist yet
 	warnings = append(warnings, installBundledTools(info, src)...)
 	if prev != nil {
 		warnings = append(warnings, replaceInstalledSkillGrants(info, id, src.manifest.Deps.Tools)...)
@@ -343,11 +347,11 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 	respondInstalled(c, info, src, name, id, missing, warnings)
 }
 
-// insertInstalledSkill 落一条技能记录：身份重新生成，归属强制为空（租户级）。
+// insertInstalledSkill writes a skill row: a fresh identity and a forced empty owner (tenant level).
 //
-// restricted 恒为 false：可见性白名单（agent_skill_bindings）无法跨租户重映射，落 true 只会
-// 得到「谁都没被授权 → 谁都发现不了」的技能（visibleCond 两条都不成立）。可见性属于目标租户的
-// 授权配置，与智能体的 endpoints 同口径 —— 不随包迁移，装完到「技能授权」里设。
+// restricted is always false: the visibility allowlist (agent_skill_bindings) cannot be remapped across
+// tenants, so true would only produce a skill nobody is granted and nobody can find (both visibleCond arms
+// fail). Visibility belongs to the target tenant's grant setup, like an agent's endpoints - it never travels; set it under skill grants after installing.
 func insertInstalledSkill(info *auth.AuthInfo, name string, status int, payload map[string]any) (string, error) {
 	id := uuid.NewString()
 
@@ -373,10 +377,10 @@ func insertInstalledSkill(info *auth.AuthInfo, name string, status int, payload 
 	return id, nil
 }
 
-// writeSkillGrants 按清单重建工具依赖，返回需要提示的项。
+// writeSkillGrants rebuilds the tool dependencies from the manifest and returns the items to report.
 //
-// 刻意不因为某个 ref 不存在就整单失败：技能正文往往仍然有用，缺的那几个工具
-// 由使用者在「工具授权」里补。但要明说一句，别让人以为依赖已经生效。
+// A missing ref deliberately does not fail the whole install: the skill body is usually still useful and the
+// user can add the missing tools under tool grants. Say so explicitly, though, so nobody assumes they are live.
 func writeSkillGrants(info *auth.AuthInfo, skillID string, deps []assetpack.ToolDep) []string {
 	if len(deps) == 0 {
 		return nil
@@ -390,20 +394,20 @@ func writeSkillGrants(info *auth.AuthInfo, skillID string, deps []assetpack.Tool
 		if _, err := grantRepo.AddSkillGrant(info.Schema, skillID,
 			models.SkillToolGrant{SkillID: skillID, ItemType: d.Type, Ref: d.Ref}); err != nil {
 			failed++
-			warnings = append(warnings, fmt.Sprintf("工具依赖 %s 写入失败：%v", d.Ref, err))
+			warnings = append(warnings, fmt.Sprintf("failed to write tool dependency %s: %v", d.Ref, err))
 		}
 	}
 	if failed == 0 {
 		warnings = append(warnings, fmt.Sprintf(
-			"已按声明写入 %d 条工具依赖；本租户缺少对应工具时它们不会生效，可在「工具授权」里调整", len(deps)))
+			"wrote %d tool dependencies as declared; any whose tool is missing in this tenant will not take effect - adjust them under tool grants", len(deps)))
 	}
 	return warnings
 }
 
-// replaceInstalledSkillGrants 覆盖安装时按清单**全量替换**该技能的工具依赖。
+// replaceInstalledSkillGrants replaces the skill's tool dependencies **wholesale** on an overwrite install.
 //
-// 与 writeSkillGrants 的差别只有最后一步（ReplaceSkillGrants 而不是逐条 AddSkillGrant）：
-// 覆盖语义下「包里没有声明的依赖」必须清掉，否则旧依赖会跟着新正文继续生效。
+// The only difference from writeSkillGrants is the last step (ReplaceSkillGrants instead of one
+// AddSkillGrant per item): an overwrite must drop dependencies the bundle does not declare, or the old ones keep applying to the new body.
 func replaceInstalledSkillGrants(info *auth.AuthInfo, skillID string, deps []assetpack.ToolDep) []string {
 	grants := make([]models.SkillToolGrant, 0, len(deps))
 	for _, d := range deps {
@@ -413,32 +417,16 @@ func replaceInstalledSkillGrants(info *auth.AuthInfo, skillID string, deps []ass
 		grants = append(grants, models.SkillToolGrant{SkillID: skillID, ItemType: d.Type, Ref: d.Ref})
 	}
 	if err := grantRepo.ReplaceSkillGrants(info.Schema, skillID, grants); err != nil {
-		return []string{"工具依赖写入失败：" + err.Error()}
+		return []string{"failed to write tool dependencies: " + err.Error()}
 	}
 	if len(grants) == 0 {
-		return []string{"工具依赖已按包内清单清空（包内没有声明任何工具）"}
+		return []string{"tool dependencies were cleared per the bundle (it declares no tools)"}
 	}
 	return []string{fmt.Sprintf(
-		"工具依赖已按包内清单全量替换（%d 条）；本租户缺少对应工具时它们不会生效，可在「工具授权」里调整", len(grants))}
+		"tool dependencies were replaced wholesale per the bundle (%d); any whose tool is missing in this tenant will not take effect - adjust them under tool grants", len(grants))}
 }
 
-// skillQuotaLeft 配额预检：超限就不装，别让用户在最后一步才看到「装不下」。
-func skillQuotaLeft(schema string) (string, bool) {
-	limits := quota.Resolve(schema)
-	if limits.MaxSkills < 0 {
-		return "", true
-	}
-	var n int
-	if err := db.DB.QueryRow(`SELECT count(*) FROM ` + tenantTable(schema, "skills")).Scan(&n); err != nil {
-		return "统计技能数量失败: " + err.Error(), false
-	}
-	if n >= limits.MaxSkills {
-		return fmt.Sprintf("技能数量已达配额上限（%d）", limits.MaxSkills), false
-	}
-	return "", true
-}
-
-// suggestFreeSkillName 给一个本租户确实没人用的建议名（最多试 50 个）。
+// suggestFreeSkillName suggests a name nobody in this tenant uses (up to 50 attempts).
 func suggestFreeSkillName(schema, base string) string {
 	cand := assetpack.SuggestName(base, nil)
 	for i := 0; i < 50; i++ {
@@ -451,33 +439,33 @@ func suggestFreeSkillName(schema, base string) string {
 	return base
 }
 
-// ===== 自定义工具 =====
+// ===== Custom tools =====
 
-// installTool 安装脚本工具。
+// installTool installs a script tool.
 //
-// 与技能最大的差别：**契约在文件里**（TOOL.json）。所以装完要从目标目录把契约读回来，
-// 用它生成表行（configs 留空、status 默认启用），而不是从 payload 里抄一堆字段 ——
-// 那样文件与行又会各说一套。
+// The big difference from skills: **the contract lives in a file** (TOOL.json). So after writing the files the
+// contract is read back from the target directory and used to build the table row (configs empty, status enabled
+// by default) instead of copying fields from the payload - which would let the file and the row disagree again.
 //
-// 同名冲突两收口：默认给建议名；req.Overwrite 时覆盖既有工具 —— 脚本整棵重铺、契约字段
-// 按包替换，但**配置值与创建人保留**（配置就是凭据，包里的 configs 是空的）。
+// A name clash has two resolutions: by default a suggested name; with req.Overwrite the existing tool is
+// overwritten - the scripts are laid down again and the contract fields come from the bundle, but **the configuration values and the creator are kept** (the configuration is credentials, and the bundle's configs are empty).
 func installTool(c *gin.Context, info *auth.AuthInfo, src *installSource, name string, req installRequest) {
 	store := customtoolstore.New(config.Cfg.Agent.RootDir, info.Schema)
 	_, derr := store.Get("", name)
 	dirExists := derr == nil
 	if derr != nil && !errors.Is(derr, sql.ErrNoRows) {
-		xhttp.ErrJSON(c, "check tool: "+derr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "check tool: "+derr.Error(), "")
 		return
 	}
-	// 表行也查一次：目录在、行不在（历史残留）同样算「已存在」，覆盖时据它保住配置与创建人
+	// Check the table row too: a directory without a row (leftover from history) also counts as existing; an overwrite uses it to keep the config and the creator
 	prev, rerr := customtools.NewRepository().Get(info.Schema, name)
 	if rerr != nil && !errors.Is(rerr, sql.ErrNoRows) {
-		xhttp.ErrJSON(c, "check tool: "+rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "check tool: "+rerr.Error(), "")
 		return
 	}
 	if (dirExists || prev != nil) && !req.Overwrite {
 		xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "custom_tool", "name": name},
-			"本租户已有同名工具："+name, gin.H{
+			"this tenant already has a tool named "+name, gin.H{
 				"suggested_name": suggestFreeToolName(store, name),
 				"can_overwrite":  true,
 			}, "")
@@ -486,13 +474,13 @@ func installTool(c *gin.Context, info *auth.AuthInfo, src *installSource, name s
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 
-	// 装上即可用（不再默认停用）：安装是一次明确的用户动作，装完就要能调用；
-	// 需要复核脚本的，装完自己停用即可。
-	// 覆盖时缺省沿用目标既有状态 —— 覆盖的是脚本内容，不是「它是否可用」这个决定。
+	// Usable right after install (no longer disabled by default): an install is an explicit user action, so the
+	// tool must be callable afterwards; anyone who wants to review the script can disable it once installed.
+	// On overwrite the default is the target's existing state - an overwrite replaces the script, not the decision about whether it is usable.
 	status := models.StatusNormal
 	if prev != nil {
 		status = prev.Status
@@ -502,10 +490,10 @@ func installTool(c *gin.Context, info *auth.AuthInfo, src *installSource, name s
 	}
 
 	if dirExists && prev == nil {
-		// 目录在、行不在（历史残留）：先清掉再铺，免得旧文件混进这次安装。
-		// 行还没有，所以 placeTool 看不到 prev，这里替它做掉。
+		// A directory without a row (leftover from history): clear it before laying files down, so old files do not
+		// mix into this install. The row does not exist yet, so placeTool cannot see prev; do it here for it.
 		if derr := st.DeletePrefix(context.Background(), paths.ToolsKey(info.Schema)+"/"+name); derr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "清理残留的工具目录失败: "+derr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to clean the leftover tool directory: "+derr.Error(), "")
 			return
 		}
 	}
@@ -513,68 +501,68 @@ func installTool(c *gin.Context, info *auth.AuthInfo, src *installSource, name s
 	id, missing, warnings, perr := placeTool(context.Background(), st, info, src,
 		src.manifest.Files, "", name, status, prev)
 	if perr != nil {
-		xhttp.ErrJSON(c, perr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, perr.Error(), "")
 		return
 	}
 	respondInstalled(c, info, src, name, id, missing, warnings)
 }
 
-// placeTool 把一个工具从快照铺到本租户目录并建行 / 覆盖行（prev 非 nil = 覆盖）。
+// placeTool lays a tool from the snapshot into this tenant's directory and creates or overwrites its row (prev non-nil = overwrite).
 //
-// 市场单装与「随智能体 / 技能带过来的工具」共用这一份：契约在文件里（TOOL.json），
-// 所以必须先落盘再从目标目录读回契约，行字段一律以契约为准 —— 从 payload 抄一份会让
-// 文件与行各说一套。能力预检也在这里，装一个跑不起来的工具比装不上更让人困惑。
+// The marketplace install and "tools brought along by an agent / skill" share it: the contract lives in a file
+// (TOOL.json), so the files must land first and the contract is read back from the target directory; every row
+// field follows the contract - copying from the payload would let file and row disagree. The capability check lives here too: installing a tool that cannot run is more confusing than a failed install.
 //
-// prefix 用于包内附件（_deps/custom_tools/<name>/），普通安装传空。
+// prefix is used for bundle attachments (_deps/custom_tools/<name>/) and is empty for a normal install.
 func placeTool(ctx context.Context, st storage.Storage, info *auth.AuthInfo, src *installSource,
 	files []assetpack.FileEntry, prefix, name string, status int, prev *models.CustomTool) (id string, missing, warnings []string, err error) {
 
 	caps := capabilitypolicy.Snapshot(info.Schema)
 	if !caps[capability.Exec] {
-		return "", nil, nil, errors.New("本租户未开通「一次性执行」（sandbox.exec）能力，脚本工具装上也无法运行")
+		return "", nil, nil, errors.New("this tenant has not enabled the one-shot execution (sandbox.exec) capability, so a script tool would install but never run")
 	}
 
 	dstDir := paths.ToolsKey(info.Schema) + "/" + name
 	if prev != nil {
-		// 覆盖：整棵目录先删再铺。直接往上叠会把旧版独有的脚本 / 数据文件留在原地
-		// （包里已删除的文件会「复活」，下次导出还会一起带走）。
+		// Overwrite: delete the whole directory, then lay it down. Stacking on top leaves scripts and data files
+		// only the old version had (files removed from the bundle "come back" and travel into the next export).
 		if derr := st.DeletePrefix(ctx, dstDir); derr != nil {
-			return "", nil, nil, fmt.Errorf("清理既有工具目录失败: %w", derr)
+			return "", nil, nil, fmt.Errorf("failed to clean the existing tool directory: %w", derr)
 		}
 	} else {
-		// 新建：版本域按 name 键，旧目录留着，装进来的工具首次发布 v1 会撞上 EnsureAbsent
-		// （错误信息指不到安装）。这条路径同时服务「随包附带的自定义工具」，两边一次收口。
+		// New: the version area is keyed by name, so a leftover directory makes the first release of this tool as
+		// v1 hit EnsureAbsent (an error pointing nowhere near the install). This path also serves bundled custom tools, so both are handled once.
 		if verr := st.DeletePrefix(ctx, paths.VersionEntityKey(info.Schema, paths.VersionTools, name)); verr != nil {
-			return "", nil, nil, fmt.Errorf("清理同名工具的旧版本目录失败: %w", verr)
+			return "", nil, nil, fmt.Errorf("failed to clear the old version directory of the same-named tool: %w", verr)
 		}
 	}
 
 	missing, rerr := assetpack.RestoreFilesUnder(ctx, st, src.snapDir, dstDir, prefix, files)
 	if rerr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		return "", nil, nil, fmt.Errorf("写入工具文件失败: %w", rerr)
+		return "", nil, nil, fmt.Errorf("failed to write the tool files: %w", rerr)
 	}
 
 	tf, cerr := adoptToolContract(ctx, st, dstDir, name)
 	if cerr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		return "", nil, nil, fmt.Errorf("工具契约不可用: %w", cerr)
+		return "", nil, nil, fmt.Errorf("the tool contract is unusable: %w", cerr)
 	}
 	if tf.Egress && !caps[capability.Egress] {
 		_ = st.DeletePrefix(ctx, dstDir)
-		return "", nil, nil, errors.New("该工具声明了出网，但本租户未开通 net.egress")
+		return "", nil, nil, errors.New("this tool declares egress but this tenant has not enabled net.egress")
 	}
 
 	t := models.CustomTool{
 		Name:      name,
 		Status:    status,
-		Configs:   xsql.JSONB{Data: map[string]any{}}, // 值不随资产走，等使用者自己填
+		Configs:   xsql.JSONB{Data: map[string]any{}}, // values never travel with the asset; the user fills them in
 		Egress:    tf.Egress,
 		CreatedBy: info.ID,
 	}
 	if prev != nil {
-		// 覆盖：身份 / 创建人 / 配置值都要留住 —— 配置就是凭据，包里的 configs 是空的
-		// （值不随资产走），跟着包清空等于让工具当场失效。
+		// Overwrite: identity, creator and configuration values must all be kept - the configuration is credentials,
+		// the bundle's configs are empty (values never travel), and clearing them would break the tool on the spot.
 		t.ID = prev.ID
 		t.CreatedBy = prev.CreatedBy
 		t.Configs = prev.Configs
@@ -584,34 +572,34 @@ func placeTool(ctx context.Context, st storage.Storage, info *auth.AuthInfo, src
 	repo := customtools.NewRepository()
 	if prev != nil {
 		if uerr := repo.Update(info.Schema, &t); uerr != nil {
-			// 目录已是新脚本、行还是旧的：不删目录（删了就是「有目录没行」），重试导入即可对齐
-			return "", nil, nil, fmt.Errorf("覆盖工具记录失败（文件已写入，请重试导入）: %w", uerr)
+			// The directory already holds the new script while the row is old: do not delete the directory (that gives "directory without row"); retrying the import aligns them
+			return "", nil, nil, fmt.Errorf("failed to overwrite the tool record (files were written; retry the import): %w", uerr)
 		}
 	} else if cerr := repo.Create(info.Schema, &t); cerr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		return "", nil, nil, fmt.Errorf("写入工具记录失败: %w", cerr)
+		return "", nil, nil, fmt.Errorf("failed to write the tool record: %w", cerr)
 	}
 
 	warnings = missingWarnings(missing)
 	if len(tf.ConfigFields) > 0 {
 		if prev != nil {
 			warnings = append(warnings, fmt.Sprintf(
-				"该工具声明了 %d 个配置项：已有的配置值按原样保留，契约里新增的项需要自己补齐", len(tf.ConfigFields)))
+				"this tool declares %d settings: existing values are kept as they are, and any setting the contract adds must be filled in", len(tf.ConfigFields)))
 		} else {
 			warnings = append(warnings, fmt.Sprintf(
-				"该工具有 %d 个配置项需要填写，没填时调用会失败", len(tf.ConfigFields)))
+				"this tool has %d settings to fill in; a call fails while they are empty", len(tf.ConfigFields)))
 		}
 	}
 	return t.ID, missing, warnings, nil
 }
 
-// installBundledTools 把包里附带的自定义工具装进本租户（启用态，与单装一致）。
+// installBundledTools installs the custom tools bundled in a package into this tenant (enabled, same as a single install).
 //
-// 三条「不做」比「做」更重要：
-//   - 目标已有同名工具不覆盖 —— 本地快照可能改过脚本或填过配置，装个智能体顺手把别人的
-//     工具盖掉是不可接受的（overwrite 只作用于单装入口，附带路径永远传 nil）；
-//   - 缺 sandbox.exec / net.egress 就跳过并说明，不让整次安装失败；
-//   - 单个工具装失败只记 warning：智能体本体已经装好了，为它回滚不划算。
+// Three "do nots" matter more than the "dos":
+//   - never overwrite a same-named tool in the target - the local copy may have edited scripts or filled in
+//     settings, and clobbering someone's tool while installing an agent is unacceptable (overwrite only applies to the single-install entry point; the bundled path always passes nil);
+//   - a missing sandbox.exec / net.egress skips the tool with an explanation instead of failing the install;
+//   - a failed single tool is only a warning: the agent itself is already installed, and rolling back for it is not worth it.
 func installBundledTools(info *auth.AuthInfo, src *installSource) []string {
 	attachments := assetpack.Attachments(src.manifest.Files)
 	if len(attachments) == 0 {
@@ -620,7 +608,7 @@ func installBundledTools(info *auth.AuthInfo, src *installSource) []string {
 
 	st, serr := getStorage()
 	if serr != nil {
-		return []string{"storage not ready，附带的自定义工具未安装：" + serr.Error()}
+		return []string{"storage not ready, bundled custom tools were not installed: " + serr.Error()}
 	}
 	ctx := context.Background()
 	store := customtoolstore.New(config.Cfg.Agent.RootDir, info.Schema)
@@ -634,24 +622,24 @@ func installBundledTools(info *auth.AuthInfo, src *installSource) []string {
 	var warnings []string
 	installed := make([]string, 0, len(names))
 	for _, name := range names {
-		// 名字直接进目录路径：附件是从 zip 里读出来的，不能假设它一定合法
+		// The name goes straight into a directory path: attachments come from a zip and cannot be assumed valid
 		if err := assetpack.ValidateName(name); err != nil {
-			warnings = append(warnings, "附带的自定义工具名不合法，未安装："+name)
+			warnings = append(warnings, "bundled custom tool name is invalid, not installed: "+name)
 			continue
 		}
 		if _, gerr := store.Get("", name); gerr == nil {
 			warnings = append(warnings, fmt.Sprintf(
-				"本租户已有同名工具 %s，保留本地快照（包内附带的没有覆盖）", name))
+				"this tenant already has a tool named %s; the local copy is kept (the bundled one did not overwrite it)", name))
 			continue
 		} else if !errors.Is(gerr, sql.ErrNoRows) {
-			warnings = append(warnings, fmt.Sprintf("检查工具 %s 失败，未安装：%v", name, gerr))
+			warnings = append(warnings, fmt.Sprintf("failed to check tool %s, not installed: %v", name, gerr))
 			continue
 		}
 
 		_, missing, w, perr := placeTool(ctx, st, info, src, attachments[name],
 			assetpack.ToolAttachmentPrefix(name), name, models.StatusNormal, nil)
 		if perr != nil {
-			warnings = append(warnings, fmt.Sprintf("附带的自定义工具 %s 安装失败：%v", name, perr))
+			warnings = append(warnings, fmt.Sprintf("failed to install bundled custom tool %s: %v", name, perr))
 			continue
 		}
 		warnings = append(warnings, missing...)
@@ -660,21 +648,21 @@ func installBundledTools(info *auth.AuthInfo, src *installSource) []string {
 	}
 	if len(installed) > 0 {
 		warnings = append(warnings, fmt.Sprintf(
-			"已随包安装 %d 个自定义工具（%s），均已启用；如需暂停请在「自定义工具」里停用",
-			len(installed), strings.Join(installed, "、")))
+			"installed %d custom tools with the bundle (%s), all enabled; disable one under custom tools to pause it",
+			len(installed), strings.Join(installed, ", ")))
 	}
 	return warnings
 }
 
-// adoptToolContract 从目标目录读回 TOOL.json，按目标名校正后写回并校验。
+// adoptToolContract reads TOOL.json back from the target directory, rewrites it with the target name and validates it.
 //
-// 改名安装时必须重写契约里的 name：Validate 要求「契约名 == 目录名」，
-// 不写回去的话这个工具从此每次加载都会报「name 与目录名不一致」。
+// Installing under a new name must rewrite name inside the contract: Validate requires "contract name ==
+// directory name", and without the rewrite every load of this tool reports a name / directory mismatch.
 func adoptToolContract(ctx context.Context, st storage.Storage, dir, name string) (*models.ToolFile, error) {
 
 	raw, err := st.ReadFile(ctx, path.Join(dir, models.ToolFileName))
 	if err != nil {
-		return nil, fmt.Errorf("缺少 %s", models.ToolFileName)
+		return nil, fmt.Errorf("%s is missing", models.ToolFileName)
 	}
 	tf, err := models.ParseToolFile(raw)
 	if err != nil {
@@ -696,7 +684,7 @@ func adoptToolContract(ctx context.Context, st storage.Storage, dir, name string
 	return tf, nil
 }
 
-// suggestFreeToolName 给一个本租户没被占用的工具名（目录与表行任一存在都算占用）。
+// suggestFreeToolName suggests a tool name free in this tenant (a directory or a table row both count as taken).
 func suggestFreeToolName(store *customtoolstore.Store, base string) string {
 	cand := assetpack.SuggestName(base, nil)
 	for i := 0; i < 50; i++ {
@@ -708,40 +696,40 @@ func suggestFreeToolName(store *customtoolstore.Store, base string) string {
 	return base
 }
 
-// ===== 智能体 =====
+// ===== Agents =====
 
-// installAgent 安装智能体：本体文件 + 一行 agents + 私有技能 + 技能绑定 + 工具授权。
+// installAgent installs an agent: the body files, one agents row, private skills, skill bindings and tool grants.
 //
-// 私有技能随目录一起还原，行由 restorePrivateSkills 按 payload.private_skills 重建
-// （归属指向新 agent）。
+// Private skills are restored with the directory, and restorePrivateSkills rebuilds their rows from
+// payload.private_skills (with ownership pointing at the new agent).
 //
-// 三个开关（is_supervisor / tools_unrestricted / skill_discovery）**随包走**：它们决定
-// 这个智能体在租户里怎么跑，不带走就会在目标租户装出一个行为不同的副本。代价是「导入」
-// 与「在编辑页勾选」得到同样的权限面 —— 这两件事本来就是同一个权限面（同一个租户管理接口），
-// 所以不额外加闸，只把结果写进 warnings 让人看见。
+// Three switches (is_supervisor / tools_unrestricted / skill_discovery) **travel with the bundle**: they decide
+// how the agent runs in a tenant, and leaving them behind installs a copy that behaves differently. The cost is
+// that "import" and "ticking a box on the edit page" reach the same permission surface - they always were
+// the same surface (the same tenant admin API), so no extra gate is added; the result is written into warnings so it is visible.
 //
-// 不随包走的只剩：
+// Only these stay behind:
 //
-//	agent_relations  跨租户无法重映射，装完提示去重新配置
-//	endpoints        对外暴露配置属于目标租户，覆盖时保留旧值
+//	agent_relations  cannot be remapped across tenants; the install tells the user to reconfigure it
+//	endpoints        exposure belongs to the target tenant; an overwrite keeps the old value
 //
-// 同名冲突有两种收口：默认给建议名让用户改名（不动既有实体）；req.Overwrite 时
-// **覆盖既有智能体**——文件 / 配置 / 私有技能 / 技能绑定 / 工具授权 / 三个开关全部按包替换。
+// A name clash has two resolutions: by default a suggested name so the user renames (leaving the existing entity alone);
+// with req.Overwrite it **overwrites the existing agent** - files / configuration / private skills / skill bindings / tool grants / the three switches all come from the bundle.
 func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name string, req installRequest) {
-	// 不判「受保护名」（main 等）：保护只约束删除 / 改名。目标租户里 main 本来就存在，
-	// 装同名会命中下面的重名处理（改名 或 覆盖前确认），不需要再叠一道「禁止占用」。
+	// No "protected name" check (main and friends): protection constrains delete / rename only. main already
+	// exists in the target tenant, so installing the same name goes through the clash handling below (rename or confirm the overwrite); no extra "name taken" gate is needed.
 	exist, eerr := agentRepo.ExistsName(info, name, "")
 	if eerr != nil {
-		xhttp.ErrJSON(c, "check name: "+eerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "check name: "+eerr.Error(), "")
 		return
 	}
 	var prev *models.Agent
 	if exist {
 		if !req.Overwrite {
-			// can_overwrite 让前端把它变成「确认覆盖」而不是只提示改名：
-			// 覆盖一个既有智能体是破坏性动作，必须由用户点过确认再带 overwrite=1 重试。
+			// can_overwrite turns this into "confirm overwrite" rather than a rename hint: overwriting an existing agent
+			// is destructive, so the user must confirm and retry with overwrite=1.
 			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "agent", "name": name},
-				"本租户已有同名智能体："+name, gin.H{
+				"this tenant already has an agent named "+name, gin.H{
 					"suggested_name": suggestFreeAgentName(info, name),
 					"can_overwrite":  true,
 				}, "")
@@ -749,78 +737,79 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		}
 		p, perr := agentRepo.FindByName(info, name)
 		if perr != nil {
-			xhttp.ErrJSON(c, "read agent: "+perr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "read agent: "+perr.Error(), "")
 			return
 		}
 		if p == nil {
-			exist = false // 判存在与取行之间被并发删掉了：退回新建
+			exist = false // deleted concurrently between the existence check and the read: fall back to create
 		} else {
 			prev = p
 		}
 	}
-	// 智能体与工作流共用一个名字空间（创建接口就是这么校验的）：这里放行会造出
-	// 一个「按名字查找永远命中另一个」的实体。覆盖时同名工作流不可能存在（同一个名字空间），
-	// 所以只在新建路径上查。
+	// Agents and workflows share one namespace (the create endpoints validate it that way): letting it through
+	// would create an entity where a lookup by name always hits the other one. An overwrite cannot meet a
+	// same-named workflow (same namespace), so only the create path checks.
 	if !exist {
 		if flowExist, ferr := flowRepo.ExistsFlowName(info, name); ferr != nil {
-			xhttp.ErrJSON(c, "check name: "+ferr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "check name: "+ferr.Error(), "")
 			return
 		} else if flowExist {
 			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "workflow", "name": name},
-				"本租户已有同名工作流，智能体名不能与工作流重名："+name, gin.H{
+				"this tenant already has a workflow named "+name+"; an agent and a workflow cannot share a name", gin.H{
 					"suggested_name": suggestFreeAgentName(info, name),
 				}, "")
 			return
 		}
 	}
 
-	// 配额预检：与「新建智能体」同一条闸，别让超限的租户先把文件铺下去。
-	// 覆盖不新增实体，跳过 —— 否则「已经顶到上限的租户连更新自己已有的智能体都做不到」。
+	// Quota preflight: the same gate as "new agent", so an over-limit tenant does not lay files down first.
+	// An overwrite adds no entity, so skip it - otherwise a tenant at the limit could not even update its own agent.
 	if !exist {
 		if cnt, qerr := quota.CountAgents(info.Schema); qerr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "统计智能体数量失败: "+qerr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to count agents: "+qerr.Error(), "")
 			return
 		} else if qerr := models.CheckQuota("agent", cnt, quota.Resolve(info.Schema).MaxAgents); qerr != nil {
-			xhttp.ErrJSON(c, qerr.Error(), nil, "")
+			le := qerr.(*models.LimitError)
+			xhttp.ErrCode(c, "quota.agent_limit_reached", le.Params(), qerr.Error(), "")
 			return
 		}
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 
 	ctx := context.Background()
 	dstDir := paths.AgentsKey(info.Schema, name)
 	if exist {
-		// 覆盖：整棵目录先删再铺。直接往上叠会把旧版独有、包里没有的文件留在原地
-		// （删掉的脚本 / 旧私有技能目录会「复活」，还会被下次导出一起打进去）。
+		// Overwrite: delete the whole directory, then lay it down. Stacking on top leaves files only the old version
+		// had (deleted scripts / old private skill directories "come back" and are packed into the next export).
 		if derr := st.DeletePrefix(ctx, dstDir); derr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "清理既有智能体目录失败: "+derr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to clean the existing agent directory: "+derr.Error(), "")
 			return
 		}
 	} else {
-		// 新建：清掉同名残留的版本域 —— 旧目录留着，首次发布 v1 会撞 EnsureAbsent
-		// （错误信息指不到「是导入带进来的」）。版本目录在 versions/agents/<name>，
-		// 与草稿目录不重叠；覆盖时不删（那份历史属于这个被覆盖的实体自己）。
+		// New: clear a leftover version area for the same name - a leftover directory makes the first release as v1
+		// hit EnsureAbsent (an error pointing nowhere near the import). Version directories live in
+		// versions/agents/<name>, which do not overlap the draft directory; not deleted on overwrite (that history belongs to the entity itself).
 		if verr := st.DeletePrefix(ctx, paths.VersionEntityKey(info.Schema, paths.VersionAgents, name)); verr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "清理同名智能体的旧版本目录失败: "+verr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to clear the old version directory of the same-named agent: "+verr.Error(), "")
 			return
 		}
 	}
-	// 只落本体：_deps/ 是依赖的自定义工具，装到 custom_tools/ 而不是 agent 目录里
+	// Only the body: _deps/ holds dependent custom tools, which install under custom_tools/, not inside the agent directory
 	missing, rerr := assetpack.RestoreFiles(ctx, st, src.snapDir, dstDir, assetpack.BodyFiles(src.manifest.Files))
 	if rerr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		xhttp.ErrCode(c, "common.internal", nil, "写入智能体文件失败: "+rerr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the agent files: "+rerr.Error(), "")
 		return
 	}
 
 	payload := src.payload
 
-	// agent 只有两态：正常 / 废弃
+	// An agent has two states: normal / deprecated
 	status := 1
 	if req.Status != nil && (*req.Status == 1 || *req.Status == 3) {
 		status = *req.Status
@@ -832,9 +821,9 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 	}
 	cfg := xsql.JSONB{Data: cfgMap}
 
-	// 三个开关按包设置。老包（没有这些字段）覆盖时沿用目标既有值、新建时取 false ——
-	// 不能直接断言成 false，否则一次覆盖就把管理员开过的开关静默关掉。
-	// 这三个开关与「在智能体编辑页手动勾选」是同一个权限面：能调这个接口的人本来也能改它们。
+	// The three switches follow the bundle. For an old bundle without these fields, an overwrite keeps the
+	// target's existing value and a create takes false - asserting false directly would silently switch off in
+	// one overwrite what an admin turned on. They are the same permission surface as ticking the boxes on the edit page: whoever can call this API can change them anyway.
 	wantSupervisor := flagFrom(payload, "is_supervisor", prev != nil && prev.IsSupervisor)
 	wantToolsUnrestricted := flagFrom(payload, "tools_unrestricted", prev != nil && prev.ToolsUnrestricted)
 	wantSkillDiscovery := flagFrom(payload, "skill_discovery", prev != nil && prev.SkillDiscovery)
@@ -851,91 +840,91 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 
 	var id string
 	warnings := missingWarnings(missing)
-	// 覆盖时把包里被清空的凭据键换回目标已有值：与 placeTool 保留 configs、工作流
-	// 按变量名保留 env_vars 的 secret 是同一套约定 —— 上架时凭据被清成空串，
-	// 直接整体替换会把目标已经配好的 api_key / token 抹掉。
-	// 覆盖换的是内容，不是凭据；目标配一次不容易，别让它在「更新版本」时白丢。
+	// On overwrite, credential keys the bundle blanked take the target's existing value: the same rule as
+	// placeTool keeping configs and workflows keeping env_vars secrets by name - credentials are blanked at
+	// listing time, and replacing the whole map would wipe the api_key / token the target already has.
+	// An overwrite replaces content, not credentials; configuring them once was work, so do not lose them on a version update.
 	if prev != nil {
 		if target, isMap := prev.Config.Data.(map[string]any); isMap {
 			if kept := assetpack.PreserveSecretKeys(cfgMap, target); kept > 0 {
 				warnings = append(warnings, fmt.Sprintf(
-					"已保留本租户原有的 %d 项凭据配置（包内这些项在上架时已清空）", kept))
+					"kept %d credential settings that already existed in this tenant (the bundle had them blanked at listing time)", kept))
 			}
 		}
 
-		// UpdateAgent 是全字段覆盖：端点必须先把旧值回填（它属于本租户的对外暴露配置，
-		// 包里没有也不该被抹掉）；两个开关按包走，不再回填。
+		// UpdateAgent overwrites every field, so endpoints must be filled back with the old value first (exposure
+		// belongs to this tenant and must not be wiped just because the bundle lacks it); the two switches follow the bundle and are not filled back.
 		ag.Endpoints = prev.Endpoints
 		if uerr := agentRepo.UpdateAgent(info, prev.ID, ag); uerr != nil {
-			// 目录已经被新内容替换掉了：这里**不删**它。行还是旧的、文件是新的，
-			// 智能体至少还能跑（AGENT.md 就是新正文），补一次导入即可对齐；
-			// 删掉反而会留下「有行、没文件」的坏实体，比不一致更糟。
+			// The directory already holds the new content, so it is **not** deleted here. With an old row and new files
+			// the agent still runs (AGENT.md is the new body), and one more import aligns them; deleting would leave a
+			// "row without files" entity, worse than a mismatch.
 			xhttp.ErrCode(c, "asset.record_write_failed", map[string]any{"kind": "agent", "name": name},
-				"覆盖智能体记录失败（文件已写入，请重试导入）: "+uerr.Error(), "")
+				"failed to overwrite the agent record (files were written; retry the import): "+uerr.Error(), "")
 			return
 		}
 		id = prev.ID
 		src.overwritten = true
-		// 超权身份是单独一列（UpdateAgent 刻意不写它，见其注释）：这里显式对齐。
-		// 降级「本租户最后一个超级智能体」会被仓储拒绝 —— 那是保护不是故障，保留原值并提示。
+		// Super-user power is its own column (UpdateAgent deliberately does not write it; see its comment), so align it here.
+		// Demoting "the last super agent of this tenant" is refused by the repository - that is protection, not a fault; keep the old value and report it.
 		if prev.IsSupervisor != wantSupervisor {
 			if serr := agentRepo.SetSupervisor(info, prev.ID, wantSupervisor); serr != nil {
-				warnings = append(warnings, "超级智能体开关未能按包设置（"+serr.Error()+"），已保留原设置")
+				warnings = append(warnings, "the super-agent switch could not be set from the bundle ("+serr.Error()+"); the previous setting is kept")
 			} else if wantSupervisor {
-				warnings = append(warnings, "已按包把该实体设为超级智能体（拥有全部内置工具、任何入口都读写草稿）")
+				warnings = append(warnings, "the entity is now a super agent per the bundle (holds every built-in tool and reads and writes drafts from any entry point)")
 			} else {
-				warnings = append(warnings, "已按包取消该实体的超级智能体身份")
+				warnings = append(warnings, "the super-agent identity was removed per the bundle")
 			}
 		}
-		// 覆盖时先把这个 agent 的私有技能记录清掉：包里没有的私有技能，文件已经随目录删了，
-		// 留着行就是「点得开、正文不存在」的空壳（而且会污染列表与注入清单）。
+		// On overwrite, clear this agent's private skill rows first: the files of private skills the bundle does not
+		// have are already gone with the directory, and a leftover row is a shell that opens onto nothing (and pollutes lists and the injection manifest).
 		if derr := skillRepo.DeleteByAgentID(info.Schema, id); derr != nil {
-			warnings = append(warnings, "清理既有私有技能记录失败："+derr.Error())
+			warnings = append(warnings, "failed to clean the existing private skill records: "+derr.Error())
 		}
 		if models.IsProtectedAgent(name) {
-			warnings = append(warnings, "覆盖的是系统内置智能体（受保护名）：内容与开关按包替换，受保护身份由名字决定")
+			warnings = append(warnings, "this overwrites a built-in agent (protected name): content and switches come from the bundle, while protection follows the name")
 		}
 	} else {
 		var cerr error
-		id, cerr = agentRepo.CreateAgent(info, ag, "") // creatorAgentID 空 = 不写 agent_relations
+		id, cerr = agentRepo.CreateAgent(info, ag, "") // empty creatorAgentID = do not write agent_relations
 		if cerr != nil {
 			_ = st.DeletePrefix(ctx, dstDir)
-			xhttp.ErrCode(c, "common.internal", nil, "写入智能体记录失败: "+cerr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to write the agent record: "+cerr.Error(), "")
 			return
 		}
 		if wantSupervisor {
-			warnings = append(warnings, "已按包把该实体设为超级智能体（拥有全部内置工具、任何入口都读写草稿）")
+			warnings = append(warnings, "the entity is now a super agent per the bundle (holds every built-in tool and reads and writes drafts from any entry point)")
 		}
 	}
-	// 私有技能重建：它属于这个 agent 自己的目录（文件已随目录还原），不是绑定关系
+	// Private skill rebuild: they belong to this agent's own directory (their files were restored with it), not to a binding
 	warnings = append(warnings, restorePrivateSkills(info, id, payload["private_skills"])...)
 	if prev != nil {
-		// 覆盖：绑定按包内清单**全量替换**（只加不减会让包里没有的技能继续挂在这个 agent 上）
+		// Overwrite: bindings are replaced **wholesale** per the bundle (add-only would keep skills the bundle does not have attached to this agent)
 		warnings = append(warnings, replaceInstalledSkillBindings(info, id, src.manifest.Deps.Skills)...)
 	} else {
 		warnings = append(warnings, bindInstalledSkills(info, id, src.manifest.Deps.Skills)...)
 	}
-	// 先装随包带过来的工具，再写授权 —— 顺序反了授权行会指向还不存在的工具
+	// Install the tools the bundle brings first, then write the grants - reversed, the grant rows point at tools that do not exist yet
 	warnings = append(warnings, installBundledTools(info, src)...)
 	if prev != nil {
 		warnings = append(warnings, replaceAgentGrants(info, id, src.manifest.Deps.Tools)...)
 	} else {
 		warnings = append(warnings, writeAgentGrants(info, id, src.manifest.Deps.Tools)...)
 	}
-	// 调用关系是「谁能调用我」的反向授权，跨租户无法重映射；明说一句免得以为装完就能被调
-	warnings = append(warnings, "调用授权（谁能调用该智能体）不会随资产迁移，需要在目标租户的「调用授权」里重新配置")
+	// Call relations are the reverse grant "who may call me" and cannot be remapped across tenants; say so, or the user expects it to be callable right away
+	warnings = append(warnings, "call grants (who may call this agent) do not migrate with the asset; reconfigure them under call grants in the target tenant")
 
 	respondInstalled(c, info, src, name, id, missing, warnings)
 }
 
-// restorePrivateSkills 把包里随 agent 带过来的私有技能重建成新 agent 的私有行。
+// restorePrivateSkills rebuilds the private skills that travelled with an agent into private rows of the new agent.
 //
-// 文件已经由 RestoreFiles 铺到 agents/<name>/skills/<skill>/ —— 但「有目录没有 skills 行」
-// 在运行期是完全看不见的：技能列表点不到、文件工具找不到入口、agent 也加载不到正文。
-// 所以文件与行必须成对出现。
+// RestoreFiles has laid the files into agents/<name>/skills/<skill>/ - but "a directory with no skills row"
+// is completely invisible at run time: the skill list does not show it, the file tools find no entry and the agent never loads the body.
+// So files and rows must come in pairs.
 //
-// 失败不整单回滚：agent 本体已经装好，少一个私有技能只记 warning（用户还能手动补），
-// 让整次安装失败反而把已经正确的内容一起扔掉。
+// A failure does not roll back the install: the agent itself is already in place, so one missing private skill
+// is only a warning (the user can add it by hand), while failing the whole install would throw away what is already correct.
 func restorePrivateSkills(info *auth.AuthInfo, agentID string, raw any) []string {
 	list, ok := raw.([]any)
 	if !ok || len(list) == 0 {
@@ -950,7 +939,7 @@ func restorePrivateSkills(info *auth.AuthInfo, agentID string, raw any) []string
 		}
 		name := strings.TrimSpace(asString(m["name"]))
 		if !paths.ValidName(name) {
-			warnings = append(warnings, "私有技能名不合法，未重建："+name)
+			warnings = append(warnings, "private skill name is invalid, not rebuilt: "+name)
 			continue
 		}
 
@@ -963,7 +952,7 @@ func restorePrivateSkills(info *auth.AuthInfo, agentID string, raw any) []string
 			UserInvocable:   xsql.Bool(asBool(m["user_invocable"])),
 			CommandDispatch: xsql.String(asString(m["command_dispatch"])),
 			CommandTool:     xsql.String(asString(m["command_tool"])),
-			AgentID:         xsql.UUID(agentID), // 归属指向新 agent，不是源 agent
+			AgentID:         xsql.UUID(agentID), // ownership points at the new agent, not the source one
 			CreatedBy:       xsql.UUID(info.ID),
 			UpdatedBy:       xsql.UUID(info.ID),
 		}
@@ -973,21 +962,21 @@ func restorePrivateSkills(info *auth.AuthInfo, agentID string, raw any) []string
 
 		id, err := skillRepo.Create(info.Schema, sk)
 		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("私有技能 %s 重建失败：%v", name, err))
+			warnings = append(warnings, fmt.Sprintf("failed to rebuild private skill %s: %v", name, err))
 			continue
 		}
 		restored = append(restored, name)
 		warnings = append(warnings, writeSkillGrants(info, id, toolDepsOf(m["tool_grants"]))...)
 	}
-	// 成功也要说一声：装完看不到私有技能时，用户第一反应是「没带上」，这类静默成功最难排查
+	// Report success too: when private skills are not visible after an install the user assumes they were left behind, and silent success is the hardest kind to diagnose
 	if len(restored) > 0 {
 		warnings = append(warnings, fmt.Sprintf(
-			"已随包重建 %d 个私有技能（%s）", len(restored), strings.Join(restored, "、")))
+			"rebuilt %d private skills from the bundle (%s)", len(restored), strings.Join(restored, ", ")))
 	}
 	return warnings
 }
 
-// toolDepsOf 把包里的 [{type, ref}] 还原成工具依赖声明（坏项直接跳过）。
+// toolDepsOf turns the [{type, ref}] entries in the bundle back into tool dependency declarations (bad items are skipped).
 func toolDepsOf(raw any) []assetpack.ToolDep {
 	list, ok := raw.([]any)
 	if !ok {
@@ -1002,73 +991,73 @@ func toolDepsOf(raw any) []assetpack.ToolDep {
 	return out
 }
 
-// bindInstalledSkills 按名字把技能绑到新智能体。
+// bindInstalledSkills binds skills to the new agent by name.
 //
-// 只能用名字匹配：跨租户的 skill id 没有意义。而且只认同名「租户级」技能（agent_id 为
-// 空的那些，FindByName 的既定口径）——别人的私有技能本来就看不见，跳过并记一条 warning，
-// 静默少绑会让「这个 agent 怎么不按文档回答」变成一次漫长的排查。
+// Only name matching works: a skill id from another tenant means nothing. And only same-named "tenant-level"
+// skills count (those with an empty agent_id, the established FindByName rule) - someone else's private skill is invisible anyway, so it is skipped with a warning;
+// a silently missing binding turns "why does this agent not follow the docs" into a long investigation.
 func bindInstalledSkills(info *auth.AuthInfo, agentID string, names []string) []string {
 	var warnings []string
 	for _, sname := range names {
 		s, err := skillRepo.FindByName(info.Schema, sname, "")
 		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("技能 %s 查询失败，未绑定：%v", sname, err))
+			warnings = append(warnings, fmt.Sprintf("failed to look up skill %s, not bound: %v", sname, err))
 			continue
 		}
 		if s == nil {
-			warnings = append(warnings, "目标租户没有同名技能，未绑定："+sname)
+			warnings = append(warnings, "the target tenant has no same-named skill, not bound: "+sname)
 			continue
 		}
-		// 绑一个已废弃的技能等于绑了个不存在的技能：留一条话，别让人去查「为什么没加载」
+		// Binding a deprecated skill equals binding a missing one: leave a note so nobody has to dig into "why is it not loaded"
 		if int(s.Status) == models.StatusDeprecated {
-			warnings = append(warnings, "目标租户的同名技能已废弃，未绑定："+sname)
+			warnings = append(warnings, "the target tenant's same-named skill is deprecated, not bound: "+sname)
 			continue
 		}
 		if _, berr := skillRepo.AddBinding(info.Schema, agentID, string(s.ID), info.ID); berr != nil {
-			warnings = append(warnings, fmt.Sprintf("技能 %s 绑定失败：%v", sname, berr))
+			warnings = append(warnings, fmt.Sprintf("failed to bind skill %s: %v", sname, berr))
 		}
 	}
 	if len(names) > 0 {
-		warnings = append(warnings, fmt.Sprintf("已按名字尝试绑定 %d 个技能（缺失的见上）", len(names)))
+		warnings = append(warnings, fmt.Sprintf("attempted to bind %d skills by name (see above for the ones missing)", len(names)))
 	}
 	return warnings
 }
 
-// replaceInstalledSkillBindings 覆盖安装时按包内清单**全量替换**技能绑定。
+// replaceInstalledSkillBindings replaces skill bindings **wholesale** on an overwrite install.
 //
-// 与 bindInstalledSkills 的差别只有最后一步（ReplaceByAgent 而不是逐条 AddBinding）：
-// 覆盖语义下「包里没有的技能」必须解绑，否则旧绑定会跟着新内容继续生效。
-// 名字匹配的口径与逐条版一致：只认租户级同名技能，缺失 / 已废弃的跳过并记 warning。
+// The only difference from bindInstalledSkills is the last step (ReplaceByAgent instead of one AddBinding per
+// item): an overwrite must unbind skills the bundle does not have, or the old bindings keep applying to the new content.
+// Name matching follows the per-item version: only tenant-level same-named skills, with missing / deprecated ones skipped and reported.
 func replaceInstalledSkillBindings(info *auth.AuthInfo, agentID string, names []string) []string {
 	var warnings []string
 	ids := make([]string, 0, len(names))
 	for _, sname := range names {
 		s, err := skillRepo.FindByName(info.Schema, sname, "")
 		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("技能 %s 查询失败，未绑定：%v", sname, err))
+			warnings = append(warnings, fmt.Sprintf("failed to look up skill %s, not bound: %v", sname, err))
 			continue
 		}
 		if s == nil {
-			warnings = append(warnings, "目标租户没有同名技能，未绑定："+sname)
+			warnings = append(warnings, "the target tenant has no same-named skill, not bound: "+sname)
 			continue
 		}
 		if int(s.Status) == models.StatusDeprecated {
-			warnings = append(warnings, "目标租户的同名技能已废弃，未绑定："+sname)
+			warnings = append(warnings, "the target tenant's same-named skill is deprecated, not bound: "+sname)
 			continue
 		}
 		ids = append(ids, string(s.ID))
 	}
 	if err := skillRepo.ReplaceByAgent(info.Schema, agentID, ids, info.ID); err != nil {
-		return append(warnings, "技能绑定重建失败："+err.Error())
+		return append(warnings, "failed to rebuild skill bindings: "+err.Error())
 	}
 	warnings = append(warnings, fmt.Sprintf(
-		"技能绑定已按包内清单全量替换（保留 %d 个，缺失的见上）", len(ids)))
+		"skill bindings were replaced wholesale per the bundle (%d kept; see above for the missing ones)", len(ids)))
 	return warnings
 }
 
-// agentGrantsOf 把依赖声明转成授权行。
+// agentGrantsOf turns dependency declarations into grant rows.
 //
-// grant_kind 缺省按 allow：老资产可能没记这个字段，按 required 会让 deny 再也收不回来。
+// grant_kind defaults to allow: older assets may not record it, and defaulting to required would mean a deny can never be taken back.
 func agentGrantsOf(agentID string, deps []assetpack.ToolDep) []models.AgentToolGrant {
 	grants := make([]models.AgentToolGrant, 0, len(deps))
 	for _, d := range deps {
@@ -1086,10 +1075,10 @@ func agentGrantsOf(agentID string, deps []assetpack.ToolDep) []models.AgentToolG
 	return grants
 }
 
-// writeAgentGrants 新建安装时写工具授权（全量替换）。
+// writeAgentGrants writes tool grants on a fresh install (replacing everything).
 //
-// 空清单直接跳过：新建走的是 CreateAgent，它已经物化了缺省授权（普通 agent 的读写组 /
-// supervisor 的 core 组），这里再 Replace 成空会把刚种下的东西抹掉。
+// An empty manifest is skipped outright: a fresh install goes through CreateAgent, which already materialised the
+// default grants (the read-write group of a normal agent / the core group of a supervisor), and replacing them with nothing here would wipe what was just seeded.
 func writeAgentGrants(info *auth.AuthInfo, agentID string, deps []assetpack.ToolDep) []string {
 	if len(deps) == 0 {
 		return nil
@@ -1099,27 +1088,27 @@ func writeAgentGrants(info *auth.AuthInfo, agentID string, deps []assetpack.Tool
 		return nil
 	}
 	if err := grantRepo.ReplaceAgentGrants(info.Schema, agentID, info.ID, grants); err != nil {
-		return []string{"工具授权写入失败：" + err.Error()}
+		return []string{"failed to write tool grants: " + err.Error()}
 	}
 	return []string{fmt.Sprintf(
-		"已写入 %d 条工具授权；本租户缺少对应工具时它们不会生效，可在「工具授权」里调整", len(grants))}
+		"wrote %d tool grants; any whose tool is missing in this tenant will not take effect - adjust them under tool grants", len(grants))}
 }
 
-// replaceAgentGrants 覆盖安装时写工具授权：**即使包里一条都没声明也要清空旧授权**。
-// 覆盖的语义是「以包为准」，留着旧授权会让新内容跑在旧的工具可见性上。
+// replaceAgentGrants writes tool grants on an overwrite install: **the old grants are cleared even when the bundle declares none**.
+// An overwrite means "the bundle decides", and keeping old grants would run the new content on the old tool visibility.
 func replaceAgentGrants(info *auth.AuthInfo, agentID string, deps []assetpack.ToolDep) []string {
 	grants := agentGrantsOf(agentID, deps)
 	if err := grantRepo.ReplaceAgentGrants(info.Schema, agentID, info.ID, grants); err != nil {
-		return []string{"工具授权写入失败：" + err.Error()}
+		return []string{"failed to write tool grants: " + err.Error()}
 	}
 	if len(grants) == 0 {
-		return []string{"工具授权已按包内清单清空（包内没有声明任何工具）"}
+		return []string{"tool grants were cleared per the bundle (it declares no tools)"}
 	}
 	return []string{fmt.Sprintf(
-		"工具授权已按包内清单全量替换（%d 条）；本租户缺少对应工具时它们不会生效", len(grants))}
+		"tool grants were replaced wholesale per the bundle (%d); any whose tool is missing in this tenant will not take effect", len(grants))}
 }
 
-// suggestFreeAgentName 给一个本租户没被占用的智能体名（最多试 50 个）。
+// suggestFreeAgentName suggests an agent name free in this tenant (up to 50 attempts).
 func suggestFreeAgentName(info *auth.AuthInfo, base string) string {
 	cand := assetpack.SuggestName(base, nil)
 	for i := 0; i < 50; i++ {
@@ -1132,89 +1121,90 @@ func suggestFreeAgentName(info *auth.AuthInfo, base string) string {
 	return base
 }
 
-// ===== 工作流 =====
+// ===== Workflows =====
 
-// installWorkflow 安装工作流：从快照里的 FLOW.json 重新建一行 {schema}.flows。
+// installWorkflow installs a workflow: it creates a new {schema}.flows row from FLOW.json in the snapshot.
 //
-// 与其它三类的差别：不落任何文件（定义只在库里），所以「先文件、后 DB」那条顺序在这里
-// 退化成一次 INSERT，失败也不用清理目录。
+// The difference from the other three kinds: no files are written (the definition lives only in the database),
+// so the "files first, DB second" order degrades to a single INSERT and a failure needs no directory cleanup.
 //
-// 装上就是「正常」态（status=1）。早期这里落的是 2，本意是「停用」，但 flows 的 2 曾是
-// **锁定**（只读、仍可运行），既不是停用也让用户改不了 —— 工作流根本没有「停用」这个状态
-// （2 现已从工作流 / agent / skill 全部取消，只剩自定义工具用它表示「停用」）。
-// 引用需要核对这件事改成提示（warnings）而不是把记录锁死。
+// An install lands as normal (status=1). Earlier it landed as 2, meant as "disabled", but for flows 2 used to
+// mean **locked** (read-only, still runnable), which is neither disabled nor editable - a workflow has no
+// "disabled" state at all (2 has been removed from workflows / agents / skills and now only means "disabled" for custom tools).
+// The need to check references became a warning instead of a locked row.
 func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, name string, req installRequest) {
 	prev, perr := flowRepo.FindByName(info, name)
 	if perr != nil {
-		xhttp.ErrJSON(c, "check name: "+perr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "check name: "+perr.Error(), "")
 		return
 	}
 	if prev != nil {
 		if !req.Overwrite {
 			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "workflow", "name": name},
-				"本租户已有同名工作流："+name, gin.H{
+				"this tenant already has a workflow named "+name, gin.H{
 					"suggested_name": suggestFreeFlowName(info, name),
 					"can_overwrite":  true,
 				}, "")
 			return
 		}
-		// 废弃态不能改定义（UpdateFlow 会拒）：提前说清，别让用户走完确认才发现
+		// A deprecated workflow cannot be redefined (UpdateFlow refuses): say so up front instead of after the user confirms
 		if int(prev.Status) == models.StatusDeprecated {
 			xhttp.ErrCode(c, "asset.target_deprecated", map[string]any{"kind": "workflow", "name": name},
-				"本租户的同名工作流处于废弃态，覆盖前请先把它切回「正常」", "")
+				"the same-named workflow in this tenant is deprecated; switch it back to normal before overwriting", "")
 			return
 		}
 	} else {
-		// 工作流与智能体共用一个名字空间（创建接口就是这么校验的）：放行会造出
-		// 一个「按名字查找永远命中另一个」的实体。覆盖的是同一个实体，不可能撞 agent，只在新建时查。
+		// Workflows and agents share one namespace (the create endpoints validate it that way): letting it through
+		// would create an entity where a lookup by name always hits the other one. An overwrite targets the same entity and cannot meet an agent, so only the create path checks.
 		if agentExist, aerr := agentRepo.ExistsName(info, name, ""); aerr != nil {
-			xhttp.ErrJSON(c, "check name: "+aerr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "check name: "+aerr.Error(), "")
 			return
 		} else if agentExist {
 			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "agent", "name": name},
-				"本租户已有同名智能体，工作流名不能与智能体重名："+name, gin.H{
+				"this tenant already has an agent named "+name+"; a workflow and an agent cannot share a name", gin.H{
 					"suggested_name": suggestFreeFlowName(info, name),
 				}, "")
 			return
 		}
-		// 配额预检：与「新建工作流」同一条闸，别让超限的租户先建出行再回滚；覆盖不新增实体，跳过
+		// Quota preflight: the same gate as "new workflow", so an over-limit tenant does not create a row and roll back; an overwrite adds no entity, so it is skipped
 		if cnt, qerr := quota.CountFlows(info.Schema); qerr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "统计工作流数量失败: "+qerr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to count workflows: "+qerr.Error(), "")
 			return
 		} else if qerr := models.CheckQuota("flow", cnt, quota.Resolve(info.Schema).MaxFlows); qerr != nil {
-			xhttp.ErrJSON(c, qerr.Error(), nil, "")
+			le := qerr.(*models.LimitError)
+			xhttp.ErrCode(c, "quota.flow_limit_reached", le.Params(), qerr.Error(), "")
 			return
 		}
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 	ctx := context.Background()
 	raw, rerr := st.ReadFile(ctx, path.Join(src.snapDir, assetpack.WorkflowFileName))
 	if rerr != nil {
 		xhttp.ErrCode(c, "asset.invalid_package", map[string]any{"file": assetpack.WorkflowFileName},
-			"快照里没有工作流定义（"+assetpack.WorkflowFileName+"）：请让提供方重新上架", "")
+			"the snapshot has no workflow definition ("+assetpack.WorkflowFileName+"): ask the provider to list it again", "")
 		return
 	}
 	var def assetpack.WorkflowSnapshot
 	if uerr := json.Unmarshal(raw, &def); uerr != nil {
-		xhttp.ErrCode(c, "asset.invalid_package", nil, "工作流定义损坏: "+uerr.Error(), "")
+		xhttp.ErrCode(c, "asset.invalid_package", nil, "the workflow definition is corrupt: "+uerr.Error(), "")
 		return
 	}
 
-	// 覆盖同名工作流时保留目标已配好的 secret 值。
+	// Overwriting a same-named workflow keeps the secret values the target already has.
 	//
-	// 包里的 secret 在上架时就被清空了（跨租户不该带凭据），但「包里没有」不等于
-	// 「目标该被抹掉」：同名覆盖换的是内容，不是凭据。按变量名把目标现有的值补回
-	// 包里空着的那些；目标没有的（本次新增的密钥变量）仍为空，装完要人填。
+	// Secrets in a bundle are blanked at listing time (credentials must not cross tenants), but "the bundle has
+	// none" is not "the target should be wiped": an overwrite replaces content, not credentials. The target's
+	// values are filled back by variable name where the bundle is empty; variables the target does not have (secrets added now) stay empty and must be filled in.
 	preservedSecrets := false
 	if prev != nil {
 		merged, merr := secureval.MergeEnvVarSecrets(jsonbBytes(prev.EnvVars), def.EnvVars)
 		if merr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "合并环境变量失败: "+merr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to merge environment variables: "+merr.Error(), "")
 			return
 		}
 		if string(merged) != string(def.EnvVars) {
@@ -1239,7 +1229,7 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 		MaxSessionRecords: xsql.Int(def.MaxSessionRecords),
 	}
 
-	// 只允许「正常 / 废弃」两种落点；覆盖时缺省沿用目标既有状态（覆盖的是内容，不是生命周期）
+	// Only "normal / deprecated" are valid landing states; on overwrite the default is the target's existing state (an overwrite replaces content, not lifecycle)
 	status := models.StatusNormal
 	if prev != nil {
 		status = int(prev.Status)
@@ -1249,61 +1239,61 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 	}
 
 	warnings := []string{
-		"工作流里的模型 / 工具 / 子流程引用不会随资产迁移，运行前请逐项核对",
+		"model / tool / sub-flow references in the workflow do not migrate with the asset; check them one by one before running",
 	}
 	switch {
 	case prev == nil:
 		warnings = append(warnings,
-			"凭据类变量（env_vars 与节点里的 api_key 等）已在上架时清空，需要重新填写")
+			"credential variables (env_vars and the api_key values in nodes) were blanked at listing time and must be filled in again")
 	case len(def.EnvVars) == 0:
-		// 包内整块 env_vars 为空：合并无从对齐，目标原有的变量会随本次覆盖移除。
-		// 这不该被说成「已保留」—— 那会让人以为密钥还在。
+		// The whole env_vars block in the bundle is empty, so there is nothing to merge against and the target's
+		// existing variables are removed by this overwrite. That must not be reported as "kept" - it would suggest the secrets are still there.
 		warnings = append(warnings,
-			"包内未携带环境变量，本次覆盖会移除目标原有的环境变量（含密钥），需要重新配置")
+			"the bundle carries no environment variables, so this overwrite removes the target's existing ones (secrets included); reconfigure them")
 	case preservedSecrets:
 		warnings = append(warnings,
-			"同名工作流已覆盖：已按变量名保留本租户原有的密钥值；包内新增的密钥类变量为空，需要填写")
+			"the same-named workflow was overwritten: the tenant's existing secret values were kept by variable name; secret variables added by the bundle are empty and must be filled in")
 	default:
 		warnings = append(warnings,
-			"同名工作流已覆盖：包内的密钥类变量为空，且没有可沿用的原值，需要填写")
+			"the same-named workflow was overwritten: the bundle's secret variables are empty and there is no previous value to reuse, so they must be filled in")
 	}
 
 	var id string
 	if prev != nil {
-		// UpdateFlow 不写 status / endpoints / 断点，也不动 flow_versions：对外暴露配置、
-		// 调试状态与发布历史都属于目标租户。覆盖改的是草稿 —— 正式入口跑的是已发布版本。
+		// UpdateFlow writes no status / endpoints / breakpoints and does not touch flow_versions: exposure, debug
+		// state and release history all belong to the target tenant. An overwrite changes the draft - the public entry point runs the released version.
 		if uerr := flowRepo.UpdateFlow(info, prev.ID, f); uerr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "覆盖工作流定义失败: "+uerr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to overwrite the workflow definition: "+uerr.Error(), "")
 			return
 		}
 		id = prev.ID
 		src.overwritten = true
 		warnings = append(warnings,
-			"覆盖只替换草稿（图 / 变量 / 限额）：已发布的版本、对外端点与断点保留原样；"+
-				"要让新内容对外生效，需在编辑器里发布新版本")
+			"an overwrite replaces only the draft (diagram / variables / limits): released versions, exposed endpoints and breakpoints stay as they are; "+
+				"release a new version in the editor to make the new content live")
 		if status != int(prev.Status) {
 			if uerr := flowRepo.UpdateStatus(info, id, status); uerr != nil {
-				warnings = append(warnings, "状态未能改成目标值，已保留原状态："+uerr.Error())
+				warnings = append(warnings, "the status could not be changed to the target value; the original is kept: "+uerr.Error())
 			}
 		}
 	} else {
 		var cerr error
 		id, cerr = flowRepo.CreateFlow(info, f)
 		if cerr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "写入工作流记录失败: "+cerr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to write the workflow record: "+cerr.Error(), "")
 			return
 		}
-		// CreateFlow 的列缺省就是「正常」（1）；只有调用方显式要求废弃时才多写一次
+		// CreateFlow's column default is already normal (1); write again only when the caller explicitly asks for deprecated
 		if status != models.StatusNormal {
 			if uerr := flowRepo.UpdateStatus(info, id, status); uerr != nil {
-				warnings = append(warnings, "工作流已创建，但状态没改成目标值："+uerr.Error())
+				warnings = append(warnings, "the workflow was created but its status could not be changed to the target value: "+uerr.Error())
 			}
 		}
 	}
 	respondInstalled(c, info, src, name, id, nil, warnings)
 }
 
-// jsonbFromRaw 把 FLOW.json 里的原始片段转成 jsonb 列值；空片段 / null 落成 nil。
+// jsonbFromRaw turns a raw fragment from FLOW.json into a jsonb column value; an empty fragment / null becomes nil.
 func jsonbFromRaw(raw json.RawMessage) xsql.JSONB {
 	if len(raw) == 0 || string(raw) == "null" {
 		return xsql.JSONB{}
@@ -1315,8 +1305,8 @@ func jsonbFromRaw(raw json.RawMessage) xsql.JSONB {
 	return xsql.JSONB{Data: v}
 }
 
-// jsonbBytes 取 JSONB 的原始字节（Data 可能是 []byte / RawMessage / string）。
-// 与上面的 jsonbFromRaw 互为反向：合并 env_vars 时要的是原始形态，不是解码后的 map。
+// jsonbBytes returns the raw bytes of a JSONB (Data may be []byte / RawMessage / string).
+// The inverse of jsonbFromRaw above: merging env_vars needs the raw form, not a decoded map.
 func jsonbBytes(j xsql.JSONB) []byte {
 	switch v := j.Data.(type) {
 	case nil:
@@ -1336,8 +1326,8 @@ func jsonbBytes(j xsql.JSONB) []byte {
 	}
 }
 
-// suggestFreeFlowName 给一个本租户没被占用的工作流名（最多试 50 个）。
-// 两个名字空间都要避开：工作流与智能体共用一张「按名字查找」的表。
+// suggestFreeFlowName suggests a workflow name free in this tenant (up to 50 attempts).
+// Both namespaces must be avoided: workflows and agents share one lookup-by-name table.
 func suggestFreeFlowName(info *auth.AuthInfo, base string) string {
 	cand := assetpack.SuggestName(base, nil)
 	for i := 0; i < 50; i++ {
@@ -1351,29 +1341,29 @@ func suggestFreeFlowName(info *auth.AuthInfo, base string) string {
 	return base
 }
 
-// ===== 公共尾巴 =====
+// ===== Shared tail =====
 
-// respondInstalled 回包 + 写安装记录（记录失败只提示，不影响这次安装）。
+// respondInstalled responds and writes the install record (a failed record write is only reported, never fails the install).
 //
-// 直接上传资产包导入时没有平台资产行（src.asset 为 nil），也就不该写安装流水 ——
-// 流水表的语义是「从平台资产装的」，凭空塞一条不存在的 asset_id 只会让「已安装」标错。
+// Importing an uploaded bundle has no platform asset row (src.asset is nil), so it must not write an install record -
+// the table means "installed from a platform asset", and inventing a row with a non-existent asset_id only marks the wrong things as installed.
 func respondInstalled(c *gin.Context, info *auth.AuthInfo, src *installSource, name, id string, missing, warnings []string) {
-	// 全局变量缺失要在这里说：装完不会立刻报错，第一次跑到相关节点才失败，
-	// 而那时用户看到的是一条与「安装」毫无关联的节点错误。
+	// Missing global variables must be said here: the install does not fail at once, the first run of a related
+	// node fails, and the user then sees a node error with no visible link to the install.
 	warnings = append(warnings, missingGlobalVarWarnings(info, src.manifest.Deps.GlobalVars)...)
 
-	// 覆盖前先记下「上次装的是不是同一份内容」：写记录之后这一条的指纹就变成新的了。
-	// 只提示、不阻断 —— 指纹说明的是「两个包一样」，不能证明实体当前内容没被本地改过。
+	// Before writing, note whether the last install carried the same content: after the record is written this
+	// fingerprint becomes the new one. Report only, never block - a matching digest says "the two bundles are the same", not that the local entity was not edited since.
 	if src.overwritten && src.manifest.Digest != "" {
 		if prevDigest, derr := sharedassets.LatestInstallDigest(info.Schema, id); derr == nil &&
 			prevDigest == src.manifest.Digest {
-			warnings = append(warnings, "本次覆盖的包与上次安装时是同一份内容（指纹 "+
-				assetpack.ShortDigest(src.manifest.Digest)+"）：若之后没在本地改过，覆盖并没有带来变化")
+			warnings = append(warnings, "this overwrite carries the same content as the previous install (digest "+
+				assetpack.ShortDigest(src.manifest.Digest)+"): unless the local copy changed since, the overwrite brought nothing new")
 		}
 	}
 	if a := src.asset; a != nil {
 		if err := sharedassets.RecordInstall(a.ID, info.Schema, a.Build, name, id, info.ID, info.Name, src.manifest.Digest); err != nil {
-			warnings = append(warnings, "安装记录写入失败（不影响使用）："+err.Error())
+			warnings = append(warnings, "failed to write the install record (the install is unaffected): "+err.Error())
 		}
 	}
 	body := gin.H{
@@ -1381,9 +1371,9 @@ func respondInstalled(c *gin.Context, info *auth.AuthInfo, src *installSource, n
 		"kind":          string(src.kind),
 		"warnings":      append(append([]string{}, src.notices...), warnings...),
 		"skipped_files": missing,
-		// 前端据此把提示从「已导入」改成「已覆盖导入」；覆盖是破坏性动作，回包必须说清
+		// The front end switches its copy from "imported" to "imported as an overwrite"; an overwrite is destructive, so the response must say so
 		"overwritten": src.overwritten,
-		// 内容指纹与清单语义版本：前端展示溯源用，也是「同一份包」判断的依据
+		// Content digest and manifest spec version: shown for provenance, and the basis for "same bundle" decisions
 		"digest": src.manifest.Digest,
 		"spec":   src.manifest.Spec,
 	}
@@ -1396,11 +1386,11 @@ func respondInstalled(c *gin.Context, info *auth.AuthInfo, src *installSource, n
 	xhttp.OkJSON(c, "Success", body, "")
 }
 
-// DeleteInstall 删一条安装记录（DELETE /admin/share/installs/:asset_id/:installed_id）。
+// DeleteInstall deletes one install record (DELETE /admin/share/installs/:asset_id/:installed_id).
 //
-// 只删流水，**不会卸载**已经装进租户的技能 / 工具 / 智能体。
-// 允许租户自己删的理由：实体被删掉、或者装到了不想留的对象上时，那条记录会一直
-// 把资产标成「已安装」，反过来挡住重新安装或误判快照状态。删记录就是「把账抹平」。
+// It deletes the record only and **never uninstalls** the skills / tools / agents already installed in the tenant.
+// The reason a tenant may delete it: when the entity was deleted, or the install landed on something undesirable,
+// the record keeps the asset marked as installed, blocking a reinstall or misrepresenting the snapshot state. Deleting the record settles the books.
 func DeleteInstall(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -1409,26 +1399,26 @@ func DeleteInstall(c *gin.Context) {
 	assetID := strings.TrimSpace(c.Param("asset_id"))
 	installedID := strings.TrimSpace(c.Param("installed_id"))
 	if assetID == "" || installedID == "" {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "缺少 asset_id / installed_id", "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "asset_id / installed_id are required", "")
 		return
 	}
 	deleted, err := sharedassets.DeleteInstall(assetID, info.Schema, installedID)
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("delete install record", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("delete install record", err), "")
 		return
 	}
 	if !deleted {
 		xhttp.ErrCode(c, "asset.install_not_found", map[string]any{"asset_id": assetID, "installed_id": installedID},
-			"安装记录不存在（可能已被删除）", "")
+			"the install record does not exist (it may have been deleted)", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": true}, "")
 }
 
-// ClearInstalls DELETE /admin/share/installs —— 清空本租户的全部安装记录。
+// ClearInstalls DELETE /admin/share/installs - clears every install record of this tenant.
 //
-// 同样只删流水、不卸载实体。用一条 DELETE 而不是逐条调用：清空要么全成要么全不成，
-// 删到一半失败剩下的记录反而更难解释。
+// Also deletes records only, never the entities. One DELETE instead of one call per record: clearing either
+// succeeds or fails as a whole, while a half-finished clear leaves records that are harder to explain.
 func ClearInstalls(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -1436,16 +1426,16 @@ func ClearInstalls(c *gin.Context) {
 	}
 	n, err := sharedassets.ClearInstalls(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("clear install records", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("clear install records", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": n}, "")
 }
 
-// missingGlobalVarWarnings 列出包里引用、但本租户还没有的全局变量。
+// missingGlobalVarWarnings lists the global variables the bundle references but this tenant lacks.
 //
-// 只提示不阻断：变量可以先建后装，也可以先在别处试用；但「缺了会怎样」
-// 必须说清（运行到相关节点直接失败，不是静默空值）。
+// Report only, never block: variables may be created after the install, or tried elsewhere first; but "what
+// happens when one is missing" must be clear (the related node fails outright, it is not a silent empty value).
 func missingGlobalVarWarnings(info *auth.AuthInfo, names []string) []string {
 	if len(names) == 0 {
 		return nil
@@ -1461,14 +1451,14 @@ func missingGlobalVarWarnings(info *auth.AuthInfo, names []string) []string {
 		return nil
 	}
 	return []string{fmt.Sprintf(
-		"该资产引用了 %d 个本租户还没有的全局变量（%s）：先在「设置 → 全局变量」创建，否则运行到相关节点会直接失败",
-		len(missing), strings.Join(missing, "、"))}
+		"this asset references %d global variables this tenant does not have (%s): create them under Settings -> Global variables, or the related nodes fail outright when they run",
+		len(missing), strings.Join(missing, ", "))}
 }
 
 func missingWarnings(missing []string) []string {
 	out := make([]string, 0, len(missing))
 	for _, f := range missing {
-		out = append(out, "快照缺少文件，已跳过："+f)
+		out = append(out, "missing in the snapshot, skipped: "+f)
 	}
 	return out
 }
@@ -1480,10 +1470,10 @@ func asString(v any) string {
 	return ""
 }
 
-// flagFrom 读包内的布尔开关。
+// flagFrom reads a boolean switch from the bundle.
 //
-// 字段缺失（老版本的包）时用 fallback，而不是当成 false：覆盖导入会把既有实体上
-// 管理员开过的「超级智能体 / 不限制工具 / 可发现未绑定技能」静默关掉，那是降权，不是缺省。
+// A missing field (an older bundle) uses fallback rather than false: an overwrite import would otherwise
+// silently switch off the super agent / unrestricted tools / skill discovery an admin turned on - that is a downgrade, not a default.
 func flagFrom(payload map[string]any, key string, fallback bool) bool {
 	if v, ok := payload[key].(bool); ok {
 		return v

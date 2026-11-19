@@ -22,49 +22,53 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 跨服务器的资产搬运：导出为 zip / 导入（上传或从对端拉取）。
+// Cross-server asset transfer: export as a zip / import (upload or pull from a peer).
 //
-// 平台侧在这里只做两件事：把已审核快照打成包、把收到的包交给 shared/assetimport。
-// 「校验 → 脱敏 → 落盘 → 写库」那一整套在 shared/assetimport，租户侧的按需拉取用的是同一份实现。
+// The platform side does only two things here: pack a reviewed snapshot, and hand a received
+// package to shared/assetimport. The whole "validate -> scrub -> write files -> write rows" chain
+// lives in shared/assetimport, and the tenant-side on-demand pull uses the same implementation.
 
 const (
-	// maxPackageUpload 上传体积上限。zip 压缩比可以很高，所以给到 128 MiB（与租户侧导入、
-	// 跨站拉包同一口径）；解压后的闸仍由 assetpack.DefaultLimits（2000 个 / 单文件 64 MiB / 合计 128 MiB）兜住。
+	// maxPackageUpload caps the upload size. A zip can compress very well, so the limit is 128 MiB
+	// (the same as tenant-side import and cross-site pulling); the extracted limits are still
+	// enforced by assetpack.DefaultLimits (2000 entries / 64 MiB per file / 128 MiB total).
 	maxPackageUpload = 128 << 20
 )
 
 // ExportAssetPackage GET /platform/assets/:id/package
 //
-// 回一个 zip（package.json + files/…）。先在内存里拼完再发：快照合计上限 128 MiB，
-// 这点内存换「出错能干干净净报 400」，比流到一半截断一个半个 zip 好得多。
+// Returns a zip (package.json + files/...). It is assembled in memory first: a snapshot is capped
+// at 128 MiB in total, and that memory buys a clean 400 on failure instead of a truncated half zip
+// mid-stream.
 func ExportAssetPackage(c *gin.Context) {
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load asset: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load asset: "+err.Error(), "")
 		return
 	}
 	if a == nil {
-		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "asset not found", "")
 		return
 	}
 	data, err := buildAssetPackage(a)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	servePackage(c, a, data)
 }
 
-// buildAssetPackage 把一行资产打包成 zip 字节（导出、对端拉取、租户按需拉取共用）。
+// buildAssetPackage packs one asset row into zip bytes (shared by export, peer pulls and tenant
+// on-demand pulls).
 func buildAssetPackage(a *sharedassets.Asset) ([]byte, error) {
 	var m assetpack.Manifest
 	if len(a.Manifest) > 0 {
 		if jerr := json.Unmarshal(a.Manifest, &m); jerr != nil {
-			return nil, fmt.Errorf("资产清单损坏: %w", jerr)
+			return nil, fmt.Errorf("the asset manifest is corrupt: %w", jerr)
 		}
 	}
 	if len(m.Files) == 0 {
-		return nil, errors.New("该资产没有文件清单，无法导出（请让提供方重新上架）")
+		return nil, errors.New("this asset has no file manifest and cannot be exported (ask the provider to list it again)")
 	}
 	st, serr := packageStorage()
 	if serr != nil {
@@ -86,79 +90,82 @@ func buildAssetPackage(a *sharedassets.Asset) ([]byte, error) {
 	var buf bytes.Buffer
 	if werr := assetpack.WritePackage(context.Background(), st,
 		paths.PlatformAssetKey(a.ID, a.Build), pkg, &buf); werr != nil {
-		return nil, fmt.Errorf("打包快照失败: %w", werr)
+		return nil, fmt.Errorf("failed to pack the snapshot: %w", werr)
 	}
 	return buf.Bytes(), nil
 }
 
-// servePackage 统一的下载响应（文件名 kind-name-vN.zip）。
+// servePackage writes the shared download response (file name kind-name-vN.zip).
 func servePackage(c *gin.Context, a *sharedassets.Asset, data []byte) {
 	filename := fmt.Sprintf("%s-%s-v%d.zip", a.Kind, a.Name, a.Build)
 	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
 	c.Data(http.StatusOK, "application/zip", data)
 }
 
-// packageStorage 平台存储（导出、导入、对端拉取都指向同一个根）。
+// packageStorage is platform storage (export, import and peer pulls all point at the same root).
 func packageStorage() (storage.Storage, error) {
 	return storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
 }
 
 // ImportAssetPackage POST /platform/asset-imports
 //
-// multipart 字段：file（必填）、origin（可选，缺省取包内 server 名）、force（"1" 覆盖）。
-// 导入结果默认 pending：跨环境复制不接受「对面审过了」作为本机的放行依据。
+// multipart fields: file (required), origin (optional, defaults to the server name inside the
+// package), force ("1" overwrites).
+// An import lands in pending by default: copying across environments never accepts "the other side
+// reviewed it" as grounds for letting it through here.
 func ImportAssetPackage(c *gin.Context) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxPackageUpload)
 	file, ferr := c.FormFile("file")
 	if ferr != nil {
-		// 超限（MaxBytesReader）与「没选文件」是两回事，别糊成一句让人摸不着头脑的话
+		// Exceeding the limit (MaxBytesReader) and "no file selected" are different things, so they are
+		// not blended into one baffling sentence
 		var mbe *http.MaxBytesError
 		if errors.As(ferr, &mbe) {
 			xhttp.ErrCode(c, "asset.package_too_large", gin.H{"limit_mb": maxPackageUpload >> 20},
-				fmt.Sprintf("资产包超过上传上限（%d MiB）", maxPackageUpload>>20), "")
+				fmt.Sprintf("the asset package exceeds the upload limit (%d MiB)", maxPackageUpload>>20), "")
 			return
 		}
-		xhttp.ErrCode(c, "asset.package_required", nil, "请选择要导入的资产包（multipart 字段名 file）", "")
+		xhttp.ErrCode(c, "asset.package_required", nil, "select an asset package to import (multipart field name file)", "")
 		return
 	}
 	if file.Size <= 0 || file.Size > maxPackageUpload {
 		xhttp.ErrCode(c, "asset.invalid_package", gin.H{"size": file.Size, "limit": maxPackageUpload},
-			fmt.Sprintf("资产包大小非法（%d 字节，上限 %d）", file.Size, maxPackageUpload), "")
+			fmt.Sprintf("invalid asset package size (%d bytes, limit %d)", file.Size, maxPackageUpload), "")
 		return
 	}
 	f, oerr := file.Open()
 	if oerr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取上传文件失败: "+oerr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the uploaded file: "+oerr.Error(), "")
 		return
 	}
 	defer func() { _ = f.Close() }()
 
 	st, serr := packageStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 	res, ierr := assetimport.Import(f, file.Size, st, assetimport.Options{
 		Origin:      c.PostForm("origin"),
 		Force:       c.PostForm("force") == "1" || strings.EqualFold(c.PostForm("force"), "true"),
-		AutoApprove: false, // 人工上传一律待审，自动通过只给「配置为 auto 的可信对端」
+		AutoApprove: false, // a manual upload always waits for review; auto-approval is only for trusted peers configured as auto
 		ImportedBy:  info.ID,
 	})
 	if ierr != nil {
 		var ce *assetimport.ConflictError
 		if errors.As(ierr, &ce) {
-			xhttp.ErrJSON(c, ce.Error(), gin.H{"existing": gin.H{
+			xhttp.ErrCodeData(c, "asset.build_conflict", gin.H{"build": ce.ExistingBuild}, ce.Error(), gin.H{"existing": gin.H{
 				"id": ce.ExistingID, "build": ce.ExistingBuild, "status": ce.ExistingStatus,
 			}}, "")
 			return
 		}
-		xhttp.ErrJSON(c, ierr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, ierr.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -172,7 +179,8 @@ func ImportAssetPackage(c *gin.Context) {
 	}, "")
 }
 
-// originView 导入溯源（本机上架的行返回 nil，前端据此决定显示「上架方」还是「来源站点」）。
+// originView renders import provenance (a row listed locally returns nil, and the frontend uses that
+// to show "listed by" instead of "source site").
 func originView(a *sharedassets.Asset) gin.H {
 	if !a.Imported() {
 		return nil

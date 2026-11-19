@@ -18,69 +18,69 @@ import (
 )
 
 // ============================================================================
-// 自定义工具**内容目录**的文件管理（与 admin/skills/files.go 同构）
+// File management for a custom tool's **content directory** (mirrors admin/skills/files.go).
 //
-//	宿主目录：{root_dir}/tenants/<schema>/tools/<name>/
-//	沙箱内  ：只读挂在 /tool，入口从这里起跑
+//	host directory: {root_dir}/tenants/<schema>/tools/<name>/
+//	inside the sandbox: mounted read-only at /tool, and the entry point starts here
 //
-// 与技能那套的两点差异（都来自「目录即实体」）：
-//   - TOOL.json 是**契约真源**：可读、**不可写不可删**。写入口只有 create / update
-//     两个接口（它们会同时写文件与表行，并做 Validate）—— 放开裸写等于绕过校验，
-//     还会让文件与表行分叉。
-//   - 入口文件（TOOL.json 里的 entry）：可读写、**不可删**。删掉它，工具还在目录里
-//     但一跑就报「入口不存在」，属于半死状态。
+// Two differences from the skill side, both because the directory is the entity:
+//   - TOOL.json is the **contract of record**: readable, **not writable and not deletable**. The only writers are create / update
+//     (they write the file and the table row together and run Validate), so raw writes would bypass validation
+//     and let the file and the table row drift apart.
+//   - the entry file (entry in TOOL.json): readable and writable, **not deletable**. Delete it and the tool is still
+//     in the directory, but every run reports a missing entry: half dead.
 //
-// 刻意不走 storage 抽象：执行侧要用宿主路径做沙箱挂载源（tools.RunCustomToolSpec
-// 会 os.Stat 这个目录），toolfile 读写 TOOL.json 也用 os。走 storage 会让 S3 部署
-// 出现「编辑器里看得见、跑不起来」外加同一目录两套视图。S3 下这条链路本来就不支持
-// 自定义工具（见 run_skill_script 的同款报错）。
+// Deliberately not going through the storage abstraction: the executor needs the host path as the sandbox mount source (tools.RunCustomToolSpec
+// calls os.Stat on this directory), and toolfile reads and writes TOOL.json with os too. Going through storage would make an S3 deployment
+// show the files in the editor yet unable to run them, plus two views of the same directory. This path never supported
+// custom tools on S3 anyway (see the same error in run_skill_script).
 // ============================================================================
 
 const (
-	// maxToolFileBytes 单文件读写上限（与技能那边一致）。
+	// maxToolFileBytes caps a single file read or write (same as the skill side).
 	maxToolFileBytes = 2 << 20
-	// toolKeepFile 建空目录时的占位文件（本地实现其实会真建目录，留着是为了与
-	// 技能侧口径一致、也不让列表把空目录当成不存在）。
+	// toolKeepFile is the placeholder written into a new empty directory (the local backend really creates the directory; it stays for
+	// parity with the skill side, and so listing never treats an empty directory as missing).
 	toolKeepFile = ".keep"
 )
 
-// toolFileRoot 定位工具目录，返回 (宿主目录, 入口相对路径, ok)。
+// toolFileRoot locates the tool directory and returns (host dir, relative entry, ok).
 //
-// forWrite=true 时过状态闸：锁定(2) / 废弃(3) 一律拒写（与 tools/gate.go、
-// 元工具三件套、技能文件接口同口径）。读路径不闸 —— 只读查看不需要理由。
+// forWrite=true passes the status gate: locked (2) and deprecated (3) always reject writes (same rule as tools/gate.go,
+// the meta-tool trio and the skill file API). Read paths are not gated: viewing needs no justification.
 func toolFileRoot(c *gin.Context, forWrite bool) (string, string, bool) {
 	info, ok := mustAuth(c)
 	if !ok {
 		return "", "", false
 	}
 	name := c.Param("name")
-	// 名字闸：URL 里的 name 会拼进宿主路径，必须按创建时的规则校验
+	// Name gate: name from the URL is joined into a host path, so it must pass the creation-time rules.
 	if !tools.ValidName(name) || strings.Contains(name, "__") {
-		xhttp.ErrCode(c, "tool.invalid_name", gin.H{"name": name}, "工具名不合法", "")
+		xhttp.ErrCode(c, "tool.invalid_name", gin.H{"name": name}, "invalid tool name", "")
 		return "", "", false
 	}
 
 	dir := toolDir(info.Schema, name)
 	st, serr := os.Stat(dir)
 	if serr != nil || !st.IsDir() {
-		xhttp.ErrCode(c, "tool.not_found", gin.H{"name": name}, fmt.Sprintf("自定义工具目录不存在：tools/%s/", name), "")
+		xhttp.ErrCode(c, "tool.not_found", gin.H{"name": name}, fmt.Sprintf("custom tool directory does not exist: tools/%s/", name), "")
 		return "", "", false
 	}
 
 	store := storeFor(info.Schema)
 	status, found, err := store.Status(name)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取工具状态失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read tool status: "+err.Error(), "")
 		return "", "", false
 	}
 	if forWrite {
 		if !found {
 			xhttp.ErrCode(c, "tool.invalid_contract", gin.H{"name": name},
-				"该目录还不是合法工具（缺 TOOL.json 或契约无效）：请先用「新建自定义工具」创建，或先修好 TOOL.json", "")
+				"this directory is not a valid tool yet (TOOL.json missing or contract invalid): create it with \"new custom tool\" first, or fix TOOL.json", "")
 			return "", "", false
 		}
 		if !models.IsModifiable(status) {
-			xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能修改（请在列表里切回「正常」）", "")
+			xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "this tool is locked or deprecated and cannot be modified (switch it back to \"normal\" in the list)", "")
 			return "", "", false
 		}
 	}
@@ -95,7 +95,7 @@ func toolFileRoot(c *gin.Context, forWrite bool) (string, string, bool) {
 	return dir, entry, true
 }
 
-// joinToolFile 把「工具目录内的相对路径」拼成宿主绝对路径（带穿越校验）。
+// joinToolFile joins a path relative to the tool directory into an absolute host path (with traversal checks).
 func joinToolFile(root, rel string) (string, string, error) {
 	if strings.TrimSpace(rel) == "" {
 		return root, "", nil
@@ -110,12 +110,12 @@ func joinToolFile(root, rel string) (string, string, error) {
 	return filepath.Join(root, filepath.FromSlash(clean)), clean, nil
 }
 
-// isToolContract 判断是否为契约文件 TOOL.json（大小写不敏感，Windows 上两种都认）。
+// isToolContract reports whether the path is the TOOL.json contract file (case-insensitive, both spellings count on Windows).
 func isToolContract(rel string) bool {
 	return strings.EqualFold(path.Clean(rel), models.ToolFileName)
 }
 
-// isToolEntry 判断是否为 TOOL.json 声明的入口文件。
+// isToolEntry reports whether the path is the entry file declared in TOOL.json.
 func isToolEntry(rel, entry string) bool {
 	if entry == "" || rel == "" {
 		return false
@@ -131,19 +131,19 @@ func ListToolFiles(c *gin.Context) {
 	}
 	abs, clean, err := joinToolFile(root, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.invalid_path", nil, err.Error(), "")
 		return
 	}
 	entries, lerr := os.ReadDir(abs)
 	if lerr != nil {
-		// 目录不存在视为空列表：与技能侧同口径，不把「还没建子目录」当错误
+		// A missing directory is an empty list (same as the skill side): "no subdirectory yet" is not an error.
 		xhttp.OkJSON(c, "Success", gin.H{"path": clean, "entries": []any{}, "entry": entry}, "")
 		return
 	}
 
 	items := make([]gin.H, 0, len(entries))
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") { // 跳过隐藏文件（含 .keep 占位）
+		if strings.HasPrefix(e.Name(), ".") { // skip hidden files (including the .keep placeholder)
 			continue
 		}
 		p := path.Join(clean, e.Name())
@@ -156,7 +156,7 @@ func ListToolFiles(c *gin.Context) {
 			"path":   p,
 			"is_dir": e.IsDir(),
 			"size":   size,
-			// readonly = 不可删除（入口文件）；locked = 连内容也不能改（TOOL.json）
+			// readonly = not deletable (the entry file); locked = content frozen too (TOOL.json)
 			"readonly": isToolContract(p) || isToolEntry(p, entry),
 			"locked":   isToolContract(p),
 		})
@@ -172,11 +172,11 @@ func ReadToolFile(c *gin.Context) {
 	}
 	abs, clean, err := joinToolFile(root, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "tool.path_required", nil, "path is required", "")
 		return
 	}
 	st, serr := os.Stat(abs)
@@ -185,7 +185,7 @@ func ReadToolFile(c *gin.Context) {
 		return
 	}
 	if st.Size() > maxToolFileBytes {
-		xhttp.ErrJSON(c, "file too large to edit", nil, "")
+		xhttp.ErrCode(c, "tool.file_too_large", gin.H{"limit_mb": maxToolFileBytes >> 20}, "file too large to edit", "")
 		return
 	}
 	data, rerr := os.ReadFile(abs)
@@ -218,39 +218,39 @@ func WriteToolFile(c *gin.Context) {
 	}
 	abs, clean, err := joinToolFile(root, body.Path)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "tool.path_required", nil, "path is required", "")
 		return
 	}
 	if isToolContract(clean) {
-		// 契约只有一个写口：update_custom_tool / 表单（它会同时写文件与表行、并做 Validate）
+		// The contract has exactly one write path: update_custom_tool / the form (it writes file and table row together and runs Validate).
 		xhttp.ErrCode(c, "tool.contract_readonly", gin.H{"file": models.ToolFileName},
-			"TOOL.json 是工具契约，请用上方表单修改（直接改文件会绕过校验并与库里的行分叉）", "")
+			"TOOL.json is the tool contract; edit it with the form above (writing the file directly bypasses validation and diverges from the table row)", "")
 		return
 	}
 	if len(body.Content) > maxToolFileBytes {
-		xhttp.ErrJSON(c, "content too large", nil, "")
+		xhttp.ErrCode(c, "tool.file_too_large", gin.H{"limit_mb": maxToolFileBytes >> 20}, "content too large", "")
 		return
 	}
 	if st, serr := os.Stat(abs); serr == nil && st.IsDir() {
-		xhttp.ErrCode(c, "tool.invalid_path", gin.H{"path": clean}, "目标是目录，不能当文件写入", "")
+		xhttp.ErrCode(c, "tool.path_is_dir", gin.H{"path": clean}, "the target is a directory and cannot be written as a file", "")
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "创建目录失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to create directory: "+err.Error(), "")
 		return
 	}
 	if werr := os.WriteFile(abs, []byte(body.Content), 0o644); werr != nil {
-		xhttp.ErrJSON(c, werr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the file: "+werr.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean, "size": len(body.Content)}, "")
 }
 
-// CreateToolEntry POST /customtools/:name/file —— 新建文件或目录。
+// CreateToolEntry POST /customtools/:name/file - creates a file or a directory.
 func CreateToolEntry(c *gin.Context) {
 	root, entry, ok := toolFileRoot(c, true)
 	if !ok {
@@ -266,20 +266,20 @@ func CreateToolEntry(c *gin.Context) {
 	}
 	abs, clean, err := joinToolFile(root, body.Path)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "tool.path_required", nil, "path is required", "")
 		return
 	}
 	if isToolContract(clean) {
 		xhttp.ErrCode(c, "tool.contract_readonly", gin.H{"file": models.ToolFileName},
-			models.ToolFileName+" 由「新建自定义工具」生成，不能手工创建", "")
+			models.ToolFileName+" is generated by \"new custom tool\" and cannot be created by hand", "")
 		return
 	}
 	if isToolEntry(clean, entry) {
-		xhttp.ErrCode(c, "tool.entry_exists", gin.H{"entry": entry}, "这是当前入口文件，已存在；要改入口请改表单里的 entry", "")
+		xhttp.ErrCode(c, "tool.entry_exists", gin.H{"entry": entry}, "this is the current entry file and already exists; to change the entry, edit entry in the form", "")
 		return
 	}
 	if _, serr := os.Stat(abs); serr == nil {
@@ -288,18 +288,18 @@ func CreateToolEntry(c *gin.Context) {
 	}
 	if body.IsDir {
 		if err = os.MkdirAll(abs, 0o755); err == nil {
-			// 占位文件：与技能侧一致，避免「空目录算不算存在」的分歧
+			// Placeholder file, same as the skill side, so "does an empty directory count as existing" has one answer.
 			err = os.WriteFile(filepath.Join(abs, toolKeepFile), []byte{}, 0o644)
 		}
 	} else {
 		if merr := os.MkdirAll(filepath.Dir(abs), 0o755); merr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "创建目录失败: "+merr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to create directory: "+merr.Error(), "")
 			return
 		}
 		err = os.WriteFile(abs, []byte{}, 0o644)
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to create the entry: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean, "is_dir": body.IsDir}, "")
@@ -313,24 +313,24 @@ func DeleteToolEntry(c *gin.Context) {
 	}
 	abs, clean, err := joinToolFile(root, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "tool.path_required", nil, "path is required", "")
 		return
 	}
 	if isToolContract(clean) {
 		xhttp.ErrCode(c, "tool.contract_readonly", gin.H{"file": models.ToolFileName},
-			models.ToolFileName+" 是工具契约，不能删除（要删工具请删整个工具）", "")
+			models.ToolFileName+" is the tool contract and cannot be deleted (to remove the tool, delete the whole tool)", "")
 		return
 	}
 	if isToolEntry(clean, entry) {
-		xhttp.ErrCode(c, "tool.entry_readonly", gin.H{"entry": entry}, "入口文件不能删除：删了工具还在，但一跑就报「入口不存在」", "")
+		xhttp.ErrCode(c, "tool.entry_readonly", gin.H{"entry": entry}, "the entry file cannot be deleted: the tool would remain but every run would report a missing entry", "")
 		return
 	}
 	if rerr := os.RemoveAll(abs); rerr != nil {
-		xhttp.ErrJSON(c, "delete failed: "+rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.delete_failed", nil, "delete failed: "+rerr.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean}, "")
@@ -338,8 +338,8 @@ func DeleteToolEntry(c *gin.Context) {
 
 // UploadToolFile POST /customtools/:name/upload（multipart：file + dir）
 //
-// 同名不覆盖：另存为 name-2.ext —— 覆盖等于删掉工具里已有的文件，
-// 那种事必须走删除（界面有二次确认），不能藏在上传动作里悄悄发生。
+// No overwriting: save as name-2.ext instead - overwriting silently deletes a file the tool already has,
+// which must go through delete (the UI asks for confirmation) rather than happen quietly inside an upload.
 func UploadToolFile(c *gin.Context) {
 	root, _, ok := toolFileRoot(c, true)
 	if !ok {
@@ -347,40 +347,40 @@ func UploadToolFile(c *gin.Context) {
 	}
 	fh, ferr := c.FormFile("file")
 	if ferr != nil {
-		xhttp.ErrJSON(c, "file is required", nil, "")
+		xhttp.ErrCode(c, "tool.file_required", nil, "file is required", "")
 		return
 	}
-	tooLarge := fmt.Sprintf("文件过大（上限 %d MB）", maxToolFileBytes>>20)
+	tooLarge := fmt.Sprintf("file too large (limit %d MB)", maxToolFileBytes>>20)
 	if fh.Size > maxToolFileBytes {
 		xhttp.ErrCode(c, "tool.file_too_large", gin.H{"limit_mb": maxToolFileBytes >> 20}, tooLarge, "")
 		return
 	}
 	absDir, cleanDir, derr := joinToolFile(root, strings.TrimSpace(c.PostForm("dir")))
 	if derr != nil {
-		xhttp.ErrJSON(c, derr.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.invalid_path", nil, derr.Error(), "")
 		return
 	}
 	name := sanitizeToolFileName(fh.Filename)
 	if name == "" {
-		xhttp.ErrJSON(c, "invalid file name", nil, "")
+		xhttp.ErrCode(c, "tool.invalid_file_name", nil, "invalid file name", "")
 		return
 	}
 	if isToolContract(path.Join(cleanDir, name)) {
-		xhttp.ErrCode(c, "tool.contract_readonly", gin.H{"file": models.ToolFileName}, "不能覆盖契约文件 "+models.ToolFileName, "")
+		xhttp.ErrCode(c, "tool.contract_readonly", gin.H{"file": models.ToolFileName}, "cannot overwrite the contract file "+models.ToolFileName, "")
 		return
 	}
 	rel := uniqueToolRel(absDir, name)
 
 	src, oerr := fh.Open()
 	if oerr != nil {
-		xhttp.ErrJSON(c, "Failed to read upload: "+oerr.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.upload_failed", nil, "failed to read the upload: "+oerr.Error(), "")
 		return
 	}
 	defer src.Close()
-	// 多读一个字节用于判定「声明的大小不可信」的极端情况
+	// Read one extra byte to cover the case where the declared size cannot be trusted.
 	data, rerr := io.ReadAll(io.LimitReader(src, maxToolFileBytes+1))
 	if rerr != nil {
-		xhttp.ErrJSON(c, "Failed to read upload: "+rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.upload_failed", nil, "failed to read the upload: "+rerr.Error(), "")
 		return
 	}
 	if len(data) > maxToolFileBytes {
@@ -388,7 +388,7 @@ func UploadToolFile(c *gin.Context) {
 		return
 	}
 	if werr := os.WriteFile(filepath.Join(absDir, rel), data, 0o644); werr != nil {
-		xhttp.ErrJSON(c, "Failed to save upload: "+werr.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.upload_save_failed", nil, "failed to save the upload: "+werr.Error(), "")
 		return
 	}
 	out := rel
@@ -400,7 +400,7 @@ func UploadToolFile(c *gin.Context) {
 
 // DownloadToolFile GET /customtools/:name/download?path=
 //
-// 拖出到桌面时取字节。只服务文件，不服务目录。
+// Serves the bytes for a drag to the desktop. Files only, never directories.
 func DownloadToolFile(c *gin.Context) {
 	root, _, ok := toolFileRoot(c, false)
 	if !ok {
@@ -408,11 +408,11 @@ func DownloadToolFile(c *gin.Context) {
 	}
 	abs, clean, err := joinToolFile(root, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "tool.path_required", nil, "path is required", "")
 		return
 	}
 	st, serr := os.Stat(abs)
@@ -431,7 +431,7 @@ func DownloadToolFile(c *gin.Context) {
 	http.ServeContent(c.Writer, c.Request, path.Base(clean), st.ModTime(), f)
 }
 
-// sanitizeToolFileName 只保留文件名本身（浏览器可能带完整路径），去掉控制字符并限制长度。
+// sanitizeToolFileName keeps only the file name itself (a browser may send the whole path), strips control characters and caps the length.
 func sanitizeToolFileName(raw string) string {
 	name := path.Base(strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/"))
 	name = strings.Map(func(r rune) rune {
@@ -456,8 +456,8 @@ func sanitizeToolFileName(raw string) string {
 	return name
 }
 
-// uniqueToolRel 同名不覆盖：name、name-2.ext、name-3.ext…
-// 返回的是目录内的相对文件名（调用方直接拼 dir）。
+// uniqueToolRel never overwrites: name, name-2.ext, name-3.ext, ...
+// It returns the file name relative to the directory (the caller joins dir directly).
 func uniqueToolRel(dir, name string) string {
 	taken := map[string]bool{}
 	if entries, err := os.ReadDir(dir); err == nil {

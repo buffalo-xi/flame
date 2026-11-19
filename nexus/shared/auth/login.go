@@ -14,115 +14,118 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// LoginRequest 登录请求结构体
+// LoginRequest is the login request body
 type LoginRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" `
 	Schema   string `json:"schema" binding:"required"`
 }
 
-// LoginResponse 登录响应结构体
+// LoginResponse is the login response body
 type LoginResponse struct {
 	User  map[string]interface{} `json:"user"`
 	Token string                 `json:"token"`
 }
 
-// Login 处理登录请求
+// Login handles a login request
 func Login(c *gin.Context) {
-	// 检查请求方法
+	// Check the request method
 	if c.Request.Method != http.MethodPost {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request method, only POST is allowed", "")
 		return
 	}
 
-	// 解析请求
+	// Parse the request
 	var reqBody LoginRequest
 	if err := c.ShouldBindJSON(&reqBody); err != nil {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
-	// 获取username、password、schema三个字段
+	// Read username, password and schema
 	name := reqBody.Username
 	password := reqBody.Password
 	schema := reqBody.Schema
 
-	// 检查字段是否存在
+	// Check the required fields
 	if name == "" || schema == "" {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Missing required fields: username, password, schema", "")
 		return
 	}
 
-	// 租户白名单：schema 会被拼进 SQL 的标识符位置，必须先确认它是「已注册且 active」的租户。
-	// 与 MCP/RPC 的 resolveTenant 同一判定；查询失败一律拒绝（fail-closed）。
-	// 文案与「用户名或密码错误」合并 —— 不向未认证方泄露租户是否存在 / 是否停用。
+	// Tenant allow-list: schema is interpolated into the SQL identifier position, so it must first be
+	// confirmed as a "registered and active" tenant.
+	// Same decision as resolveTenant in MCP/RPC; any query failure is denied (fail-closed).
+	// The wording matches "invalid user name or password" - nothing about whether a tenant exists or
+	// is disabled leaks to an unauthenticated caller.
 	if active, terr := tenants.IsActive(schema); terr != nil || !active {
 		if terr != nil {
-			xlog.Error("[login] 租户白名单查询失败: %v", terr)
+			xlog.Error("[login] tenant allow-list query failed: %v", terr)
 		} else {
-			xlog.Info("[login] 拒绝未注册或已停用的租户: %s", schema)
+			xlog.Info("[login] rejected an unregistered or disabled tenant: %s", schema)
 		}
-		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "invalid user name or password", "")
 		return
 	}
 
-	// 检查数据库连接
+	// Check the database connection
 	if !db.IsConnected() {
 		xhttp.ErrCode(c, "common.internal", nil, "Database not connected", "")
 		return
 	}
 
-	// 构建SQL查询语句：一并取出 role / status
+	// Build the query: role and status come along
 	query := fmt.Sprintf("SELECT id, name, display_name, password, email, phone, role, status FROM %s.users WHERE name = $1", schema)
 
-	// 执行查询
+	// Run the query
 	row := db.DB.QueryRow(query, name)
 
-	// 定义变量存储查询结果
+	// Variables for the result
 	var id string
 	var dbName string
 	var dbPassword, displayName, email, phone sql.NullString
 	var role, status string
 
-	// 扫描查询结果
+	// Scan the result
 	err := row.Scan(&id, &dbName, &displayName, &dbPassword, &email, &phone, &role, &status)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			// 不区分「用户不存在」与「密码错误」，避免账号枚举
-			xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
+			// "no such user" and "wrong password" are not distinguished, to prevent account enumeration
+			xhttp.ErrCode(c, "auth.invalid_credentials", nil, "invalid user name or password", "")
 			return
 		}
-		// 其它错误（例如尚未执行租户用户角色迁移）如实报出，便于排查
+		// Other errors (for example the tenant user role migration not yet applied) are reported as they are, for diagnosis
 		xhttp.ErrCode(c, "common.internal", nil, "Failed to load user: "+err.Error(), "")
 		return
 	}
 
-	// 只允许管理用户登录控制台：服务用户只用 API Key / OAuth 调接口
+	// Only management users may sign in to the console: service users call the API with an API key / OAuth only
 	if role != RoleManage {
-		xhttp.ErrCode(c, "auth.account_not_console", nil, "该账号为服务用户，不能登录控制台", "")
+		xhttp.ErrCode(c, "auth.account_not_console", nil, "this account is a service user and cannot sign in to the console", "")
 		return
 	}
 
-	// 状态校验：停用 / 锁定都拒绝
+	// Status check: both disabled and locked are rejected
 	if status != UserStatusActive {
 		if status == UserStatusLocked {
-			xhttp.ErrCode(c, "auth.account_locked", nil, "该账号已被锁定，请联系管理员解锁", "")
+			xhttp.ErrCode(c, "auth.account_locked", nil, "this account is locked; ask an administrator to unlock it", "")
 			return
 		}
-		xhttp.ErrCode(c, "auth.account_disabled", nil, "该账号已被停用，请联系管理员", "")
+		xhttp.ErrCode(c, "auth.account_disabled", nil, "this account is disabled; ask an administrator", "")
 		return
 	}
 
-	// 密码校验：bcrypt 优先，兼容历史 MD5（空值一律不通过）。
-	//（原实现是「dbPassword 为空则跳过校验」，会让无密码账号被任意密码登录 ——
-	//  服务用户天然无密码，一旦存在这种行就等同于开放登录。）
+	// Password check: bcrypt first, legacy MD5 still accepted (an empty value never passes).
+	// (The original implementation skipped the check when dbPassword was empty, which let an account
+	//  with no password be signed into with any password - service users have no password by design,
+	//  and one such row was equivalent to an open login.)
 	ok, needRehash := VerifyPassword(dbPassword.String, password)
 	if !ok {
-		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "invalid user name or password", "")
 		return
 	}
 
-	// 旧 MD5 哈希：本次登录成功后透明升级为 bcrypt（失败只记日志，不影响本次登录）
+	// Legacy MD5 hash: transparently upgrade to bcrypt on a successful login (a failure only logs and does not affect this login)
 	if needRehash {
 		if newHash, herr := HashPassword(password); herr == nil {
 			if _, uerr := db.DB.Exec(
@@ -133,8 +136,8 @@ func Login(c *gin.Context) {
 		}
 	}
 
-	// 密码验证成功，生成JWT token
-	// 注意：token 刻意不带 role —— 角色只在上面这一关判定；当前 /login 是唯一签发点。
+	// Password verified, issue the JWT token.
+	// Note: the token deliberately carries no role - the role is decided only by the check above; /login is the only issuer today.
 	jwtConfig := xjwt.JWTConfig{
 		SecretKey:   config.Cfg.JWT.SecretKey,
 		TokenExpiry: config.Cfg.JWT.TokenExpiry,
@@ -146,7 +149,7 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// 返回用户信息（除了password）和token；role / status 供前端展示
+	// Return the user info (minus the password) and the token; role / status are for the frontend
 	userInfo := map[string]interface{}{
 		"id":           id,
 		"name":         dbName,

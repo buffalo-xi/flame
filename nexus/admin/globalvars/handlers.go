@@ -148,7 +148,7 @@ func UpsertGlobalVar(c *gin.Context) {
 	}
 
 	if err := validateValue(name, kind, value); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -262,7 +262,7 @@ func authInfo(c *gin.Context) (*auth.AuthInfo, bool) {
 	}
 	info, ok := value.(*auth.AuthInfo)
 	if !ok || info == nil {
-		xhttp.ErrJSON(c, "Invalid authentication information", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return nil, false
 	}
 	return info, true

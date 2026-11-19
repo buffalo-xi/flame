@@ -1,7 +1,9 @@
-// Package plugins 管理端「插件」接口：磁盘 Python 插件的发现结果 + 租户级启用与配置。
+// Package plugins holds the admin "plugins" endpoints: the discovered disk Python plugins plus
+// tenant-level enablement and configuration.
 //
-// 语义要点：**没有「新建插件」接口**。插件是磁盘上放进去的代码（自注册），
-// 管理端只做「看见它 / 启用它 / 选实现 / 填配置 / 试一次」。
+// Semantics: **there is no "create plugin" endpoint**. A plugin is code placed on disk
+// (self-registering); the admin side only "sees it / enables it / picks an implementation /
+// fills in config / tries it once".
 package plugins
 
 import (
@@ -27,11 +29,13 @@ import (
 
 var repo = pluginsrepo.NewRepository()
 
-// secretMask 打码前缀。回传时前端原样带回 —— 后端据此判定「这个 secret 没改」，
-// 从而保留旧值（不把真 key 回显给浏览器，也不会因为打码串把 key 洗掉）。
+// secretMask is the masking prefix. The frontend sends it back verbatim - the backend reads it
+// as "this secret was not changed" and keeps the old value (the real key is never echoed to the
+// browser, and the masking string never wipes the key either).
 const secretMask = "••••"
 
-// PluginView 管理端一行 = 磁盘清单（工具面 + 实现清单） + 本租户状态 + 平台策略。
+// PluginView is one admin row = disk manifest (tool surface + implementation list) + this
+// tenant's state + platform policy.
 type PluginView struct {
 	Name        string         `json:"name"`
 	DisplayName string         `json:"display_name"`
@@ -42,22 +46,23 @@ type PluginView struct {
 
 	Implementations []plugin.Implementation `json:"implementations"`
 
-	Configured bool                      `json:"configured"` // 本租户是否已保存过配置
+	Configured bool                      `json:"configured"` // whether this tenant has ever saved a config
 	IsActive   bool                      `json:"is_active"`
 	Impl       string                    `json:"impl"`
 	Fallbacks  []string                  `json:"fallbacks"`
-	Configs    map[string]map[string]any `json:"configs"` // secret 字段已打码
+	Configs    map[string]map[string]any `json:"configs"` // secret fields are masked
 
-	// 平台策略（只读）：由平台管理端在「租户 → 插件」里配，
-	// 本接口只回显，UpdatePlugin 不接受该字段 —— 能不能用是成本与安全护栏，
-	// 不能让租户自己开。
+	// Platform policy (read-only): configured by the platform admin under "tenant -> plugins".
+	// This endpoint only echoes it and UpdatePlugin does not accept the field - availability is a
+	// cost and safety guardrail, not something a tenant may switch on for itself.
 	//
-	// Blocked 是全局闸：与「本租户没开通」分开，租户才能看出该找谁解决。
+	// Blocked is the global gate: kept separate from "not enabled for this tenant" so the tenant
+	// can tell who to ask.
 	Allowed bool `json:"allowed"`
 	Blocked bool `json:"blocked"`
 }
 
-// ListPlugins 列出磁盘上发现的插件 + 本租户状态 + 扫描错误。
+// ListPlugins lists the plugins discovered on disk plus this tenant's state and the scan errors.
 func ListPlugins(c *gin.Context) {
 	authInfo, ok := mustAuth(c)
 	if !ok {
@@ -75,27 +80,29 @@ func ListPlugins(c *gin.Context) {
 	snap := src.Snapshot()
 	rows, err := repo.List(authInfo)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取插件配置失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the plugin config: "+err.Error(), "")
 		return
 	}
 	byName := make(map[string]*models.Plugin, len(rows))
 	for i := range rows {
-		// 本页只列 tools：把索引限制在 tools 的行上，否则将来同名的 sources 行
-		// 会把工具配置挤掉（List 是跨 kind 全取）。
+		// This page lists tools only: restricting the index to tools rows keeps a future
+		// same-named sources row from displacing the tool config (List fetches every kind).
 		if rows[i].Kind != pluginsrepo.KindTools {
 			continue
 		}
 		byName[rows[i].Name] = &rows[i]
 	}
 
-	// 平台策略一次全取：逐个 Resolve 会打出 N 条查询（插件数量不受控）。
+	// Platform policy is fetched in one go: resolving plugin by plugin would emit N queries, and
+	// the number of plugins is unbounded.
 	//
-	// 读失败（多半是 platform.tenant_plugins 还没建表）时**不能按缺省**：缺省是开放，
-	// 而「读不出」不等于「没人停用过」。降级为全部「已停用」，页面上带 policy_error 提醒 ——
-	// 租户侧的插件配置照常展示，但不能因为平台表没建就变成全开。
+	// A read failure (usually platform.tenant_plugins not created yet) must **not** fall back to
+	// the default: the default is open, while "cannot read" does not mean "nobody disabled it".
+	// Degrade to "all disabled" with a policy_error note on the page - the tenant-side plugin
+	// config still renders, but a missing platform table never turns everything on.
 	policies, perr := pluginpolicy.List(authInfo.Schema)
 	if perr != nil {
-		xlog.Error("读取插件策略失败 schema=%s（按「已停用」展示）: %v", authInfo.Schema, perr)
+		xlog.Error("failed to read plugin policies schema=%s (showing everything as disabled): %v", authInfo.Schema, perr)
 		policies = map[string]pluginpolicy.Policy{}
 	}
 
@@ -103,7 +110,7 @@ func ListPlugins(c *gin.Context) {
 	for _, m := range snap.Tools {
 		pol := policyOf(policies, m.Name)
 		if perr != nil {
-			pol = pluginpolicy.Policy{Allowed: false} // 保守方向：读不到就当被停用
+			pol = pluginpolicy.Policy{Allowed: false} // conservative: unreadable means disabled
 		}
 		out = append(out, buildView(m, byName[m.Name], pol))
 	}
@@ -124,7 +131,8 @@ func ListPlugins(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", body, "")
 }
 
-// updateReq 更新插件配置。configs 按实现分键；secret 字段原样带回打码串表示「不改」。
+// updateReq updates a plugin config. configs is keyed per implementation; a secret field sent
+// back as the masking string means "unchanged".
 type updateReq struct {
 	Impl      string                    `json:"impl"`
 	Fallbacks []string                  `json:"fallbacks"`
@@ -132,7 +140,7 @@ type updateReq struct {
 	IsActive  *bool                     `json:"is_active"`
 }
 
-// UpdatePlugin 保存某插件的启用状态 / 主实现 / 兜底链 / 配置。
+// UpdatePlugin saves a plugin's enabled state / main implementation / fallback chain / config.
 func UpdatePlugin(c *gin.Context) {
 	authInfo, ok := mustAuth(c)
 	if !ok {
@@ -141,17 +149,17 @@ func UpdatePlugin(c *gin.Context) {
 	name := c.Param("name")
 	m, found := lookupManifest(name)
 	if !found {
-		xhttp.ErrCode(c, "plugin.not_found", gin.H{"name": name}, fmt.Sprintf("插件 %s 不在磁盘清单里（先放进 plugins/tools/%s/ 再刷新）", name, name), "")
+		xhttp.ErrCode(c, "plugin.not_found", gin.H{"name": name}, fmt.Sprintf("plugin %s is not in the disk manifest (put it in plugins/tools/%s/ and refresh)", name, name), "")
 		return
 	}
 
 	var req updateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "请求体格式不对", "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "malformed request body", "")
 		return
 	}
 	if msg := validateSelection(m, req.Impl, req.Fallbacks, req.Configs); msg != "" {
-		xhttp.ErrJSON(c, msg, nil, "")
+		xhttp.ErrCode(c, "plugin.invalid_selection", nil, msg, "")
 		return
 	}
 
@@ -159,7 +167,7 @@ func UpdatePlugin(c *gin.Context) {
 	if p, err := repo.Get(authInfo, m.Kind, m.Name); err == nil {
 		old = p
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		xhttp.ErrCode(c, "common.internal", nil, "读取插件配置失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the plugin config: "+err.Error(), "")
 		return
 	}
 
@@ -171,9 +179,9 @@ func UpdatePlugin(c *gin.Context) {
 	if impl == "" {
 		impl = old.Impl
 	}
-	// 启用一个没选实现的插件 = 建了一条调用必然失败的配置，直接挡在保存前
+	// Enabling a plugin with no implementation picked would create a config that always fails; block it before saving
 	if active && impl == "" {
-		xhttp.ErrCode(c, "plugin.main_impl_required", nil, "启用前请先选择主实现", "")
+		xhttp.ErrCode(c, "plugin.main_impl_required", nil, "pick a main implementation before enabling", "")
 		return
 	}
 
@@ -187,17 +195,18 @@ func UpdatePlugin(c *gin.Context) {
 		IsActive:  active,
 	}
 	if err := repo.Upsert(authInfo, row); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "保存失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to save: "+err.Error(), "")
 		return
 	}
 
 	saved, err := repo.Get(authInfo, m.Kind, m.Name)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "保存后读取失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read back after saving: "+err.Error(), "")
 		return
 	}
-	// 保存已经成功，策略读失败不该把这次写入回报成失败；但也别回显成「开放」——
-	// 这与 ListPlugins 的保守口径保持一致（读不到就当被停用）。
+	// The save already succeeded, so a policy read failure must not report this write as failed;
+	// but it must not echo as "open" either - same conservative rule as ListPlugins (unreadable
+	// means disabled).
 	pol, perr := pluginpolicy.Resolve(authInfo.Schema, m.Name)
 	if perr != nil {
 		pol = pluginpolicy.Policy{Allowed: false}
@@ -205,17 +214,20 @@ func UpdatePlugin(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", buildView(m, saved, pol), "")
 }
 
-// testReq 「试一次」：可带未保存的配置（用户刚填的 key 不必先保存才能测）。
+// testReq is "try it once": it may carry unsaved config (a freshly typed key need not be saved
+// before testing).
 type testReq struct {
 	Impl    string         `json:"impl"`
 	Query   string         `json:"query"`
 	Configs map[string]any `json:"configs"`
 }
 
-// TestPlugin 用真实后端跑一次检索，回显前 3 条结果或原始错误。
+// TestPlugin runs one real retrieval against the backend and returns the first 3 results or the
+// raw error.
 //
-// 刻意走 Host 而不是 Runner：Runner 要求「已保存且已启用」，而这里恰恰是用来
-// 在保存之前验证配置的。超时/错误分类仍与生产一致（同一个宿主进程）。
+// It deliberately goes through Host rather than Runner: Runner requires "saved and enabled",
+// while this exists precisely to validate a config before saving. Timeout and error
+// classification still match production (same host process).
 func TestPlugin(c *gin.Context) {
 	authInfo, ok := mustAuth(c)
 	if !ok {
@@ -224,18 +236,18 @@ func TestPlugin(c *gin.Context) {
 	name := c.Param("name")
 	m, found := lookupManifest(name)
 	if !found {
-		xhttp.ErrCode(c, "plugin.not_found", gin.H{"name": name}, fmt.Sprintf("插件 %s 不在磁盘清单里", name), "")
+		xhttp.ErrCode(c, "plugin.not_found", gin.H{"name": name}, fmt.Sprintf("plugin %s is not in the disk manifest", name), "")
 		return
 	}
 
 	var req testReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "请求体格式不对", "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "malformed request body", "")
 		return
 	}
 	impl := strings.TrimSpace(req.Impl)
 	if _, ok := m.ImplementationOf(impl); !ok {
-		xhttp.ErrCode(c, "plugin.invalid_impl", gin.H{"impl": impl}, fmt.Sprintf("实现 %q 不在插件清单里", impl), "")
+		xhttp.ErrCode(c, "plugin.invalid_impl", gin.H{"impl": impl}, fmt.Sprintf("implementation %q is not in the plugin manifest", impl), "")
 		return
 	}
 	query := strings.TrimSpace(req.Query)
@@ -243,23 +255,24 @@ func TestPlugin(c *gin.Context) {
 		query = "flame plugin test"
 	}
 
-	// 「试一次」也真实打上游，所以同样受平台策略约束：没开通直接拒。
-	// 这里不要求 is_active：该接口存在的意义就是「保存之前先验一下能不能通」。
+	// "Try it once" also hits the upstream for real, so it obeys the platform policy too: not
+	// enabled is rejected outright. is_active is not required here - the point of this endpoint is
+	// to check reachability before saving.
 	pol, err := pluginpolicy.Resolve(authInfo.Schema, m.Name)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取插件授权失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the plugin grant: "+err.Error(), "")
 		return
 	}
 	if !pol.Allowed {
 		if pol.Blocked {
-			xhttp.ErrCode(c, "plugin.globally_disabled", gin.H{"name": m.Name}, fmt.Sprintf("插件 %s 已被平台全局停用", m.Name), "")
+			xhttp.ErrCode(c, "plugin.globally_disabled", gin.H{"name": m.Name}, fmt.Sprintf("plugin %s is globally disabled by the platform", m.Name), "")
 			return
 		}
-		xhttp.ErrCode(c, "plugin.not_enabled_for_tenant", gin.H{"name": m.Name}, fmt.Sprintf("插件 %s 未对本租户开放（请联系平台管理员开通）", m.Name), "")
+		xhttp.ErrCode(c, "plugin.not_enabled_for_tenant", gin.H{"name": m.Name}, fmt.Sprintf("plugin %s is not enabled for this tenant (ask a platform admin to enable it)", m.Name), "")
 		return
 	}
 
-	// 已保存的配置打底，再用请求里的覆盖（跳过打码串）
+	// Start from the saved config and override with the request (skipping masking strings)
 	cfg := map[string]any{}
 	if p, err := repo.Get(authInfo, m.Kind, m.Name); err == nil {
 		for k, v := range p.ImplConfig(impl) {
@@ -297,7 +310,7 @@ func TestPlugin(c *gin.Context) {
 		return
 	}
 
-	// 只回前 3 条：测试连接是给人看的，不是给模型用的
+	// Return only the first 3: a connection test is for humans, not for the model
 	res, _ := raw.(map[string]any)
 	results := []any{}
 	if items, ok := res["results"].([]any); ok {
@@ -316,15 +329,16 @@ func TestPlugin(c *gin.Context) {
 	}, "")
 }
 
-// RefreshPlugins 立即重扫插件目录（不等后台的刷新周期）。
+// RefreshPlugins rescans the plugin directory immediately (without waiting for the background
+// refresh cycle).
 func RefreshPlugins(c *gin.Context) {
 	reg := plugin.Current()
 	if reg == nil {
-		xhttp.ErrCode(c, "plugin.registry_not_initialized", nil, "插件注册表未初始化（检查 plugin.dir / 启动日志）", "")
+		xhttp.ErrCode(c, "plugin.registry_not_initialized", nil, "the plugin registry is not initialised (check plugin.dir and the startup log)", "")
 		return
 	}
 	if err := reg.Refresh(c.Request.Context(), true); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "刷新失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "refresh failed: "+err.Error(), "")
 		return
 	}
 	snap := reg.Snapshot()
@@ -333,7 +347,7 @@ func RefreshPlugins(c *gin.Context) {
 	}, "")
 }
 
-// ===== 内部工具 =====
+// ===== internal helpers =====
 
 func mustAuth(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
@@ -343,7 +357,7 @@ func mustAuth(c *gin.Context) (*auth.AuthInfo, bool) {
 	}
 	info, ok := v.(*auth.AuthInfo)
 	if !ok || info == nil {
-		xhttp.ErrJSON(c, "Invalid authentication information", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return nil, false
 	}
 	return info, true
@@ -357,7 +371,8 @@ func lookupManifest(name string) (plugin.Manifest, bool) {
 	return src.Get(name)
 }
 
-// buildView 合并「磁盘清单」与「租户配置」，顺带把 secret 打码，并回显平台策略。
+// buildView merges the disk manifest with the tenant config, masks secrets on the way and echoes
+// the platform policy.
 func buildView(m plugin.Manifest, p *models.Plugin, pol pluginpolicy.Policy) PluginView {
 	v := PluginView{
 		Name:            m.Name,
@@ -373,7 +388,8 @@ func buildView(m plugin.Manifest, p *models.Plugin, pol pluginpolicy.Policy) Plu
 		Allowed: pol.Allowed,
 		Blocked: pol.Blocked,
 	}
-	// p 为 nil（本租户还没配过）也要回显策略：平台没开通的插件，界面上应该一眼看出来
+	// The policy is echoed even when p is nil (this tenant never configured it): a plugin the
+	// platform has not enabled should be visible at a glance in the UI
 	if p == nil {
 		return v
 	}
@@ -387,7 +403,7 @@ func buildView(m plugin.Manifest, p *models.Plugin, pol pluginpolicy.Policy) Plu
 	return v
 }
 
-// policyOf 从「一次全取」的结果里取某插件的策略，缺省补成「开放」。
+// policyOf picks one plugin's policy out of the "fetched in one go" result, defaulting to open.
 func policyOf(all map[string]pluginpolicy.Policy, name string) pluginpolicy.Policy {
 	if p, ok := all[name]; ok {
 		return p
@@ -395,7 +411,7 @@ func policyOf(all map[string]pluginpolicy.Policy, name string) pluginpolicy.Poli
 	return pluginpolicy.Default()
 }
 
-// maskConfigs 把每个实现里的 secret 字段替换成「••••尾4位」。
+// maskConfigs replaces every implementation's secret field with "mask plus the last 4 chars".
 func maskConfigs(m plugin.Manifest, all map[string]map[string]any) map[string]map[string]any {
 	out := make(map[string]map[string]any, len(all))
 	for impl, cfg := range all {
@@ -426,11 +442,12 @@ func maskValue(s string) string {
 	return secretMask + s[len(s)-4:]
 }
 
-// validateSelection 校验「主实现 / 兜底链 / 配置键」都落在清单里，返回空串表示通过。
+// validateSelection checks that the main implementation / fallback chain / config keys all exist
+// in the manifest; an empty return means it passed.
 func validateSelection(m plugin.Manifest, impl string, fallbacks []string, cfgs map[string]map[string]any) string {
 	if impl != "" {
 		if _, ok := m.ImplementationOf(impl); !ok {
-			return fmt.Sprintf("实现 %q 不在插件清单里", impl)
+			return fmt.Sprintf("implementation %q is not in the plugin manifest", impl)
 		}
 	}
 	seen := map[string]bool{}
@@ -440,22 +457,23 @@ func validateSelection(m plugin.Manifest, impl string, fallbacks []string, cfgs 
 			continue
 		}
 		if _, ok := m.ImplementationOf(fb); !ok {
-			return fmt.Sprintf("兜底实现 %q 不在插件清单里", fb)
+			return fmt.Sprintf("fallback implementation %q is not in the plugin manifest", fb)
 		}
 		if seen[fb] {
-			return fmt.Sprintf("兜底实现 %q 重复", fb)
+			return fmt.Sprintf("fallback implementation %q is duplicated", fb)
 		}
 		seen[fb] = true
 	}
 	for implName := range cfgs {
 		if _, ok := m.ImplementationOf(implName); !ok {
-			return fmt.Sprintf("配置里出现未知实现 %q", implName)
+			return fmt.Sprintf("the config references an unknown implementation %q", implName)
 		}
 	}
 	return ""
 }
 
-// mergeConfigs 按实现合并：只覆盖请求里出现的键；打码串（未改）保留旧值。
+// mergeConfigs merges per implementation: only keys present in the request are overwritten, and a
+// masking string (unchanged) keeps the old value.
 func mergeConfigs(old, incoming map[string]map[string]any) map[string]map[string]any {
 	out := make(map[string]map[string]any, len(old)+len(incoming))
 	for impl, cfg := range old {
@@ -473,7 +491,7 @@ func mergeConfigs(old, incoming map[string]map[string]any) map[string]map[string
 		}
 		for k, v := range cfg {
 			if s, ok := v.(string); ok && strings.HasPrefix(s, secretMask) {
-				continue // 打码回传 = 没改
+				continue // sent back masked = unchanged
 			}
 			cur[k] = v
 		}

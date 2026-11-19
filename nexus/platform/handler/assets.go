@@ -19,26 +19,29 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 跨租户资源分发的平台侧：审核 / 可见范围。
+// Platform side of cross-tenant asset distribution: review / visibility.
 //
-// 只做「治理」不做「搬运」：快照由租户侧接口写（admin/share），安装也在租户侧完成；
-// 这里改的是状态机与白名单，因此平台侧不需要读任何租户 schema。
+// It only governs, never transfers: snapshots are written by the tenant-side endpoint (admin/share)
+// and installation also happens on the tenant side; what changes here is the state machine and the
+// allow-list, so the platform side never needs to read a tenant schema.
 //
-// 状态机（见 docs/asset-sharing.md §6）：
+// State machine (see docs/asset-sharing.md section 6):
 //
-//	draft → pending → listed | rejected
-//	listed → delisted
+//	draft -> pending -> listed | rejected
+//	listed -> delisted
 //
-// P0 不分页：资产数量在百级，先把「审核得动」跑通；要分页时在
-// sharedassets.Filter 上加 Limit/Offset（已支持）并补一个 Count。
+// P0 does not paginate: assets number in the hundreds, so getting "review actually works" done comes
+// first; when paging is needed, add Limit/Offset to sharedassets.Filter (already supported) and a
+// Count.
 
 // ListAssets GET /platform/assets?status=&kind=&q=&source=&origin=
 //
-// 默认按「待审优先、再按更新时间倒序」给资产列表用：没有 status 时把 pending 排在最前，
-// 免得管理员在几十条里翻。
+// By default the list is ordered "pending first, then newest update": without a status filter,
+// pending rows come first so an administrator does not have to page through dozens of them.
 //
-// origin=local 只看本机上架的行，其它值按对端站点名过滤；接入多个远端市场后，
-// 资产列表里「这条是从哪台机器收进来的」必须能一眼分开。
+// origin=local shows only rows listed on this server; any other value filters by peer site name. With
+// several remote markets attached, "which machine did this row come from" must be visible at a
+// glance.
 func ListAssets(c *gin.Context) {
 	originServer, originLocal := originFilter(c.Query("origin"))
 	f := sharedassets.Filter{
@@ -51,7 +54,7 @@ func ListAssets(c *gin.Context) {
 	}
 	list, err := sharedassets.List(f)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load assets: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load assets: "+err.Error(), "")
 		return
 	}
 
@@ -59,7 +62,7 @@ func ListAssets(c *gin.Context) {
 	for i := range list {
 		items = append(items, platformAssetView(&list[i], false))
 	}
-	// 待审的排前面（稳定排序：同组内保持 updated_at 倒序）
+	// Pending first (stable sort: updated_at descending is preserved inside each group)
 	if strings.TrimSpace(c.Query("status")) == "" {
 		pending := make([]gin.H, 0, len(items))
 		rest := make([]gin.H, 0, len(items))
@@ -72,10 +75,10 @@ func ListAssets(c *gin.Context) {
 		}
 		items = append(pending, rest...)
 	}
-	// 来源下拉的数据：忽略 origin 条件，其余条件照旧
+	// Data for the origin dropdown: the origin filter is ignored, every other filter still applies
 	counts, cerr := sharedassets.CountByOrigin(f)
 	if cerr != nil {
-		xhttp.ErrJSON(c, "Failed to count origins: "+cerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to count origins: "+cerr.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -85,7 +88,8 @@ func ListAssets(c *gin.Context) {
 	}, "")
 }
 
-// originFilter 把 ?origin= 翻译成过滤条件（留空 = 全部；local = 本机；其它 = 该对端站点）。
+// originFilter translates ?origin= into filter conditions (empty = all; local = this server; anything
+// else = that peer site).
 func originFilter(raw string) (originServer string, originLocal bool) {
 	v := strings.TrimSpace(raw)
 	if v == "" {
@@ -97,21 +101,20 @@ func originFilter(raw string) (originServer string, originLocal bool) {
 	return v, false
 }
 
-// originOptions 来源下拉选项：本机排第一，其余按名字排。
+// originOptions builds the origin dropdown: this server first, the rest sorted by name.
+//
+// label is language-neutral on purpose: it is the site name, and an empty string means "listed on this
+// server", which the frontend renders from its locale bundle (the backend never emits UI copy).
 func originOptions(counts map[string]int) []gin.H {
 	out := make([]gin.H, 0, len(counts))
 	for server, n := range counts {
-		label := server
-		if server == "" {
-			label = "本机上架"
-		}
-		out = append(out, gin.H{"server": server, "label": label, "count": n})
+		out = append(out, gin.H{"server": server, "label": server, "count": n})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		si, _ := out[i]["server"].(string)
 		sj, _ := out[j]["server"].(string)
 		if (si == "") != (sj == "") {
-			return si == "" // 本机永远在最前
+			return si == "" // this server always comes first
 		}
 		return si < sj
 	})
@@ -120,22 +123,23 @@ func originOptions(counts map[string]int) []gin.H {
 
 // GetAsset GET /platform/assets/:id
 //
-// 详情给审核用：依赖声明、文件清单、上架人、被几个租户装过、上一轮的审核备注。
+// The detail view for review: dependency declaration, file manifest, lister, install count across
+// tenants, previous review note.
 func GetAsset(c *gin.Context) {
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load asset: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load asset: "+err.Error(), "")
 		return
 	}
 	if a == nil {
-		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "asset not found", "")
 		return
 	}
 
 	v := platformAssetView(a, true)
 	installs, cerr := sharedassets.CountInstalls(a.ID)
 	if cerr != nil {
-		installs = 0 // 统计失败不该让详情页打不开
+		installs = 0 // a failed count must not make the detail page unopenable
 	}
 	v["install_count"] = installs
 
@@ -154,13 +158,13 @@ type reviewRequest struct {
 
 // ReviewAsset POST /platform/assets/:id/review
 //
-// 状态迁移在这里收口：approve/reject 只对 pending 生效，delist 只对 listed 生效。
-// 不做「任意状态跳任意状态」—— 那会让 rejected 的资产被误上架、delisted 的又被 approve 回来，
-// 审核记录就失去意义了。
+// State transitions are settled here: approve/reject only apply to pending, delist only to listed.
+// There is no "any state to any state" - that would let a rejected asset slip into the market or an
+// approved one be re-approved after delisting, and the review record would lose its meaning.
 func ReviewAsset(c *gin.Context) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 	var req reviewRequest
@@ -171,11 +175,11 @@ func ReviewAsset(c *gin.Context) {
 
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load asset: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load asset: "+err.Error(), "")
 		return
 	}
 	if a == nil {
-		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "asset not found", "")
 		return
 	}
 
@@ -184,32 +188,32 @@ func ReviewAsset(c *gin.Context) {
 	case "approve":
 		if a.Status != sharedassets.StatusPending {
 			xhttp.ErrCode(c, "asset.invalid_status", gin.H{"id": a.ID, "status": a.Status},
-				"只有待审的资产可以通过（当前："+a.Status+"）", "")
+				"only a pending asset can be approved (current: "+a.Status+")", "")
 			return
 		}
 		next = sharedassets.StatusListed
 	case "reject":
 		if a.Status != sharedassets.StatusPending {
 			xhttp.ErrCode(c, "asset.invalid_status", gin.H{"id": a.ID, "status": a.Status},
-				"只有待审的资产可以驳回（当前："+a.Status+"）", "")
+				"only a pending asset can be rejected (current: "+a.Status+")", "")
 			return
 		}
 		next = sharedassets.StatusRejected
 	case "delist":
 		if a.Status != sharedassets.StatusListed {
 			xhttp.ErrCode(c, "asset.invalid_status", gin.H{"id": a.ID, "status": a.Status},
-				"只有已通过的资产可以下架（当前："+a.Status+"）", "")
+				"only a listed asset can be delisted (current: "+a.Status+")", "")
 			return
 		}
 		next = sharedassets.StatusDelisted
 	default:
 		xhttp.ErrCode(c, "asset.invalid_action", gin.H{"action": strings.TrimSpace(req.Action)},
-			"未知动作（只支持 approve / reject / delist）", "")
+			"unknown action (only approve / reject / delist are supported)", "")
 		return
 	}
 
 	if err := sharedassets.Review(a.ID, next, strings.TrimSpace(req.Note), info.ID); err != nil {
-		xhttp.ErrJSON(c, "review: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "review: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"id": a.ID, "status": next}, "")
@@ -224,16 +228,16 @@ type visibilityRequest struct {
 func GetAssetVisibility(c *gin.Context) {
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load asset: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load asset: "+err.Error(), "")
 		return
 	}
 	if a == nil {
-		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "asset not found", "")
 		return
 	}
 	schemas, serr := sharedassets.VisibleSchemas(a.ID)
 	if serr != nil {
-		xhttp.ErrJSON(c, "Failed to load allowlist: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load allowlist: "+serr.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -244,8 +248,9 @@ func GetAssetVisibility(c *gin.Context) {
 
 // SetAssetVisibility PUT /platform/assets/:id/visibility
 //
-// allowlist 每次全量替换（前端就是「勾选框 → 保存」），不提供单条增删：
-// 半套增量接口最容易出现「以为删了其实没删」的白名单。
+// The allow-list is replaced wholesale every time (the frontend is "tick boxes -> save"), with no
+// per-entry add/remove: a half-baked incremental endpoint is the easiest way to end up with an
+// allow-list that "looks deleted but is not".
 func SetAssetVisibility(c *gin.Context) {
 	var req visibilityRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -255,21 +260,22 @@ func SetAssetVisibility(c *gin.Context) {
 	vis := strings.TrimSpace(req.Visibility)
 	if vis != sharedassets.VisibilityAll && vis != sharedassets.VisibilityAllowlist {
 		xhttp.ErrCode(c, "asset.invalid_visibility", gin.H{"visibility": vis},
-			"visibility 只能是 all 或 allowlist", "")
+			"visibility must be all or allowlist", "")
 		return
 	}
 
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load asset: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load asset: "+err.Error(), "")
 		return
 	}
 	if a == nil {
-		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "asset not found", "")
 		return
 	}
 
-	// 白名单里的租户必须真实存在：写进一个拼错的 schema 等于「看起来开放了，其实没人能装」
+	// Every tenant in the allow-list must really exist: writing a misspelled schema in means "it looks
+	// open, but nobody can install it"
 	for _, s := range req.Schemas {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -277,23 +283,23 @@ func SetAssetVisibility(c *gin.Context) {
 		}
 		t, terr := tenantsrepo.Get(s)
 		if terr != nil {
-			xhttp.ErrJSON(c, "check tenant: "+terr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "check tenant: "+terr.Error(), "")
 			return
 		}
 		if t == nil {
-			xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": s}, "租户不存在："+s, "")
+			xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": s}, "tenant not found: "+s, "")
 			return
 		}
 	}
 
 	if err := sharedassets.SetVisibility(a.ID, vis, req.Schemas); err != nil {
-		xhttp.ErrJSON(c, "set visibility: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "set visibility: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"visibility": vis, "schemas": req.Schemas}, "")
 }
 
-// platformAssetView 平台侧资产视图（与租户侧同源，多带审核信息）。
+// platformAssetView is the platform-side asset view (same shape as the tenant side plus review data).
 func platformAssetView(a *sharedassets.Asset, withManifest bool) gin.H {
 	var m assetpack.Manifest
 	if len(a.Manifest) > 0 {
@@ -303,8 +309,9 @@ func platformAssetView(a *sharedassets.Asset, withManifest bool) gin.H {
 	if a.ListedBy.Valid {
 		by = a.ListedBy.String
 	}
-	// 导入行的 source_schema 是「对方那台机器上的租户」，本机有同名 schema 纯属巧合，
-	// 拿它去查本机 tenants 会给出误导性的名字 —— 这类行统一用来源站点名展示。
+	// An imported row's source_schema is "the tenant on the other machine", and a same-named schema
+	// here is a coincidence; looking it up in the local tenants table would produce a misleading name,
+	// so such rows are labelled with the origin site instead.
 	tenantName := sharedassets.TenantDisplayName(a.SourceSchema)
 	if a.Imported() {
 		tenantName = a.OriginServer
@@ -343,42 +350,46 @@ func platformAssetView(a *sharedassets.Asset, withManifest bool) gin.H {
 
 // DeleteAsset DELETE /platform/assets/:id
 //
-// 删除不要求先下架：下架是「撤出市场但留档」，删除是「彻底清掉」，两者是并列手段，
-// 不是前后步骤 —— 在架的直接删同样不碰租户已装出去的副本（复制式语义）。
+// Deleting does not require delisting first: delisting is "withdraw from the market but keep the
+// record", deleting is "remove entirely"; they are parallel tools, not consecutive steps - deleting a
+// listed asset also leaves copies already installed in tenants alone (copy semantics).
 //
-// 仍拦住租户侧还没走完的三种状态：
-//   - pending / rejected 属于租户侧没走完的流程，替租户拍板不合适（要处置就是驳回）；
-//   - draft 本来就由租户侧「清空未上架」自己收拾。
+// Three states the tenant side has not finished are still blocked:
+//   - pending / rejected are unfinished tenant-side flows, and deciding for the tenant is not
+//     appropriate (the way to handle them is to reject);
+//   - draft is cleaned up by the tenant side's own "clear unlisted" action.
 //
-// 先删库再清快照目录：库是入口，目录清不掉只留垃圾（记日志，不回滚）。
-// 白名单与安装记录随外键级联删除；已经装到租户里的实体不动 —— 那是租户的东西。
+// The row goes first, then the snapshot directory: the row is the entry point, and a directory that
+// cannot be removed only leaves garbage (logged, no rollback).
+// The allow-list and install records cascade with the foreign keys; entities already installed in
+// tenants are untouched - they belong to the tenant.
 func DeleteAsset(c *gin.Context) {
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load asset: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load asset: "+err.Error(), "")
 		return
 	}
 	if a == nil {
-		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "asset not found", "")
 		return
 	}
 	switch a.Status {
 	case sharedassets.StatusListed, sharedassets.StatusDelisted:
 	default:
 		xhttp.ErrCode(c, "asset.invalid_status", gin.H{"id": a.ID, "status": a.Status},
-			"只有已上架或已下架的资产可以删除（当前状态："+a.Status+"）", "")
+			"only a listed or delisted asset can be deleted (current status: "+a.Status+")", "")
 		return
 	}
 
 	if derr := sharedassets.Delete(a.ID); derr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "删除失败: "+derr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "delete failed: "+derr.Error(), "")
 		return
 	}
 
 	if store, serr := tenantStorage(); serr != nil {
-		xlog.Error("[platform] 资产 %s 已删除，但存储不可用、快照未清理: %v", a.ID, serr)
+		xlog.Error("[platform] asset %s deleted, but storage is unavailable so the snapshot was not cleaned: %v", a.ID, serr)
 	} else if perr := store.DeletePrefix(context.Background(), path.Join(paths.PlatformAssetsSubdir, a.ID)); perr != nil {
-		xlog.Error("[platform] 资产 %s 已删除，但清理快照目录失败: %v", a.ID, perr)
+		xlog.Error("[platform] asset %s deleted, but cleaning the snapshot directory failed: %v", a.ID, perr)
 	}
 
 	xhttp.OkJSON(c, "Success", gin.H{"id": a.ID}, "")

@@ -13,10 +13,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 全局Repository实例
+// Shared repository instance
 var repo = rpcrepo.NewRepository()
 
-// GetRpcConnection 根据 ID 获取 RPC 连接
+// GetRpcConnection returns an RPC connection by ID
 func GetRpcConnection(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -35,7 +35,7 @@ func GetRpcConnection(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", conn, "")
 }
 
-// CreateRpcConnection 创建 RPC 连接
+// CreateRpcConnection creates an RPC connection
 func CreateRpcConnection(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -50,7 +50,7 @@ func CreateRpcConnection(c *gin.Context) {
 	}
 
 	if err := validateRpcConnectionName(conn.Name); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if conn.DisplayName == "" {
@@ -58,19 +58,19 @@ func CreateRpcConnection(c *gin.Context) {
 	}
 
 	if err := rejectSelfLink(authInfo.(*auth.AuthInfo).Schema, conn.URL); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	id, err := repo.Create(authInfo.(*auth.AuthInfo), &conn)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	conn.ID = id
 
-	// 若启用，立即发现并持久化工具
+	// When enabled, discover and persist the tools right away
 	if conn.IsActive {
 		if created, gerr := repo.GetByID(authInfo.(*auth.AuthInfo), id); gerr == nil {
 			_ = client.RefreshToolsWithRepo(c.Request.Context(), authInfo.(*auth.AuthInfo), created, repo)
@@ -80,7 +80,7 @@ func CreateRpcConnection(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", conn, "")
 }
 
-// UpdateRpcConnection 更新 RPC 连接
+// UpdateRpcConnection updates an RPC connection
 func UpdateRpcConnection(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -98,7 +98,7 @@ func UpdateRpcConnection(c *gin.Context) {
 
 	if conn.Name != "" {
 		if err := validateRpcConnectionName(conn.Name); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 	}
@@ -107,19 +107,20 @@ func UpdateRpcConnection(c *gin.Context) {
 	}
 
 	if err := rejectSelfLink(authInfo.(*auth.AuthInfo).Schema, conn.URL); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	if err := repo.Update(authInfo.(*auth.AuthInfo), id, &conn); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// stdio 连接配置变更后，使进程池中的旧会话失效，下次调用将使用新配置重建子进程
+	// After a stdio connection config change, invalidate the old session in the process pool;
+	// the next call rebuilds the child process from the new config
 	client.GetSessionPool().Invalidate(id)
 
-	// 若更新为启用，刷新工具列表
+	// When updated to enabled, refresh the tool list
 	if conn.IsActive {
 		if updated, gerr := repo.GetByID(authInfo.(*auth.AuthInfo), id); gerr == nil {
 			_ = client.RefreshToolsWithRepo(c.Request.Context(), authInfo.(*auth.AuthInfo), updated, repo)
@@ -129,9 +130,10 @@ func UpdateRpcConnection(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// SetRpcConnectionEnabled 启用/停用 RPC 连接（轻量状态切换，不直接编辑其他字段）。
-// 启用顺序为「先发现工具、成功后再落库」：工具发现失败则不改变 is_active，
-// 避免出现「库里已启用、卡片仍显示停用」的不一致。
+// SetRpcConnectionEnabled enables / disables an RPC connection (a lightweight state switch that
+// does not edit other fields directly).
+// Enabling runs "discover the tools first, persist only after success": a failed discovery leaves
+// is_active untouched, so the card never shows disabled while the row says enabled.
 func SetRpcConnectionEnabled(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -141,7 +143,7 @@ func SetRpcConnectionEnabled(c *gin.Context) {
 
 	id := c.Param("id")
 	if id == "" {
-		xhttp.ErrJSON(c, "Connection ID is required", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Connection ID is required", "")
 		return
 	}
 
@@ -154,24 +156,25 @@ func SetRpcConnectionEnabled(c *gin.Context) {
 	}
 
 	if body.IsActive {
-		// 启用：先重新发现并持久化工具，成功后才落库，保证卡片状态与库一致
+		// Enable: rediscover and persist the tools first, persist the switch only on success, so
+		// the card state matches the row
 		conn, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 		if err != nil {
 			xhttp.ErrCode(c, "rpc.connection_not_found", nil, "RPC connection not found", "")
 			return
 		}
 		if err := client.RefreshToolsWithRepo(c.Request.Context(), authInfo.(*auth.AuthInfo), conn, repo); err != nil {
-			xhttp.ErrCode(c, "rpc.discovery_failed", nil, "工具发现失败，未启用该连接: "+err.Error(), "")
+			xhttp.ErrCode(c, "rpc.discovery_failed", nil, "tool discovery failed, the connection was not enabled: "+err.Error(), "")
 			return
 		}
 		if err := repo.UpdateIsActive(authInfo.(*auth.AuthInfo), id, true); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 	} else {
-		// 停用：先落库，再使进程池中的 stdio 会话失效
+		// Disable: persist first, then invalidate the stdio sessions in the process pool
 		if err := repo.UpdateIsActive(authInfo.(*auth.AuthInfo), id, false); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		client.GetSessionPool().Invalidate(id)
@@ -180,30 +183,32 @@ func SetRpcConnectionEnabled(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// validateRpcConnectionName 校验连接标识(name)：非空且只允许英文字母和数字
+// validateRpcConnectionName checks the connection identifier (name): non-empty and ASCII letters and digits only
 func validateRpcConnectionName(name string) error {
 	if name == "" {
-		return fmt.Errorf("连接标识(name)不能为空")
+		return fmt.Errorf("the connection identifier (name) cannot be empty")
 	}
 	for _, r := range name {
 		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
-			return fmt.Errorf("连接标识(name)只允许英文字母和数字，不含空格或特殊字符")
+			return fmt.Errorf("the connection identifier (name) accepts ASCII letters and digits only, with no spaces or special characters")
 		}
 	}
 	return nil
 }
 
-// rejectSelfLink 阻止把 RPC 连接指向本租户自身的服务端点（/service/rpc/{schema}）。
-// 判据是 URL 路径里的 schema 与调用方租户一致，与域名/IP 无关；
-// 指向其他租户（跨租户链接）合法放行。URL 为空（stdio 传输）时跳过。
+// rejectSelfLink stops an RPC connection from pointing at the tenant's own service endpoint
+// (/service/rpc/{schema}).
+// The test is whether the schema in the URL path equals the caller's tenant, regardless of
+// domain / IP; pointing at another tenant (a cross-tenant link) is allowed. An empty URL (stdio
+// transport) is skipped.
 func rejectSelfLink(schema, rawURL string) error {
 	if s := svcpath.SchemaFromURL(rawURL, "rpc"); s != "" && s == schema {
-		return fmt.Errorf("不能把连接指向本租户自身（%s）", s)
+		return fmt.Errorf("a connection cannot point at the tenant itself (%s)", s)
 	}
 	return nil
 }
 
-// DeleteRpcConnection 删除 RPC 连接
+// DeleteRpcConnection deletes an RPC connection
 func DeleteRpcConnection(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -214,17 +219,17 @@ func DeleteRpcConnection(c *gin.Context) {
 	id := c.Param("id")
 
 	if err := repo.Delete(authInfo.(*auth.AuthInfo), id); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 连接删除后，移除进程池中可能残留的 stdio 会话
+	// After the connection is deleted, drop any stdio session left in the process pool
 	client.GetSessionPool().Invalidate(id)
 
 	xhttp.OkJSON(c, "RPC connection deleted successfully", id, "")
 }
 
-// ListRpcConnections 获取 RPC 连接列表（分页 + 过滤）
+// ListRpcConnections returns the RPC connection list (paging plus filters)
 func ListRpcConnections(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -238,7 +243,7 @@ func ListRpcConnections(c *gin.Context) {
 		return
 	}
 
-	// 分页兜底
+	// Paging fallbacks
 	if req.Page <= 0 {
 		req.Page = 1
 	}
@@ -248,7 +253,7 @@ func ListRpcConnections(c *gin.Context) {
 
 	data, total, err := repo.List(authInfo.(*auth.AuthInfo), &req)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -262,7 +267,7 @@ func ListRpcConnections(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", response, "")
 }
 
-// ListRpcConnectionTools 列出某连接已持久化的工具
+// ListRpcConnectionTools lists the tools already persisted for a connection
 func ListRpcConnectionTools(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -274,14 +279,14 @@ func ListRpcConnectionTools(c *gin.Context) {
 
 	tools, err := repo.ListTools(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	xhttp.OkJSON(c, "Success", tools, "")
 }
 
-// RefreshRpcConnectionTools 立即重新发现并持久化某连接的工具
+// RefreshRpcConnectionTools rediscovers and persists a connection's tools immediately
 func RefreshRpcConnectionTools(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -298,7 +303,7 @@ func RefreshRpcConnectionTools(c *gin.Context) {
 	}
 
 	if err := client.RefreshToolsWithRepo(c.Request.Context(), authInfo.(*auth.AuthInfo), conn, repo); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 

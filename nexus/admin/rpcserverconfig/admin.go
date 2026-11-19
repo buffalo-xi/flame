@@ -30,23 +30,23 @@ func getServerConfig(c *gin.Context) {
 	}
 	info, ok := authInfo.(*auth.AuthInfo)
 	if !ok {
-		xhttp.ErrJSON(c, "Invalid tenant auth info", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
 	authType := strings.TrimSpace(c.Query("auth_type"))
 	if authType == "" {
-		xhttp.ErrJSON(c, "auth_type query param required", nil, "")
+		xhttp.ErrCode(c, "rpc.auth_type_required", nil, "auth_type query param required", "")
 		return
 	}
 	if !validAuthType(authType) {
-		xhttp.ErrJSON(c, "auth_type must be 'apikey' or 'oauth'", nil, "")
+		xhttp.ErrCode(c, "rpc.invalid_auth_type", nil, "auth_type must be 'apikey' or 'oauth'", "")
 		return
 	}
 
 	cfg, err := server.GetServerConfig(info, authType)
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load server config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load server config: "+err.Error(), "")
 		return
 	}
 
@@ -72,17 +72,17 @@ func putServerConfig(c *gin.Context) {
 	}
 	info, ok := authInfo.(*auth.AuthInfo)
 	if !ok {
-		xhttp.ErrJSON(c, "Invalid tenant auth info", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
 	var req putRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	if !validAuthType(req.AuthType) {
-		xhttp.ErrJSON(c, "auth_type must be 'apikey' or 'oauth'", nil, "")
+		xhttp.ErrCode(c, "rpc.invalid_auth_type", nil, "auth_type must be 'apikey' or 'oauth'", "")
 		return
 	}
 
@@ -92,7 +92,7 @@ func putServerConfig(c *gin.Context) {
 		IsActive:   req.IsActive,
 	}
 	if err := server.UpsertServerConfig(info, cfg); err != nil {
-		xhttp.ErrJSON(c, "failed to save server config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to save server config: "+err.Error(), "")
 		return
 	}
 

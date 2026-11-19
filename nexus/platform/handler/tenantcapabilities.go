@@ -10,43 +10,46 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 工具能力的平台级授权：platform.tenant_capabilities + platform.capability_gates 的读写。
+// Platform-level grants for tool capabilities: reading and writing platform.tenant_capabilities plus
+// platform.capability_gates.
 //
-// 键名沿用 sandbox.exec / sandbox.browser（不改库、不改接口），但语义是「这类工具
-// 能不能用」：界面统一叫「能力」，与插件授权摆在同一页（形状完全一致）。
+// The key names stay sandbox.exec / sandbox.browser (no database or API change), but the meaning is "may this kind of tool be
+// used": the UI calls them "capabilities" throughout and puts them on the same page as plugin grants (the shape is identical).
 //
-// 两层，缺一不可：
+// Two layers, both required:
 //
-//	租户行   这个租户允不允许（缺省拒绝：没有行 = 未开通）—— 编辑框绑原始行
-//	全局闸   这项能力还开不开（缺省放行：没有行 = 不拦）—— 急停，压过租户的显式开启
+//	tenant row  whether this tenant may (deny by default: no row = not enabled) - the edit form binds to the raw row
+//	global gate whether the capability is on at all (allow by default: no row = not blocked) - the emergency stop, overriding
+//	            a tenant's explicit enable
 //
-// 生效 = (租户行 ?? 未开通) AND NOT blocked。2026-10-21 移除了「系统默认行」
-// （tenant_id = ''）：它只改缺省值、与急停是两种东西，混在一张表里会让管理员
-// 分不清「我关的」和「本来就没有」，也会误以为它是总闸。
+// Effective = (tenant row ?? not enabled) AND NOT blocked. On 2026-10-21 the "system default row" (tenant_id = '') was removed:
+// it only changed the default and is a different thing from the emergency stop, and keeping both in one table left
+// administrators unable to tell "I turned it off" from "it was never there", or even mistook it for a master switch.
 //
-// 表结构见 nexus/platform/sql/tenant_capabilities.sql 与 capability_gates.sql；
-// 解析逻辑见 shared/capabilitypolicy。
-// 为什么不做租户侧开关：能力没有「用哪个实现/key」这类租户配置面，二级开关没有约束力。
+// The DDL lives in nexus/platform/sql/tenant_capabilities.sql and capability_gates.sql; the resolution logic in
+// shared/capabilitypolicy.
+// Why there is no tenant-side switch: a capability has no tenant configuration surface such as "which implementation / key",
+// so a second-level switch would have no force.
 
-// capabilityView 一行能力：生效值 + 本租户原始值 + 全局闸状态。
+// capabilityView is one capability row: effective value + this tenant's raw value + global gate state.
 type capabilityView struct {
 	Key     string `json:"key"`
 	Label   string `json:"label"`
-	Allowed bool   `json:"allowed"` // 生效值（已乘上全局闸）
-	Row     *bool  `json:"row"`     // 本租户原始行；null = 没设过（未开通）
-	Blocked bool   `json:"blocked"` // 全局闸是否拦下（false = 不拦，含「没有闸行」）
+	Allowed bool   `json:"allowed"` // effective value (already multiplied by the global gate)
+	Row     *bool  `json:"row"`     // this tenant's raw row; null = never set (not enabled)
+	Blocked bool   `json:"blocked"` // whether the global gate stops it (false = no, including "no gate row")
 }
 
-// buildCapabilityViews 把「本租户行 + 全局闸」合并成列表（顺序按 capability.All）。
+// buildCapabilityViews merges "this tenant's rows + the global gate" into a list (ordered by capability.All).
 //
-// Row 用 *bool 而不是 bool：null（没设过 = 未开通）与 false（显式关闭）是两种意思，
-// 压成一个布尔会让编辑框把「未设置」静默写成「关闭」。
+// Row is a *bool rather than a bool: null (never set = not enabled) and false (explicitly off) mean different things, and
+// collapsing them into one boolean would make the edit form silently turn "unset" into "off".
 func buildCapabilityViews(rows map[string]capabilitypolicy.Policy, gates map[string]bool) []capabilityView {
 	out := make([]capabilityView, 0, len(capability.All()))
 	for _, key := range capability.All() {
 		v := capabilityView{Key: key, Label: capability.Label(key)}
 
-		eff := capabilitypolicy.Default() // 未开通
+		eff := capabilitypolicy.Default() // not enabled
 		if p, ok := rows[key]; ok {
 			eff = p
 			b := p.Allowed
@@ -54,7 +57,7 @@ func buildCapabilityViews(rows map[string]capabilitypolicy.Policy, gates map[str
 		}
 		if gates[key] {
 			v.Blocked = true
-			eff.Allowed = false // 硬闸最后乘上去的 0，排除在「原始行」之外
+			eff.Allowed = false // the hard gate's 0 multiplied in last, kept out of the "raw row"
 		}
 		v.Allowed = eff.Allowed
 		out = append(out, v)
@@ -70,12 +73,12 @@ func ListTenantCapabilities(c *gin.Context) {
 	}
 	rows, err := capabilitypolicy.Rows(schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load tenant capabilities: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load tenant capabilities: "+err.Error(), "")
 		return
 	}
 	gates, err := capabilitypolicy.Gates()
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load capability gates: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load capability gates: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"capabilities": buildCapabilityViews(rows, gates)}, "")
@@ -83,24 +86,25 @@ func ListTenantCapabilities(c *gin.Context) {
 
 // ListCapabilityGates GET /platform/system/capability-gates
 //
-// 键齐全（顺序按 capability.All），未设闸的一律 blocked=false —— 界面是一排开关，
-// 不需要区分「没设过」和「设成不拦」：两者行为完全一致。
+// Every key is present (ordered by capability.All), and an ungated one is blocked=false - the UI is a row of switches and
+// does not need to tell "never set" from "set to not blocked": both behave identically.
 func ListCapabilityGates(c *gin.Context) {
 	gates, err := capabilitypolicy.Gates()
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load capability gates: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load capability gates: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"capabilities": buildCapabilityViews(nil, gates)}, "")
 }
 
-// capabilityDeps 能力的依赖键（**任一**开通即可；空 = 无依赖）。
+// capabilityDeps lists a capability's dependency keys (**any one** enabled is enough; empty = no dependency).
 //
-// net.egress 依赖 exec 或 shell：它约束的是「命令执行族能否出网」，而这两个通道
-// 都能执行任意代码 —— 只开 shell 的租户同样需要出网能力，只写 exec 会把它挡在门外。
+// net.egress depends on exec or shell: what it constrains is "can the command-execution family reach the network", and both
+// channels can run arbitrary code - a tenant that only enabled shell needs egress just as much, and listing exec alone would
+// lock it out.
 //
-// 依赖只在**写入时**挡，运行时不做级联：exec/shell 都关掉后 egress 变孤儿是无害的 ——
-// 它本来就只在执行时才生效，不会凭空多出一个可出网的通道。
+// Dependencies are only enforced **on write**, never cascaded at runtime: egress becoming an orphan once both exec and shell
+// are off is harmless - it only takes effect during execution anyway and cannot conjure a new network channel.
 func capabilityDeps(key string) []string {
 	if key == capability.Egress {
 		return []string{capability.Exec, capability.Shell}
@@ -108,19 +112,20 @@ func capabilityDeps(key string) []string {
 	return nil
 }
 
-// capabilityEnabled 某租户下某能力的生效值（缺省未开通）。
+// capabilityEnabled is a capability's effective value for one tenant (not enabled by default).
 //
-// 读失败直接上抛：这是写库前的准入判断，拿不准就拒绝，不要在最宽松的方向上兜底。
+// A read failure is propagated: this is an admission check before a write, and when in doubt it refuses rather than falling
+// back in the most permissive direction.
 func capabilityEnabled(tenantID, key string) (bool, error) {
 	rows, err := capabilitypolicy.Rows(tenantID)
 	if err != nil {
 		return false, err
 	}
 	p, ok := rows[key]
-	return ok && p.Allowed, nil // 没有行 = 未开通（缺省拒绝）
+	return ok && p.Allowed, nil // no row = not enabled (deny by default)
 }
 
-// setCapabilityReq 写入一行；allowed 省略视为 false（缺省拒绝，不做「保留原值」的猜测）。
+// setCapabilityReq writes one row; an omitted allowed counts as false (deny by default, no guessing "keep the old value").
 type setCapabilityReq struct {
 	Allowed *bool `json:"allowed"`
 }
@@ -133,7 +138,7 @@ func SetTenantCapabilityPolicy(c *gin.Context) {
 	}
 	key := c.Param("key")
 	if !capability.Valid(key) {
-		xhttp.ErrJSON(c, "unknown capability: "+key, nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "unknown capability: "+key, "")
 		return
 	}
 	var body setCapabilityReq
@@ -142,13 +147,14 @@ func SetTenantCapabilityPolicy(c *gin.Context) {
 		return
 	}
 	allowed := body.Allowed != nil && *body.Allowed
-	// 依赖准入：放开依赖项之前，被依赖的能力至少有一个已经生效（否则配出来的是空组合）。
+	// Dependency admission: before enabling a dependent capability, at least one of its dependencies must already be
+	// effective (otherwise the result is an empty combination).
 	if deps := capabilityDeps(key); allowed && len(deps) > 0 {
 		var ok bool
 		for _, dep := range deps {
 			v, err := capabilityEnabled(schema, dep)
 			if err != nil {
-				xhttp.ErrJSON(c, "Failed to check "+dep+": "+err.Error(), nil, "")
+				xhttp.ErrCode(c, "common.internal", nil, "Failed to check "+dep+": "+err.Error(), "")
 				return
 			}
 			if v {
@@ -158,13 +164,13 @@ func SetTenantCapabilityPolicy(c *gin.Context) {
 		}
 		if !ok {
 			xhttp.ErrCode(c, "capability.dependency_missing", gin.H{"capability": key, "deps": strings.Join(deps, " / ")},
-				key+" 依赖 "+strings.Join(deps, " 或 ")+
-					"：请先开通其中之一，否则只是「允许出网但不能执行」的空组合", "")
+				key+" depends on "+strings.Join(deps, " or ")+
+					": enable one of them first, otherwise this is an empty combination of \"network allowed but nothing to run\"", "")
 			return
 		}
 	}
 	if err := capabilitypolicy.Set(schema, key, capabilitypolicy.Policy{Allowed: allowed}); err != nil {
-		xhttp.ErrJSON(c, "Failed to save capability: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to save capability: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"key": key, "allowed": allowed}, "")
@@ -178,29 +184,29 @@ func DeleteTenantCapabilityPolicy(c *gin.Context) {
 	}
 	key := c.Param("key")
 	if !capability.Valid(key) {
-		xhttp.ErrJSON(c, "unknown capability: "+key, nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "unknown capability: "+key, "")
 		return
 	}
 	if err := capabilitypolicy.Delete(schema, key); err != nil {
-		xhttp.ErrJSON(c, "Failed to delete capability: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to delete capability: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"key": key}, "")
 }
 
-// setGateReq 全局闸写入；blocked 省略视为 false（= 不拦）。
+// setGateReq writes the global gate; an omitted blocked counts as false (= do not block).
 type setGateReq struct {
 	Blocked *bool `json:"blocked"`
 }
 
 // SetCapabilityGate PUT /platform/system/capability-gates/:key
 //
-// blocked=false 走删行而不是 SetGate(false)：闸表只保留「确实被拦」的记录，
-// 否则排查时看到一行 false 会以为「有人动过这个闸」。
+// blocked=false deletes the row instead of SetGate(false): the gate table keeps only "actually blocked" records, otherwise
+// someone troubleshooting would see a false row and assume "somebody touched this gate".
 func SetCapabilityGate(c *gin.Context) {
 	key := c.Param("key")
 	if !capability.Valid(key) {
-		xhttp.ErrJSON(c, "unknown capability: "+key, nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "unknown capability: "+key, "")
 		return
 	}
 	var body setGateReq
@@ -216,7 +222,7 @@ func SetCapabilityGate(c *gin.Context) {
 		err = capabilitypolicy.DeleteGate(key)
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to save capability gate: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to save capability gate: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"key": key, "blocked": blocked}, "")
@@ -226,11 +232,11 @@ func SetCapabilityGate(c *gin.Context) {
 func DeleteCapabilityGate(c *gin.Context) {
 	key := c.Param("key")
 	if !capability.Valid(key) {
-		xhttp.ErrJSON(c, "unknown capability: "+key, nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "unknown capability: "+key, "")
 		return
 	}
 	if err := capabilitypolicy.DeleteGate(key); err != nil {
-		xhttp.ErrJSON(c, "Failed to delete capability gate: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to delete capability gate: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"key": key}, "")

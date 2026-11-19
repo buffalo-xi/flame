@@ -20,11 +20,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 全局Repository实例
+// Global repository instances.
 var repo = repository.NewRepository()
 var providerRepository = providerRepo.NewRepository()
 
-// GetLLMModel 根据ID获取LLM模型
+// GetLLMModel returns one LLM model by id.
 func GetLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -40,14 +40,14 @@ func GetLLMModel(c *gin.Context) {
 			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	xhttp.OkJSON(c, "Success", llmModel, "")
 }
 
-// CreateLLMModel 创建LLM模型
+// CreateLLMModel creates an LLM model.
 func CreateLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -83,7 +83,7 @@ func CreateLLMModel(c *gin.Context) {
 
 	id, err := repo.Create(authInfo.(*auth.AuthInfo), &llmModel)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -91,7 +91,7 @@ func CreateLLMModel(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", llmModel, "")
 }
 
-// UpdateLLMModel 更新LLM模型
+// UpdateLLMModel updates an LLM model.
 func UpdateLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -116,19 +116,19 @@ func UpdateLLMModel(c *gin.Context) {
 		return
 	}
 
-	// 已启用的模型：gateway_model 决定 LiteLLM 的 model_name，改动会导致路由失配，必须先禁用。
-	// 只挡这一项 —— 名字 / 上下文 / 参数等改动允许，改完由「同步」推到网关。
+	// For an enabled model, gateway_model becomes the LiteLLM model_name and changing it breaks routing, so it must be disabled first.
+	// Only that field is blocked - name / context / parameters may change, and "sync" pushes them to the gateway.
 	existing, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if string(existing.GatewayID) != "" && req.GatewayModel != string(existing.GatewayModel) {
-		xhttp.ErrCode(c, "llm.model_enabled_locked", nil, "模型已启用，gateway_model 不可修改，请先禁用", "")
+		xhttp.ErrCode(c, "llm.model_enabled_locked", nil, "the model is enabled, so gateway_model cannot be changed; disable it first", "")
 		return
 	}
 
@@ -149,16 +149,16 @@ func UpdateLLMModel(c *gin.Context) {
 			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// DeleteLLMModel 删除LLM模型。
-// 已启用（gateway_id 非空）的先到网关注销，避免 LiteLLM 里留下孤儿记录；
-// 再在同一事务内解开 agent 引用并删除行。
+// DeleteLLMModel deletes an LLM model.
+// An enabled model (non-empty gateway_id) is deprovisioned on the gateway first, so LiteLLM keeps no orphan record;
+// then the agent references are cleared and the row deleted in one transaction.
 func DeleteLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -174,37 +174,37 @@ func DeleteLLMModel(c *gin.Context) {
 			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 1. 已启用则先网关注销（网络调用，放在事务外）。Deprovision 幂等，网关没了也算成功
+	// 1. if enabled, deprovision first (a network call, outside the transaction). Deprovision is idempotent, so a missing model still counts as success
 	if gatewayID := string(m.GatewayID); gatewayID != "" {
 		if gateway.Current == nil {
-			xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 			return
 		}
 		if derr := gateway.Current.Deprovision(info.Schema,
 			gateway.ModelInput{GatewayID: gatewayID}, gateway.ProviderInput{}); derr != nil {
-			xhttp.ErrJSON(c, "Deprovision failed: "+derr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "deprovision failed: "+derr.Error(), "")
 			return
 		}
 	}
 
-	// 2. 解开 agent 引用 + 删除模型行
+	// 2. clear the agent references and delete the model row
 	if err := repo.DeleteCascade(info, id); err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	xhttp.OkJSON(c, "LLM model deleted successfully", id, "")
 }
 
-// ListLLMModels 获取LLM模型列表
+// ListLLMModels returns the LLM model list.
 func ListLLMModels(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -212,7 +212,7 @@ func ListLLMModels(c *gin.Context) {
 		return
 	}
 
-	// 解析请求参数
+	// Parse the request parameters
 	var req repository.ListLLMModelsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
@@ -221,11 +221,11 @@ func ListLLMModels(c *gin.Context) {
 
 	llmModels, total, err := repo.List(authInfo.(*auth.AuthInfo), &req)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 构建响应
+	// Build the response
 	response := gin.H{
 		"items": llmModels,
 		"total": total,
@@ -236,7 +236,7 @@ func ListLLMModels(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", response, "")
 }
 
-// ListLLMModelsByProviderID 根据ProviderID获取LLM模型列表
+// ListLLMModelsByProviderID returns the LLM models of one provider.
 func ListLLMModelsByProviderID(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -246,7 +246,7 @@ func ListLLMModelsByProviderID(c *gin.Context) {
 
 	providerID := c.Param("provider_id")
 
-	// 解析请求参数
+	// Parse the request parameters
 	var req repository.ListLLMModelsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
@@ -255,11 +255,11 @@ func ListLLMModelsByProviderID(c *gin.Context) {
 
 	llmModels, total, err := repo.ListByProviderID(authInfo.(*auth.AuthInfo), providerID, &req)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 构建响应
+	// Build the response
 	response := gin.H{
 		"items": llmModels,
 		"total": total,
@@ -270,7 +270,7 @@ func ListLLMModelsByProviderID(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", response, "")
 }
 
-// GetDefaultLLMModel 获取默认模型
+// GetDefaultLLMModel returns the default model.
 func GetDefaultLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -284,15 +284,15 @@ func GetDefaultLLMModel(c *gin.Context) {
 			xhttp.ErrCode(c, "llm.model_not_found", nil, "Default LLM model not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	xhttp.OkJSON(c, "Success", llmModel, "")
 }
 
-// ListSelectableLLMModels 返回可在 LLM 节点下拉中选择的模型列表：
-// provider.enabled=true 且 gateway_id 非空，DISTINCT 去重
+// ListSelectableLLMModels returns the models selectable in the LLM node dropdown:
+// provider.enabled=true with a non-empty gateway_id, deduplicated with DISTINCT
 func ListSelectableLLMModels(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -302,7 +302,7 @@ func ListSelectableLLMModels(c *gin.Context) {
 
 	llmModels, err := repo.ListSelectable(authInfo.(*auth.AuthInfo))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -314,7 +314,7 @@ func ListSelectableLLMModels(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", response, "")
 }
 
-// ProvisionLLMModel 启用 LLM 模型：向 LiteLLM 网关注册模型并将 gateway_id 回写 DB
+// ProvisionLLMModel enables an LLM model: registers it on the LiteLLM gateway and writes gateway_id back to the DB
 func ProvisionLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -325,74 +325,74 @@ func ProvisionLLMModel(c *gin.Context) {
 	id := c.Param("id")
 
 	if gateway.Current == nil {
-		xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 		return
 	}
 
-	// 1. 查模型
+	// 1. look up the model
 	m, err := repo.GetByID(info, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 已有 gateway_id 则幂等返回
+	// An existing gateway_id returns idempotently
 	if string(m.GatewayID) != "" {
 		xhttp.OkJSON(c, "already provisioned", m, "")
 		return
 	}
 
-	// 2. 查 provider 构造 ProviderInput
+	// 2. look up the provider to build ProviderInput
 	provider, err := providerRepository.GetByID(info, m.ProviderID)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to get LLM provider: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get the llm provider: "+err.Error(), "")
 		return
 	}
 
-	// 2.1 服务商必须处于启用状态 —— 否则会在网关上注册一个在下拉里选不到的模型
+	// 2.1 the provider must be enabled - otherwise a model is registered on the gateway that the dropdown cannot reach
 	if !bool(provider.Enabled) {
-		xhttp.ErrCode(c, "llm.provider_disabled", nil, "服务商已停用，请先在「LLM 服务商」里启用后再启用模型", "")
+		xhttp.ErrCode(c, "llm.provider_disabled", nil, "the provider is disabled; enable it under LLM providers before enabling the model", "")
 		return
 	}
 
-	// 2.2 gateway_model 决定 LiteLLM 的 model_name，已启用的模型之间不允许重名。
-	// 该模型此刻 gateway_id 必为空，所以这条统计天然排除了自己。
+	// 2.2 gateway_model becomes the LiteLLM model_name, and enabled models must not share one.
+	// This model's gateway_id is empty at this point, so the count excludes itself.
 	gatewayModel := string(m.GatewayModel)
 	if gatewayModel == "" {
-		xhttp.ErrCode(c, "llm.gateway_model_required", nil, "网关模型名(gateway_model)不能为空，请先填写后再启用", "")
+		xhttp.ErrCode(c, "llm.gateway_model_required", nil, "gateway_model cannot be empty; fill it in before enabling", "")
 		return
 	}
 	dup, err := repo.CountEnabledByGatewayModel(info, gatewayModel)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to check gateway_model uniqueness: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to check the gateway_model uniqueness: "+err.Error(), "")
 		return
 	}
 	if dup > 0 {
-		xhttp.ErrCode(c, "llm.gateway_model_taken", gin.H{"name": gatewayModel}, "网关模型名 "+gatewayModel+" 已被其他启用中的模型使用，会导致网关路由歧义，请改用不同的 gateway_model", "")
+		xhttp.ErrCode(c, "llm.gateway_model_taken", gin.H{"name": gatewayModel}, "the gateway model name "+gatewayModel+" is already used by another enabled model, which makes gateway routing ambiguous; use a different gateway_model", "")
 		return
 	}
 
-	// 3. 构造 ModelInput / ProviderInput（锁外调 LiteLLM 注册）
+	// 3. build ModelInput / ProviderInput (the LiteLLM call happens outside the lock)
 	modelInput, providerInput, err := buildGatewayInputs(m, provider)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	gatewayID, err := gateway.Current.Provision(info.Schema, modelInput, providerInput)
 	if err != nil {
-		xhttp.ErrJSON(c, "Provision failed: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "provision failed: "+err.Error(), "")
 		return
 	}
 
-	// 4. 锁行防并发：若已被别人 provision，退订自己刚注册的
+	// 4. lock the row against concurrency: if someone else provisioned it, deprovision what was just registered
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() {
@@ -403,11 +403,11 @@ func ProvisionLLMModel(c *gin.Context) {
 
 	existing, err := repo.LockAndGetGatewayID(tx, info, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if existing != "" {
-		// 已被并发请求 provision：退订自己刚注册的，返回已有 id
+		// provisioned by a concurrent request: deprovision what was just registered and return the existing id
 		tx.Rollback()
 		tx = nil
 		_ = gateway.Current.Deprovision(info.Schema, gateway.ModelInput{GatewayID: gatewayID}, gateway.ProviderInput{})
@@ -416,11 +416,11 @@ func ProvisionLLMModel(c *gin.Context) {
 	}
 
 	if err := repo.SetGatewayIDInTx(tx, info, id, gatewayID); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	tx = nil
@@ -428,7 +428,7 @@ func ProvisionLLMModel(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"gateway_id": gatewayID}, "")
 }
 
-// DeprovisionLLMModel 禁用 LLM 模型：从 LiteLLM 网关删除模型并条件清空 gateway_id
+// DeprovisionLLMModel disables an LLM model: removes it from the LiteLLM gateway and clears gateway_id conditionally
 func DeprovisionLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -439,39 +439,39 @@ func DeprovisionLLMModel(c *gin.Context) {
 	id := c.Param("id")
 
 	if gateway.Current == nil {
-		xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 		return
 	}
 
-	// 1. 查模型
+	// 1. look up the model
 	m, err := repo.GetByID(info, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	gatewayID := string(m.GatewayID)
 	if gatewayID == "" {
-		// 幂等返回
+		// idempotent return
 		xhttp.OkJSON(c, "already deprovisioned", m, "")
 		return
 	}
 
-	// 2. 先 LiteLLM 删除（锁外做网络调用）
+	// 2. delete on LiteLLM first (a network call outside the lock)
 	if err := gateway.Current.Deprovision(info.Schema,
 		gateway.ModelInput{GatewayID: gatewayID}, gateway.ProviderInput{}); err != nil {
-		xhttp.ErrJSON(c, "Deprovision failed: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "deprovision failed: "+err.Error(), "")
 		return
 	}
 
-	// 3. 锁行 + 条件清空（仅当当前 gateway_id 仍等于 gatewayID 才置空）
+	// 3. lock the row and clear conditionally (only when gateway_id still equals gatewayID)
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() {
@@ -482,16 +482,16 @@ func DeprovisionLLMModel(c *gin.Context) {
 
 	affected, err := repo.ClearGatewayIDInTx(tx, info, id, gatewayID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	tx = nil
 
-	// affected == 0：说明在 LiteLLM 删除与 DB 清空之间被重新 provision，新 id 不应被清
+	// affected == 0: the row was provisioned again between the LiteLLM delete and the DB clear, so the new id must not be cleared
 	if affected == 0 {
 		xlog.Info("DeprovisionLLMModel: gateway_id changed concurrently for model %s, skip clearing", id)
 	}
@@ -499,9 +499,9 @@ func DeprovisionLLMModel(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// DeprovisionAllLLMModels 批量注销当前租户下所有已注册到网关的模型：
-// 1. 先调用网关 DeprovisionAll 删除 LiteLLM 中 schema 前缀的所有模型（失败立即返回，不动 DB）
-// 2. 成功后批量将该租户下所有 gateway_id 非空的模型置空
+// DeprovisionAllLLMModels deprovisions every model of this tenant registered on the gateway:
+// 1. call the gateway's DeprovisionAll to remove every model under the schema prefix (a failure returns at once, DB untouched)
+// 2. on success, clear gateway_id on every model of this tenant that has one
 func DeprovisionAllLLMModels(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -511,28 +511,28 @@ func DeprovisionAllLLMModels(c *gin.Context) {
 	info := authInfo.(*auth.AuthInfo)
 
 	if gateway.Current == nil {
-		xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 		return
 	}
 
-	// 1. 从网关批量删除，返回实际删除的模型数量（某行失败立即返回，DB 保持不变以保证两端一致）
+	// 1. delete in bulk on the gateway, returning how many models were removed (a failure returns at once and the DB stays untouched so both sides agree)
 	count, err := gateway.Current.DeprovisionAll(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "Deprovision all failed: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "deprovision all failed: "+err.Error(), "")
 		return
 	}
 
-	// 2. 批量清空 gateway_id
+	// 2. clear gateway_id in bulk
 	if err := repo.ClearAllGatewayIDs(info); err != nil {
-		xhttp.ErrJSON(c, "Failed to clear gateway ids: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to clear the gateway ids: "+err.Error(), "")
 		return
 	}
 
 	xhttp.OkJSON(c, "Success", gin.H{"count": count}, "")
 }
 
-// bpFloat 从 base_params map 中取出 float 类型参数值。
-// 键不存在或类型不符时返回 (0, false)，调用方据此判断是否使用该参数。
+// bpFloat pulls a float parameter out of the base_params map.
+// A missing key or a mismatched type returns (0, false), and the caller decides whether to use the parameter.
 func bpFloat(bp map[string]any, key string) (float64, bool) {
 	v, ok := bp[key]
 	if !ok || v == nil {
@@ -558,32 +558,32 @@ func bpFloat(bp map[string]any, key string) (float64, bool) {
 	}
 }
 
-// ---- 网关同步 ----
+// ---- Gateway sync ----
 
-// syncSkip 被跳过的模型（只同步已启用的，其余列出来让操作者知情）
+// syncSkip is a skipped model (only enabled ones are synced; the rest are listed so the operator knows)
 type syncSkip struct {
 	Model  string `json:"model"`
 	Reason string `json:"reason"`
 }
 
-// syncFailure 同步失败的模型（单个失败不中断整体流程）
+// syncFailure is a model that failed to sync (one failure does not abort the whole run)
 type syncFailure struct {
 	Model string `json:"model"`
 	Error string `json:"error"`
 }
 
-// SyncLLMModels 把本地 LLM 模型配置逐个同步到 LiteLLM 网关。
+// SyncLLMModels syncs each local LLM model configuration to the LiteLLM gateway.
 //
-// 逐条判定（判据是 gateway_id，即 LiteLLM 的 model_id UUID —— model_name 可重名，不可靠）：
+// Each model is decided by gateway_id, the LiteLLM model_id UUID (model_name can repeat and is not reliable):
 //
-//  1. 已启用（gateway_id 非空）但网关上查不到 → 重新注册并回写 gateway_id（created）；
-//  2. 未启用（gateway_id 为空）→ 不注册，记入 skipped；
-//  3. 网关上已存在且托管字段有差异 → Update 覆盖（updated），一致则 unchanged；
-//  4. 网关上属于本 schema 前缀、但同步结束后没有任何本地 gateway_id 引用的记录 → 删除（deleted）；
-//  5. 单条失败不中断，收集到 errors 一并返回。
+//  1. enabled (non-empty gateway_id) but unknown to the gateway -> register again and write the gateway_id back (created);
+//  2. not enabled (empty gateway_id) -> not registered, recorded in skipped;
+//  3. present on the gateway with differing managed fields -> Update overwrites (updated), otherwise unchanged;
+//  4. records under this schema prefix that no local gateway_id references after the sync -> deleted;
+//  5. a single failure does not abort; failures are collected into errors.
 //
-// 删除范围严格限定在 model_name 前缀 "<当前schema>:" 之内 —— LiteLLM 是多租户共用实例，
-// 不限制前缀会删掉其他租户的模型。
+// The delete scope is strictly the model_name prefix "<schema>:" - LiteLLM is one instance shared by many tenants,
+// and without the prefix other tenants' models would be deleted.
 func SyncLLMModels(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -593,19 +593,19 @@ func SyncLLMModels(c *gin.Context) {
 	info := authInfo.(*auth.AuthInfo)
 
 	if gateway.Current == nil {
-		xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 		return
 	}
 
 	locals, err := repo.ListAll(info)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to list llm models: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to list the llm models: "+err.Error(), "")
 		return
 	}
 
 	remote, err := gateway.Current.ListProvisioned(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to list gateway models: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to list the gateway models: "+err.Error(), "")
 		return
 	}
 	remoteByID := make(map[string]gateway.ProvisionedModel, len(remote))
@@ -622,7 +622,7 @@ func SyncLLMModels(c *gin.Context) {
 		deleted   int
 		skipped   = []syncSkip{}
 		failures  = []syncFailure{}
-		// keepIDs 记录同步结束后本地仍引用的网关 id，用于判定「多余」
+		// keepIDs tracks the gateway ids still referenced locally after the sync, to decide what is stale
 		keepIDs = make(map[string]bool, len(locals))
 	)
 
@@ -630,23 +630,23 @@ func SyncLLMModels(c *gin.Context) {
 		m := &locals[i]
 		name := m.Name
 
-		// 规则 2：未启用 —— 不注册、不处理，只记一笔让操作者知情
+		// Rule 2: not enabled - not registered, not touched, just recorded so the operator knows
 		gatewayID := string(m.GatewayID)
 		if gatewayID == "" {
-			skipped = append(skipped, syncSkip{Model: name, Reason: "未启用，未注册"})
+			skipped = append(skipped, syncSkip{Model: name, Reason: "not enabled, not registered"})
 			continue
 		}
 
-		// 先登记：即使后续步骤失败，也不能把它在网关上的记录当成「多余」删掉
+		// Register it first: even if a later step fails, its gateway record must not be treated as stale and deleted
 		keepIDs[gatewayID] = true
 
 		provider, perr := getProviderCached(providerCache, info, m.ProviderID)
 		if perr != nil {
-			failures = append(failures, syncFailure{Model: name, Error: "读取服务商失败: " + perr.Error()})
+			failures = append(failures, syncFailure{Model: name, Error: "failed to read the provider: " + perr.Error()})
 			continue
 		}
 		if provider == nil {
-			failures = append(failures, syncFailure{Model: name, Error: "服务商不存在（provider_id=" + m.ProviderID + "）"})
+			failures = append(failures, syncFailure{Model: name, Error: "the provider does not exist (provider_id=" + m.ProviderID + "）"})
 			continue
 		}
 
@@ -658,15 +658,15 @@ func SyncLLMModels(c *gin.Context) {
 
 		remoteModel, onGateway := remoteByID[gatewayID]
 		if !onGateway {
-			// 规则 1：已启用但网关查不到 → 清掉旧 id 强制新建，成功后回写 gateway_id
+			// Rule 1: enabled but unknown to the gateway -> clear the old id to force a create, then write the gateway_id back
 			modelInput.GatewayID = ""
 			newID, rerr := gateway.Current.Provision(info.Schema, modelInput, providerInput)
 			if rerr != nil {
-				failures = append(failures, syncFailure{Model: name, Error: "注册失败: " + rerr.Error()})
+				failures = append(failures, syncFailure{Model: name, Error: "registration failed: " + rerr.Error()})
 				continue
 			}
 			if uerr := repo.UpdateGatewayID(info, m.ID, newID); uerr != nil {
-				failures = append(failures, syncFailure{Model: name, Error: "网关已注册但回写 gateway_id 失败: " + uerr.Error()})
+				failures = append(failures, syncFailure{Model: name, Error: "registered on the gateway but writing gateway_id back failed: " + uerr.Error()})
 				continue
 			}
 			delete(keepIDs, gatewayID)
@@ -675,28 +675,28 @@ func SyncLLMModels(c *gin.Context) {
 			continue
 		}
 
-		// 规则 3：已存在 —— 只比托管字段，有差异才覆盖
+		// Rule 3: already present - compare managed fields only and overwrite only on a difference
 		if gatewayModelMatches(remoteModel, info.Schema, modelInput, providerInput) {
 			unchanged++
 			continue
 		}
 		modelInput.GatewayID = gatewayID
 		if uerr := gateway.Current.Update(info.Schema, modelInput, providerInput); uerr != nil {
-			failures = append(failures, syncFailure{Model: name, Error: "更新失败: " + uerr.Error()})
+			failures = append(failures, syncFailure{Model: name, Error: "update failed: " + uerr.Error()})
 			continue
 		}
 		updated++
 	}
 
-	// 规则 4：清理网关多余（仅限本 schema 前缀 —— remote 已由 ListProvisioned 过滤）。
-	// remote 是循环前的快照，本次新建的记录不在其中，不会被自己删掉。
+	// Rule 4: clean up stale gateway records (this schema prefix only - ListProvisioned already filtered remote).
+	// remote is the snapshot taken before the loop, so records created now are not in it and cannot delete themselves.
 	for _, r := range remote {
 		if keepIDs[r.GatewayID] {
 			continue
 		}
 		if derr := gateway.Current.Deprovision(info.Schema,
 			gateway.ModelInput{GatewayID: r.GatewayID}, gateway.ProviderInput{}); derr != nil {
-			failures = append(failures, syncFailure{Model: r.ModelName, Error: "删除多余记录失败: " + derr.Error()})
+			failures = append(failures, syncFailure{Model: r.ModelName, Error: "failed to delete the stale record: " + derr.Error()})
 			continue
 		}
 		deleted++
@@ -712,8 +712,8 @@ func SyncLLMModels(c *gin.Context) {
 	}, "")
 }
 
-// getProviderCached 按 provider_id 取服务商（nil 表示不存在）。
-// 同步会遍历全部模型，同一 provider 只查一次库。
+// getProviderCached returns a provider by provider_id (nil means it does not exist).
+// The sync walks every model, so each provider is queried once.
 func getProviderCached(cache map[string]*models.LLMProvider, info *auth.AuthInfo, providerID string) (*models.LLMProvider, error) {
 	if p, ok := cache[providerID]; ok {
 		return p, nil
@@ -730,16 +730,16 @@ func getProviderCached(cache map[string]*models.LLMProvider, info *auth.AuthInfo
 	return p, nil
 }
 
-// buildGatewayInputs 把 DB 的模型 + 服务商转成网关入参。
-// Provision / Update / 同步三处共用，保证写进网关的内容完全一致。
+// buildGatewayInputs turns a DB model + provider into gateway inputs.
+// Provision / Update / sync all share it, so what reaches the gateway is always identical.
 //
-// 注意 GatewayModel 的语义：它是 chat 请求里的 model 字段，必须是 "<schema>:<gateway_model>"。
-// 本函数只做 DB → 入参的映射，前缀由调用方补齐。
+// Note the meaning of GatewayModel: it is the model field of a chat request and must be "<schema>:<gateway_model>".
+// This function only maps DB -> inputs; the caller adds the prefix.
 func buildGatewayInputs(m *models.LLMModel, provider *models.LLMProvider) (gateway.ModelInput, gateway.ProviderInput, error) {
-	// 网关模型名必须用 DB 的 gateway_model，不允许为空
+	// The gateway model name must come from gateway_model in the DB and cannot be empty
 	gatewayModel := string(m.GatewayModel)
 	if gatewayModel == "" {
-		return gateway.ModelInput{}, gateway.ProviderInput{}, fmt.Errorf("网关模型名(gateway_model)不能为空，请先填写后再启用")
+		return gateway.ModelInput{}, gateway.ProviderInput{}, fmt.Errorf("gateway_model cannot be empty; fill it in before enabling")
 	}
 
 	var extraParams map[string]any
@@ -749,7 +749,7 @@ func buildGatewayInputs(m *models.LLMModel, provider *models.LLMProvider) (gatew
 		}
 	}
 
-	// 从 base_params 解包生成参数（键存在=使用，键不存在=未使用）
+	// Unpack base_params into parameters (a key present = used, absent = unused)
 	var bp map[string]any
 	if !m.BaseParams.IsNil() {
 		if err := m.BaseParams.Unmarshal(&bp); err != nil {
@@ -769,8 +769,8 @@ func buildGatewayInputs(m *models.LLMModel, provider *models.LLMProvider) (gatew
 		topP = v
 	}
 
-	// 服务商的额外配置原样透传给 LiteLLM，用于 api_version（Azure）、
-	// vertex_project / vertex_location / vertex_credentials（Vertex AI）、timeout / max_retries 等
+	// The provider's extra configuration is passed through to LiteLLM as is, for api_version (Azure),
+	// vertex_project / vertex_location / vertex_credentials (Vertex AI), timeout / max_retries and so on
 	var providerExtra map[string]any
 	if !provider.ExtraConfig.IsNil() {
 		if err := provider.ExtraConfig.Unmarshal(&providerExtra); err != nil {
@@ -798,29 +798,29 @@ func buildGatewayInputs(m *models.LLMModel, provider *models.LLMProvider) (gatew
 	}, nil
 }
 
-// gatewayModelMatches 判断网关上已有记录是否与本地配置一致。
-// 只比对「我们托管写入」的字段：model_name、litellm_params.model/api_base/api_key、
-// provider extra_config 展开到 litellm_params 的键、
-// model_info.context_window/max_tokens + 模型 extra_params 展开的键。
-// LiteLLM 会自行补充 tpm / rpm / use_in_pass_through 等键，全量比 JSON 会把它们误当差异，
-// 导致每次同步都无谓地 Update，因此只比托管子集。
+// gatewayModelMatches reports whether the gateway record matches the local configuration.
+// Only the fields we manage are compared: model_name, litellm_params.model/api_base/api_key,
+// the keys provider extra_config expands into litellm_params,
+// and model_info.context_window/max_tokens plus the keys model extra_params expands into.
+// LiteLLM adds keys such as tpm / rpm / use_in_pass_through itself, and comparing the whole JSON would read them as differences,
+// making every sync Update for no reason; hence the managed subset only.
 func gatewayModelMatches(r gateway.ProvisionedModel, schema string, model gateway.ModelInput, provider gateway.ProviderInput) bool {
 	if r.ModelName != schema+":"+model.GatewayModel {
 		return false
 	}
 
-	// litellm_params.model 必须是 "<protocol>/<model.Name>"
+	// litellm_params.model must be "<protocol>/<model.Name>"
 	if want := provider.Protocol + "/" + model.Name; r.LitellmParams["model"] != want {
 		return false
 	}
-	// api_base 与 provider.URL 对齐
+	// api_base must match provider.URL
 	if provider.URL != "" {
 		if got, _ := r.LitellmParams["api_base"].(string); got != provider.URL {
 			return false
 		}
 	}
-	// api_key 对齐。网关若以 os.environ/ 引用或返回打码值（含 *）则无法直接比对，跳过，
-	// 避免把每次同步都变成一次覆盖写。
+	// api_key must match. When the gateway references os.environ/ or returns a masked value (containing *), a direct comparison is impossible, so it is skipped
+	// to avoid turning every sync into an overwrite.
 	if provider.APIKey != "" {
 		if got, _ := r.LitellmParams["api_key"].(string); got != "" &&
 			!strings.HasPrefix(got, "os.environ/") && !strings.Contains(got, "*") {
@@ -830,22 +830,22 @@ func gatewayModelMatches(r gateway.ProvisionedModel, schema string, model gatewa
 		}
 	}
 
-	// provider extra_config 是逐键并进 litellm_params 的，只比对我们写入的键。
-	// 漏掉这里的话，改了 extra_config（如 api_version）同步不会判为差异，也就不会推送。
+	// provider extra_config is merged into litellm_params key by key, so only the keys we write are compared.
+	// Missing this would let a changed extra_config (api_version, say) pass as no difference and never be pushed.
 	for k, want := range provider.ExtraConfig {
 		if !jsonValueEqual(r.LitellmParams[k], want) {
 			return false
 		}
 	}
 
-	// model_info：未使用的参数按 0 处理（buildModelInfoMap 只在 >0 时写入该键）
+	// model_info: unused parameters count as 0 (buildModelInfoMap only writes the key when >0)
 	if !infoNumEqual(r.ModelInfo, "context_window", float64(model.ContextWindow)) {
 		return false
 	}
 	if !infoNumEqual(r.ModelInfo, "max_tokens", float64(model.MaxTokens)) {
 		return false
 	}
-	// extra_params 是逐键合并进 model_info 的，只比对我们写入的键
+	// extra_params is merged into model_info key by key, so only the keys we write are compared
 	for k, want := range model.ExtraParams {
 		if !jsonValueEqual(r.ModelInfo[k], want) {
 			return false
@@ -854,7 +854,7 @@ func gatewayModelMatches(r gateway.ProvisionedModel, schema string, model gatewa
 	return true
 }
 
-// infoNumEqual 比较 model_info 中的数值键：键缺失时，期望值为 0 视为一致
+// infoNumEqual compares a numeric key in model_info: when the key is missing, an expected 0 counts as equal
 func infoNumEqual(info map[string]any, key string, want float64) bool {
 	v, ok := info[key]
 	if !ok || v == nil {
@@ -867,7 +867,7 @@ func infoNumEqual(info map[string]any, key string, want float64) bool {
 	return f == want
 }
 
-// jsonValueEqual 比较两个来自 JSON 的值；数字统一按 float64 比，避免 int/float 类型差异误判
+// jsonValueEqual compares two JSON values; numbers are compared as float64 so int/float differences are not misread
 func jsonValueEqual(a, b any) bool {
 	af, aok := toFloat(a)
 	bf, bok := toFloat(b)
@@ -877,7 +877,7 @@ func jsonValueEqual(a, b any) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// toFloat 把 JSON 反序列化出的数值统一转成 float64
+// toFloat turns a number decoded from JSON into float64
 func toFloat(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:

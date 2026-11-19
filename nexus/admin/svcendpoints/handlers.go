@@ -31,7 +31,7 @@ func GetSvcEndpoint(c *gin.Context) {
 			xhttp.ErrCode(c, "endpoint.not_found", gin.H{"name": id}, "Service endpoint not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -70,7 +70,7 @@ func CreateSvcEndpoint(c *gin.Context) {
 
 	id, err := repo.Create(authInfo.(*auth.AuthInfo), &svcEndpoint)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -106,7 +106,7 @@ func UpdateSvcEndpoint(c *gin.Context) {
 				xhttp.ErrCode(c, "endpoint.not_found", gin.H{"name": id}, "Service endpoint not found", "")
 				return
 			}
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		xhttp.OkJSON(c, "Success", nil, "")
@@ -125,7 +125,7 @@ func UpdateSvcEndpoint(c *gin.Context) {
 			xhttp.ErrCode(c, "endpoint.not_found", gin.H{"name": id}, "Service endpoint not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -151,7 +151,7 @@ func DeleteSvcEndpointsByTarget(c *gin.Context) {
 
 	err := repo.DeleteByTarget(authInfo.(*auth.AuthInfo), req.TargetType, req.TargetID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -176,7 +176,7 @@ func RetractSvcEndpoints(c *gin.Context) {
 	}
 
 	if err := repo.RetractByTarget(authInfo.(*auth.AuthInfo), req.TargetType, req.TargetID); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -195,7 +195,7 @@ func DeleteSvcEndpoint(c *gin.Context) {
 
 	err := repo.Delete(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -219,7 +219,7 @@ func ListSvcEndpoints(c *gin.Context) {
 
 	svcEndpoints, total, err := repo.List(authInfo.(*auth.AuthInfo), &req)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 

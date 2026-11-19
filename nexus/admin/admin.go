@@ -29,12 +29,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SetupRoutes 设置管理路由
+// SetupRoutes wires the admin routes.
 func SetupRoutes(router *gin.RouterGroup) {
-	// 登录路由（不需要认证中间件）
+	// Login route (no auth middleware).
 	router.POST("/login", auth.Login)
 
-	// LiteLLM 网关测试路由（不需要认证，仅开发/调试用）
+	// LiteLLM gateway test routes (no auth; development and debugging only).
 	gatewayTestGroup := router.Group("/gatewaytest")
 	{
 		gatewayTestGroup.POST("/run", gatewaytest.RunGatewayTest)
@@ -43,15 +43,15 @@ func SetupRoutes(router *gin.RouterGroup) {
 		gatewayTestGroup.POST("/generate", gatewaytest.GenerateTest)
 	}
 
-	// 工作区文件「导航式下载」：浏览器的 window.location 带不了 Authorization 头，
-	// 靠 URL 里的短时 HMAC 票（见 admin/agents/download_ticket.go）鉴权。
+	// Workspace file "navigation download": the browser's window.location cannot carry an Authorization header,
+	// so it authenticates with a short-lived HMAC ticket in the URL (see admin/agents/download_ticket.go).
 	router.GET("/filedl/:id", agents.DownloadByTicket)
 
-	// 添加认证中间件
+	// Auth middleware from here on.
 	router.Use(auth.AuthMiddleware())
 
-	// 自定义工具（{schema}.custom_tools）：租户自定义的 custom__* 工具。
-	// 与插件页分开：插件是"启用磁盘上的实现"，这里是"新建自己的工具"。
+	// Custom tools ({schema}.custom_tools): tenant-defined custom__* tools.
+	// Separate from the plugins page: a plugin enables an implementation on disk, while this creates your own tool.
 	customToolsGroup := router.Group("/customtools")
 	{
 		customToolsGroup.GET("/", customtools.ListCustomTools)
@@ -59,39 +59,39 @@ func SetupRoutes(router *gin.RouterGroup) {
 		customToolsGroup.GET("/:name", customtools.GetCustomTool)
 		customToolsGroup.PUT("/:name", customtools.UpdateCustomTool)
 		customToolsGroup.DELETE("/:name", customtools.DeleteCustomTool)
-		// 试跑：与线上调用同一条执行内核，把 stdout / stderr / 退出码回给管理员。
-		// gin 支持静态段（/create）与参数段（/:name/run）做兄弟节点；若启动报路由冲突，
-		// 改成 POST /customtools/run（name 放进 body）即可，前端只动一处。
+		// Trial run: the same execution core as a live call, returning stdout / stderr / exit code to the admin.
+		// gin allows a static segment (/create) and a parameter segment (/:name/run) as siblings; if startup reports a
+		// route conflict, change it to POST /customtools/run (name in the body) - only one front-end call site moves.
 		customToolsGroup.POST("/:name/run", customtools.RunCustomTool)
-		// 内容目录文件管理（与技能内容目录同构，两处差别见 files.go 顶部注释）：
-		//   TOOL.json 可读不可写不可删（契约只有一个写口），入口文件不可删。
+		// Content directory file management (mirrors the skill content directory; see the files.go header for the two differences):
+		//   TOOL.json is readable but not writable and not deletable (the contract has one write path), and the entry file cannot be deleted.
 		customToolsGroup.GET("/:name/files", customtools.ListToolFiles)
 		customToolsGroup.GET("/:name/file", customtools.ReadToolFile)
 		customToolsGroup.PUT("/:name/file", customtools.WriteToolFile)
 		customToolsGroup.POST("/:name/file", customtools.CreateToolEntry)
 		customToolsGroup.DELETE("/:name/file", customtools.DeleteToolEntry)
-		// 上传到内容目录（multipart：file + dir；同名不覆盖，另存 name-2.ext）
+		// Upload into the content directory (multipart: file + dir; no overwrite, a clash saves as name-2.ext)
 		customToolsGroup.POST("/:name/upload", customtools.UploadToolFile)
-		// 文件流式下载（只读；拖出到桌面取字节，需带 ?path=）
+		// Streaming file download (read-only; drag-to-desktop fetches the bytes, requires ?path=)
 		customToolsGroup.GET("/:name/download", customtools.DownloadToolFile)
-		// 版本：正式运行读 is_current 那一份（versions/tools/<name>/v<n>），
-		// 草稿只在编辑页调试时生效。改动口径见 shared/versions 与 nexus/docs/terminology.md
+		// Versions: a production run reads the is_current copy (versions/tools/<name>/v<n>),
+		// while the draft only applies to debugging in the editor. See shared/versions and nexus/docs/terminology.md.
 		customToolsGroup.GET("/:name/versions", customtools.ListToolVersions)
-		// 发布 = 把当前草稿目录冻结成新版本并设为当前
+		// Release = freeze the current draft directory into a new version and make it current
 		customToolsGroup.POST("/:name/versions", customtools.ReleaseToolVersion)
-		// 回滚 = 线上切到该版本（不动草稿）；载入 = 该版本写回草稿（不动线上）
+		// Rollback = switch production to that version (the draft is untouched); apply = write that version back into the draft (production is untouched)
 		customToolsGroup.POST("/:name/versions/:version/rollback", customtools.RollbackToolVersion)
-		// 载入 = 该版本内容写回草稿（不动线上）；删除 = 只清历史（当前版拒绝）
+		// Apply = write that version back into the draft (production untouched); delete = history only (the current version is refused)
 		customToolsGroup.POST("/:name/versions/:version/apply", customtools.ApplyToolVersion)
 		customToolsGroup.DELETE("/:name/versions/:version", customtools.DeleteToolVersion)
 	}
 
-	// 跨租户资源分发（平台审核 + 复制式安装）：
-	//   - 上架：把本租户的技能提交成平台资产（进 pending，等平台审核）
-	//   - 安装：从平台资产复制成本租户实体（先文件后 DB，冲突回 409 + 建议名）
-	//   - 我的上架 / 已安装：状态与「有新版本」提示
-	// 平台 schema 由 config.database.platform_schema 决定，表名不接受请求体输入。
-	// 方案见 docs/asset-sharing.md。
+	// Cross-tenant distribution (platform review + copy-style install):
+	//   - list: submit an entity of this tenant as a platform asset (lands in pending, waiting for platform review)
+	//   - install: copy a platform asset into an entity of this tenant (files first, DB second; a clash returns 409 plus a suggested name)
+	//   - my listings / installed: status and an "update available" hint
+	// The platform schema comes from config.database.platform_schema; table names never come from the request body.
+	// See docs/asset-sharing.md for the design.
 	shareGroup := router.Group("/share")
 	{
 		shareGroup.GET("/assets", share.ListAssets)
@@ -99,34 +99,34 @@ func SetupRoutes(router *gin.RouterGroup) {
 		shareGroup.POST("/listings", share.CreateListing)
 		shareGroup.GET("/mine", share.ListMine)
 		shareGroup.POST("/mine/:id/withdraw", share.Withdraw)
-		// 我的上架：直接删除（不经过撤回流转）与一键清空未过审的
+		// My listings: delete directly (skipping the withdraw flow) and clear every unapproved one at once
 		shareGroup.DELETE("/mine", share.ClearMine)
 		shareGroup.DELETE("/mine/:id", share.DeleteMine)
 		shareGroup.POST("/install", share.Install)
-		// 资产包导出 / 导入：卡片上的「导出」直接下载 zip（不落平台快照、不进审核），
-		// 「导入」上传 zip 后走同一套安装逻辑装成本租户实体。见 docs/asset-sharing.md。
+		// Bundle export / import: "export" on a card downloads a zip directly (no platform snapshot, no review),
+		// and "import" uploads a zip that goes through the same install logic into an entity of this tenant. See docs/asset-sharing.md.
 		shareGroup.GET("/export", share.Export)
 		shareGroup.POST("/import", share.Import)
-		// 导入前预检：只读解析包，列出依赖（技能 / 工具 / 被调用智能体 / 能力）在本租户是否存在，
-		// 缺什么在动手前就能看见，而不是装完读 warnings
+		// Pre-import check: parse the bundle read-only and list whether each dependency (skill / tool / called agent / capability) exists in this tenant,
+		// so what is missing is visible before anything is touched instead of read from warnings afterwards
 		shareGroup.POST("/import/inspect", share.Inspect)
-		// 市场安装前预检（只读）：同名实体 / 依赖 / 能力一次看全，与上传导入的预检同源同判据
+		// Pre-install check for the marketplace (read-only): same-named entity / dependencies / capabilities at once, from the same source and rules as the upload preflight
 		shareGroup.POST("/install/inspect", share.InspectAsset)
 		shareGroup.GET("/installs", share.ListInstalls)
-		// 只删安装流水，不卸载实体（卸载走各自的删除接口）
+		// Deletes install records only, never the entities (uninstalling uses each kind's delete API)
 		shareGroup.DELETE("/installs", share.ClearInstalls)
 		shareGroup.DELETE("/installs/:asset_id/:installed_id", share.DeleteInstall)
 
-		// 远端市场（pull-through）：目录只看平台配好且对本租户可见的对端；
-		// 拉取由服务端持令牌完成 —— 令牌始终只在服务端，前端拿不到。
-		// 对端地址会以只读字段下发（租户端标注「这个站在哪」用），但它不参与
-		// 任何出站请求的构造：拉取仍然按 peer 名走，没有 SSRF 面。
-		// 拉取与安装拆开：拉取按「资产」去重，安装才按「租户」。
+		// Remote market (pull-through): the catalog shows only peers the platform configured and made visible to this tenant;
+		// pulling is done server-side with the token - the token stays on the server and the front end never sees it.
+		// The peer address is sent as a read-only field (so the tenant can see where the site is), but it never feeds
+		// the construction of any outbound request: pulls still go by peer name, so there is no SSRF surface.
+		// Pull and install are separate: pulling deduplicates by asset, installing is per tenant.
 		shareGroup.GET("/remote-assets", share.RemoteAssets)
 		shareGroup.POST("/pull-asset", share.PullAsset)
 	}
 
-	// LLM服务商管理路由
+	// LLM provider routes
 	llmProvidersGroup := router.Group("/llmproviders")
 	{
 		llmProvidersGroup.POST("/", llmproviders.ListLLMProviders)
@@ -136,13 +136,13 @@ func SetupRoutes(router *gin.RouterGroup) {
 		llmProvidersGroup.DELETE("/:id", llmproviders.DeleteLLMProvider)
 	}
 
-	// LLM服务商预设路由（系统级，全局共享）
+	// LLM provider preset routes (system level, shared globally)
 	llmProviderPresetsGroup := router.Group("/llmproviderpresets")
 	{
 		llmProviderPresetsGroup.GET("/", llmproviderpresets.ListLLMProviderPresets)
 	}
 
-	// LLM模型管理路由
+	// LLM model routes
 	llmModelsGroup := router.Group("/llmmodels")
 	{
 		llmModelsGroup.POST("/", llmmodels.ListLLMModels)
@@ -156,25 +156,25 @@ func SetupRoutes(router *gin.RouterGroup) {
 		llmModelsGroup.POST("/:id/deprovision", llmmodels.DeprovisionLLMModel)
 		llmModelsGroup.POST("/deprovision-all", llmmodels.DeprovisionAllLLMModels)
 		llmModelsGroup.POST("/selectable", llmmodels.ListSelectableLLMModels)
-		// 把本地 LLM 配置逐个对齐到 LiteLLM 网关，并清理网关上的多余记录
+		// Align every local LLM config with the LiteLLM gateway and clean up stale gateway records
 		llmModelsGroup.POST("/sync", llmmodels.SyncLLMModels)
 	}
 
-	// 运行台账：本租户当前在跑的 agent + flow（含其它实例，Redis 台账）。
-	// 终止走广播：运行只存在于跑它的那台机器的内存里，向所有实例发停止意图最稳。
+	// Run ledger: this tenant's agent + flow runs in progress (other instances included, kept in Redis).
+	// Stopping is broadcast: a run lives only in the memory of the machine running it, so sending the intent to every instance is the reliable path.
 	runningGroup := router.Group("/running")
 	{
 		runningGroup.GET("", runs.ListRunning)
 		runningGroup.POST("/stop", runs.StopRun)
-		// 历史运行：跨流程查询 / 按条件清理 / CSV 导出。
-		// 与上面两个接口是两套数据：台账在 Redis、只活在运行期间；
-		// 这里读的是 PG 的 flow_run_records，跑完才落库、长期保留。
+		// Historical runs: query across flows / clean up by filter / CSV export.
+		// Two different data sets from the two APIs above: the ledger lives in Redis for the duration of a run,
+		// while this reads flow_run_records in PostgreSQL, written when a run finishes and kept long term.
 		runningGroup.GET("/history", runs.ListHistory)
 		runningGroup.DELETE("/history", runs.CleanupHistory)
 		runningGroup.GET("/history/export", runs.ExportHistory)
 	}
 
-	// 智能体管理路由（agents 表）
+	// Agent routes (the agents table)
 	agentsGroup := router.Group("/agents")
 	{
 		agentsGroup.POST("/", agents.ListAgents)
@@ -183,66 +183,66 @@ func SetupRoutes(router *gin.RouterGroup) {
 		agentsGroup.PUT("/:id", agents.UpdateAgent)
 		agentsGroup.DELETE("/:id", agents.DeleteAgent)
 		agentsGroup.POST("/:id/chat", agents.ChatAgent)
-		// 终止正在运行的 agent（按会话或按 run）；幂等，没在跑时返回 stopped:0
+		// Stop a running agent (by session or by run); idempotent, returning stopped:0 when nothing runs
 		agentsGroup.POST("/:id/stop", agents.StopAgentRun)
 		agentsGroup.POST("/:id/sessions", agents.CreateSession)
 		agentsGroup.GET("/:id/sessions", agents.ListSessions)
 		agentsGroup.PUT("/:id/status", agents.SetAgentStatus)
-		// 调用授权（agent_relations）：出边（可调用谁）+ 入边（谁能调用它）
+		// Call grants (agent_relations): out-edges (who it may call) + in-edges (who may call it)
 		agentsGroup.GET("/:id/relations", agents.GetAgentRelations)
 		agentsGroup.PUT("/:id/relations", agents.SetAgentRelations)
-		// 技能绑定（agent_skill_bindings 的 agent 侧）：该 agent 可用的技能
+		// Skill bindings (the agent side of agent_skill_bindings): the skills this agent may use
 		agentsGroup.GET("/:id/skillbindings", agents.GetAgentSkillBindings)
 		agentsGroup.PUT("/:id/skillbindings", agents.SetAgentSkillBindings)
-		// 工作区文件管理（agent 的本质是一个文件夹；skills/ 只读）
+		// Workspace file management (an agent is essentially a folder; skills/ is read-only)
 		agentsGroup.GET("/:id/files", agents.ListAgentFiles)
 		agentsGroup.GET("/:id/file", agents.ReadAgentFile)
 		agentsGroup.PUT("/:id/file", agents.WriteAgentFile)
 		agentsGroup.POST("/:id/file", agents.CreateAgentEntry)
 		agentsGroup.DELETE("/:id/file", agents.DeleteAgentEntry)
-		// 上传到定义域（multipart：file + dir；skills/ 拒绝，同名另存 name-2.ext）
+		// Upload into the definition domain (multipart: file + dir; skills/ is refused, a clash saves as name-2.ext)
 		agentsGroup.POST("/:id/upload", agents.UploadAgentFile)
-		// 定义域文件流式下载（只读；拖出到桌面用它取字节）
+		// Streaming download from the definition domain (read-only; drag-to-desktop takes the bytes from here)
 		agentsGroup.GET("/:id/download", agents.DownloadAgentFile)
-		// 会话「工作区」文件浏览（运行产物；用 session_id 定位 user + 会话目录）
+		// Session "workspace" browsing (run products; session_id locates the user and session directory)
 		agentsGroup.GET("/:id/session/files", agents.ListSessionFiles)
 		agentsGroup.GET("/:id/session/file", agents.ReadSessionFile)
-		// 新建文件 / 目录（子目录同样走这条：path 里带 / 即可，中间层由存储层建出）
+		// Create a file / directory (subdirectories use the same call: put / in path and the storage layer creates the levels)
 		agentsGroup.POST("/:id/session/file", agents.CreateSessionEntry)
-		// 删除产物（目录递归删除、不可恢复）：界面侧必须二次确认
+		// Delete products (directories deleted recursively, unrecoverable): the UI must confirm
 		agentsGroup.DELETE("/:id/session/file", agents.DeleteSessionEntry)
-		// 重命名 / 移动（POST {path, new_path}）：改名不能靠「下载再新建」——
-		// 新建的 content 是字符串，二进制文件根本没这条路
+		// Rename / move (POST {path, new_path}): renaming cannot rely on "download and create again" -
+		// a create takes content as a string, and binary files have no such path
 		agentsGroup.POST("/:id/session/rename", agents.RenameSessionEntry)
-		// 流式下载（二进制 / 大文件）：与 session/file 同源同鉴权，Content-Disposition: attachment
+		// Streaming download (binary / large files): same source and auth as session/file, Content-Disposition: attachment
 		agentsGroup.GET("/:id/session/download", agents.DownloadSessionFile)
-		// 下载票：前端拿到 schema/path/exp/sig 后拼 /filedl/:id 导航下载（浏览器原生进度/续传）
+		// Download ticket: the front end gets schema/path/exp/sig and navigates to /filedl/:id (native browser progress / resume)
 		agentsGroup.POST("/:id/session/download-ticket", agents.CreateDownloadTicket)
-		// 最近改动/生成的文件（工作台「新生成的文件」标签）：根目录 + 一层子目录，按 mtime 倒序
+		// Recently changed / generated files (the workbench "newly generated" tab): root plus one level, newest mtime first
 		agentsGroup.GET("/:id/session/recent", agents.RecentSessionFiles)
-		// chat 输入框「+」：把文件传到会话工作区 uploads/（multipart：file + 可选 session_id）
+		// Chat "+": upload a file into uploads/ of the session workspace (multipart: file + optional session_id)
 		agentsGroup.POST("/:id/session/upload", agents.UploadSessionFile)
-		// 工具授权（工具授权体系）：授权项读写 + 实际生效工具预览
+		// Tool grants: read / write grants plus a preview of the tools actually in effect
 		agentsGroup.GET("/:id/toolgrants", toolgrants.GetAgentToolGrants)
 		agentsGroup.PUT("/:id/toolgrants", toolgrants.SetAgentToolGrants)
 		agentsGroup.GET("/:id/effective-tools", toolgrants.GetAgentEffectiveTools)
-		// 版本：私有技能没有独立版本号，随这份 agent 版本一起冻结
-		// （内容在 versions/agents/<name>/v<n>/skills/**，元数据在版本行 skills 列）
+		// Versions: private skills have no version of their own; they are frozen with this agent's version
+		// (their content lives in versions/agents/<name>/v<n>/skills/** and their metadata in the skills column of the version row)
 		agentsGroup.GET("/:id/versions", agents.ListAgentVersions)
 		agentsGroup.POST("/:id/versions", agents.ReleaseAgentVersion)
-		// 回滚 = 线上切到该版本（不动草稿）；载入 = 该版本写回草稿（不动线上）
+		// Rollback = switch production to that version (the draft is untouched); apply = write that version back into the draft (production is untouched)
 		agentsGroup.POST("/:id/versions/:version/rollback", agents.RollbackAgentVersion)
 		agentsGroup.POST("/:id/versions/:version/apply", agents.ApplyAgentVersion)
 		agentsGroup.DELETE("/:id/versions/:version", agents.DeleteAgentVersion)
 	}
 
-	// 内置工具清单（智能体设置 → 工具配置）：独立路径，避免与 /agents/:id 冲突
+	// Built-in tool list (agent settings -> tool configuration): a separate path to avoid clashing with /agents/:id
 	agentToolsGroup := router.Group("/agenttools")
 	{
 		agentToolsGroup.GET("/", agents.ListBuiltinTools)
 	}
 
-	// 工具授权：可引用目录 + 自定义工具组
+	// Tool grants: the referenceable catalog + custom tool groups
 	toolCatalogGroup := router.Group("/toolcatalog")
 	{
 		toolCatalogGroup.GET("/", toolgrants.ListToolCatalog)
@@ -253,13 +253,13 @@ func SetupRoutes(router *gin.RouterGroup) {
 		toolGroupsGroup.POST("/", toolgrants.UpsertToolGroup)
 		toolGroupsGroup.DELETE("/:name", toolgrants.DeleteToolGroup)
 	}
-	// 工具授权：引用明细（删除 / 下线前的影响面查询）
+	// Tool grants: reference detail (the impact check before deleting / delisting)
 	toolGrantsGroup := router.Group("/toolgrants")
 	{
 		toolGrantsGroup.GET("/usages", toolgrants.GetRefUsages)
 	}
 
-	// 技能管理路由（skills 表）
+	// Skill routes (the skills table)
 	skillsGroup := router.Group("/skills")
 	{
 		skillsGroup.POST("/", skills.ListSkills)
@@ -268,33 +268,33 @@ func SetupRoutes(router *gin.RouterGroup) {
 		skillsGroup.PUT("/:id", skills.UpdateSkill)
 		skillsGroup.DELETE("/:id", skills.DeleteSkill)
 		skillsGroup.PUT("/:id/status", skills.SetSkillStatus)
-		// 可见性（restricted 开关 + 授权 agent 白名单）
+		// Visibility (the restricted switch + the allowlist of granted agents)
 		skillsGroup.GET("/:id/visibility", skills.GetSkillVisibility)
 		skillsGroup.PUT("/:id/visibility", skills.SetSkillVisibility)
-		// 内容目录文件管理（与 agent 工作区文件接口同构；入口 SKILL.md 不可删除）
+		// Content directory file management (mirrors the agent workspace file API; the SKILL.md entry cannot be deleted)
 		skillsGroup.GET("/:id/files", skills.ListSkillFiles)
 		skillsGroup.GET("/:id/file", skills.ReadSkillFile)
 		skillsGroup.PUT("/:id/file", skills.WriteSkillFile)
 		skillsGroup.POST("/:id/file", skills.CreateSkillEntry)
 		skillsGroup.DELETE("/:id/file", skills.DeleteSkillEntry)
-		// 上传到内容目录（multipart：file + dir；同名不覆盖，另存 name-2.ext）
+		// Upload into the content directory (multipart: file + dir; no overwrite, a clash saves as name-2.ext)
 		skillsGroup.POST("/:id/upload", skills.UploadSkillFile)
-		// 技能内容文件流式下载（只读；拖出到桌面用它取字节）
+		// Streaming download of skill content (read-only; drag-to-desktop takes the bytes from here)
 		skillsGroup.GET("/:id/download", skills.DownloadSkillFile)
-		// 工具依赖（skill 声明「需要哪些工具」，供 agent 侧「按需注入」使用）
+		// Tool dependencies (a skill declares which tools it needs, so the agent side can inject them on demand)
 		skillsGroup.GET("/:id/toolgrants", toolgrants.GetSkillToolGrants)
 		skillsGroup.PUT("/:id/toolgrants", toolgrants.SetSkillToolGrants)
-		// 版本：只覆盖租户级技能。私有技能没有独立版本号 —— 它的版本就是所属
-		// agent 的版本（见 /agents/:id/versions 与 nexus/docs/terminology.md）
+		// Versions: tenant-level skills only. A private skill has no version of its own - its version is that of the
+		// agent it belongs to (see /agents/:id/versions and nexus/docs/terminology.md)
 		skillsGroup.GET("/:id/versions", skills.ListSkillVersions)
 		skillsGroup.POST("/:id/versions", skills.ReleaseSkillVersion)
-		// 回滚 = 线上切到该版本（不动草稿）；载入 = 该版本写回草稿（不动线上）
+		// Rollback = switch production to that version (the draft is untouched); apply = write that version back into the draft (production is untouched)
 		skillsGroup.POST("/:id/versions/:version/rollback", skills.RollbackSkillVersion)
 		skillsGroup.POST("/:id/versions/:version/apply", skills.ApplySkillVersion)
 		skillsGroup.DELETE("/:id/versions/:version", skills.DeleteSkillVersion)
 	}
 
-	// 会话管理路由（泛化：agent/flow 会话）
+	// Session routes (generic: agent / flow sessions)
 	sessionsGroup := router.Group("/sessions")
 	{
 		sessionsGroup.GET("/latest", agents.GetLatestSession)
@@ -303,7 +303,7 @@ func SetupRoutes(router *gin.RouterGroup) {
 		sessionsGroup.DELETE("/:id", agents.DeleteSession)
 	}
 
-	// 服务端点管理路由
+	// Service endpoint routes
 	svcendpointsGroup := router.Group("/svcendpoints")
 	{
 		svcendpointsGroup.POST("/", svcendpoints.ListSvcEndpoints)
@@ -315,7 +315,7 @@ func SetupRoutes(router *gin.RouterGroup) {
 		svcendpointsGroup.POST("/delete-by-target", svcendpoints.DeleteSvcEndpointsByTarget)
 	}
 
-	// 工作流实例管理路由
+	// Workflow routes
 	flowsGroup := router.Group("/flows")
 	{
 		flowsGroup.POST("/", flows.ListFlows)
@@ -330,18 +330,18 @@ func SetupRoutes(router *gin.RouterGroup) {
 		flowsGroup.DELETE("/:id/runs", flows.DeleteRuns)
 		flowsGroup.DELETE("/:id/runs/:runId", flows.DeleteRun)
 		flowsGroup.PUT("/:id/status", flows.SetFlowStatus)
-		// 版本：正式运行读 is_current（见 repository.GetCurrentFlowVersion），
-		// 草稿只在编辑页调试/run_flow 试跑时生效
+		// Versions: a production run reads is_current (see repository.GetCurrentFlowVersion),
+		// while the draft applies only to editor debugging and run_flow trial runs
 		flowsGroup.GET("/:id/versions", flows.ListFlowVersions)
 		flowsGroup.POST("/:id/versions", flows.ReleaseFlowVersion)
-		// 回滚 = 线上切到该版本（不动画布）；apply = 该版本载入画布（不动线上）
+		// Rollback = switch production to that version (the canvas is untouched); apply = load that version into the canvas (production is untouched)
 		flowsGroup.POST("/:id/versions/:version/rollback", flows.RollbackFlowVersion)
 		flowsGroup.POST("/:id/versions/:version/apply", flows.ApplyFlowVersion)
-		// 删除 = 只清历史行。当前版本（is_current）是正式调用的定义来源，拒绝删除
+		// Delete = history rows only. The current version (is_current) is the definition production calls use, so it is refused
 		flowsGroup.DELETE("/:id/versions/:version", flows.DeleteFlowVersion)
 	}
 
-	// MCP 连接管理路由
+	// MCP connection routes
 	mcpConnectionsGroup := router.Group("/mcpconnections")
 	{
 		mcpConnectionsGroup.POST("/", mcpconnections.ListMcpConnections)
@@ -354,8 +354,8 @@ func SetupRoutes(router *gin.RouterGroup) {
 		mcpConnectionsGroup.PUT("/:id/enabled", mcpconnections.SetMcpConnectionEnabled)
 	}
 
-	// 插件（磁盘 Python 插件：发现 + 租户级启用/配置/试跑）
-	// 注意：没有「创建插件」接口 —— 插件靠把代码放进 {root_dir}/plugins/<kind>/<tool>/ 自注册。
+	// Plugins (on-disk Python plugins: discovery + tenant-level enable / configure / test)
+	// Note: there is no "create plugin" API - a plugin registers itself by putting its code in {root_dir}/plugins/<kind>/<tool>/.
 	pluginsGroup := router.Group("/plugins")
 	{
 		pluginsGroup.GET("/", plugins.ListPlugins)
@@ -364,7 +364,7 @@ func SetupRoutes(router *gin.RouterGroup) {
 		pluginsGroup.POST("/:name/test", plugins.TestPlugin)
 	}
 
-	// RPC 连接管理路由
+	// RPC connection routes
 	rpcConnectionsGroup := router.Group("/rpcconnections")
 	{
 		rpcConnectionsGroup.POST("/", rpcconnections.ListRpcConnections)
@@ -377,79 +377,79 @@ func SetupRoutes(router *gin.RouterGroup) {
 		rpcConnectionsGroup.PUT("/:id/enabled", rpcconnections.SetRpcConnectionEnabled)
 	}
 
-	// MCP 服务鉴权配置路由（mcp_server_configs 表，按 auth_type 分行）
+	// MCP server auth configuration routes (the mcp_server_configs table, one row per auth_type)
 	mcpServerConfigGroup := router.Group("/mcpserverconfig")
 	{
 		mcpserverconfig.RegisterRoutes(mcpServerConfigGroup)
 	}
 
-	// RPC 服务鉴权配置路由（rpc_server_configs 表，按 auth_type 分行）
+	// RPC server auth configuration routes (the rpc_server_configs table, one row per auth_type)
 	rpcServerConfigGroup := router.Group("/rpcserverconfig")
 	{
 		rpcserverconfig.RegisterRoutes(rpcServerConfigGroup)
 	}
 
-	// 服务端认证身份绑定路由（svc_auth_bindings 表，MCP/RPC 共用）
+	// Server-side auth identity binding routes (the svc_auth_bindings table, shared by MCP and RPC)
 	svcAuthBindingsGroup := router.Group("/svcauthbindings")
 	{
 		svcauthbindings.RegisterRoutes(svcAuthBindingsGroup)
 	}
 
-	// 租户用户列表路由（供服务凭证选择用户）
+	// Tenant user list routes (for picking a user when creating a service credential)
 	usersGroup := router.Group("/users")
 	{
 		users.RegisterRoutes(usersGroup)
 	}
 
-	// 租户级配额自助（platform.quota_configs 的租户行；系统顶只读、只做校验）。
-	// 独立成 /tenantquota 而不是 /users/quota：后者会与 /users/:id 形成
-	// "静态段 / 参数段同级"，本文件已多次因这类冲突把接口拆开（见 /me/password）。
+	// Tenant-level self-service quota (the tenant row of platform.quota_configs; the system ceiling is read-only and only validated).
+	// It is /tenantquota rather than /users/quota because the latter would make a static segment and /users/:id
+	// siblings in the route tree, and this file has split APIs apart for that clash more than once (see /me/password).
 	tenantQuotaGroup := router.Group("/tenantquota")
 	{
 		tenantQuotaGroup.GET("", users.GetTenantQuota)
 		tenantQuotaGroup.PUT("", users.UpdateTenantQuota)
 	}
 
-	// 当前登录用户自助修改密码
-	// 注意：独立成 /me/password，不放进 /users —— 避免与 /users/:id/password 这种
-	// 静态段与参数段同级的路由冲突（gin 的路由树对此敏感）。
+	// Self-service password change for the logged-in user
+	// Note: /me/password stands alone rather than living under /users - that avoids the static-segment /
+	// parameter-segment sibling clash with /users/:id/password (gin's route tree is sensitive to it).
 	meGroup := router.Group("/me")
 	{
 		meGroup.POST("/password", users.ChangeMyPassword)
 	}
 
-	// 工作流运行参数管理路由（platform.flow_configs，系统缺省 + 租户配置）
+	// Workflow run parameter routes (platform.flow_configs, system defaults + tenant configuration)
 	flowconfigsGroup := router.Group("/flowconfigs")
 	{
 		flowconfigsGroup.GET("/", flowconfigs.Getflowconfigs)
 		flowconfigsGroup.PUT("/", flowconfigs.UpdateTenantflowconfigs)
 	}
 
-	// 智能体运行参数（platform.agent_configs，系统缺省 + 租户配置）
-	// 与 flowconfigs 同一套语义，区别是本表不接受 -1（四个字段都是安全阀）
+	// Agent run parameters (platform.agent_configs, system defaults + tenant configuration)
+	// The same semantics as flowconfigs, except this table does not accept -1 (all four fields are safety valves)
 	agentconfigsGroup := router.Group("/agentconfigs")
 	{
 		agentconfigsGroup.GET("/", agentconfigs.GetAgentConfigs)
 		agentconfigsGroup.PUT("/", agentconfigs.UpdateTenantAgentConfigs)
 	}
 
-	// 全局变量（{schema}.global_vars）
+	// Global variables ({schema}.global_vars)
 	//
-	// 本租户内全局：工作流的节点输入变量里声明 source_type: "global"、
-	// 智能体/技能文档写 ${global_vars.名字}。资产包只带引用名不带值，
-	// 装到别的租户只需在这里填一次 —— 这是「导出导入不把值写死」的落点。
-	// secret 类型的值一律掩码出参、加密落库；明文只在运行期解析时取。
+	// Global within a tenant: a workflow node input declares source_type: "global", and
+	// agent and skill documents write ${global_vars.name}. A bundle carries only the reference names, never the values,
+	// so installing into another tenant means filling them in once here - that is where "export and import never hardcode values" lands.
+	// Secret values are always masked in responses and encrypted at rest; plaintext is read only while resolving them at run time.
 	globalVarsGroup := router.Group("/globalvars")
 	{
 		globalVarsGroup.GET("/", globalvars.ListGlobalVars)
 		globalVarsGroup.POST("/", globalvars.UpsertGlobalVar)
-		// 引用面查询：删除确认框用它列出「谁会坏」
+		// Reference query: the delete confirmation uses it to list what would break
 		globalVarsGroup.GET("/:name/usage", globalvars.GlobalVarUsage)
-		// 默认拦引用（force=1 才真删）
+		// References block deletion by default (only force=1 really deletes)
 		globalVarsGroup.DELETE("/:name", globalvars.DeleteGlobalVar)
 	}
 
-	// 工作流元数据接口（节点能力、脚本语言、系统限制）
+	// Workflow metadata API (node capabilities, script languages, system limits)
 	flowMetaGroup := router.Group("/flow")
 	{
 		flow.RegisterRoutes(flowMetaGroup)

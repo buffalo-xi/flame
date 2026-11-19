@@ -16,6 +16,7 @@ import (
 	agentrelations "flame/nexus/shared/repository/agentrelations"
 	repository "flame/nexus/shared/repository/agents"
 	flowsrepo "flame/nexus/shared/repository/flows"
+	"flame/nexus/shared/repository/sessions"
 	skills "flame/nexus/shared/repository/skills"
 	svcendpoints "flame/nexus/shared/repository/svcendpoints"
 	"flame/nexus/shared/skeleton"
@@ -283,8 +284,10 @@ func CreateAgent(c *gin.Context) {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
-	if err := models.CheckQuota("agent", cnt, quota.Resolve(schema).MaxAgents); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+	if qerr := models.CheckQuota("agent", cnt, quota.Resolve(schema).MaxAgents); qerr != nil {
+		// A full quota is not an internal error: report it as quota.agent_limit_reached so the UI can word it.
+		le := qerr.(*models.LimitError)
+		xhttp.ErrCode(c, "quota.agent_limit_reached", le.Params(), qerr.Error(), "")
 		return
 	}
 
@@ -726,6 +729,15 @@ func DeleteAgent(c *gin.Context) {
 				xlog.Error("failed to clean the definition/version directories schema=%s name=%s: %v", ai.Schema, inst.Name, rerr)
 			}
 		}
+	}
+
+	// The agent's sessions go with it: once the owner is gone the console can no longer list (or delete) them, yet they
+	// keep counting against the user's session quota and keep their workspaces on disk - a user at the cap would be locked
+	// out with no way to clean up. Best-effort: the row is already gone, so a failure is logged rather than rolled back.
+	if n, derr := sessions.NewRepository().DeleteByOwner(ai.Schema, models.SessionOwnerTypeAgent, id); derr != nil {
+		xlog.Error("failed to delete the sessions of the deleted agent schema=%s agent=%s: %v", ai.Schema, id, derr)
+	} else if n > 0 {
+		xlog.Info("deleted %d session(s) together with agent schema=%s agent=%s", n, ai.Schema, id)
 	}
 
 	xhttp.OkJSON(c, "Agent instance deleted successfully", id, "")

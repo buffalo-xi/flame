@@ -1,5 +1,5 @@
-// Package skills 提供 skills 的管理接口（增删改查 + 状态切换）。
-// 元数据走 skills 表，内容走 agent 存储后端（driver 由 config.yaml 决定）。
+// Package skills provides the skill management API (CRUD + status changes).
+// Metadata lives in the skills table and content in the agent storage backend (the driver comes from config.yaml).
 package skills
 
 import (
@@ -36,11 +36,11 @@ var (
 	storeErr  error
 )
 
-// ensureAgentModifiable 指定归属 agent 必须存在、且处于正常态；
-// agentID 为空 = 租户级，免校验。新建、改、删、调可见性、写文件一概走这里
-// （判据 models.IsModifiable，与 skillManager.checkOwnerAgent、
-// tools/gate.go 的 checkWrite / checkWriteOwn 四处同口径 —— 缺一即会出现口径分裂）。
-// 废弃(3) 一律不可写。
+// ensureAgentModifiable requires the owner agent to exist and be in the normal state;
+// an empty agentID means tenant level and needs no check. Create, update, delete, visibility changes and file writes all
+// go through here (the test is models.IsModifiable, matching skillManager.checkOwnerAgent,
+// checkWrite / checkWriteOwn in tools/gate.go - miss one and the rules diverge).
+// A deprecated (3) agent is never writable.
 func ensureAgentModifiable(info *auth.AuthInfo, agentID string) error {
 	if agentID == "" {
 		return nil
@@ -53,12 +53,12 @@ func ensureAgentModifiable(info *auth.AuthInfo, agentID string) error {
 		return fmt.Errorf("skill owner agent %s not found", agentID)
 	}
 	if !oa.IsModifiable() {
-		return fmt.Errorf("归属 agent %q 已废弃；其私有技能不可变更", oa.Name)
+		return fmt.Errorf("owner agent %q is deprecated; its private skills cannot be changed", oa.Name)
 	}
 	return nil
 }
 
-// ensureOwnerAgentModifiable 已登记 skill 的归属 agent 必须可写（见 ensureAgentModifiable）。
+// ensureOwnerAgentModifiable requires the owner agent of an existing skill to be writable (see ensureAgentModifiable).
 func ensureOwnerAgentModifiable(info *auth.AuthInfo, s *models.Skill) error {
 	if s == nil {
 		return nil
@@ -66,7 +66,7 @@ func ensureOwnerAgentModifiable(info *auth.AuthInfo, s *models.Skill) error {
 	return ensureAgentModifiable(info, string(s.AgentID))
 }
 
-// getStorage 懒加载 agent 存储实例（与 service/agent.InitStorage 同配置）。
+// getStorage lazily builds the agent storage instance (the same configuration as service/agent.InitStorage).
 func getStorage() (storage.Storage, error) {
 	storeOnce.Do(func() {
 		store, storeErr = storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
@@ -74,7 +74,7 @@ func getStorage() (storage.Storage, error) {
 	return store, storeErr
 }
 
-// contentPath 返回 skill 内容文件路径（租户级或 agent 私有）。
+// contentPath returns the skill content file path (tenant level or agent private).
 func contentPath(schema, agentName, name string) string {
 	if agentName == "" {
 		return tools.SkillPath(schema, name)
@@ -82,7 +82,7 @@ func contentPath(schema, agentName, name string) string {
 	return tools.AgentSkillPath(schema, agentName, name)
 }
 
-// resolveAgentName 由 agent_id 反查 name；agent_id 为空返回空串（租户级）。
+// resolveAgentName looks up an agent name from agent_id; an empty agent_id returns an empty string (tenant level).
 func resolveAgentName(schema, agentID string) (string, error) {
 	if agentID == "" {
 		return "", nil
@@ -94,7 +94,7 @@ func resolveAgentName(schema, agentID string) (string, error) {
 	return inst.Name, nil
 }
 
-// skillToMap 将 Skill 转为响应 map（content 由调用方提供）。
+// skillToMap turns a Skill into a response map (content is supplied by the caller).
 func skillToMap(s *models.Skill, content string) gin.H {
 	return gin.H{
 		"id":               s.ID,
@@ -116,7 +116,7 @@ func skillToMap(s *models.Skill, content string) gin.H {
 	}
 }
 
-// ListSkills 列出 skill（分页 + 过滤）。
+// ListSkills lists skills (paged and filtered).
 func ListSkills(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -151,23 +151,23 @@ func ListSkills(c *gin.Context) {
 		Keyword: req.Keyword,
 	})
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 批量取授权数量（一次查询）——供列表展示"仅 N 个 agent / 无人可见"
+	// Fetch the grant counts in one query, so the list can show "only N agents / nobody can see it"
 	ids := make([]string, 0, len(list))
 	for i := range list {
 		ids = append(ids, list[i].ID)
 	}
 	counts, err := skillRepo.ListBindingCounts(info.Schema, ids)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 当前版本号：一次批量查两张表 —— 租户级技能看自己的版本，私有技能没有独立版本，
-	// 正文冻结在所属 agent 的当前版本里，所以取 agent 的版本号（version_source 标明来源）。
+	// Current versions: one batch query on two tables - a tenant-level skill uses its own version, a private skill has none,
+	// its body being frozen into the owner agent's current version, so the agent's number is used (version_source says which).
 	skillVers, _ := versioning.CurrentVersions(info.Schema, "skill_versions")
 	agentVers, _ := versioning.CurrentVersions(info.Schema, "agent_versions")
 
@@ -175,7 +175,7 @@ func ListSkills(c *gin.Context) {
 	for i := range list {
 		m := skillToMap(&list[i], "")
 		m["bound_count"] = counts[list[i].ID]
-		// 0 = 尚未发布正式版本（卡片显示「未发布」；私有技能随所属 agent，agent 没发布也就是 0）
+		// 0 = no released version yet (the card shows "not released"; a private skill follows its agent, so an unreleased agent means 0)
 		if string(list[i].AgentID) != "" {
 			m["current_version"] = agentVers[string(list[i].AgentID)]
 			m["version_source"] = "agent"
@@ -188,7 +188,7 @@ func ListSkills(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"items": items, "total": total, "page": req.Page, "limit": req.Limit}, "")
 }
 
-// GetSkill 获取单个 skill（含内容）。
+// GetSkill returns one skill (content included).
 func GetSkill(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -200,7 +200,7 @@ func GetSkill(c *gin.Context) {
 
 	s, err := skillRepo.Get(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if s == nil {
@@ -210,7 +210,7 @@ func GetSkill(c *gin.Context) {
 
 	agentName, err := resolveAgentName(info.Schema, string(s.AgentID))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -221,8 +221,8 @@ func GetSkill(c *gin.Context) {
 		}
 	}
 	body := skillToMap(s, content)
-	// 版本状态：编辑器头部要能区分「未发布 / 已发布但有改动 / 与线上一致」（与 flow 同口径）。
-	// 私有技能恒为 0 —— 它的版本随所属 agent，前端据此显示「随 agent 版本」。
+	// Version state: the editor header must distinguish "not released / released with changes / matches production" (same as flows).
+	// A private skill is always 0 - its version follows its agent, and the UI shows "follows the agent version".
 	body["current_version"], body["dirty"] = 0, false
 	if st, serr := getStorage(); serr == nil {
 		v, dirty := versioning.SkillVersionState(context.Background(), st, info.Schema, s)
@@ -231,22 +231,22 @@ func GetSkill(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", body, "")
 }
 
-// skillRequest 创建/更新请求结构。
+// skillRequest is the create / update body.
 type skillRequest struct {
 	Name            string `json:"name"`
 	Description     string `json:"description"`
-	AgentID         string `json:"agent_id"` // 空 = 租户级
+	AgentID         string `json:"agent_id"` // empty = tenant level
 	Content         string `json:"content"`
-	Restricted      *bool  `json:"restricted"` // nil = 缺省 true（企业级默认拒绝：不授权即不可见）
+	Restricted      *bool  `json:"restricted"` // nil = default true (enterprise default deny: no grant, no visibility)
 	UserInvocable   bool   `json:"user_invocable"`
 	CommandDispatch string `json:"command_dispatch"`
 	CommandTool     string `json:"command_tool"`
-	// Lang 正文为空时用于生成 SKILL.md 骨架的语言（不进库）。
-	// 不传 / 不认识 → 英文骨架（见 shared/skeleton.Normalize）。
+	// Lang is the language used to generate the SKILL.md skeleton when the body is empty (never stored).
+	// Absent / unrecognised -> an English skeleton (see shared/skeleton.Normalize).
 	Lang string `json:"lang"`
 }
 
-// CreateSkill 创建 skill。
+// CreateSkill creates a skill.
 func CreateSkill(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -262,65 +262,67 @@ func CreateSkill(c *gin.Context) {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if !tools.ValidName(req.Name) {
-		xhttp.ErrCode(c, "skill.invalid_name", nil, "Invalid skill name (只允许字母数字横线，长度≤64)", "")
+		xhttp.ErrCode(c, "skill.invalid_name", nil, "Invalid skill name (letters, digits and hyphens only, at most 64 characters)", "")
 		return
 	}
-	// 归属范围内重名检查（全状态）
+	// Duplicate check within the owner scope (any status)
 	exist, err := skillRepo.FindByName(info.Schema, req.Name, req.AgentID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if exist != nil {
-		xhttp.ErrJSON(c, "skill already exists", nil, "")
+		xhttp.ErrCode(c, "skill.name_taken", nil, "skill already exists", "")
 		return
 	}
 
-	// 同名重建：清掉上一个同名实体留下的版本目录（DB 里没有行不代表盘上没有）。
-	// 私有技能没有独立版本目录，不需要这一步。
+	// Recreating the same name: clear the version directory the previous entity left (no row in the DB does not mean no directory on disk).
+	// A private skill has no version directory of its own, so this step is unnecessary.
 	if req.AgentID == "" {
 		removeSkillVersions(info.Schema, req.Name)
 	}
 
-	// 归属 agent 非编辑态 → 不给它新建私有技能（与 Update / Delete / 元工具同口径）
+	// A non-modifiable owner agent gets no new private skill (same rule as Update / Delete and the meta tools)
 	if verr := ensureAgentModifiable(info, req.AgentID); verr != nil {
-		xhttp.ErrJSON(c, verr.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.owner_agent_not_modifiable", nil, verr.Error(), "")
 		return
 	}
 	agentName, err := resolveAgentName(info.Schema, req.AgentID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 配额检查：租户内 skill 数量上限（必须在写内容文件之前，否则会留孤儿文件）
+	// Quota check: the per-tenant skill cap (must run before writing content, or an orphan file is left behind)
 	cnt, err := quota.CountSkills(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
-	if err := models.CheckQuota("skill", cnt, quota.Resolve(info.Schema).MaxSkills); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+	if qerr := models.CheckQuota("skill", cnt, quota.Resolve(info.Schema).MaxSkills); qerr != nil {
+		// A full quota is not an internal error: report it as quota.skill_limit_reached so the UI can word it.
+		le := qerr.(*models.LimitError)
+		xhttp.ErrCode(c, "quota.skill_limit_reached", le.Params(), qerr.Error(), "")
 		return
 	}
 
 	st, err := getStorage()
 	if err != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.storage_unavailable", nil, "storage not ready: "+err.Error(), "")
 		return
 	}
-	// 先写入口文件，再落库；落库失败则清理文件。
-	// 内容为空时写入默认骨架（与 agent 新建时写 AGENT.md 一致），保证"新建后即可编辑"。
+	// Write the entry file first, then the row; a failed insert removes the file.
+	// An empty body gets the default skeleton (the same as AGENT.md when an agent is created), so a new skill is editable at once.
 	entry := req.Content
 	if strings.TrimSpace(entry) == "" {
 		entry = skeleton.SkillMD(skeleton.Normalize(req.Lang), req.Name, req.Description)
 	}
 	if err := st.WriteFile(context.Background(), contentPath(info.Schema, agentName, req.Name), []byte(entry)); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 可见性缺省 true（企业级默认拒绝：不显式授权即不可见）；仅租户级 skill 生效
+	// Visibility defaults to true (enterprise default deny: no explicit grant, no visibility); only tenant-level skills are affected
 	restricted := true
 	if req.Restricted != nil {
 		restricted = *req.Restricted
@@ -339,13 +341,13 @@ func CreateSkill(c *gin.Context) {
 	})
 	if err != nil {
 		_ = st.Delete(context.Background(), contentPath(info.Schema, agentName, req.Name))
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"id": id}, "")
 }
 
-// UpdateSkill 更新 skill（name/description/content；改名同步迁移内容文件）。
+// UpdateSkill updates a skill (name / description / content; a rename migrates the content files).
 func UpdateSkill(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -363,21 +365,21 @@ func UpdateSkill(c *gin.Context) {
 
 	s, err := skillRepo.Get(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if s == nil {
 		xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 		return
 	}
-	// 归属 agent 非编辑态 → 它的私有 skill 整片冻结（与 skills.go / tools/gate.go 同口径）
+	// A non-modifiable owner agent freezes its private skills entirely (same rule as skills.go / tools/gate.go)
 	if verr := ensureOwnerAgentModifiable(info, s); verr != nil {
-		xhttp.ErrJSON(c, verr.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.owner_agent_not_modifiable", nil, verr.Error(), "")
 		return
 	}
-	// 只有正常态允许改定义，与 agent / flow 同口径
+	// Only the normal state allows redefining, as with agents / flows
 	if !s.IsModifiable() {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能修改（如需修改请先切回「正常」）", "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot be modified (switch it back to normal first)", "")
 		return
 	}
 
@@ -386,29 +388,29 @@ func UpdateSkill(c *gin.Context) {
 		newName = s.Name
 	}
 	if newName != s.Name {
-		// 内置受保护 skill：不允许改名（描述等其它字段可改）
+		// A built-in protected skill cannot be renamed (other fields such as the description can change)
 		if models.IsProtectedSkill(s.Name) {
-			xhttp.ErrJSON(c, "protected skill "+s.Name+" cannot be renamed", nil, "")
+			xhttp.ErrCode(c, "skill.protected", gin.H{"name": s.Name}, "protected skill "+s.Name+" cannot be renamed", "")
 			return
 		}
 		if !tools.ValidName(newName) {
-			xhttp.ErrCode(c, "skill.invalid_name", nil, "Invalid skill name (只允许字母数字横线，长度≤64)", "")
+			xhttp.ErrCode(c, "skill.invalid_name", nil, "Invalid skill name (letters, digits and hyphens only, at most 64 characters)", "")
 			return
 		}
 		exist, err := skillRepo.FindByName(info.Schema, newName, string(s.AgentID))
 		if err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		if exist != nil && exist.ID != s.ID {
-			xhttp.ErrJSON(c, "skill already exists", nil, "")
+			xhttp.ErrCode(c, "skill.name_taken", nil, "skill already exists", "")
 			return
 		}
 	}
 
 	agentName, err := resolveAgentName(info.Schema, string(s.AgentID))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	oldPath := contentPath(info.Schema, agentName, s.Name)
@@ -418,7 +420,7 @@ func UpdateSkill(c *gin.Context) {
 	if req.Description != "" {
 		s.Description = xsql.String(req.Description)
 	}
-	// 命令相关字段全量覆盖（空值即清空，便于取消命令分发）
+	// Command fields are overwritten wholesale (an empty value clears them, which is how command dispatch is cancelled)
 	s.UserInvocable = xsql.Bool(req.UserInvocable)
 	s.CommandDispatch = xsql.String(req.CommandDispatch)
 	s.CommandTool = xsql.String(req.CommandTool)
@@ -429,12 +431,12 @@ func UpdateSkill(c *gin.Context) {
 			xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	newPath := contentPath(info.Schema, agentName, newName)
-	// 只改元数据、没传内容、也没改名 → 文件不动
+	// Metadata only, no content, no rename -> the file is left alone
 	if req.Content == "" && oldPath == newPath {
 		xhttp.OkJSON(c, "Success", nil, "")
 		return
@@ -442,33 +444,33 @@ func UpdateSkill(c *gin.Context) {
 
 	st, err := getStorage()
 	if err != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.storage_unavailable", nil, "storage not ready: "+err.Error(), "")
 		return
 	}
 	content := []byte(req.Content)
-	// 改名：**整个技能目录**一起搬。
+	// Rename: the **whole skill directory** moves together.
 	//
-	// 技能目录可以放附属文件与子目录（见本包 files.go 的文件管理接口），只搬 SKILL.md
-	// 会把附属资源留在旧目录变成孤儿。与 service/agent/skills.go 的 Update 同口径。
-	// 搬不动时（目标目录已存在 / 跨设备等）退回「读旧 + 写新 + 删旧」，至少保住入口文件。
+	// A skill directory may hold extra files and subdirectories (see the file API in this package's files.go), and moving only SKILL.md
+	// would leave those resources orphaned in the old directory. Same rule as Update in service/agent/skills.go.
+	// When the move fails (target exists / crosses devices) it falls back to "read old + write new + delete old", at least keeping the entry file.
 	if oldPath != newPath {
 		if rerr := st.Rename(context.Background(), path.Dir(oldPath), path.Dir(newPath)); rerr != nil {
 			if data, rerr2 := st.ReadFile(context.Background(), oldPath); rerr2 == nil {
 				if werr := st.WriteFile(context.Background(), newPath, data); werr != nil {
-					xhttp.ErrJSON(c, werr.Error(), nil, "")
+					xhttp.ErrCode(c, "common.internal", nil, werr.Error(), "")
 					return
 				}
 			}
 			_ = st.Delete(context.Background(), oldPath)
 		}
-		// 租户级技能：版本目录按名字键，必须跟着草稿一起搬，
-		// 否则历史版本挂在旧名下，按当前 name 拼路径就找不到了。
-		// 私有技能没有独立版本目录（随所属 agent），不走这里。
+		// Tenant-level skills: the version directory is keyed by name and must move with the draft,
+		// or the history stays under the old name and a path built from the current name finds nothing.
+		// A private skill has no version directory of its own (it follows its agent), so this does not apply.
 		if string(s.AgentID) == "" {
 			verOld := paths.VersionEntityKey(info.Schema, paths.VersionSkills, oldName)
 			verNew := paths.VersionEntityKey(info.Schema, paths.VersionSkills, newName)
 			if rerr := st.Rename(context.Background(), verOld, verNew); rerr != nil {
-				xhttp.ErrCode(c, "skill.rename_failed", nil, "技能已改名，但版本目录迁移失败（请重试或手工搬运）: "+rerr.Error(), "")
+				xhttp.ErrCode(c, "skill.rename_failed", nil, "the skill was renamed but the version directory could not be moved (retry or move it by hand): "+rerr.Error(), "")
 				return
 			}
 		}
@@ -476,7 +478,7 @@ func UpdateSkill(c *gin.Context) {
 
 	if len(content) == 0 {
 		if oldPath != newPath {
-			xhttp.OkJSON(c, "Success", nil, "") // 文件已随目录搬过去
+			xhttp.OkJSON(c, "Success", nil, "") // the files moved with the directory
 			return
 		}
 		if data, rerr := st.ReadFile(context.Background(), oldPath); rerr == nil {
@@ -484,13 +486,13 @@ func UpdateSkill(c *gin.Context) {
 		}
 	}
 	if err := st.WriteFile(context.Background(), newPath, content); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// DeleteSkill 删除 skill（行 + 内容文件）。
+// DeleteSkill deletes a skill (row + content files).
 func DeleteSkill(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -502,7 +504,7 @@ func DeleteSkill(c *gin.Context) {
 
 	s, err := skillRepo.Get(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if s == nil {
@@ -510,44 +512,44 @@ func DeleteSkill(c *gin.Context) {
 		return
 	}
 
-	// 归属 agent 非编辑态 → 它的私有 skill 整片冻结（与 skills.go / tools/gate.go 同口径）
+	// A non-modifiable owner agent freezes its private skills entirely (same rule as skills.go / tools/gate.go)
 	if verr := ensureOwnerAgentModifiable(info, s); verr != nil {
-		xhttp.ErrJSON(c, verr.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.owner_agent_not_modifiable", nil, verr.Error(), "")
 		return
 	}
-	// 废弃不允许删除（与 agent / flow 同口径）
+	// A deprecated skill cannot be deleted (same rule as agents / flows)
 	if !s.IsModifiable() {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能删除（如需删除请先切回「正常」）", "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot be deleted (switch it back to normal first)", "")
 		return
 	}
 
-	// 内置受保护 skill 不允许删除
+	// A built-in protected skill cannot be deleted
 	if models.IsProtectedSkill(s.Name) {
-		xhttp.ErrJSON(c, "protected skill "+s.Name+" cannot be deleted", nil, "")
+		xhttp.ErrCode(c, "skill.protected", gin.H{"name": s.Name}, "protected skill "+s.Name+" cannot be deleted", "")
 		return
 	}
 
 	if err := skillRepo.Delete(info.Schema, id); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 尽力清理整个内容目录（含 SKILL.md 与其它文件）；归属 agent 已不存在时跳过
+	// Best effort: remove the whole content directory (SKILL.md and any other files); skipped when the owner agent is gone
 	if agentName, rerr := resolveAgentName(info.Schema, string(s.AgentID)); rerr == nil {
 		if st, serr := getStorage(); serr == nil {
 			_ = st.DeletePrefix(context.Background(), skillDirKey(info.Schema, agentName, s.Name))
 		}
 	}
-	// 租户级技能：版本域一并清。版本目录按名字键，留着会让同名重建「继承」旧历史。
-	// 私有技能没有独立版本目录（内容随所属 agent 的版本目录），这里不处理。
+	// Tenant-level skills: clear the version area with them. It is keyed by name, and keeping it lets a recreate inherit the old history.
+	// A private skill has no version directory of its own (its content lives in the agent's), so nothing to do here.
 	if string(s.AgentID) == "" {
 		removeSkillVersions(info.Schema, s.Name)
 	}
 	xhttp.OkJSON(c, "Skill deleted successfully", id, "")
 }
 
-// SetSkillStatus 切换 skill 状态（1=正常 | 3=废弃，与 agents / flows 同一套两态）。
-// skill 没有服务端点，所以没有"下架联动"：废弃后不再被 agent 看到/注入。
+// SetSkillStatus switches a skill's status (1 = normal | 3 = deprecated, the same two states as agents / flows).
+// A skill has no service endpoint, so there is no delist cascade: once deprecated, an agent no longer sees or injects it.
 func SetSkillStatus(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -567,15 +569,15 @@ func SetSkillStatus(c *gin.Context) {
 	switch body.Status {
 	case models.StatusNormal, models.StatusDeprecated:
 	default:
-		xhttp.ErrCode(c, "skill.invalid_status", nil, "status must be 1(正常) / 3(废弃)", "")
+		xhttp.ErrCode(c, "skill.invalid_status", nil, "status must be 1 (normal) or 3 (deprecated)", "")
 		return
 	}
 
-	// 归属 agent 非正常态 → 它名下私有 skill 的状态也不受理（与其他管理端入口同口径）。
-	// 刻意**不判** skill 自身状态：那正是本次要改的字段，判它会让废弃后无法恢复（死锁）。
+	// A non-normal owner agent also blocks status changes on its private skills (same rule as the other admin entry points).
+	// The skill's own status is **not** checked on purpose: that is the field being changed, and checking it would make deprecation irreversible (deadlock).
 	s, err := skillRepo.Get(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if s == nil {
@@ -583,7 +585,7 @@ func SetSkillStatus(c *gin.Context) {
 		return
 	}
 	if verr := ensureOwnerAgentModifiable(info, s); verr != nil {
-		xhttp.ErrJSON(c, verr.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.owner_agent_not_modifiable", nil, verr.Error(), "")
 		return
 	}
 
@@ -592,14 +594,14 @@ func SetSkillStatus(c *gin.Context) {
 			xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// GetSkillVisibility 获取某 skill 的可见性配置（restricted 开关 + 授权 agent 列表）。
-// 仅租户级 skill 有意义；私有 skill 的可见性由归属决定。
+// GetSkillVisibility returns a skill's visibility configuration (the restricted switch + granted agents).
+// It only means something for tenant-level skills; a private skill's visibility follows its owner.
 func GetSkillVisibility(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -611,7 +613,7 @@ func GetSkillVisibility(c *gin.Context) {
 
 	s, err := skillRepo.Get(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if s == nil {
@@ -621,19 +623,19 @@ func GetSkillVisibility(c *gin.Context) {
 
 	list, err := skillRepo.ListBindings(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
 		"items":      list,
-		"restricted": s.Restricted, // 直接读 skills.restricted
-		"agent_id":   s.AgentID,    // 非空 = 私有 skill
+		"restricted": s.Restricted, // straight from skills.restricted
+		"agent_id":   s.AgentID,    // non-empty = a private skill
 	}, "")
 }
 
-// SetSkillVisibility 设置可见性：restricted 开关 + 授权 agent 白名单（事务内全量替换）。
+// SetSkillVisibility sets visibility: the restricted switch + the granted agent allowlist (replaced wholesale in a transaction).
 // body: {"restricted": true, "agent_ids": ["uuid-A","uuid-B"]}
-// restricted=false 时 bindings 不参与判定（数据保留，便于来回切换开关）。
+// With restricted=false the bindings are ignored (the rows stay, so the switch can be flipped back).
 func SetSkillVisibility(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -654,30 +656,30 @@ func SetSkillVisibility(c *gin.Context) {
 
 	s, err := skillRepo.Get(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if s == nil {
 		xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 		return
 	}
-	// 归属 agent 非编辑态 → 它的私有 skill 整片冻结（与 skills.go / tools/gate.go 同口径）
+	// A non-modifiable owner agent freezes its private skills entirely (same rule as skills.go / tools/gate.go)
 	if verr := ensureOwnerAgentModifiable(info, s); verr != nil {
-		xhttp.ErrJSON(c, verr.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.owner_agent_not_modifiable", nil, verr.Error(), "")
 		return
 	}
-	// 可见性是定义的一部分：废弃期间不接受调整
+	// Visibility is part of the definition: it cannot change while the skill is deprecated
 	if !s.IsModifiable() {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能修改（如需修改请先切回「正常」）", "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot be modified (switch it back to normal first)", "")
 		return
 	}
-	// 私有 skill 的可见性由归属决定，不接受收窄配置
+	// A private skill's visibility follows its owner and cannot be narrowed here
 	if s.AgentID != "" {
-		xhttp.ErrJSON(c, "private skill does not support visibility config", nil, "")
+		xhttp.ErrCode(c, "skill.private_no_visibility", nil, "private skill does not support visibility config", "")
 		return
 	}
 
-	// 去重 + 校验 agent 存在
+	// Deduplicate and check that each agent exists
 	seen := map[string]bool{}
 	agentIDs := make([]string, 0, len(body.AgentIDs))
 	for _, aid := range body.AgentIDs {
@@ -693,7 +695,7 @@ func SetSkillVisibility(c *gin.Context) {
 	}
 
 	if err := skillRepo.SetVisibility(info.Schema, id, body.Restricted, agentIDs, info.ID); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"restricted": body.Restricted, "count": len(agentIDs)}, "")

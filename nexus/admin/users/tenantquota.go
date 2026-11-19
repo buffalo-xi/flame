@@ -9,26 +9,32 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 租户级配额自助（{platform}.quota_configs 的租户行）。
+// Tenant-level self-service quota (the tenant row of {platform}.quota_configs).
 //
-// 与平台「我的租户」那条 PUT /platform/me/tenants/:schema/quota 同语义，区别只有两点：
-//   - 这里不传 schema，直接用当前登录租户（info.Schema），无法越租户；
-//   - 权限上不需要额外判断角色：服务用户不可登录（auth/login.go 只放行 RoleManage），
-//     能带着租户 token 走到这里的必然是管理用户。
+// Same semantics as the platform's PUT /platform/me/tenants/:schema/quota, with two differences:
+//   - no schema is passed here; the signed-in tenant (info.Schema) is used, so no cross-tenant
+//     access is possible;
+//   - no extra role check is needed: service users cannot sign in (auth/login.go only admits
+//     RoleManage), so anyone reaching here with a tenant token is a management user.
 //
-// 五项都能改，但都不能超过系统顶（超了直接拒，不静默截断）：自助页面必须当场说清，
-// 否则「保存成功但生效值没变」等于骗人。系统顶为 -1（不限）时不做上限约束。
+// All five values are editable but none may exceed the system ceiling (an excess is rejected
+// outright, never silently truncated): a self-service page must say so on the spot, otherwise
+// "saved successfully but the effective value did not change" is a lie. A system ceiling of -1
+// (unlimited) imposes no upper bound.
 //
-// 写完由 quota.SetRow 内部失效缓存，运行期立即生效（多实例靠共享 Redis 缓存分发）。
+// After writing, quota.SetRow invalidates the cache internally, so it takes effect at runtime
+// immediately (multiple instances receive it through the shared Redis cache).
 
 // GetTenantQuota GET /admin/tenantquota
 //
-// 一次回全「本租户原始行 + 系统行 + 代码兜底 + 生效值 + 三项用量」：
-//   - quota     本租户原始行（null = 未设置，绑编辑框）
-//   - system    系统行原始值（null = 未设置，展示"系统顶"）
-//   - fallback  代码兜底（系统行也未设置时它就是顶）
-//   - effective 生效值（后端算，前端不重算截断规则）
-//   - usage     智能体 / 技能 / 工作流当前数量（会话两项没有便宜的"当前用量"，由前端显示 —）
+// It returns everything at once: this tenant's raw row + the system row + the code fallback + the
+// effective values + three usage counters:
+//   - quota     this tenant's raw row (null = unset, bound to the edit form)
+//   - system    the system row's raw values (null = unset, shown as the "system ceiling")
+//   - fallback  the code fallback (the ceiling when the system row is unset too)
+//   - effective the effective values (computed by the backend; the frontend never redoes truncation)
+//   - usage     current agent / skill / flow counts (the two session values have no cheap "current
+//     usage" and are rendered as "-" by the frontend)
 func GetTenantQuota(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -37,19 +43,20 @@ func GetTenantQuota(c *gin.Context) {
 
 	row, err := quota.GetRow(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load tenant quota: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load the tenant quota: "+err.Error(), "")
 		return
 	}
 	sysRow, err := quota.GetRow("")
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load system quota: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load the system quota: "+err.Error(), "")
 		return
 	}
 
 	fb := quota.Fallback()
 	eff := quota.Resolve(info.Schema)
 
-	// 用量统计失败按 0 展示：配额页读不出来的代价不应该是一整个页面打不开
+	// Usage counts fall back to 0 on failure: the cost of an unreadable counter must not be an
+	// unopenable page
 	agents, _ := quota.CountAgents(info.Schema)
 	skills, _ := quota.CountSkills(info.Schema)
 	flows, _ := quota.CountFlows(info.Schema)
@@ -91,14 +98,15 @@ func GetTenantQuota(c *gin.Context) {
 	}, "")
 }
 
-// setTenantQuotaRequest 缺省 / null = 清除（回退系统行）；-1 = 不限；正数 = 上限。
+// setTenantQuotaRequest: absent / null clears the value (falls back to the system row); -1 means
+// unlimited; a positive number is the ceiling.
 type setTenantQuotaRequest struct {
 	MaxAgents       *int `json:"max_agents"`
 	MaxSkills       *int `json:"max_skills"`
 	MaxFlows        *int `json:"max_flows"`
 	MaxUserSessions *int `json:"max_user_sessions"`
 
-	// MaxSessionStorageBytes 单会话空间上限（字节）；-1 = 不限制。
+	// MaxSessionStorageBytes is the per-session storage ceiling in bytes; -1 means unlimited.
 	MaxSessionStorageBytes *int64 `json:"max_session_storage_bytes"`
 }
 
@@ -115,7 +123,7 @@ func UpdateTenantQuota(c *gin.Context) {
 		return
 	}
 
-	// 取值合法性：-1（不限）或非负数（0 = 禁止新建）
+	// Value validity: -1 (unlimited) or a non-negative number (0 = creation forbidden)
 	for _, f := range []struct {
 		name string
 		v    *int
@@ -127,42 +135,43 @@ func UpdateTenantQuota(c *gin.Context) {
 	} {
 		if f.v != nil && *f.v < -1 {
 			xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": f.name, "min": -1},
-				f.name+" 只能是 -1（不限制）或非负数", "")
+				f.name+" must be -1 (unlimited) or a non-negative number", "")
 			return
 		}
 	}
 	if req.MaxSessionStorageBytes != nil && *req.MaxSessionStorageBytes < -1 {
 		xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": "max_session_storage_bytes", "min": -1},
-			"max_session_storage_bytes 只能是 -1（不限制）或非负数", "")
+			"max_session_storage_bytes must be -1 (unlimited) or a non-negative number", "")
 		return
 	}
 
-	// 系统顶 = 系统行（未设置 / -1 时退到代码兜底）；-1 表示不限，不做上限约束
+	// The system ceiling comes from the system row (falling back to the code fallback when unset or
+	// -1); -1 means unlimited, so no upper bound applies
 	sys := quota.Resolve("")
 	if req.MaxAgents != nil && sys.MaxAgents >= 0 && *req.MaxAgents > sys.MaxAgents {
 		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_agents", "limit": sys.MaxAgents},
-			fmt.Sprintf("智能体数量上限不能超过系统限额（%d）", sys.MaxAgents), "")
+			fmt.Sprintf("the agent ceiling cannot exceed the system limit (%d)", sys.MaxAgents), "")
 		return
 	}
 	if req.MaxSkills != nil && sys.MaxSkills >= 0 && *req.MaxSkills > sys.MaxSkills {
 		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_skills", "limit": sys.MaxSkills},
-			fmt.Sprintf("技能数量上限不能超过系统限额（%d）", sys.MaxSkills), "")
+			fmt.Sprintf("the skill ceiling cannot exceed the system limit (%d)", sys.MaxSkills), "")
 		return
 	}
 	if req.MaxFlows != nil && sys.MaxFlows >= 0 && *req.MaxFlows > sys.MaxFlows {
 		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_flows", "limit": sys.MaxFlows},
-			fmt.Sprintf("工作流数量上限不能超过系统限额（%d）", sys.MaxFlows), "")
+			fmt.Sprintf("the flow ceiling cannot exceed the system limit (%d)", sys.MaxFlows), "")
 		return
 	}
 	if req.MaxUserSessions != nil && sys.MaxUserSessions >= 0 && *req.MaxUserSessions > sys.MaxUserSessions {
 		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_user_sessions", "limit": sys.MaxUserSessions},
-			fmt.Sprintf("单用户会话数上限不能超过系统限额（%d）", sys.MaxUserSessions), "")
+			fmt.Sprintf("the per-user session ceiling cannot exceed the system limit (%d)", sys.MaxUserSessions), "")
 		return
 	}
 	if req.MaxSessionStorageBytes != nil && sys.MaxSessionStorageBytes >= 0 &&
 		*req.MaxSessionStorageBytes > sys.MaxSessionStorageBytes {
 		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_session_storage_bytes", "limit": sys.MaxSessionStorageBytes},
-			fmt.Sprintf("单会话空间上限不能超过系统限额（%d 字节）", sys.MaxSessionStorageBytes), "")
+			fmt.Sprintf("the per-session storage ceiling cannot exceed the system limit (%d bytes)", sys.MaxSessionStorageBytes), "")
 		return
 	}
 
@@ -173,7 +182,7 @@ func UpdateTenantQuota(c *gin.Context) {
 		MaxUserSessions:        req.MaxUserSessions,
 		MaxSessionStorageBytes: req.MaxSessionStorageBytes,
 	}); err != nil {
-		xhttp.ErrJSON(c, "Failed to set quota: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to set the quota: "+err.Error(), "")
 		return
 	}
 

@@ -34,7 +34,7 @@ func GetLLMProvider(c *gin.Context) {
 			xhttp.ErrCode(c, "llm.provider_not_found", nil, "LLM provider not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -75,7 +75,7 @@ func CreateLLMProvider(c *gin.Context) {
 
 	id, err := repo.Create(authInfo.(*auth.AuthInfo), &llmProvider)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -123,7 +123,7 @@ func UpdateLLMProvider(c *gin.Context) {
 			xhttp.ErrCode(c, "llm.provider_not_found", nil, "LLM provider not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -152,7 +152,7 @@ func DeleteLLMProvider(c *gin.Context) {
 	rows, err := db.DB.Query(
 		fmt.Sprintf(`SELECT id, gateway_id FROM %s.llm_models WHERE provider_id = $1`, schema), id)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to get LLM models", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to get LLM models", "")
 		return
 	}
 	var providerModels []providerModel
@@ -160,7 +160,7 @@ func DeleteLLMProvider(c *gin.Context) {
 		var pm providerModel
 		if err := rows.Scan(&pm.id, &pm.gatewayID); err != nil {
 			rows.Close()
-			xhttp.ErrJSON(c, "Failed to scan LLM model", nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "Failed to scan LLM model", "")
 			return
 		}
 		providerModels = append(providerModels, pm)
@@ -174,12 +174,12 @@ func DeleteLLMProvider(c *gin.Context) {
 			continue
 		}
 		if gateway.Current == nil {
-			xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 			return
 		}
 		if derr := gateway.Current.Deprovision(schema,
 			gateway.ModelInput{GatewayID: pm.gatewayID.String}, gateway.ProviderInput{}); derr != nil {
-			xhttp.ErrJSON(c, "Deprovision failed for model "+pm.id+": "+derr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "Deprovision failed for model "+pm.id+": "+derr.Error(), "")
 			return
 		}
 	}
@@ -187,7 +187,7 @@ func DeleteLLMProvider(c *gin.Context) {
 	// 2. Transaction: unlink the agent references -> delete the models -> delete the provider.
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to begin transaction", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to begin transaction", "")
 		return
 	}
 	defer func() {
@@ -200,26 +200,26 @@ func DeleteLLMProvider(c *gin.Context) {
 	for _, pm := range providerModels {
 		if _, err := tx.Exec(
 			fmt.Sprintf(`UPDATE %s.agents SET llm_model_id = NULL WHERE llm_model_id = $1`, schema), pm.id); err != nil {
-			xhttp.ErrJSON(c, "Failed to update agent instances", nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "Failed to update agent instances", "")
 			return
 		}
 	}
 	for _, pm := range providerModels {
 		if _, err := tx.Exec(
 			fmt.Sprintf(`DELETE FROM %s.llm_models WHERE id = $1`, schema), pm.id); err != nil {
-			xhttp.ErrJSON(c, "Failed to delete LLM model", nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "Failed to delete LLM model", "")
 			return
 		}
 	}
 
 	result, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s.llm_providers WHERE id = $1`, schema), id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if rowsAffected == 0 {
@@ -228,7 +228,7 @@ func DeleteLLMProvider(c *gin.Context) {
 	}
 
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	tx = nil
@@ -253,7 +253,7 @@ func ListLLMProviders(c *gin.Context) {
 
 	llmProviders, total, err := repo.List(authInfo.(*auth.AuthInfo), &req)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 

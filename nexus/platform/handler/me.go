@@ -19,31 +19,33 @@ import (
 
 // Me GET /platform/me
 //
-// 供前端刷新页面后恢复身份（前端只存 token，不自己解 JWT）。
-// 每次都回查数据库：账号被停用/删除后，即便 token 仍在有效期内也立即失效。
+// Lets the frontend restore the identity after a page refresh (the frontend only stores the token
+// and never decodes the JWT itself).
+// It re-reads the database every time: once the account is disabled or deleted, the token stops
+// working immediately even if it has not expired.
 func Me(c *gin.Context) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 
 	u, err := pmusers.GetByID(info.ID)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load platform user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load platform user: "+err.Error(), "")
 		return
 	}
 	if u == nil || u.Status != account.StatusActive {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "账号不存在或已停用")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "the account does not exist or is disabled")
 		return
 	}
 
 	data := gin.H{"user": userView(u)}
-	// 用户身份补一个"名下租户数"，供管理台顶栏徽标使用
+	// For a user identity, add the tenant count under their name, used by the admin console top-bar badge
 	if u.Role == auth.RoleUser {
 		n, cerr := tenantsrepo.CountByOwner(u.ID)
 		if cerr != nil {
-			xhttp.ErrJSON(c, "Failed to count tenants: "+cerr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "Failed to count tenants: "+cerr.Error(), "")
 			return
 		}
 		data["tenant_count"] = n
@@ -54,18 +56,18 @@ func Me(c *gin.Context) {
 
 // MyTenants GET /platform/me/tenants
 //
-// 「用户」身份的唯一数据面：我名下（owner_user_id = 我）的租户。
-// 管理员不走这里（他走 /platform/tenants 看全部）。
+// The only data surface of the "user" identity: the tenants under my name (owner_user_id = me).
+// Administrators do not come here (they use /platform/tenants to see everything).
 func MyTenants(c *gin.Context) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 
 	list, err := tenantsrepo.ListByOwner(info.ID)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to list tenants: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to list tenants: "+err.Error(), "")
 		return
 	}
 
@@ -82,14 +84,17 @@ type resetPrimaryPasswordRequest struct {
 
 // ResetMyTenantPrimaryPassword POST /platform/me/tenants/:schema/primary/password
 //
-// 「用户」为**自己名下**租户的根账号（primary）重置密码。
+// Lets a "user" reset the root account (primary) password of a tenant **under their own name**.
 //
-// 存在的意义：平台开通租户时交付的是 primary 的初始密码，一旦忘了/丢了，租户侧自己进不去
-// （改密要旧密码）、平台管理台也没有触碰租户 users 的接口 —— 所以由"负责人"在此自助重置。
-// 它等价于租户侧管理员的「重置密码」，只是不需要先拿到旧密码。
+// Why this exists: provisioning delivers the primary account's initial password, and once it is
+// forgotten or lost the tenant cannot get in itself (a password change needs the old one) and the
+// platform console has no endpoint that touches tenant users - so the "owner" resets it here.
+// It is equivalent to a tenant administrator's "reset password", except no old password is needed
+// first.
 //
-// **只改密码**：role / status / display_name 一律不碰（primary 在租户侧本就受"不可修改"守卫），
-// 也不签发 token、不作废已有会话（与 /me/password 等改密接口同语义）；无缓存需要失效。
+// **It only changes the password**: role / status / display_name are never touched (primary is
+// already under the "immutable" guard on the tenant side), no token is issued and no existing
+// session is revoked (same semantics as /me/password); no cache needs invalidating.
 func ResetMyTenantPrimaryPassword(c *gin.Context) {
 	schema, ok := mustOwnTenant(c)
 	if !ok {
@@ -98,43 +103,44 @@ func ResetMyTenantPrimaryPassword(c *gin.Context) {
 
 	var req resetPrimaryPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	switch {
 	case len(req.Password) < account.MinPasswordLength:
 		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": account.MinPasswordLength},
-			fmt.Sprintf("密码至少 %d 位", account.MinPasswordLength), "")
+			fmt.Sprintf("the password must be at least %d characters", account.MinPasswordLength), "")
 		return
 	case len(req.Password) > account.MaxPasswordBytes:
-		xhttp.ErrJSON(c, account.ErrPasswordTooLong.Error(), nil, "")
+		xhttp.ErrCode(c, "user.password_too_long", nil, account.ErrPasswordTooLong.Error(), "")
 		return
 	}
 
 	hash, herr := account.HashPassword(req.Password)
 	if herr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to set the password: "+herr.Error(), "")
 		return
 	}
 
-	// schema 来自注册表（已注册的租户名）且 mustOwnTenant 已确认归属，这里仍转义标识符（纵深防御）
+	// schema comes from the registry (a registered tenant name) and mustOwnTenant already confirmed
+	// ownership, but the identifier is still quoted (defence in depth)
 	tbl := pq.QuoteIdentifier(schema) + ".users"
 	var id string
 	err := db.DB.QueryRow(
 		`SELECT id::text FROM `+tbl+` WHERE name = $1`, sharedtenants.PrimaryUserName).Scan(&id)
 	if err == sql.ErrNoRows {
-		xhttp.SendErrorResponse(c, http.StatusNotFound, "not_found", "租户根账号 primary 不存在")
+		xhttp.SendErrorResponse(c, http.StatusNotFound, "not_found", "the tenant root account primary does not exist")
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load tenant user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load tenant user: "+err.Error(), "")
 		return
 	}
 
 	if _, err := db.DB.Exec(
 		`UPDATE `+tbl+` SET password = $2, updated_at = NOW() WHERE name = $1`,
 		sharedtenants.PrimaryUserName, hash); err != nil {
-		xhttp.ErrJSON(c, "Failed to reset password: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to reset password: "+err.Error(), "")
 		return
 	}
 
@@ -148,57 +154,61 @@ type changeMyPasswordRequest struct {
 
 // ChangeMyPassword POST /platform/me/password
 //
-// 平台账号自助改密：必须提供旧密码，只改自己（不接受 id）。
-// 与管理员「重置密码」（POST /platform/users/:id/password）不同：后者是代人重置。
-// 与租户侧 /admin/me/password 同语义：**不签发新 token、不作废其它端会话**。
+// Self-service password change for a platform account: the old password is required and it only
+// changes your own (no id accepted).
+// Unlike the admin "reset password" (POST /platform/users/:id/password), which resets on someone's
+// behalf.
+// Same semantics as the tenant-side /admin/me/password: **no new token is issued and no session on
+// other devices is revoked**.
 func ChangeMyPassword(c *gin.Context) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 
 	var req changeMyPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	switch {
 	case len(req.NewPassword) < account.MinPasswordLength:
-		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": account.MinPasswordLength}, "新密码至少 8 位", "")
+		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": account.MinPasswordLength}, "the new password must be at least 8 characters", "")
 		return
 	case len(req.NewPassword) > account.MaxPasswordBytes:
-		xhttp.ErrJSON(c, account.ErrPasswordTooLong.Error(), nil, "")
+		xhttp.ErrCode(c, "user.password_too_long", nil, account.ErrPasswordTooLong.Error(), "")
 		return
 	case req.NewPassword == req.OldPassword:
-		xhttp.ErrCode(c, "user.password_unchanged", nil, "新密码不能与当前密码相同", "")
+		xhttp.ErrCode(c, "user.password_unchanged", nil, "the new password must differ from the current one", "")
 		return
 	}
 
-	// 每次回查数据库：账号被停用/删除后，即便 token 仍在有效期内也不许改密
+	// Re-read the database every time: once the account is disabled or deleted, the password change is
+	// refused even if the token has not expired
 	u, err := pmusers.GetByID(info.ID)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load platform user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load platform user: "+err.Error(), "")
 		return
 	}
 	if u == nil || u.Status != account.StatusActive {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "账号不存在或已停用")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "the account does not exist or is disabled")
 		return
 	}
 
-	// 校验旧密码（兼容历史 MD5；通过后下面写入 bcrypt，等于顺手完成升级）
+	// Verify the old password (legacy MD5 is accepted; the bcrypt write below upgrades it on the way)
 	if okOld, _ := account.VerifyPassword(u.Password, req.OldPassword); !okOld {
-		xhttp.ErrCode(c, "user.password_incorrect", nil, "当前密码不正确", "")
+		xhttp.ErrCode(c, "user.password_incorrect", nil, "the current password is incorrect", "")
 		return
 	}
 
 	hash, herr := account.HashPassword(req.NewPassword)
 	if herr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to set the password: "+herr.Error(), "")
 		return
 	}
 	if err := pmusers.UpdatePassword(info.ID, hash); err != nil {
-		xhttp.ErrJSON(c, "Failed to update password: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to update password: "+err.Error(), "")
 		return
 	}
 

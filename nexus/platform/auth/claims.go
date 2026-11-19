@@ -1,12 +1,12 @@
-// Package auth 平台侧身份：角色词表、token 签发/解析、两把中间件。
+// Package auth holds platform-side identity: the role vocabulary, token issuing/parsing and the two middlewares.
 //
-// 与租户侧 shared/auth 完全独立，靠 claims 形态天然互斥：
+// It is fully independent of the tenant-side shared/auth, and the claim shapes are mutually exclusive by nature:
 //
-//	租户 token：{id, name, schema}                     —— 无 scope
-//	平台 token：{sub, name, scope:"platform", role}    —— 无 schema
+//	tenant token: {id, name, schema}                    - no scope
+//	platform token: {sub, name, scope:"platform", role} - no schema
 //
-// 因此平台 token 打 /admin/* 会被租户侧 AuthMiddleware（parseClaims 强制要 schema）拒；
-// 租户 token 打 /platform/* 会被本包 PlatformAuthMiddleware（强制要 scope）拒。
+// So a platform token sent to /admin/* is rejected by the tenant-side AuthMiddleware (parseClaims requires schema), and a
+// tenant token sent to /platform/* is rejected by this package's PlatformAuthMiddleware (which requires scope).
 package auth
 
 import (
@@ -17,32 +17,32 @@ import (
 )
 
 const (
-	// ScopePlatform 平台 token 的 scope 值。租户 token 不含该字段。
+	// ScopePlatform is the scope value of a platform token. Tenant tokens do not carry the field.
 	ScopePlatform = "platform"
 
-	// RoleAdmin 管理员：管理所有租户与平台用户。
+	// RoleAdmin: administrator; manages all tenants and platform users.
 	RoleAdmin = "admin"
-	// RoleUser 用户：只能看/管自己名下的租户。
+	// RoleUser: user; can only see and manage the tenants under their own name.
 	RoleUser = "user"
 )
 
-// PlatformAuthInfo 平台侧认证信息（由 token 解析而来）。
+// PlatformAuthInfo is platform-side authentication info (parsed from the token).
 type PlatformAuthInfo struct {
 	ID   string
 	Name string
 	Role string // admin | user
 }
 
-// IsAdmin 是否平台管理员。
+// IsAdmin reports whether this is a platform administrator.
 func (p *PlatformAuthInfo) IsAdmin() bool { return p != nil && p.Role == RoleAdmin }
 
-// jwtConfig 与租户侧共用同一套 JWT 参数（同进程、同密钥、同有效期）。
+// jwtConfig shares the tenant side's JWT parameters (same process, same key, same expiry).
 func jwtConfig() xjwt.JWTConfig { return xjwt.JWTConfig(config.Cfg.JWT) }
 
-// GenerateToken 签发平台 token。
+// GenerateToken issues a platform token.
 //
-// 刻意不带 schema：见包注释，这让平台 token 天然进不了租户接口。
-// name 仅供展示与审计，前端不依赖它判定权限（权限只看 role）。
+// It deliberately carries no schema: see the package comment - that is what keeps a platform token out of tenant endpoints.
+// name is for display and audit only; the frontend does not use it for authorisation (that looks at role alone).
 func GenerateToken(id, name, role string) (string, error) {
 	return xjwt.GenerateTokenWithMapClaims(map[string]any{
 		"sub":   id,
@@ -52,7 +52,7 @@ func GenerateToken(id, name, role string) (string, error) {
 	}, jwtConfig())
 }
 
-// ParseToken 校验并解析平台 token；任何一项不合规都返回错误（fail-closed）。
+// ParseToken validates and parses a platform token; any non-compliant item returns an error (fail-closed).
 func ParseToken(tokenString string) (*PlatformAuthInfo, error) {
 	claims, err := xjwt.ValidateTokenWithMapClaims(tokenString, jwtConfig())
 	if err != nil {

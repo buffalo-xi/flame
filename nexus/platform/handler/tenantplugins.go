@@ -16,24 +16,25 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 插件授权：platform.tenant_plugins（租户行）+ platform.plugin_gates（全局闸）的读写。
+// Plugin grants: reading and writing platform.tenant_plugins (tenant rows) plus platform.plugin_gates (the global gate).
 //
-// 三种值要分清楚：
+// Three values must be kept apart:
 //
-//	row      本租户的原始行（null = 没设过 = 未开通）—— 编辑框绑它
-//	blocked  全局闸是否拦下（缺省放行）—— 「还开不开」，压过租户的显式开启
-//	enabled  租户侧认不认这个插件（{schema}.plugins.is_active）—— 只读展示
+//	row      this tenant's raw row (null = never set = not enabled) - the edit form binds to it
+//	blocked  whether the global gate stops it (default: let through) - "may it be on at all", overriding a tenant's
+//	         explicit enable
+//	enabled  whether the tenant side accepts this plugin ({schema}.plugins.is_active) - display only
 //
-// 生效 = (租户行 ?? 未开通) AND NOT blocked。2026-10-21 移除了「系统默认行」
-// （tenant_id = ''）：它只改缺省值、与急停是两种东西，混在一张表里会让管理员
-// 分不清「我开的」和「本来就没有」。
+// Effective = (tenant row ?? not enabled) AND NOT blocked. On 2026-10-21 the "system default row" (tenant_id = '') was
+// removed: it only changed the default and is a different thing from the emergency stop, and keeping both in one table
+// left administrators unable to tell "I turned it on" from "it was never there".
 //
-// 表结构见 nexus/platform/sql/tenant_plugins.sql 与 plugin_gates.sql；解析逻辑见 shared/pluginpolicy。
+// The DDL lives in nexus/platform/sql/tenant_plugins.sql and plugin_gates.sql; the resolution logic in shared/pluginpolicy.
 
-// pluginCfgRepo 读租户侧插件配置（只取 name / is_active / impl，不碰 key）。
+// pluginCfgRepo reads tenant-side plugin config (name / is_active / impl only, never the keys).
 var pluginCfgRepo = pluginsrepo.NewRepository()
 
-// policyJSON 策略的对外形状（与 shared/pluginpolicy.Policy 一一对应）。
+// policyJSON is the external shape of a policy (one-to-one with shared/pluginpolicy.Policy).
 type policyJSON struct {
 	Allowed bool `json:"allowed"`
 }
@@ -42,26 +43,27 @@ func toPolicyJSON(p pluginpolicy.Policy) policyJSON {
 	return policyJSON{Allowed: p.Allowed}
 }
 
-// tenantPluginView 平台「租户 → 插件」列表的一行。
+// tenantPluginView is one row of the platform "tenant -> plugins" list.
 type tenantPluginView struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
 	Description string `json:"description"`
 	Version     string `json:"version"`
 
-	// 生效值（本租户行 ?? 开放），已乘上全局闸
+	// effective value (this tenant's row ?? open), already multiplied by the global gate
 	policyJSON
-	Blocked bool `json:"blocked"` // 全局闸是否拦下（false = 不拦，含「没有闸行」）
+	Blocked bool `json:"blocked"` // whether the global gate stops it (false = no, including "no gate row")
 
-	Row *policyJSON `json:"row"` // 本租户原始行；null = 没设过（= 缺省开放）
+	Row *policyJSON `json:"row"` // this tenant's raw row; null = never set (= open by default)
 
-	// 租户侧状态：开了没、用哪个实现（额度与实现无关，但并排看更有用）
+	// Tenant-side state: is it on, and which implementation is used (quotas do not depend on the implementation, but
+	// they are more useful side by side)
 	Enabled bool   `json:"enabled"`
 	Impl    string `json:"impl"`
 }
 
 // ListTenantPlugins GET /platform/tenants/:schema/plugins
-// 磁盘上发现的插件 × 本租户策略 × 租户侧启用状态。
+// Plugins discovered on disk x this tenant's policy x the tenant-side enabled state.
 func ListTenantPlugins(c *gin.Context) {
 	schema, ok := mustTenant(c)
 	if !ok {
@@ -70,21 +72,22 @@ func ListTenantPlugins(c *gin.Context) {
 
 	rows, err := pluginpolicy.Rows(schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load tenant plugin policy: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load tenant plugin policy: "+err.Error(), "")
 		return
 	}
 	gates, err := pluginpolicy.Gates()
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load plugin gates: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load plugin gates: "+err.Error(), "")
 		return
 	}
 
-	// 租户侧配置读失败（schema 还没建、表不存在）不影响平台授权：按「未启用」展示。
+	// A failed read of the tenant-side config (schema not built yet, table missing) must not affect platform grants: show
+	// it as "not enabled".
 	enabled := map[string]bool{}
 	impl := map[string]string{}
 	if list, lerr := pluginCfgRepo.List(&auth.AuthInfo{Schema: schema}); lerr == nil {
 		for _, p := range list {
-			if p.Kind != pluginsrepo.KindTools { // List 跨 kind，这里只要工具插件
+			if p.Kind != pluginsrepo.KindTools { // List spans kinds; only tool plugins belong here
 				continue
 			}
 			enabled[p.Name] = p.IsActive
@@ -114,7 +117,7 @@ func ListTenantPlugins(c *gin.Context) {
 			v.Row = &r
 		}
 		if gates[t.Name] {
-			eff.Allowed = false // 硬闸最后乘上去的 0；原始行原样保留
+			eff.Allowed = false // the hard gate multiplied in last; the raw row is kept as it is
 			v.Blocked = true
 		}
 		v.policyJSON = toPolicyJSON(eff)
@@ -124,7 +127,8 @@ func ListTenantPlugins(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"plugins": out}, "")
 }
 
-// setPolicyReq 覆盖式写入本租户行；字段省略 = 保留当前值（先读后改，避免误清）。
+// setPolicyReq overwrites this tenant's row; an omitted field keeps the current value (read first, then modify, so nothing
+// is cleared by accident).
 type setPolicyReq struct {
 	Allowed *bool `json:"allowed"`
 }
@@ -143,7 +147,8 @@ func SetTenantPluginPolicy(c *gin.Context) {
 }
 
 // DeleteTenantPluginPolicy DELETE /platform/tenants/:schema/plugins/:name
-// 删掉本租户行 = 回到缺省（未开通）。系统默认行已移除，所以「清除」就是彻底关掉。
+// Deleting this tenant's row returns to the default (not enabled). The system default row is gone, so "clear" really means
+// "off".
 func DeleteTenantPluginPolicy(c *gin.Context) {
 	schema, ok := mustTenant(c)
 	if !ok {
@@ -154,26 +159,27 @@ func DeleteTenantPluginPolicy(c *gin.Context) {
 		return
 	}
 	if err := pluginpolicy.Delete(schema, name); err != nil {
-		xhttp.ErrJSON(c, "Failed to delete tenant plugin policy: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to delete tenant plugin policy: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"schema": schema, "plugin": name, "row": nil}, "")
 }
 
-// setPluginGateReq 闸写入；blocked 省略视为 false（= 不拦）。
+// setPluginGateReq writes the gate; an omitted blocked counts as false (= do not stop).
 //
-// 不叫 setGateReq：本包已有一份属于能力闸的同名类型，重名会直接编译不过。
+// It is not called setGateReq: this package already has a same-named type for the capability gate, and the clash would not
+// compile.
 type setPluginGateReq struct {
 	Blocked *bool `json:"blocked"`
 }
 
 // SetPluginGate PUT /platform/system/plugin-gates/:name
 //
-// 没有单独的「列出全部闸」接口：插件管理页的 /platform/plugins 已经在每个插件上
-// 带 blocked，再开一个列表接口只会多一份需要对齐的口径。
+// There is no separate "list all gates" endpoint: /platform/plugins already carries blocked on every plugin, and another
+// list endpoint would only add a second shape that has to be kept in sync.
 //
-// blocked=false 走删行而不是 SetGate(false)：闸表只保留「确实被拦」的记录，
-// 否则排查时看到一行 false 会以为「有人动过这个闸」。
+// blocked=false deletes the row instead of SetGate(false): the gate table keeps only "actually blocked" records, otherwise
+// someone troubleshooting would see a false row and assume "somebody touched this gate".
 func SetPluginGate(c *gin.Context) {
 	name, ok := mustPlugin(c)
 	if !ok {
@@ -192,7 +198,7 @@ func SetPluginGate(c *gin.Context) {
 		err = pluginpolicy.DeleteGate(name)
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to save plugin gate: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to save plugin gate: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"plugin": name, "blocked": blocked}, "")
@@ -205,13 +211,13 @@ func DeletePluginGate(c *gin.Context) {
 		return
 	}
 	if err := pluginpolicy.DeleteGate(name); err != nil {
-		xhttp.ErrJSON(c, "Failed to delete plugin gate: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to delete plugin gate: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"plugin": name}, "")
 }
 
-// writePluginPolicy 读当前行 → 应用请求里的字段 → 落库 → 回显生效值。
+// writePluginPolicy reads the current row -> applies the request fields -> writes -> echoes the effective value.
 func writePluginPolicy(c *gin.Context, tenantID, name string) {
 	var req setPolicyReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -221,7 +227,7 @@ func writePluginPolicy(c *gin.Context, tenantID, name string) {
 
 	cur, has, err := pluginpolicy.Get(tenantID, name)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load plugin policy: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load plugin policy: "+err.Error(), "")
 		return
 	}
 	if !has {
@@ -232,13 +238,13 @@ func writePluginPolicy(c *gin.Context, tenantID, name string) {
 	}
 
 	if err := pluginpolicy.Set(tenantID, name, cur); err != nil {
-		xhttp.ErrJSON(c, "Failed to save plugin policy: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to save plugin policy: "+err.Error(), "")
 		return
 	}
 
 	eff, err := pluginpolicy.Resolve(tenantID, name)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to resolve plugin policy: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to resolve plugin policy: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -248,10 +254,11 @@ func writePluginPolicy(c *gin.Context, tenantID, name string) {
 	}, "")
 }
 
-// ===== 插件管理页（一次取全：清单 × 全局闸 × 各租户原始行 × 租户启用状态） =====
+// ===== Plugin management page (one fetch: manifest x global gates x each tenant's raw row x tenant enabled state) =====
 
-// pluginOverview 一个插件的全局视图。Blocked 是全局闸状态；
-// 不做「生效值」计算 —— 生效值取决于看哪个租户，由前端按同一套规则现算。
+// pluginOverview is the global view of one plugin. Blocked is the global gate state;
+// no "effective value" is computed - that depends on which tenant you look at, and the frontend derives it from the same
+// rules.
 type pluginOverview struct {
 	Name            string                      `json:"name"`
 	DisplayName     string                      `json:"display_name"`
@@ -261,7 +268,7 @@ type pluginOverview struct {
 	Blocked         bool                        `json:"blocked"`
 }
 
-// tenantBrief 矩阵的行头。
+// tenantBrief is the row header of the matrix.
 type tenantBrief struct {
 	Schema      string `json:"schema"`
 	DisplayName string `json:"display_name"`
@@ -270,22 +277,23 @@ type tenantBrief struct {
 
 // ListPluginOverview GET /platform/plugins
 //
-// 回四块：
+// Returns four blocks:
 //
-//	plugins   磁盘清单 + 全局闸状态（blocked）
-//	tenants   租户列表（矩阵行头）
-//	policies  各租户的**原始行**（缺 = 没设过 = 缺省开放）
-//	enabled   各租户实际启用了哪些（{schema}.plugins.is_active）
+//	plugins   disk manifest + global gate state (blocked)
+//	tenants   tenant list (matrix row header)
+//	policies  each tenant's **raw row** (absent = never set = open by default)
+//	enabled   what each tenant actually enabled ({schema}.plugins.is_active)
 //
-// 一次取全的理由：矩阵要同时看「平台给没给」和「租户开没开」，
-// 否则前端得按租户逐个请求，页面上会看到一堆先后到达的局部状态。
+// Everything in one fetch because the matrix shows "did the platform grant it" and "did the tenant turn it on" side by
+// side; otherwise the frontend would have to request tenant by tenant and the page would fill with partial states arriving
+// at different times.
 func ListPluginOverview(c *gin.Context) {
 	tools := plugininfo.Tools()
 	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 
 	gates, err := pluginpolicy.Gates()
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load plugin gates: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load plugin gates: "+err.Error(), "")
 		return
 	}
 
@@ -303,7 +311,7 @@ func ListPluginOverview(c *gin.Context) {
 
 	tenants, err := tenantsrepo.List("", "", 0, 0)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load tenants: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load tenants: "+err.Error(), "")
 		return
 	}
 
@@ -322,15 +330,15 @@ func ListPluginOverview(c *gin.Context) {
 				policies[t.Schema] = m
 			}
 		} else {
-			// 单租户读失败不拖垮整页：那一列按「继承」显示，日志里留证据
-			xlog.Error("读取租户插件策略失败 schema=%s: %v", t.Schema, rerr)
+			// One tenant's failed read must not bring down the page: that column shows "inherited" and the log keeps the evidence
+			xlog.Error("failed to read tenant plugin policy schema=%s: %v", t.Schema, rerr)
 		}
 
-		// 租户侧配置读失败（schema 还没建、表不存在）按「未启用」展示
+		// A failed read of the tenant-side config (schema not built yet, table missing) shows as "not enabled"
 		if list, lerr := pluginCfgRepo.List(&auth.AuthInfo{Schema: t.Schema}); lerr == nil {
 			m := make(map[string]bool, len(list))
 			for _, p := range list {
-				if p.Kind != pluginsrepo.KindTools { // 矩阵只画工具插件
+				if p.Kind != pluginsrepo.KindTools { // the matrix only draws tool plugins
 					continue
 				}
 				if p.IsActive {
@@ -349,16 +357,17 @@ func ListPluginOverview(c *gin.Context) {
 	}, "")
 }
 
-// mustPlugin 取路径里的插件名，并确认它确实在磁盘清单里（清单里没有的插件配了也没用）。
+// mustPlugin reads the plugin name from the path and confirms it really is in the disk manifest (configuring a plugin that
+// is not there does nothing).
 func mustPlugin(c *gin.Context) (string, bool) {
 	name := strings.TrimSpace(c.Param("name"))
 	if name == "" {
-		xhttp.ErrCode(c, "plugin.name_required", nil, "插件名为空", "")
+		xhttp.ErrCode(c, "plugin.name_required", nil, "the plugin name cannot be empty", "")
 		return "", false
 	}
 	if _, ok := plugininfo.Find(name); !ok {
 		xhttp.ErrCode(c, "plugin.not_found", gin.H{"name": name},
-			fmt.Sprintf("插件 %s 不在磁盘清单里（先放进 plugins/tools/%s/ 再刷新）", name, name), "")
+			fmt.Sprintf("plugin %s is not in the disk manifest (put it in plugins/tools/%s/ and refresh)", name, name), "")
 		return "", false
 	}
 	return name, true

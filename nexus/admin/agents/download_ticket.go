@@ -21,18 +21,18 @@ import (
 )
 
 // ============================================================================
-// 工作区文件下载票
+// Workspace file download ticket.
 //
-// 浏览器的「下载」是导航行为（window.location），带不了 Authorization 头。
-// 让 JWT 进 URL 会留在 nginx access log / 浏览器历史 / Referer 里，所以这里换一张
-// 短时（60s）、绑定 tenant + agent + session + path 的 HMAC 票：
-//   - 无状态，不落库，多实例部署天然一致；
-//   - 签名密钥复用 jwt.secret_key（多实例必须一致，否则验签随机失败）。
+// A browser download is a navigation (window.location) and cannot carry an Authorization header.
+// Putting the JWT in the URL would leave it in nginx access logs, browser history and Referer, so this
+// uses a short-lived (60s) HMAC ticket bound to tenant + agent + session + path instead:
+//   - stateless and never stored, so any number of instances agree by construction;
+//   - the signing key reuses jwt.secret_key (it must match across instances, or verification fails at random).
 // ============================================================================
 
 const downloadTicketTTL = 60 * time.Second
 
-// DownloadTicket 票据内容：签进 HMAC 的就是这几个字段，改任何一个都会验签失败。
+// DownloadTicket is the ticket payload: exactly these fields are signed, so changing any one fails verification.
 type DownloadTicket struct {
 	Schema    string
 	AgentID   string
@@ -61,8 +61,8 @@ func ticketValid(t DownloadTicket, sig string) bool {
 	return hmac.Equal([]byte(ticketSignature(t)), []byte(sig))
 }
 
-// CreateDownloadTicket 给「下载」按钮签票（需要登录态）。
-// 返回 schema / path / exp / sig，前端自己拼成 URL 再 window.location 导航。
+// CreateDownloadTicket signs a ticket for the download button (requires a session).
+// It returns schema / path / exp / sig; the front end assembles the URL and navigates with window.location.
 func CreateDownloadTicket(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -73,7 +73,7 @@ func CreateDownloadTicket(c *gin.Context) {
 
 	inst, err := repo.GetAgent(info, c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get the agent: "+err.Error(), "")
 		return
 	}
 	if inst == nil {
@@ -90,31 +90,31 @@ func CreateDownloadTicket(c *gin.Context) {
 		return
 	}
 
-	// 签票是登录态动作，按「会话归属用户」收口：
-	// 票据一旦签出，/filedl 那条无认证的路就只认签名了。
+	// Signing is an authenticated action, scoped by the session's owning user:
+	// once a ticket exists, the unauthenticated /filedl route trusts the signature alone.
 	sess, lerr := lookupSessionForUser(info, info.Schema, body.SessionID)
 	if lerr != nil {
 		respondSessionErr(c, lerr, notOwnedSession)
 		return
 	}
-	// 会话目录按 user 组织，没有归属用户就没有可签的路径
+	// Session directories are organised per user, so a session without an owner has no path to sign.
 	if sess.UserID == "" {
-		xhttp.ErrJSON(c, notOwnedSession, nil, "")
+		xhttp.ErrCode(c, "session.not_found", nil, notOwnedSession, "")
 		return
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 	wsKey := paths.UserSessionKey(info.Schema, sess.UserID, sess.ID)
 	abs, clean, jerr := joinKey(wsKey, body.Path)
 	if jerr != nil || clean == "" {
-		xhttp.ErrJSON(c, "invalid path", nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, "invalid path", "")
 		return
 	}
-	// 签票前先确认文件存在：否则用户拿到票、点了才发现 404
+	// Confirm the file exists before signing, or the user gets a ticket and only finds a 404 after clicking.
 	if _, _, statErr := st.Stat(context.Background(), abs); statErr != nil {
 		xhttp.ErrCode(c, "agent.file_not_found", nil, "file not found", "")
 		return
@@ -135,8 +135,8 @@ func CreateDownloadTicket(c *gin.Context) {
 	}, "")
 }
 
-// DownloadByTicket 导航式下载入口：没有 Authorization 头，靠 URL 里的签名鉴权。
-// 路由必须注册在认证中间件之前（见 admin.SetupRoutes）。
+// DownloadByTicket is the navigation-style download: no Authorization header, authenticated by the signature in the URL.
+// The route must be registered before the auth middleware (see admin.SetupRoutes).
 func DownloadByTicket(c *gin.Context) {
 	exp, _ := strconv.ParseInt(c.Query("exp"), 10, 64)
 	t := DownloadTicket{
@@ -151,7 +151,7 @@ func DownloadByTicket(c *gin.Context) {
 		return
 	}
 
-	// 票据里带了 schema：伪造 AuthInfo 让仓储层照常按租户查（没有登录态可用）
+	// The ticket carries the schema: a forged AuthInfo lets the repository query by tenant as usual (no session here).
 	inst, err := repo.GetAgent(&auth.AuthInfo{Schema: t.Schema}, t.AgentID)
 	if err != nil || inst == nil {
 		c.String(http.StatusNotFound, "agent not found")
@@ -171,7 +171,7 @@ func DownloadByTicket(c *gin.Context) {
 	}
 	wsKey := paths.UserSessionKey(t.Schema, sess.UserID, sess.ID)
 	abs, clean, jerr := joinKey(wsKey, t.Path)
-	if jerr != nil || clean != t.Path { // clean != 票据里的 path：说明路径被规整过，拒绝
+	if jerr != nil || clean != t.Path { // clean != the ticket path means the path was normalised, reject it
 		c.String(http.StatusBadRequest, "invalid path")
 		return
 	}

@@ -15,17 +15,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 市场列表分页：一次最多 200 条，默认 50。
+// Marketplace pagination: at most 200 items at a time, 50 by default.
 //
-// 用「加载更多」而不是页码：顺序按 updated_at DESC，用户对「第 3 页是什么」没有预期，
-// 页码只会让「找不到」变成「翻着找」。远端市场不做分页（对端目录是整包缓存，
-// 分也省不了传输），那边用条数上限 + 搜索收敛。
+// It uses "load more" rather than page numbers: the order is updated_at DESC, users have no expectation of
+// "what page 3 is", and page numbers only turn "cannot find it" into "keeps paging". The remote market is
+// not paginated (a peer catalog is cached whole, so paging saves no transfer); there a cap plus search narrows it down.
 const (
 	marketPageDefault = 50
 	marketPageMax     = 200
 )
 
-// queryInt 读 ?limit/?offset 这类整数参数：没传用默认值，非法也回默认，越界夹到区间。
+// queryInt reads integer parameters such as ?limit / ?offset: the default when absent, the default when invalid, and clamped to the range when out of bounds.
 func queryInt(c *gin.Context, key string, def, lo, hi int) int {
 	raw := strings.TrimSpace(c.Query(key))
 	if raw == "" {
@@ -44,10 +44,10 @@ func queryInt(c *gin.Context, key string, def, lo, hi int) int {
 	return n
 }
 
-// ListAssets 可安装列表：只列已通过审核、且对本租户可见的资产。
+// ListAssets is the installable list: only assets that passed review and are visible to this tenant.
 //
-// 可见性收在 sharedassets.List 的 VisibleTo 里（EXISTS 子查询）：allowlist 模式下
-// 「没有白名单行」必须等于「不可见」，写在 SQL 里才不会因为上层忘了判而漏出去。
+// Visibility lives in VisibleTo of sharedassets.List (an EXISTS subquery): in allowlist mode
+// "no allowlist row" must mean "not visible", and keeping that in SQL stops it leaking when a caller forgets to check.
 func ListAssets(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -63,16 +63,16 @@ func ListAssets(c *gin.Context) {
 		OriginServer: originServer,
 		OriginLocal:  originLocal,
 	}
-	// Count 不拼 LIMIT：拿到的才是「筛选后的全量」，前端据此判断还有没有下一页
+	// Count applies no LIMIT, so it returns the full filtered set and the front end can tell whether another page exists
 	total, err := sharedassets.Count(f)
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("count assets", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("count assets", err), "")
 		return
 	}
 	f.Limit, f.Offset = limit, offset
 	list, err := sharedassets.List(f)
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("query assets", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("query assets", err), "")
 		return
 	}
 
@@ -87,15 +87,15 @@ func ListAssets(c *gin.Context) {
 		items = append(items, v)
 	}
 
-	// 来源下拉的数据：忽略 origin 条件（其余条件照旧），筛了某个来源时其它选项不会消失
+	// Data for the origin dropdown: the origin condition is ignored (the rest apply), so filtering one origin does not make the other options disappear
 	counts, cerr := sharedassets.CountByOrigin(f)
 	if cerr != nil {
-		xhttp.ErrJSON(c, assetErrMsg("count origins", cerr), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("count origins", cerr), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
 		"items":    items,
-		"total":    total, // 筛选后的总数，不是本页条数
+		"total":    total, // total after filtering, not the number of items on this page
 		"limit":    limit,
 		"offset":   offset,
 		"has_more": offset+len(items) < total,
@@ -103,9 +103,9 @@ func ListAssets(c *gin.Context) {
 	}, "")
 }
 
-// originFilter 把 ?origin= 翻译成过滤条件：
+// originFilter turns ?origin= into filter conditions:
 //
-//	留空 = 全部来源；local = 只看本机上架；其它值 = 只看该对端站点导入的。
+//	empty = every origin; local = only what was listed here; anything else = only what that peer site imported.
 func originFilter(raw string) (originServer string, originLocal bool) {
 	v := strings.TrimSpace(raw)
 	if v == "" {
@@ -117,13 +117,13 @@ func originFilter(raw string) (originServer string, originLocal bool) {
 	return v, false
 }
 
-// originOptions 来源下拉选项：本机排第一，其余按名字排（条数来自 CountByOrigin）。
+// originOptions builds the origin dropdown: this machine first, the rest by name (counts come from CountByOrigin).
 func originOptions(counts map[string]int) []gin.H {
 	out := make([]gin.H, 0, len(counts))
 	for server, n := range counts {
 		label := server
 		if server == "" {
-			label = "本机上架"
+			label = "listed here"
 		}
 		out = append(out, gin.H{"server": server, "label": label, "count": n})
 	}
@@ -131,22 +131,22 @@ func originOptions(counts map[string]int) []gin.H {
 		si, _ := out[i]["server"].(string)
 		sj, _ := out[j]["server"].(string)
 		if (si == "") != (sj == "") {
-			return si == "" // 本机永远在最前
+			return si == "" // this machine always comes first
 		}
 		return si < sj
 	})
 	return out
 }
 
-// errAssetNotFound 资产不存在。
+// errAssetNotFound reports a missing asset.
 //
-// error 编码供前端翻译；params.id 只用于定位，不进翻译模板。
-// msg 仍是中文原文 —— 日志、curl 与未升级的调用方看到的和以前一样。
+// The error code is for the front end to translate; params.id only locates the asset and never enters a template.
+// msg is the plain fallback text - logs, curl and callers that have not upgraded still read it.
 func errAssetNotFound(c *gin.Context, id string) {
-	xhttp.ErrCode(c, "asset.not_found", map[string]any{"id": id}, "资产不存在", "")
+	xhttp.ErrCode(c, "asset.not_found", map[string]any{"id": id}, "asset not found", "")
 }
 
-// GetAsset 资产详情（可安装范围）；含文件清单与依赖，供安装前确认。
+// GetAsset returns asset detail (within the installable scope), with the file list and dependencies for a pre-install check.
 func GetAsset(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -154,7 +154,7 @@ func GetAsset(c *gin.Context) {
 	}
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("query asset", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("query asset", err), "")
 		return
 	}
 	if a == nil {
@@ -163,16 +163,16 @@ func GetAsset(c *gin.Context) {
 	}
 	visible, verr := sharedassets.VisibleTo(a, info.Schema)
 	if verr != nil {
-		xhttp.ErrJSON(c, "check visibility: "+verr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "check visibility: "+verr.Error(), "")
 		return
 	}
-	// 自己的（哪怕是草稿）能看，别人的必须已审核且可见。
-	// 「自己」= 本机原创 + 本租户 schema：导入行的 source_schema 也可能与本机同名（对方也叫 t0），
-	// 不能只凭 schema 就当成自己的 —— 否则草稿态的导入行能被本租户看到。
+	// Your own asset (even a draft) is visible; someone else's must be listed and visible.
+	// "Own" = created here plus this tenant's schema: an imported row's source_schema can also match this machine's name (the other site is t0 too),
+	// so the schema alone does not make it yours - otherwise a draft imported row would be visible to this tenant.
 	mine := a.SourceSchema == info.Schema && a.OriginServer == ""
 	if !mine && (!visible || a.Status != sharedassets.StatusListed) {
 		xhttp.ErrCode(c, "asset.not_available", map[string]any{"id": a.ID},
-			"该资产未对你所在的租户开放", "")
+			"this asset is not open to your tenant", "")
 		return
 	}
 
@@ -188,11 +188,11 @@ func GetAsset(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"asset": view}, "")
 }
 
-// ListMine 我上架的（含草稿 / 待审 / 被驳回），带驳回原因。
+// ListMine lists what this tenant has listed (drafts / pending / rejected included), with rejection notes.
 //
-// OriginLocal 必须带上：导入行的 source_schema 记的是**对方那台机器上的租户**，
-// 与本机同名 schema（都是 t0）撞上时，从别的站导入的资产会被当成「我上架的」列出来，
-// 界面上显示成「我上架的东西，来源却是 aaa 站」。
+// OriginLocal is required: an imported row's source_schema records **the tenant on the other machine**,
+// so when it matches a local schema name (both are t0) assets imported from another site would be listed as "mine",
+// showing up as "something I listed, yet the origin says site aaa".
 func ListMine(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -200,7 +200,7 @@ func ListMine(c *gin.Context) {
 	}
 	list, err := sharedassets.List(sharedassets.Filter{SourceSchema: info.Schema, OriginLocal: true})
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("query assets", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("query assets", err), "")
 		return
 	}
 	items := make([]gin.H, 0, len(list))
@@ -212,10 +212,10 @@ func ListMine(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"items": items, "total": len(items)}, "")
 }
 
-// Withdraw 撤开上架：pending → draft（等改完再交）；draft → 直接删除（含快照目录）。
+// Withdraw takes a listing back: pending -> draft (resubmit once edited); draft -> deleted outright (snapshot directory included).
 //
-// 已通过的资产不允许自己撤下 —— 装出去的那些实体已经与快照无关，撤下只会让
-// 「谁装过」的记录悬空，真要下架走平台侧 delisted。
+// A listed asset cannot be withdrawn by its author - installed entities no longer depend on the snapshot, so withdrawing
+// would only orphan the "who installed it" records; to take it off the market use delist on the platform side.
 func Withdraw(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -223,47 +223,47 @@ func Withdraw(c *gin.Context) {
 	}
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("query asset", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("query asset", err), "")
 		return
 	}
 	if a == nil {
 		errAssetNotFound(c, c.Param("id"))
 		return
 	}
-	// 导入行不是「我上架的」：source_schema 只是对方那台机器上的租户名，与本机撞名是巧合
+	// An imported row is not "mine": its source_schema is just the tenant name on the other machine, and a local match is a coincidence
 	if a.SourceSchema != info.Schema || a.OriginServer != "" {
-		xhttp.ErrCode(c, "asset.not_owner", map[string]any{"id": a.ID}, "只能撤回本租户上架的资产", "")
+		xhttp.ErrCode(c, "asset.not_owner", map[string]any{"id": a.ID}, "only assets listed by this tenant can be withdrawn", "")
 		return
 	}
 
 	switch a.Status {
 	case sharedassets.StatusPending:
 		if err := sharedassets.SetStatus(a.ID, sharedassets.StatusDraft); err != nil {
-			xhttp.ErrJSON(c, assetErrMsg("withdraw", err), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("withdraw", err), "")
 			return
 		}
 		xhttp.OkJSON(c, "Success", gin.H{"status": sharedassets.StatusDraft}, "")
 	case sharedassets.StatusDraft:
 		if err := sharedassets.Delete(a.ID); err != nil {
-			xhttp.ErrJSON(c, assetErrMsg("delete asset", err), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("delete asset", err), "")
 			return
 		}
-		// 行删掉了再删文件：反过来的话行还在、内容却没了，审核页会展示一个空资产
+		// Delete the row first, then the files: the other way round leaves a row with no content, and the review page shows an empty asset
 		if st, serr := getStorage(); serr == nil {
 			_ = st.DeletePrefix(context.Background(), paths.PlatformAssetsSubdir+"/"+a.ID)
 		}
 		xhttp.OkJSON(c, "Success", gin.H{"deleted": true}, "")
 	default:
 		xhttp.ErrCode(c, "asset.invalid_status", map[string]any{"id": a.ID, "status": a.Status},
-			"当前状态（"+a.Status+"）不能撤回：已通过审核的资产由平台下架", "")
+			"the current status ("+a.Status+") cannot be withdrawn: a listed asset is delisted by the platform", "")
 	}
 }
 
-// DeleteMine DELETE /admin/share/mine/:id —— 删掉自己的一条上架（行 + 快照目录）。
+// DeleteMine DELETE /admin/share/mine/:id - deletes one of your own listings (row + snapshot directory).
 //
-// 与 Withdraw 的区别：Withdraw 是「撤回流转」（pending → draft，draft → 删除），
-// 这里是「直接清掉」，草稿/待审/被驳回/已下架的都能删，省掉两步。
-// listed 一律拒绝：它已经装到别人那里去过，删除会让安装记录悬空，先让平台下架。
+// The difference from Withdraw: Withdraw moves the state (pending -> draft, draft -> deleted),
+// while this clears it directly, so drafts / pending / rejected / delisted can all go in one step.
+// listed is always refused: it may already be installed elsewhere, and deleting it would orphan those install records; delist it on the platform first.
 func DeleteMine(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -271,7 +271,7 @@ func DeleteMine(c *gin.Context) {
 	}
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("query asset", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("query asset", err), "")
 		return
 	}
 	if a == nil {
@@ -279,30 +279,30 @@ func DeleteMine(c *gin.Context) {
 		return
 	}
 	if a.SourceSchema != info.Schema || a.OriginServer != "" {
-		xhttp.ErrCode(c, "asset.not_owner", map[string]any{"id": a.ID}, "只能删除本租户上架的资产", "")
+		xhttp.ErrCode(c, "asset.not_owner", map[string]any{"id": a.ID}, "only assets listed by this tenant can be deleted", "")
 		return
 	}
 	if a.Status == sharedassets.StatusListed {
 		xhttp.ErrCode(c, "asset.invalid_status", map[string]any{"id": a.ID, "status": a.Status},
-			"已通过审核的资产不能直接删除：它可能已经被别的租户装走，"+
-				"请先让平台下架（delisted），再回来删除", "")
+			"a listed asset cannot be deleted directly: another tenant may already have installed it; "+
+				"delist it on the platform first, then come back and delete", "")
 		return
 	}
 	if err := sharedassets.Delete(a.ID); err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("delete asset", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("delete asset", err), "")
 		return
 	}
-	// 行删掉了再删文件：反过来的话行还在、内容却没了，审核页会展示一个空资产
+	// Delete the row first, then the files: the other way round leaves a row with no content, and the review page shows an empty asset
 	if st, serr := getStorage(); serr == nil {
 		_ = st.DeletePrefix(context.Background(), paths.PlatformAssetsSubdir+"/"+a.ID)
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": true}, "")
 }
 
-// ClearMine DELETE /admin/share/mine —— 清空本租户所有「未通过审核」的上架。
+// ClearMine DELETE /admin/share/mine - clears every unlisted listing of this tenant.
 //
-// 保留 listed：那些资产可能已经被别的租户安装，删掉会让他们的安装记录悬空。
-// 返回删了几条，界面据此提示「已清空 N 条（已通过的 N 条保留）」。
+// listed is kept: other tenants may have installed those assets, and deleting them would orphan their records.
+// It returns how many were deleted, so the UI can say "cleared N (N listed ones kept)".
 func ClearMine(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -310,10 +310,10 @@ func ClearMine(c *gin.Context) {
 	}
 	ids, err := sharedassets.DeleteMineUnlisted(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("clear mine", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("clear mine", err), "")
 		return
 	}
-	// 行删掉之后再清快照目录（顺序与 DeleteMine 一致）
+	// Clear the snapshot directories after the rows (same order as DeleteMine)
 	if st, serr := getStorage(); serr == nil {
 		ctx := context.Background()
 		for _, id := range ids {
@@ -323,7 +323,7 @@ func ClearMine(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": len(ids)}, "")
 }
 
-// ListInstalls 本租户的安装记录（谁、从哪个快照、装成了什么名字）。
+// ListInstalls lists this tenant's install records (who, from which snapshot, under what name).
 func ListInstalls(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -331,7 +331,7 @@ func ListInstalls(c *gin.Context) {
 	}
 	list, err := sharedassets.InstallsBy(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, assetErrMsg("query installs", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, assetErrMsg("query installs", err), "")
 		return
 	}
 	items := make([]gin.H, 0, len(list))

@@ -13,30 +13,30 @@ import (
 	"flame/tools/xlog"
 )
 
-// CleanupSnapshots 启动时清扫平台资产快照目录（一次）。收两类垃圾：
+// CleanupSnapshots sweeps the platform asset snapshot directories at startup (once). It collects this litter:
 //
-//   - 表里没有的资产目录：导入/上架写了一半崩掉，或行已删但 DeletePrefix 失败留下的孤儿；
-//   - 超出保留窗口的旧快照；
-//   - 比当前快照还新、且超过 snapshotPendingTTL 没有任何写入的残留快照
-//     （写完文件、行没提交成功；刚写完的不动 —— 那可能正是别的实例在发布）。
+//   - asset directories with no row: left by an import / listing that crashed halfway, or by a deleted row whose DeletePrefix failed;
+//   - snapshots older than the retention window;
+//   - snapshots newer than the current one with no write for longer than snapshotPendingTTL
+//     (files written, row never committed; freshly written ones are left alone - another instance may be publishing right now).
 //
-// 只在启动跑：运行期由 assetpack.PruneOldBuilds 精确删除。全盘扫描会与正在进行的上架
-// 抢同一个目录 —— 那时「行还没指向新快照、目录已经在写」是正常状态，扫描会误判成孤儿。
+// It runs at startup only: at run time assetpack.PruneOldBuilds deletes precisely. A full sweep would race a
+// listing in progress - "the row does not point at the new snapshot yet, the directory is already being written" is normal then, and a sweep would misread it as an orphan.
 //
-// 多实例共享同一存储时，最后一条是必须的：同一时刻可能有另一个实例正在发布，
-// 它的新快照目录此刻「比库里当前 build 还新」但并不属于残留。
+// When several instances share one storage the last rule is essential: another instance may be publishing at this
+// very moment, and its new snapshot directory is "newer than the current build in the database" without being litter.
 const snapshotPendingTTL = time.Hour
 
 func CleanupSnapshots() {
 	st, err := getStorage()
 	if err != nil {
-		xlog.Error("清理资产快照失败（存储未就绪）: %v", err)
+		xlog.Error("failed to clean asset snapshots (storage not ready): %v", err)
 		return
 	}
-	// 空条件 = 全部状态：草稿与已下架也有当前快照，不能只按 listed 判
+	// An empty filter = every status: drafts and delisted assets have a current snapshot too, so listed alone will not do
 	assets, lerr := sharedassets.List(sharedassets.Filter{})
 	if lerr != nil {
-		xlog.Error("清理资产快照失败（列举资产）: %v", lerr)
+		xlog.Error("failed to clean asset snapshots (listing assets): %v", lerr)
 		return
 	}
 	current := make(map[string]int, len(assets))
@@ -44,14 +44,14 @@ func CleanupSnapshots() {
 		current[a.ID] = a.Build
 	}
 	orphans, builds := cleanupSnapshotDirs(context.Background(), st, current)
-	xlog.Info("资产快照清理完成：孤儿目录 %d 个、旧快照 %d 个", orphans, builds)
+	xlog.Info("asset snapshot cleanup done: %d orphan directories, %d old snapshots", orphans, builds)
 }
 
-// cleanupSnapshotDirs 是 CleanupSnapshots 的纯存储部分（不碰 DB，便于单测）。
+// cleanupSnapshotDirs is the storage-only part of CleanupSnapshots (no DB access, so it is easy to unit test).
 func cleanupSnapshotDirs(ctx context.Context, st storage.Storage, current map[string]int) (orphans, builds int) {
 	ids, derr := st.List(ctx, paths.PlatformAssetsSubdir)
 	if derr != nil {
-		// 全新部署没有这个目录；S3 上列举一个不存在的「目录」也可能报错，都按「没有」处理
+		// A fresh deployment has no such directory, and listing a missing "directory" on S3 can error too; both count as empty
 		return 0, 0
 	}
 	for _, id := range ids {
@@ -62,7 +62,7 @@ func cleanupSnapshotDirs(ctx context.Context, st storage.Storage, current map[st
 		cur, known := current[id.Name]
 		if !known {
 			if err := st.DeletePrefix(ctx, dir); err != nil {
-				xlog.Error("删除孤儿快照失败 %s: %v", dir, err)
+				xlog.Error("failed to delete orphan snapshot %s: %v", dir, err)
 				continue
 			}
 			orphans++
@@ -78,25 +78,25 @@ func cleanupSnapshotDirs(ctx context.Context, st storage.Storage, current map[st
 			}
 			n, aerr := strconv.Atoi(v.Name)
 			if aerr != nil {
-				continue // 不是快照目录（例如人工放的东西），不猜
+				continue // not a snapshot directory (something placed by hand, say); do not guess
 			}
 			p := path.Join(dir, v.Name)
 			switch {
 			case n <= cur-assetpack.BuildsKept:
-				// 掉出保留窗口的旧快照：确定没有读者（安装/导出只读当前快照），直接删。
+				// A snapshot that fell out of the retention window: certainly unread (install / export read the current snapshot only), so delete it.
 			case n > cur:
-				// 比库里当前 build 还新：可能是「写完文件、行没提交成功」的残留，
-				// 也可能是**别的实例正在发布**（目录已写、行还没提交，属正常瞬时状态）。
-				// 目录本身区分不了两者，只能靠时间：超过 snapshotPendingTTL 无写入才算残留。
+				// Newer than the current build in the database: it may be litter from "files written, row never committed",
+				// or **another instance publishing right now** (directory written, row not committed - a normal transient state).
+				// The directory alone cannot tell them apart, so time decides: litter only if nothing was written for snapshotPendingTTL.
 				ts, ok := storage.LastActivity(ctx, st, p, v)
 				if !ok || time.Since(ts) < snapshotPendingTTL {
 					continue
 				}
 			default:
-				continue // 仍在保留窗口内
+				continue // still inside the retention window
 			}
 			if err := st.DeletePrefix(ctx, p); err != nil {
-				xlog.Error("删除快照目录失败 %s: %v", p, err)
+				xlog.Error("failed to delete snapshot directory %s: %v", p, err)
 				continue
 			}
 			builds++

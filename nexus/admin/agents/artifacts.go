@@ -12,34 +12,39 @@ import (
 )
 
 // ============================================================================
-// 本轮产物（artifacts）
+// Artifacts produced by the current turn
 //
-// 定位：只报「这一轮改过工作区里的哪些文件」这个客观事实，不做价值判断。
-// 价值判断（哪些是交付物）留给前端筛选或后续的模型回报，顺序不能反。
+// Scope: report the objective fact of "which workspace files this turn touched",
+// and make no value judgement. Deciding which of them are deliverables belongs
+// to frontend filtering or to a later model report - the order cannot be flipped.
 //
-// 为什么用「扫目录」而不是让每个工具上报：
-//   - exec / code 节点里 `python gen.py > out.csv` 这类写文件的路径是隐式的，
-//     工具入参里根本没有 —— 只有扫目录才看得见；
-//   - 工作区是唯一产物落点，扫一次即可覆盖全部来源；
-//   - 沙箱侧上报要改 codehost 与三条 mode 链路，成本远大于收益。
+// Why scan the directory instead of letting every tool report its writes:
+//   - write paths such as `python gen.py > out.csv` inside exec / code nodes are
+//     implicit and never appear in the tool arguments - only a scan sees them;
+//   - the workspace is the single landing zone for artifacts, so one scan covers
+//     every source;
+//   - reporting from the sandbox side would mean touching codehost and three mode
+//     chains, far more cost than benefit.
 //
-// 代价是每轮一次 LIST。为了不让「会话目录被塞满」时把一次对话变成几十次 LIST，
-// 这里沿用了「最近文件」的收敛策略：只扫根 + 一层子目录，条数封顶，跳过依赖目录。
+// The price is one LIST per turn. To keep a packed session directory from turning
+// a single reply into dozens of LISTs, this reuses the "recent files" convergence
+// policy: scan the root plus one level, cap the entry count, skip dependency dirs.
 // ============================================================================
 
 const (
-	// maxArtifactScanEntries 单次扫描最多看多少条（与 maxRecentScanEntries 同量级）。
+	// maxArtifactScanEntries bounds a single scan (same order of magnitude as maxRecentScanEntries).
 	maxArtifactScanEntries = 300
-	// maxRunArtifacts 随 RUN_FINISHED 下发的产物上限：前端是「本轮产出」区域，
-	// 不是文件管理器，超出部分让用户去工作区看。
+	// maxRunArtifacts caps the artifacts sent with RUN_FINISHED: the frontend area is
+	// "what this turn produced", not a file manager, so the rest is left to the workspace.
 	maxRunArtifacts = 50
-	// artifactClockSkew 时间前移窗口。文件在 RUN_STARTED 之前几毫秒写入、
-	// 或文件系统时间精度粗（S3 按秒）时，阈值卡死会漏掉。
+	// artifactClockSkew is the backwards window. Files written a few milliseconds before
+	// RUN_STARTED, or coarse filesystem timestamps (S3 is second-granular), would be
+	// missed by a hard threshold.
 	artifactClockSkew = 2 * time.Second
 )
 
-// artifactSkipDirs 即使被改动也不算产物：依赖 / 缓存 / VCS 目录。
-// 名字按「目录名」匹配（不看层级），命中即整棵跳过。
+// artifactSkipDirs are never artifacts even when modified: dependency / cache / VCS dirs.
+// Names match by directory name (level is ignored); a hit skips the whole subtree.
 var artifactSkipDirs = map[string]struct{}{
 	"node_modules":  {},
 	"__pycache__":   {},
@@ -55,21 +60,23 @@ var artifactSkipDirs = map[string]struct{}{
 	".ruff_cache":   {},
 }
 
-// Artifact 本轮运行在工作区里写过的一个文件。
+// Artifact is one file this run wrote inside the workspace.
 type Artifact struct {
-	Path    string    `json:"path"`     // 工作区相对路径（前端直接拿去开标签）
+	Path    string    `json:"path"`     // workspace-relative path (the frontend opens it directly)
 	Name    string    `json:"name"`     //
 	Size    int64     `json:"size"`     //
-	ModTime time.Time `json:"mod_time"` // 最后一次写入时间
-	Action  string    `json:"action"`   // 当前恒为 modified：只报「写过」，不区分新建/覆盖
+	ModTime time.Time `json:"mod_time"` // last write time
+	Action  string    `json:"action"`   // always modified: only "written" is reported, create and overwrite are not distinguished
 }
 
-// runArtifacts 收集某一轮对话产生的产物。失败一律返回空切片：
-// 产物是锦上添花，不能因为它让一轮已经成功的对话返回错误。
+// runArtifacts collects the artifacts of one turn. It always returns an empty slice on
+// failure: artifacts are a bonus, and must never turn an otherwise successful turn into
+// an error.
 //
-// since 取 RUN_STARTED 的时刻；sessionID 为空（理论上不会）时直接返回空。
+// since is the RUN_STARTED timestamp; an empty sessionID (which should not happen)
+// returns empty right away.
 func runArtifacts(schema, userID, sessionID string, since time.Time) []Artifact {
-	// 返回空切片而不是 nil：JSON 序列化成 []，前端不必为 null 单独兜底。
+	// An empty slice rather than nil: it serialises to [], so the frontend needs no null path.
 	if sessionID == "" || userID == "" {
 		return []Artifact{}
 	}
@@ -81,8 +88,8 @@ func runArtifacts(schema, userID, sessionID string, since time.Time) []Artifact 
 	return scanArtifacts(context.Background(), st, wsKey, since, maxRunArtifacts)
 }
 
-// scanArtifacts 扫描工作区里 mod_time >= since 的文件。
-// 与 RecentSessionFiles 同一套收敛策略（根 + 一层，条数封顶）。
+// scanArtifacts scans the workspace for files with mod_time >= since.
+// It uses the same convergence policy as RecentSessionFiles (root plus one level, capped count).
 func scanArtifacts(ctx context.Context, st storage.Storage, wsKey string, since time.Time, limit int) []Artifact {
 	if limit <= 0 {
 		limit = maxRunArtifacts
@@ -99,13 +106,13 @@ func scanArtifacts(ctx context.Context, st storage.Storage, wsKey string, since 
 		}
 		entries, lerr := st.List(ctx, dir)
 		if lerr != nil {
-			return // 目录不存在 / 读失败：这一层当作空
+			return // missing directory / read failure: treat this level as empty
 		}
 		for _, e := range entries {
 			if len(out) >= limit || scanned >= maxArtifactScanEntries {
 				return
 			}
-			if strings.HasPrefix(e.Name, ".") { // 隐藏文件（含 .keep 占位）不是产物
+			if strings.HasPrefix(e.Name, ".") { // hidden files (including .keep placeholders) are not artifacts
 				continue
 			}
 			scanned++
@@ -118,8 +125,9 @@ func scanArtifacts(ctx context.Context, st storage.Storage, wsKey string, since 
 				}
 				continue
 			}
-			// 零值时间只出现在 S3 的 CommonPrefixes（目录），对象本身都有 LastModified；
-			// 真遇到零值宁可漏报也不误报 —— 否则每次都会把历史文件全列一遍。
+			// A zero time only shows up for S3 CommonPrefixes (directories); every object has
+			// LastModified. When it does happen, under-reporting beats over-reporting - otherwise
+			// every turn would list the whole history again.
 			if e.ModTime.IsZero() || e.ModTime.Before(threshold) {
 				continue
 			}
@@ -134,7 +142,7 @@ func scanArtifacts(ctx context.Context, st storage.Storage, wsKey string, since 
 	}
 	collect(wsKey, "", 0)
 
-	// 最近写过的排前面；同一秒写入时按路径排，保证顺序稳定（前端展示不跳）
+	// Newest first; ties on the same second fall back to path so the order is stable (no jumping UI)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].ModTime.Equal(out[j].ModTime) {
 			return out[i].Path < out[j].Path

@@ -26,7 +26,7 @@ func ListFlowVersions(c *gin.Context) {
 
 	list, err := repo.ListFlowVersions(ai, c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"versions": list}, "")
@@ -60,7 +60,7 @@ func ReleaseFlowVersion(c *gin.Context) {
 			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", v, "")
@@ -81,7 +81,7 @@ func RollbackFlowVersion(c *gin.Context) {
 
 	target, err := strconv.Atoi(c.Param("version"))
 	if err != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
@@ -91,7 +91,7 @@ func RollbackFlowVersion(c *gin.Context) {
 			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", v, "")
@@ -113,7 +113,7 @@ func ApplyFlowVersion(c *gin.Context) {
 
 	target, err := strconv.Atoi(c.Param("version"))
 	if err != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
@@ -122,7 +122,7 @@ func ApplyFlowVersion(c *gin.Context) {
 			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
@@ -144,7 +144,7 @@ func DeleteFlowVersion(c *gin.Context) {
 
 	target, err := strconv.Atoi(c.Param("version"))
 	if err != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
@@ -155,10 +155,10 @@ func DeleteFlowVersion(c *gin.Context) {
 		}
 		if errors.Is(err, repository.ErrCannotDeleteCurrentVersion) {
 			// The text is passed through as is: it is guidance for a human (roll back first), not a 400 parameter error.
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")

@@ -13,17 +13,17 @@ import (
 )
 
 // ============================================================================
-// 智能体运行参数（platform.agent_configs 的租户行）
+// Agent run limits (the tenant rows of platform.agent_configs).
 //
-// 与工作流运行参数（admin/flowconfigs）唯一的差别：**没有 -1（不限制）**。
-// 这四个字段都是安全阀而不是配额 —— max_iterations = -1 等于取消防死循环，
-// 所以校验口径是「只能是 >= 1 的整数」，而不是 flow 那边的「-1 或非负」。
-// 上限校验（不得超过系统级）与 flow 完全一致。
+// The one difference from the flow limits (admin/flowconfigs): **there is no -1 (unlimited)**.
+// All four are safety valves rather than quotas - max_iterations = -1 would disable the loop guard,
+// so the rule is "an integer >= 1", not the flow side's "-1 or non-negative".
+// The upper-bound check (never above the system value) matches flows exactly.
 // ============================================================================
 
 var repo = agentconfigrepo.NewRepository()
 
-// nullable 将 sql.NullInt32 转为 interface{}（Valid 时返回数值，否则返回 nil）
+// nullable turns a sql.NullInt32 into an interface{} (the number when Valid, nil otherwise).
 func nullable(v sql.NullInt32) interface{} {
 	if v.Valid {
 		return v.Int32
@@ -31,7 +31,7 @@ func nullable(v sql.NullInt32) interface{} {
 	return nil
 }
 
-// toJSON 将一行配置转为 JSON 友好 map（NULL 字段为 null）
+// toJSON renders a config row as a JSON-friendly map (NULL columns become null).
 func toJSON(cfg *agentconfigrepo.AgentConfig) gin.H {
 	if cfg == nil {
 		return gin.H{}
@@ -44,7 +44,7 @@ func toJSON(cfg *agentconfigrepo.AgentConfig) gin.H {
 	}
 }
 
-// GetAgentConfigs 返回系统级配置 + 当前租户配置（系统级作为参考展示）
+// GetAgentConfigs returns the system-wide config plus the current tenant's (the system one is shown for reference).
 func GetAgentConfigs(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -55,12 +55,12 @@ func GetAgentConfigs(c *gin.Context) {
 
 	sysCfg, err := repo.Get("")
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load system config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load system config: "+err.Error(), "")
 		return
 	}
 	tenantCfg, err := repo.Get(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load tenant config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load tenant config: "+err.Error(), "")
 		return
 	}
 
@@ -68,7 +68,7 @@ func GetAgentConfigs(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{
 		"system": toJSON(sysCfg),
 		"tenant": toJSON(tenantCfg),
-		// fallback 让界面能提示「留空会退到哪」，与平台侧系统设置页同一口径
+		// fallback lets the UI say where an empty field falls back to, matching the platform system settings page.
 		"fallback": gin.H{
 			"max_iterations":   fb.MaxIterations,
 			"max_call_depth":   fb.MaxCallDepth,
@@ -78,7 +78,7 @@ func GetAgentConfigs(c *gin.Context) {
 	}, "")
 }
 
-// updateRequest 前端提交的租户配置（null 表示未设置，由后端存 NULL）
+// updateRequest is the tenant config submitted by the frontend (null means unset, stored as NULL).
 type updateRequest struct {
 	MaxIterations  *int32 `json:"max_iterations"`
 	MaxCallDepth   *int32 `json:"max_call_depth"`
@@ -86,7 +86,7 @@ type updateRequest struct {
 	MaxOutputBytes *int32 `json:"max_output_bytes"`
 }
 
-// toNullInt32 将 *int32 转为 sql.NullInt32（nil 表示未设置）
+// toNullInt32 turns *int32 into sql.NullInt32 (nil means unset).
 func toNullInt32(v *int32) sql.NullInt32 {
 	if v == nil {
 		return sql.NullInt32{}
@@ -94,24 +94,24 @@ func toNullInt32(v *int32) sql.NullInt32 {
 	return sql.NullInt32{Int32: *v, Valid: true}
 }
 
-// agentFields 本表的四个字段名（校验与提示共用一份，别在两个地方各写一遍）
+// agentFields lists the four column names so validation and the UI notes share one copy.
 type agentField struct {
 	name  string
 	value *int32
 }
 
-// checkPositive 拒绝 < 1 的值。这里**刻意不支持 -1**：
-// 四个字段都是安全阀，-1 会让「防死循环 / 防递归 / 防上下文爆炸」直接失效。
+// checkPositive rejects values below 1. **-1 is deliberately unsupported**:
+// all four are safety valves, and -1 would switch off the loop, recursion and context guards at once.
 func checkPositive(fields []agentField) error {
 	for _, f := range fields {
 		if f.value != nil && *f.value < 1 {
-			return fmt.Errorf("%s 必须是 >= 1 的整数（该配置不支持 -1 不限制）", f.name)
+			return fmt.Errorf("%s must be an integer >= 1 (this setting does not support -1 for unlimited)", f.name)
 		}
 	}
 	return nil
 }
 
-// checkNotExceed 校验租户值不超过系统级（系统未设置时不限制）
+// checkNotExceed keeps the tenant value within the system one (unlimited when it is unset).
 func checkNotExceed(field string, tenantVal, sysVal sql.NullInt32) error {
 	if !sysVal.Valid {
 		return nil
@@ -120,12 +120,12 @@ func checkNotExceed(field string, tenantVal, sysVal sql.NullInt32) error {
 		return nil
 	}
 	if tenantVal.Int32 > sysVal.Int32 {
-		return fmt.Errorf("%s 不能超过系统级值 %d", field, sysVal.Int32)
+		return fmt.Errorf("%s cannot exceed the system value %d", field, sysVal.Int32)
 	}
 	return nil
 }
 
-// UpdateTenantAgentConfigs 更新当前租户的运行参数（保存前校验取值范围与系统级上限）
+// UpdateTenantAgentConfigs updates the run limits of the current tenant (range and system bound checked before saving).
 func UpdateTenantAgentConfigs(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -136,7 +136,7 @@ func UpdateTenantAgentConfigs(c *gin.Context) {
 
 	var req updateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	if err := checkPositive([]agentField{
@@ -145,14 +145,14 @@ func UpdateTenantAgentConfigs(c *gin.Context) {
 		{"max_tools", req.MaxTools},
 		{"max_output_bytes", req.MaxOutputBytes},
 	}); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 读取系统级配置用于上限校验
+	// Read the system config for the upper-bound checks.
 	sysCfg, err := repo.Get("")
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load system config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load system config: "+err.Error(), "")
 		return
 	}
 	var sysZero agentconfigrepo.AgentConfig
@@ -180,16 +180,16 @@ func UpdateTenantAgentConfigs(c *gin.Context) {
 	}
 	for _, chk := range checks {
 		if err := checkNotExceed(chk.field, chk.tenantVal, chk.sysVal); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 	}
 
 	if err := repo.Upsert(cfg); err != nil {
-		xhttp.ErrJSON(c, "failed to save agent config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to save agent config: "+err.Error(), "")
 		return
 	}
-	// 写后删：删掉该租户的 Redis 缓存键，下次 Resolve 回源 DB 重建。
+	// Delete after writing: drop the tenant's Redis cache key so the next Resolve rebuilds it from the database.
 	agentconfig.Invalidate(info.Schema)
 
 	xhttp.OkJSON(c, "Success", gin.H{"tenant": toJSON(cfg)}, "")

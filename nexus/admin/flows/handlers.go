@@ -14,6 +14,7 @@ import (
 	"flame/nexus/shared/quota"
 	agentsrepo "flame/nexus/shared/repository/agents"
 	"flame/nexus/shared/repository/flows"
+	"flame/nexus/shared/repository/sessions"
 	svcendpoints "flame/nexus/shared/repository/svcendpoints"
 	"flame/nexus/shared/secureval"
 	"flame/nexus/shared/versioning"
@@ -280,8 +281,10 @@ func CreateFlow(c *gin.Context) {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
-	if err := models.CheckQuota("flow", cnt, quota.Resolve(schema).MaxFlows); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+	if qerr := models.CheckQuota("flow", cnt, quota.Resolve(schema).MaxFlows); qerr != nil {
+		// A full quota is not an internal error: report it as quota.flow_limit_reached so the UI can word it.
+		le := qerr.(*models.LimitError)
+		xhttp.ErrCode(c, "quota.flow_limit_reached", le.Params(), qerr.Error(), "")
 		return
 	}
 
@@ -561,6 +564,16 @@ func DeleteFlow(c *gin.Context) {
 		}
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
+	}
+
+	// The flow's sessions go with it: once the owner is gone the console can no longer list (or delete) them, yet they keep
+	// counting against the user's session quota and keep their workspaces on disk. Best-effort: the row is already gone, so
+	// a failure is logged rather than rolled back.
+	ai := authInfo.(*auth.AuthInfo)
+	if n, derr := sessions.NewRepository().DeleteByOwner(ai.Schema, models.SessionOwnerTypeFlow, id); derr != nil {
+		xlog.Error("failed to delete the sessions of the deleted flow schema=%s flow=%s: %v", ai.Schema, id, derr)
+	} else if n > 0 {
+		xlog.Info("deleted %d session(s) together with flow schema=%s flow=%s", n, ai.Schema, id)
 	}
 
 	xhttp.OkJSON(c, "flow instance deleted successfully", id, "")

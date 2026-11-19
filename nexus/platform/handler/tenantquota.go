@@ -10,16 +10,17 @@ import (
 
 // GetTenantQuota GET /platform/tenants/:schema/quota
 //
-// 管理界面需要"原始值 + 系统顶 + 生效值"三样，所以这里一次全回：
+// The console needs three things - raw values, the system ceiling and the effective values - so all of it is returned at once:
 //
-//	quota     该租户的**原始行**（null = 未设置）—— 编辑框绑它
-//	system    系统行的原始值（null = 未设置）—— 展示"系统顶"
-//	fallback  代码兜底值 —— 系统行未设置时它就是顶
-//	effective 生效值 = clampMax(pick(tenant, system, fallback), pick(system, fallback))
-//	          （直接取 quota.Resolve(schema)，前端**不重算**截断规则，避免两套实现漂移）
+//	quota     this tenant's **raw row** (null = unset) - the edit form binds to it
+//	system    the system row's raw values (null = unset) - shown as the "system ceiling"
+//	fallback  the code fallback - the ceiling when the system row is unset too
+//	effective effective values = clampMax(pick(tenant, system, fallback), pick(system, fallback))
+//	          (taken straight from quota.Resolve(schema); the frontend **never recomputes** the truncation rules, so two
+//	          implementations cannot drift apart)
 //
-// 为什么不复用 tenantView 里的 quota：那是 Resolve 之后的**生效值**，
-// 拿它做编辑框会让"原始行被静默压平"（行里存 500、界面显示 100，一保存就变 100）。
+// Why not reuse the quota inside tenantView: that is the **effective value** after Resolve, and binding it to an edit form
+// would silently flatten the raw row (the row stores 500, the form shows 100, and saving turns it into 100).
 func GetTenantQuota(c *gin.Context) {
 	schema, ok := mustTenant(c)
 	if !ok {
@@ -30,8 +31,9 @@ func GetTenantQuota(c *gin.Context) {
 
 // GetMyTenantQuota GET /platform/me/tenants/:schema/quota
 //
-// 「用户」自助：只能读自己名下租户的配额（不是自己名下 → 403）。
-// 返回体与管理员那条完全一致（原始行 + 系统顶 + 兜底 + 生效值），共用 respondTenantQuota。
+// "User" self-service: can only read the quota of a tenant under their own name (otherwise 403).
+// The response body is identical to the administrator route (raw row + system ceiling + fallback + effective values) and
+// shares respondTenantQuota.
 func GetMyTenantQuota(c *gin.Context) {
 	schema, ok := mustOwnTenant(c)
 	if !ok {
@@ -40,16 +42,17 @@ func GetMyTenantQuota(c *gin.Context) {
 	respondTenantQuota(c, schema)
 }
 
-// respondTenantQuota 输出「原始行 + 系统行 + 兜底 + 生效值」四份数据（管理员与「用户」共用）。
+// respondTenantQuota emits the four blocks "raw row + system row + fallback + effective values" (shared by the administrator
+// and the "user" routes).
 func respondTenantQuota(c *gin.Context, schema string) {
 	row, err := tenantsrepo.GetQuotaRow(schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load tenant quota: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load tenant quota: "+err.Error(), "")
 		return
 	}
 	sysRow, err := tenantsrepo.GetQuotaRow("")
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load system quota: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load system quota: "+err.Error(), "")
 		return
 	}
 

@@ -1,11 +1,12 @@
 package auth
 
-// BootstrapAdminName 平台**受保护管理员**的登录名：由环境初始数据预置的那个 active 管理员。
+// BootstrapAdminName is the login name of the platform's **protected administrator**: the active administrator seeded by
+// the environment's initial data.
 //
-// **固定为 plat，不可配置** —— 与租户侧的 shared/tenants.PrimaryUserName 对称：两者都是
-// "系统预置的那个账号"，因此管理台都禁止修改（资料 / 角色 / 状态）与删除
-// （守卫在 handler/users.go 的 isProtectedPlatformUser；删除接口本就不存在）。
+// **Fixed at plat, not configurable** - symmetrical with shared/tenants.PrimaryUserName on the tenant side: both are "the
+// account the system preinstalls", so the console forbids modifying them (profile / role / status) and deleting them
+// (the guard is isProtectedPlatformUser in handler/users.go; the delete endpoint does not exist at all).
 //
-// 放 auth 包的原因：它属于平台身份词表（与角色词表同处），handler 层直接引用，
-// 且不该反向依赖 handler。
+// It lives in the auth package because it belongs to the platform identity vocabulary (alongside the role vocabulary),
+// the handler layer references it directly, and this package must not depend on handler.
 const BootstrapAdminName = "plat"

@@ -16,28 +16,32 @@ import (
 	"github.com/google/uuid"
 )
 
-// namePattern 登录名字符集：避免空白/特殊字符；DB 侧还有唯一索引兜底
-// （/login 用 WHERE name = $1 取单行，重名会让登录行为不确定）。
+// namePattern is the login-name character set: it keeps out whitespace and special characters,
+// and the unique index in the database is the second line of defence (/login fetches a single row
+// with WHERE name = $1, so duplicates would make login behaviour undefined).
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-// RegisterRoutes 注册 /users 管理接口（外层已带 /users 前缀）
+// RegisterRoutes registers the /users management endpoints (the caller already adds the /users
+// prefix).
 //
-// 角色口径（本模块只做两件事）：
-//   - role：manage 可登录控制台 / service 不可登录
-//   - status：active / disabled / locked —— 账号是否可用（登录与 API 都看它）
+// Role model (this module does exactly two things):
+//   - role: manage can sign in to the console / service cannot
+//   - status: active / disabled / locked - whether the account is usable (both login and the API
+//     look at it)
 //
-// 不提供删除用户：created_by / updated_by 是对用户的弱引用 UUID，删掉会留悬空；
-// 停用（status=disabled）即可，且能保留审计线索。
+// There is no delete-user endpoint: created_by / updated_by are weak UUID references to users, so
+// deleting one leaves them dangling; disabling (status=disabled) is enough and keeps the audit
+// trail.
 func RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("", listUsers)
 	router.POST("/create", createUser)
-	// 单用户配额覆盖（会话数 / 每会话空间）。不写 users，只动 user_quotas。
+	// Per-user quota overrides (session count / per-session storage). It never writes users, only user_quotas.
 	router.PUT("/:id/quota", setUserQuota)
 	router.PUT("/:id", updateUser)
 	router.POST("/:id/password", resetPassword)
 }
 
-// authOf 取当前请求的租户认证信息（失败时已写响应）。
+// authOf reads the current request's tenant auth info (the response is already written on failure).
 func authOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
 	if !exists {
@@ -46,22 +50,24 @@ func authOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	}
 	info, ok := v.(*auth.AuthInfo)
 	if !ok {
-		xhttp.ErrJSON(c, "Invalid tenant auth info", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return nil, false
 	}
 	return info, true
 }
 
-// listUsers 返回本租户用户列表（id/name/display_name/email/phone/role/status）。
-// 供「用户管理」与「服务凭证」共用 —— 凭证不限制角色，因此按角色过滤。
+// listUsers returns this tenant's users (id/name/display_name/email/phone/role/status).
+// It is shared by "user management" and "service credentials" - credentials do not restrict the
+// role, so the frontend filters by role.
 func listUsers(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
 		return
 	}
 
-	// 带上 user_quotas 的覆盖值（无行 = 跟随租户）。
-	// 老租户可能还没补这张表：JOIN 失败时退回不带配额的查询，别让整个用户管理页打不开。
+	// Include the user_quotas overrides (no row = follow the tenant).
+	// An older tenant may not have that table yet: fall back to the query without quotas rather
+	// than making the whole user management page unopenable.
 	withQuota := true
 	rows, err := db.DB.Query(
 		`SELECT u.id, u.name, COALESCE(u.display_name, ''), COALESCE(u.email, ''), COALESCE(u.phone, ''),
@@ -78,7 +84,7 @@ func listUsers(c *gin.Context) {
 			  ORDER BY role, name`)
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to list users: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to list users: "+err.Error(), "")
 		return
 	}
 	defer rows.Close()
@@ -90,20 +96,20 @@ func listUsers(c *gin.Context) {
 			var maxSessions sql.NullInt32
 			var maxStorage sql.NullInt64
 			if err := rows.Scan(&id, &name, &displayName, &email, &phone, &role, &status, &maxSessions, &maxStorage); err != nil {
-				xhttp.ErrJSON(c, "failed to scan user: "+err.Error(), nil, "")
+				xhttp.ErrCode(c, "common.internal", nil, "failed to scan user: "+err.Error(), "")
 				return
 			}
 			items = append(items, gin.H{
 				"id": id, "name": name, "display_name": displayName, "email": email,
 				"phone": phone, "role": role, "status": status,
-				// null = 跟随租户；数字 = 该用户的覆盖值
+				// null = follow the tenant; a number = this user's override
 				"max_sessions":              nullableInt(maxSessions),
 				"max_session_storage_bytes": nullableInt64(maxStorage),
 			})
 			continue
 		}
 		if err := rows.Scan(&id, &name, &displayName, &email, &phone, &role, &status); err != nil {
-			xhttp.ErrJSON(c, "failed to scan user: "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to scan user: "+err.Error(), "")
 			return
 		}
 		items = append(items, gin.H{
@@ -120,7 +126,7 @@ func listUsers(c *gin.Context) {
 	lim := quota.Resolve(info.Schema)
 	xhttp.OkJSON(c, "Success", gin.H{
 		"items": items,
-		// 前端显示「跟随租户（N）」时用的默认值
+		// The defaults the frontend uses to render "follow the tenant (N)"
 		"defaults": gin.H{
 			"sessions":              lim.MaxUserSessions,
 			"session_storage_bytes": lim.MaxSessionStorageBytes,
@@ -145,12 +151,13 @@ func nullableInt64(v sql.NullInt64) interface{} {
 // setUserQuota PUT /users/:id/quota
 //
 // body: {"max_sessions": 20|null, "max_session_storage_bytes": 268435456|null}
-// null = 跟随租户；两个都 null = 删除覆盖行。
+// null = follow the tenant; both null = delete the override row.
 //
-// 守卫与 updateUser 同口径：
-//   - primary 是平台开通时创建的根账号，租户侧不可改；
-//   - 不能把自己的配额设为 0（等于把自己锁成只读，且自己再改不回来）；
-//   - 任何值都不得超过租户给每用户的上限（后端 clamp，不靠前端）。
+// The guards match updateUser:
+//   - primary is the root account created at provisioning and is read-only on the tenant side;
+//   - your own quota cannot be set to 0 (that locks you out as read-only, and you cannot undo it);
+//   - no value may exceed the tenant's per-user ceiling (clamped in the backend, not relied on from
+//     the frontend).
 func setUserQuota(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -158,7 +165,7 @@ func setUserQuota(c *gin.Context) {
 	}
 	id := c.Param("id")
 	if _, err := uuid.Parse(id); err != nil {
-		xhttp.ErrJSON(c, "invalid user id", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid user id", "")
 		return
 	}
 
@@ -167,7 +174,7 @@ func setUserQuota(c *gin.Context) {
 		MaxSessionStorageBytes *int64 `json:"max_session_storage_bytes"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 
@@ -178,50 +185,50 @@ func setUserQuota(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to get user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get user: "+err.Error(), "")
 		return
 	}
 	if curName == sharedtenants.PrimaryUserName {
-		xhttp.ErrCode(c, "user.primary_readonly", nil, "primary 账号的配额只能由平台调整", "")
+		xhttp.ErrCode(c, "user.primary_readonly", nil, "the primary account's quota can only be adjusted by the platform", "")
 		return
 	}
 
 	sessionsCeil := quota.UserSessionsCeiling(info.Schema)
 	if v := body.MaxSessions; v != nil {
 		if *v < -1 {
-			xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": "max_sessions", "min": -1}, "会话数不能小于 -1（-1 表示不限）", "")
+			xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": "max_sessions", "min": -1}, "the session count cannot be below -1 (-1 means unlimited)", "")
 			return
 		}
 		if id == info.ID && *v == 0 {
-			xhttp.ErrCode(c, "quota.self_lockout", gin.H{"field": "max_sessions"}, "不能把自己的会话配额设为 0", "")
+			xhttp.ErrCode(c, "quota.self_lockout", gin.H{"field": "max_sessions"}, "you cannot set your own session quota to 0", "")
 			return
 		}
 		if sessionsCeil != -1 && *v != -1 && *v > sessionsCeil {
 			xhttp.ErrCode(c, "quota.exceeds_tenant_limit", gin.H{"field": "max_sessions", "limit": sessionsCeil},
-				fmt.Sprintf("会话数不能超过租户上限（%d）", sessionsCeil), "")
+				fmt.Sprintf("the session count cannot exceed the tenant ceiling (%d)", sessionsCeil), "")
 			return
 		}
 	}
 	storageCeil := quota.UserSessionStorageCeiling(info.Schema)
 	if v := body.MaxSessionStorageBytes; v != nil {
 		if *v < -1 {
-			xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": "max_session_storage_bytes", "min": -1}, "空间不能小于 -1（-1 表示不限）", "")
+			xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": "max_session_storage_bytes", "min": -1}, "storage cannot be below -1 (-1 means unlimited)", "")
 			return
 		}
 		if id == info.ID && *v == 0 {
-			xhttp.ErrCode(c, "quota.self_lockout", gin.H{"field": "max_session_storage_bytes"}, "不能把自己的空间配额设为 0", "")
+			xhttp.ErrCode(c, "quota.self_lockout", gin.H{"field": "max_session_storage_bytes"}, "you cannot set your own storage quota to 0", "")
 			return
 		}
 		if storageCeil != -1 && *v != -1 && *v > storageCeil {
 			xhttp.ErrCode(c, "quota.exceeds_tenant_limit", gin.H{"field": "max_session_storage_bytes", "limit": storageCeil},
-				fmt.Sprintf("空间不能超过租户上限（%d 字节）", storageCeil), "")
+				fmt.Sprintf("storage cannot exceed the tenant ceiling (%d bytes)", storageCeil), "")
 			return
 		}
 	}
 
 	in := quota.UserQuotaInput{MaxSessions: body.MaxSessions, MaxSessionStorageBytes: body.MaxSessionStorageBytes}
 	if err := quota.SetUserQuota(info.Schema, id, in, info.ID); err != nil {
-		xhttp.ErrJSON(c, "failed to set quota: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to set quota: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -233,12 +240,12 @@ func setUserQuota(c *gin.Context) {
 }
 
 type createUserRequest struct {
-	Name        string `json:"name" binding:"required"` // 登录名：唯一、创建后不可改
+	Name        string `json:"name" binding:"required"` // login name: unique and immutable after creation
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
 	Phone       string `json:"phone"`
 	Role        string `json:"role" binding:"required"` // manage | service
-	Password    string `json:"password"`                // role=manage 必填；role=service 必须为空
+	Password    string `json:"password"`                // required for role=manage; must be empty for role=service
 }
 
 // createUser POST /users/create
@@ -249,44 +256,45 @@ func createUser(c *gin.Context) {
 	}
 	var req createUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 
 	name := strings.TrimSpace(req.Name)
 	role := strings.TrimSpace(req.Role)
 	if !namePattern.MatchString(name) {
-		xhttp.ErrCode(c, "user.invalid_name", nil, "登录名只允许字母/数字/下划线/横线，长度 1-64", "")
+		xhttp.ErrCode(c, "user.invalid_name", nil, "the login name accepts letters, digits, underscores and hyphens only, 1-64 characters", "")
 		return
 	}
 	if role != auth.RoleManage && role != auth.RoleService {
-		xhttp.ErrJSON(c, "role must be 'manage' or 'service'", nil, "")
+		xhttp.ErrCode(c, "user.invalid_role", nil, "role must be 'manage' or 'service'", "")
 		return
 	}
 	switch role {
 	case auth.RoleManage:
 		if len(req.Password) < 8 {
-			xhttp.ErrCode(c, "user.password_required", nil, "管理用户必须设置密码（至少 8 位）", "")
+			xhttp.ErrCode(c, "user.password_required", nil, "a management user must have a password (at least 8 characters)", "")
 			return
 		}
 	case auth.RoleService:
-		// 服务用户不可登录 —— 不留密码，避免将来改成 manage 时"突然获得"登录能力
+		// A service user cannot sign in - it keeps no password, so it never "suddenly gains" login
+		// ability if switched to manage later
 		if req.Password != "" {
-			xhttp.ErrCode(c, "user.password_not_allowed", nil, "服务用户不可登录，不应设置密码", "")
+			xhttp.ErrCode(c, "user.password_not_allowed", nil, "a service user cannot sign in and must not have a password", "")
 			return
 		}
 	}
 
-	// 登录名查重（唯一索引也会拦，这里先给出可读报错）
+	// Duplicate login name (the unique index catches it too; this gives a readable error first)
 	var existID string
 	err := db.DB.QueryRow(
 		`SELECT id FROM `+info.Schema+`.users WHERE name = $1`, name).Scan(&existID)
 	if err == nil {
-		xhttp.ErrCode(c, "user.name_taken", gin.H{"name": name}, "登录名已存在: "+name, "")
+		xhttp.ErrCode(c, "user.name_taken", gin.H{"name": name}, "the login name already exists: "+name, "")
 		return
 	}
 	if err != sql.ErrNoRows {
-		xhttp.ErrJSON(c, "failed to check name: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to check name: "+err.Error(), "")
 		return
 	}
 
@@ -294,7 +302,7 @@ func createUser(c *gin.Context) {
 	if role == auth.RoleManage {
 		h, herr := auth.HashPassword(req.Password)
 		if herr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to set the password: "+herr.Error(), "")
 			return
 		}
 		passwordHash = h
@@ -306,7 +314,7 @@ func createUser(c *gin.Context) {
 		id, name, strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Email),
 		strings.TrimSpace(req.Phone), passwordHash, role, auth.UserStatusActive)
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to create user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to create user: "+err.Error(), "")
 		return
 	}
 
@@ -324,12 +332,14 @@ type updateUserRequest struct {
 	Phone       string `json:"phone"`
 	Role        string `json:"role" binding:"required"`   // manage | service
 	Status      string `json:"status" binding:"required"` // active | disabled | locked
-	// Password 可选：留空表示不改密码。service → manage 且库中无密码时必须提供。
+	// Password is optional: empty means unchanged. It is required when switching service -> manage
+	// and the row has no password.
 	Password string `json:"password"`
 }
 
 // updateUser PUT /users/:id
-// 可改：display_name / email / phone / role / status（name 不可改，它是审计与绑定的锚点）
+// Editable: display_name / email / phone / role / status (name is immutable - it anchors the audit
+// trail and bindings)
 func updateUser(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -339,21 +349,21 @@ func updateUser(c *gin.Context) {
 
 	var req updateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	role := strings.TrimSpace(req.Role)
 	status := strings.TrimSpace(req.Status)
 	if role != auth.RoleManage && role != auth.RoleService {
-		xhttp.ErrJSON(c, "role must be 'manage' or 'service'", nil, "")
+		xhttp.ErrCode(c, "user.invalid_role", nil, "role must be 'manage' or 'service'", "")
 		return
 	}
 	if status != auth.UserStatusActive && status != auth.UserStatusDisabled && status != auth.UserStatusLocked {
-		xhttp.ErrJSON(c, "status must be 'active' / 'disabled' / 'locked'", nil, "")
+		xhttp.ErrCode(c, "user.invalid_status", nil, "status must be 'active' / 'disabled' / 'locked'", "")
 		return
 	}
 
-	// 读现状
+	// Read the current row
 	var curName, curRole, curStatus string
 	var curPassword sql.NullString
 	err := db.DB.QueryRow(
@@ -365,25 +375,28 @@ func updateUser(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load user: "+err.Error(), "")
 		return
 	}
 
-	// 守卫 0：primary 是平台开通租户时创建的**根账号**（登录名由平台固定交付），任何字段都不许改 ——
-	// 一旦被改名/降级/停用，租户就失去了"平台交付的那个可登录 manage 账号"。
-	// 删除更不存在：本模块不提供删除接口（见 RegisterRoutes 注释），所以"不得删除"无需额外守卫。
+	// Guard 0: primary is the **root account** created when the platform provisions a tenant (its
+	// login name is delivered by the platform), so no field may change - once it is renamed,
+	// downgraded or disabled the tenant loses "the signable manage account the platform delivered".
+	// Deletion does not even exist: this module has no delete endpoint (see the RegisterRoutes
+	// comment), so "must not be deleted" needs no extra guard.
 	if curName == sharedtenants.PrimaryUserName {
-		xhttp.ErrCode(c, "user.primary_readonly", nil, "primary 用户不可修改（平台开通时创建的根账号）", "")
+		xhttp.ErrCode(c, "user.primary_readonly", nil, "the primary user is read-only (the root account created at provisioning)", "")
 		return
 	}
 
-	// 守卫 1：不能停用/降级当前登录账号（否则当场把自己踢出去）
+	// Guard 1: the signed-in account cannot disable or downgrade itself (that would kick itself out on the spot)
 	if id == info.ID && (role != auth.RoleManage || status != auth.UserStatusActive) {
-		xhttp.ErrCode(c, "user.cannot_modify_self", nil, "不能停用或降级当前登录账号", "")
+		xhttp.ErrCode(c, "user.cannot_modify_self", nil, "you cannot disable or downgrade the account you are signed in with", "")
 		return
 	}
 
-	// 守卫 2：不能把最后一个「可登录的管理用户」降级或停用（否则租户自锁，只能改库救场）
+	// Guard 2: the last "signable management user" cannot be downgraded or disabled (that would
+	// lock the tenant out, recoverable only by editing the database)
 	losingLogin := curRole == auth.RoleManage && curStatus == auth.UserStatusActive &&
 		(role != auth.RoleManage || status != auth.UserStatusActive)
 	if losingLogin {
@@ -391,18 +404,19 @@ func updateUser(c *gin.Context) {
 		if err := db.DB.QueryRow(
 			`SELECT count(*) FROM `+info.Schema+`.users WHERE role = $1 AND status = $2`,
 			auth.RoleManage, auth.UserStatusActive).Scan(&n); err != nil {
-			xhttp.ErrJSON(c, "failed to count admins: "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to count admins: "+err.Error(), "")
 			return
 		}
 		if n <= 1 {
-			xhttp.ErrCode(c, "user.last_admin_undeletable", nil, "不能停用或降级最后一个可登录的管理用户", "")
+			xhttp.ErrCode(c, "user.last_admin_undeletable", nil, "the last signable management user cannot be disabled or downgraded", "")
 			return
 		}
 	}
 
-	// 密码处理：
-	//   - 改成 service：清空密码（不可登录，不该留凭据）
-	//   - 保持/改成 manage：留空则不改；但库里没有密码时必须本次提供（否则建了个登不进去的管理员）
+	// Password handling:
+	//   - switching to service: clear the password (cannot sign in, should keep no credential)
+	//   - staying / becoming manage: empty means unchanged; but if the row has no password it must
+	//     be provided now (otherwise the new admin cannot sign in)
 	setPassword := false
 	newHash := ""
 	if role == auth.RoleService {
@@ -410,18 +424,18 @@ func updateUser(c *gin.Context) {
 		newHash = ""
 	} else if pw := strings.TrimSpace(req.Password); pw != "" {
 		if len(pw) < 8 {
-			xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": 8}, "密码至少 8 位", "")
+			xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": 8}, "the password must be at least 8 characters", "")
 			return
 		}
 		h, herr := auth.HashPassword(pw)
 		if herr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to set the password: "+herr.Error(), "")
 			return
 		}
 		setPassword = true
 		newHash = h
 	} else if !curPassword.Valid || curPassword.String == "" {
-		xhttp.ErrCode(c, "user.password_required", nil, "该用户当前没有密码，切换为管理用户必须设置密码（至少 8 位）", "")
+		xhttp.ErrCode(c, "user.password_required", nil, "this user has no password; switching to a management user requires setting one (at least 8 characters)", "")
 		return
 	}
 
@@ -439,7 +453,7 @@ func updateUser(c *gin.Context) {
 			WHERE id=$1`, id, displayName, email, phone, role, status)
 	}
 	if execErr != nil {
-		xhttp.ErrJSON(c, "failed to update user: "+execErr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to update user: "+execErr.Error(), "")
 		return
 	}
 
@@ -452,8 +466,10 @@ type changeMyPasswordRequest struct {
 }
 
 // ChangeMyPassword POST /me/password
-// 当前登录用户自助修改密码：必须提供旧密码，只改自己（不接受 user_id）。
-// 与管理员「重置密码」不同：后者是代人重置，这里是本人凭旧密码更换。
+// Self-service password change for the signed-in user: the old password is required, and it only
+// changes your own (no user_id accepted).
+// Unlike the admin "reset password", which resets on someone's behalf, this replaces the password
+// with the old one as proof.
 func ChangeMyPassword(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -462,18 +478,18 @@ func ChangeMyPassword(c *gin.Context) {
 
 	var req changeMyPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	switch {
 	case len(req.NewPassword) < auth.MinPasswordLength:
-		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": auth.MinPasswordLength}, "新密码至少 8 位", "")
+		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": auth.MinPasswordLength}, "the new password must be at least 8 characters", "")
 		return
 	case len(req.NewPassword) > auth.MaxPasswordBytes:
-		xhttp.ErrJSON(c, auth.ErrPasswordTooLong.Error(), nil, "")
+		xhttp.ErrCode(c, "user.password_too_long", nil, auth.ErrPasswordTooLong.Error(), "")
 		return
 	case req.NewPassword == req.OldPassword:
-		xhttp.ErrCode(c, "user.password_unchanged", nil, "新密码不能与当前密码相同", "")
+		xhttp.ErrCode(c, "user.password_unchanged", nil, "the new password must differ from the current one", "")
 		return
 	}
 
@@ -485,25 +501,25 @@ func ChangeMyPassword(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load user: "+err.Error(), "")
 		return
 	}
 
-	// 校验旧密码（兼容历史 MD5；通过后下面写入 bcrypt，等于顺手完成升级）
+	// Verify the old password (legacy MD5 is accepted; the bcrypt write below upgrades it on the way)
 	if okOld, _ := auth.VerifyPassword(curPassword.String, req.OldPassword); !okOld {
-		xhttp.ErrCode(c, "user.password_incorrect", nil, "当前密码不正确", "")
+		xhttp.ErrCode(c, "user.password_incorrect", nil, "the current password is incorrect", "")
 		return
 	}
 
 	newHash, herr := auth.HashPassword(req.NewPassword)
 	if herr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to set the password: "+herr.Error(), "")
 		return
 	}
 	if _, err := db.DB.Exec(
 		`UPDATE `+info.Schema+`.users SET password=$2, updated_at=NOW() WHERE id=$1`,
 		info.ID, newHash); err != nil {
-		xhttp.ErrJSON(c, "failed to update password: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to update password: "+err.Error(), "")
 		return
 	}
 
@@ -515,7 +531,8 @@ type resetPasswordRequest struct {
 }
 
 // resetPassword POST /users/:id/password
-// 也是"空密码账号"的解锁入口（迁移后 password 为空的行登不进去）。
+// It is also the unlock entry for "password-less accounts" (rows whose password is empty after a
+// migration cannot sign in).
 func resetPassword(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -525,11 +542,11 @@ func resetPassword(c *gin.Context) {
 
 	var req resetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	if len(req.Password) < 8 {
-		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": 8}, "密码至少 8 位", "")
+		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": 8}, "the password must be at least 8 characters", "")
 		return
 	}
 
@@ -541,23 +558,23 @@ func resetPassword(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load user: "+err.Error(), "")
 		return
 	}
 	if role != auth.RoleManage {
-		xhttp.ErrCode(c, "user.password_not_allowed", nil, "服务用户不可登录，无需设置密码", "")
+		xhttp.ErrCode(c, "user.password_not_allowed", nil, "a service user cannot sign in and needs no password", "")
 		return
 	}
 
 	h, herr := auth.HashPassword(req.Password)
 	if herr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to set the password: "+herr.Error(), "")
 		return
 	}
 	if _, err := db.DB.Exec(
 		`UPDATE `+info.Schema+`.users SET password=$2, updated_at=NOW() WHERE id=$1`,
 		id, h); err != nil {
-		xhttp.ErrJSON(c, "failed to reset password: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to reset password: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"id": id}, "")

@@ -20,30 +20,30 @@ import (
 	"github.com/google/uuid"
 )
 
-// sseKeepAlive SSE 心跳间隔。
+// sseKeepAlive is the SSE heartbeat interval.
 //
-// 15 秒：小于常见反向代理的 60 秒空闲超时，又不至于把一条安静的流刷成噪音。
-// 心跳同时充当半开连接的探针 —— 写失败即判定对端已断（见 Chat）。
+// 15 seconds: below the 60-second idle timeout of common reverse proxies, yet not so short that a quiet stream becomes noise.
+// The heartbeat doubles as a half-open connection probe: a failed write means the peer is gone (see ChatAgent).
 const sseKeepAlive = 15 * time.Second
 
-// 会话记录保留上限在 agent 层（service/agent/agent_impl.go maxSessionRecordKeep）。
+// The session record retention cap lives in the agent layer (service/agent/agent_impl.go maxSessionRecordKeep).
 
-// chatRequest agent 对话请求
+// chatRequest is an agent chat request.
 type chatRequest struct {
 	Message   string   `json:"message"`
-	SessionID string   `json:"session_id"` // 可选：为空则新建会话
-	Files     []string `json:"files"`      // 本轮附件（会话工作区相对路径，来自 /session/upload）
-	// FollowDrafts 本轮**调起的子实体**（agent / flow）读草稿还是已发布版本。
-	// 指针以区分「没传」与「显式 false」：缺省 true（跟草稿，与 flow 调试器同一缺省）。
-	// 只影响被调起的那些；本对话的 agent 自身始终读草稿。
+	SessionID string   `json:"session_id"` // optional: a new session is created when empty
+	Files     []string `json:"files"`      // attachments for this turn (session-workspace relative paths, from /session/upload)
+	// FollowDrafts decides whether the **sub-entities this turn calls** (agent / flow) read the draft or the released version.
+	// A pointer distinguishes "not sent" from an explicit false: the default is true (follow drafts, the same default as the flow debugger).
+	// It only affects the ones being called; the agent of this conversation always reads its draft.
 	FollowDrafts *bool `json:"follow_drafts"`
 }
 
-// ChatAgent 与指定 agent 对话，SSE 流式返回，支持多轮会话历史。
-// 事件对齐 AG-UI 语义：
+// ChatAgent chats with one agent over SSE and supports multi-turn session history.
+// Events follow AG-UI semantics:
 //
 //	RUN_STARTED / TEXT_MESSAGE_CONTENT / RUN_FINISHED / RUN_ERROR
-//	THINKING_DELTA（模型推理）/ TOOL_CALL_START / TOOL_CALL_END（工具调用）
+//	THINKING_DELTA (model reasoning) / TOOL_CALL_START / TOOL_CALL_END (tool calls)
 func ChatAgent(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -60,9 +60,9 @@ func ChatAgent(c *gin.Context) {
 		return
 	}
 	message := strings.TrimSpace(req.Message)
-	// 只带附件也允许发送：正文为空时由附件清单承担「这一轮要干什么」
+	// Attachments alone may be sent: with an empty body the attachment list says what this turn is about
 	if message == "" && len(req.Files) == 0 {
-		xhttp.ErrJSON(c, "message is required", nil, "")
+		xhttp.ErrCode(c, "agent.message_required", nil, "message is required", "")
 		return
 	}
 
@@ -72,35 +72,35 @@ func ChatAgent(c *gin.Context) {
 		return
 	}
 
-	// 会话处理：空则新建，非空走统一归属校验（sessions.Lookup）
+	// Session handling: create when empty, otherwise go through the shared ownership check (sessions.Lookup)
 	sessRepo := sessions.NewRepository()
 	sessionID := strings.TrimSpace(req.SessionID)
-	// 会话工作目录按「会话归属用户」定位（附件就在那下面），单独记一份：
-	// 目录的唯一事实来源是会话行，而不是调用方身份 —— 两者已被 lookupSessionForUser
-	// 校验为同一个用户，取会话自己的值可以在将来放宽口径时仍然指对目录。
+	// The session working directory is located by the session's owner (that is where attachments live), recorded separately:
+	// the session row, not the caller identity, is the single source of truth for the directory - lookupSessionForUser has
+	// already proven they are the same user, and taking the session's own value keeps pointing at the right directory if the rule is ever relaxed.
 	sessUserID := ai.ID
 	if sessionID == "" {
 		sessionID, err = sessRepo.Create(ai.Schema, models.SessionOwnerTypeAgent, instance.ID, ai.ID, "")
 		if err != nil {
-			respondQuotaErr(c, err) // 会话数超限 → 507
+			respondQuotaErr(c, err) // too many sessions -> 507
 			return
 		}
 	} else {
-		// 会话私有：按归属用户收口（owner 只记录创建者，见 lookupSessionForUser）
+		// Sessions are private: narrowed by owner (owner only records the creator; see lookupSessionForUser)
 		sess, lerr := lookupSessionForUser(ai, ai.Schema, sessionID)
 		if lerr != nil {
 			respondSessionErr(c, lerr, notOwnedSession)
 			return
 		}
-		// 租户级会话（user_id 为空）沿用调用方身份定位目录，避免拼出 users//sessions/…
+		// For a tenant-level session (empty user_id) the caller identity locates the directory, avoiding a users//sessions/... path
 		if sess.UserID != "" {
 			sessUserID = sess.UserID
 		}
 	}
 
-	// 附件清单只拼进「喂给模型」的这一条；落库（_record_input）与历史回放仍是用户原文。
-	// 历史不再由这里读：agent 层按 session_id 从 session_records 读，与协议端点共用同一份
-	// 记忆实现（否则同一个会话从两个入口进来，历史长度、顺序、条数都可能不一样）。
+	// The attachment list is appended only to what the model sees; the stored record (_record_input) and history replay keep the user's own text.
+	// History is no longer read here: the agent layer reads session_records by session_id, sharing one
+	// memory implementation with the protocol endpoints (otherwise one session entered through two doors could differ in history length, order and count).
 	prompt := message
 	var block string
 	if st, serr := getStorage(); serr == nil {
@@ -108,7 +108,7 @@ func ChatAgent(c *gin.Context) {
 	}
 	if block != "" {
 		if prompt == "" {
-			prompt = block // 只带附件、没有正文时，别以空行开头
+			prompt = block // attachments only, no body: do not start with a blank line
 		} else {
 			prompt = prompt + "\n\n" + block
 		}
@@ -120,19 +120,19 @@ func ChatAgent(c *gin.Context) {
 		"user_id":       ai.ID,
 		"session_id":    sessionID,
 		"run_id":        runID,
-		"_user_message": prompt,  // 喂给模型的当前输入（含附件清单）
-		"_record_input": message, // 落库的原文（不含附件清单）
+		"_user_message": prompt,  // the current input to the model (attachment list included)
+		"_record_input": message, // the text stored (without the attachment list)
 		"_run_type":     "call",
 	}
-	// 起点实体同样进链：这次对话的 agent 就是「当前执行实体」，
-	// 它再出站（rpc__ / mcp__ / call_agent）时链里已含自己 ——
-	// 绕回来能在第一层就拒，而不是白跑一整轮才被深度上限拦住。
+	// The starting entity joins the chain too: the agent of this conversation is the "current executing entity",
+	// so when it makes an outbound call (rpc__ / mcp__ / call_agent) the chain already contains itself -
+	// a loop back is rejected at the first level instead of wasting a full turn before the depth cap stops it.
 	args[callchain.ArgumentKey] = []string{callchain.Key(callchain.KindAgent, instance.ID)}
-	// 管理端聊天是「试聊」：顶层 agent 恒读草稿，改完立刻能验证。
-	// 正式调用（MCP / RPC / 端点 / flow）才读已发布版本 —— 那几条路走 SetReleaseMode。
+	// Admin chat is a "trial chat": the top-level agent always reads the draft, so a change can be verified at once.
+	// Only production calls (MCP / RPC / endpoints / flows) read the released version - those paths use SetReleaseMode.
 	agent.SetDraftMode(args)
-	// 子调用（call_agent / local__flow / run_flow）读哪份由本开关决定，缺省跟草稿。
-	// 关掉后走已发布版本：被调实体没发布过会明确报错，不静默回退草稿。
+	// This switch decides which copy sub-calls (call_agent / local__flow / run_flow) read, defaulting to drafts.
+	// Turned off it uses released versions: a callee with no release reports an error instead of silently falling back to its draft.
 	followDrafts := true
 	if req.FollowDrafts != nil {
 		followDrafts = *req.FollowDrafts
@@ -140,11 +140,11 @@ func ChatAgent(c *gin.Context) {
 	agent.SetFollowDrafts(args, followDrafts)
 	inst, err := agent.NewAgent(instance, ai.Schema, args)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to init agent: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to init the agent: "+err.Error(), "")
 		return
 	}
 
-	// SSE 响应头
+	// SSE headers
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -152,17 +152,17 @@ func ChatAgent(c *gin.Context) {
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		xhttp.ErrJSON(c, "Streaming unsupported", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "streaming is not supported by this server", "")
 		return
 	}
 
 	sendSSE(c.Writer, flusher, "RUN_STARTED", map[string]interface{}{"agent": instance.Name, "session_id": sessionID})
 
-	// 本轮耗时：从 RUN_STARTED 到 run 结束。既落库（session_records.duration_ms），
-	// 也随结束事件回给前端 —— 保证「刚跑完看到的秒数」与「刷新后历史里的秒数」是同一个值。
+	// Turn duration: from RUN_STARTED to the end of the run. It is both stored (session_records.duration_ms)
+	// and returned with the finish event, so the seconds seen right after a run equal the ones shown in history after a refresh.
 	startedAt := time.Now()
 
-	// 后台运行 agent 循环
+	// Run the agent loop in the background
 	runDone := make(chan struct{})
 	go func() {
 		defer close(runDone)
@@ -172,22 +172,22 @@ func ChatAgent(c *gin.Context) {
 		inst.CloseChans()
 	}()
 
-	// 流式输出：思考 / 正文 / 工具调用。
-	// 客户端断开（关页面 / 取消请求）时主动终止本轮：否则 SSE 连接已经没了，
-	// agent 还会把整轮跑完 —— 期间 exec / browser 继续占用沙箱资源。
+	// Streaming output: thinking / text / tool calls.
+	// A client disconnect (page closed / request cancelled) ends the turn on purpose: otherwise the SSE connection is gone
+	// while the agent runs the whole turn, with exec / browser still holding sandbox resources.
 	//
-	// 两个断开信号都要接住：
-	//   - reqCtx.Done：浏览器 abort / 关页面，FIN 到达即触发；
-	//   - 心跳写失败：断网 / 休眠 / 中间代理空闲超时不会送 FIN，只能靠「写一次」发现。
-	// 旧实现是在「收到一条事件时」顺带检查 ctx —— 模型长思考或长工具调用期间断连
-	// 要等下一个事件才生效，那段时间沙箱仍在空转。这里改成 select 直接等。
+	// Both disconnect signals must be caught:
+	//   - reqCtx.Done: browser abort / page close, fired as soon as FIN arrives;
+	//   - a failed heartbeat write: a dropped network / sleep / proxy idle timeout sends no FIN, so only a write reveals it.
+	// The old implementation checked ctx while handling an event, so a disconnect during a long model thought or tool call
+	// only took effect on the next event, with the sandbox spinning meanwhile. This waits in the select directly.
 	clientGone := false
 	signalGone := func(why string) {
 		if clientGone {
 			return
 		}
 		clientGone = true
-		inst.LogError("客户端已断开（" + why + "），终止本轮")
+		inst.LogError("client gone (" + why + "), ending this turn")
 		agent.StopRunCause(runID, sessionID, agent.ErrClientGone)
 	}
 
@@ -200,15 +200,15 @@ loop:
 	for {
 		select {
 		case <-reqCtx.Done():
-			signalGone("连接关闭")
-			reqCtx = nil // 置 nil 后该分支永久阻塞，避免重复触发
+			signalGone("connection closed")
+			reqCtx = nil // a nil channel blocks forever, so the branch cannot fire twice
 		case <-ticker.C:
 			if clientGone {
 				continue
 			}
-			// SSE 注释帧：既是保活（防代理 60s 空闲断开），也是半开连接的探针。
+			// An SSE comment frame: both a keepalive (against the 60s proxy idle timeout) and a half-open connection probe.
 			if _, err := fmt.Fprint(c.Writer, ": keepalive\n\n"); err != nil {
-				signalGone("心跳写入失败")
+				signalGone("heartbeat write failed")
 				continue
 			}
 			flusher.Flush()
@@ -217,7 +217,7 @@ loop:
 				break loop
 			}
 			if clientGone {
-				continue // 只排空 channel，不再往已断开的连接写
+				continue // drain the channel only; never write to a closed connection
 			}
 			switch ev.Type {
 			case core.EventThinking:
@@ -248,33 +248,33 @@ loop:
 
 	<-runDone
 
-	// 与落库值同源：agent 层写 session_records 时冻结的耗时，避免「刚看到 8.4s、
-	// 刷新后历史里 8.3s」的错位（两个值必须完全一致）。
+	// From the same source as the stored value: the duration the agent layer froze when writing session_records, avoiding
+	// "8.4s now, 8.3s in history after a refresh" (the two must match exactly).
 	elapsedMs := inst.GetDurationMs()
 
 	if e := inst.GetError(); e != "" {
 		sendSSE(c.Writer, flusher, "RUN_ERROR", map[string]interface{}{"message": e, "duration_ms": elapsedMs})
 	} else {
-		// 本轮产物：run 结束后扫一次工作区，把「这轮写过哪些文件」随结束事件下发。
-		// 只报客观事实（写过），不做价值判断；前端拿它渲染「本轮产出」区域。
+		// Turn artifacts: scan the workspace once after the run and send "which files this turn wrote" with the finish event.
+		// It reports the objective fact (written), makes no judgement, and the UI renders it in the "this turn's output" area.
 		sendSSE(c.Writer, flusher, "RUN_FINISHED", map[string]interface{}{
 			"duration_ms": elapsedMs,
 			"artifacts":   runArtifacts(ai.Schema, sessUserID, sessionID, startedAt),
 		})
 	}
 
-	// 本轮落库已由 agent 层在 Stream 结束时完成（有 session_id 才写），
-	// 这里不再重复写，否则一次对话会在 session_records 里留下两行。
+	// The agent layer already stored this turn when Stream ended (only when a session_id exists),
+	// so nothing is written here - two rows per conversation would otherwise land in session_records.
 
 	fmt.Fprint(c.Writer, "\n")
 	flusher.Flush()
 }
 
-// 会话记录的读写已全部收口到 agent 层（service/agent/agent_impl.go）：
-// 读历史、写本轮、刷新标题都在那里，入口只负责建/解析会话与注入 _record_input。
-// 这样 Web 对话、RPC、MCP、call_agent、flow 节点调起的 agent 共用一套记忆口径。
+// Reading and writing session records all happen in the agent layer (service/agent/agent_impl.go):
+// reading history, storing the turn and refreshing the title live there; an entry point only creates / resolves the session and injects _record_input.
+// That way agents called from web chat, RPC, MCP, call_agent and flow nodes share one memory contract.
 
-// sendSSE 以标准 SSE 分帧发送一个事件。
+// sendSSE sends one event with standard SSE framing.
 func sendSSE(w http.ResponseWriter, flusher http.Flusher, event string, data interface{}) {
 	b, err := json.Marshal(data)
 	if err != nil {
@@ -284,29 +284,29 @@ func sendSSE(w http.ResponseWriter, flusher http.Flusher, event string, data int
 	flusher.Flush()
 }
 
-// stopRequest 终止运行的定位参数：
-//   - session_id：必填。它既是「停哪批运行」的锚点，也是归属校验的唯一依据 ——
-//     没有它就无法判断要停的这条运行是不是本 agent 的；
-//   - run_id：可选。给了就精确停这一条，不给则停该会话下所有在跑的运行（UI 只知道会话）。
+// stopRequest locates the run to stop:
+//   - session_id: required. It anchors "which runs to stop" and is the only basis for the ownership check -
+//     without it there is no way to tell whether the run being stopped belongs to this agent;
+//   - run_id: optional. Given, exactly that run stops; omitted, every run of the session stops (the UI only knows the session).
 //
-// 不接受「只给 run_id」：run 台账是进程级、跨 agent 的，只凭一个 run_id 就能停掉
-// 别人的运行；而 RUN_STARTED 从不回传 run_id，正常前端也拿不到它 ——
-// 这条路本来就不该开（此前文档写着「必须同时给 session_id」，实现却只要求二选一）。
+// "run_id alone" is not accepted: the run ledger is process-wide and spans agents, so a bare run_id could stop
+// someone else's run; and RUN_STARTED never returns a run_id, so a normal front end does not have one -
+// that path should never have been open (the docs said session_id was required, while the code accepted either).
 type stopRequest struct {
 	SessionID string `json:"session_id"`
 	RunID     string `json:"run_id"`
 }
 
-// StopAgentRun 终止正在运行的 agent。
+// StopAgentRun stops a running agent.
 //
-// 幂等：没在跑时返回 stopped:0，不报错（重复调用不会出问题）。
-// 终止后本轮仍会落库（output 为空、duration_ms 照记），SSE 侧收到
-// RUN_ERROR「运行已终止（用户请求）」。
+// Idempotent: stopped:0 when nothing runs, not an error (calling twice is harmless).
+// The turn is still stored after a stop (empty output, duration_ms recorded), and the SSE side receives
+// RUN_ERROR "run stopped (user request)".
 //
-// 对话页的停止按钮**不走这里**：它直接 abort 掉那条 SSE 连接（后端按
-// ErrClientGone 终止）。原因是台账在进程内，多实例部署时这条 HTTP 请求可能被
-// 负载均衡分到没跑这一轮的实例上，只会拿到 stopped:0。本接口留给管理端 /
-// 运维 / 没有连接可断的入口（RPC、MCP、脚本）。
+// The stop button on the chat page does **not** come through here: it aborts the SSE connection itself (the backend
+// ends the run with ErrClientGone). The reason: the ledger is in-process, and with several instances this HTTP request may be
+// load-balanced to an instance that is not running this turn and only get stopped:0. This API is for the admin side /
+// operations / entry points with no connection to abort (RPC, MCP, scripts).
 func StopAgentRun(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -315,7 +315,7 @@ func StopAgentRun(c *gin.Context) {
 	}
 	ai := authInfo.(*auth.AuthInfo)
 
-	// 仍要过 GetAgent：先确认这个 agent 在本租户可见，再谈停止
+	// GetAgent is still required: confirm the agent is visible in this tenant before talking about stopping
 	if _, err := repo.GetAgent(ai, c.Param("id")); err != nil {
 		xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 		return
@@ -327,12 +327,12 @@ func StopAgentRun(c *gin.Context) {
 		return
 	}
 	if req.SessionID == "" {
-		xhttp.ErrJSON(c, "session_id is required", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "session_id is required", "")
 		return
 	}
 
-	// 归属校验：与 ChatAgent 同一口径（按会话归属用户收口）。
-	// 只校验 user 就够了 —— stop 按会话取消全部在跑的运行，跨用户就能打断别人。
+	// Ownership: the same rule as ChatAgent (narrowed by the session owner).
+	// Checking the user is enough - stop cancels every run of the session, so a cross-user call would interrupt someone else.
 	if _, lerr := lookupSessionForUser(ai, ai.Schema, req.SessionID); lerr != nil {
 		respondSessionErr(c, lerr, notOwnedSession)
 		return
@@ -340,7 +340,7 @@ func StopAgentRun(c *gin.Context) {
 
 	stopped := 0
 	if req.RunID != "" {
-		// session_id 一并传入：run 台账会做归属比对，防止跨会话误停。
+		// session_id is passed along: the ledger compares ownership, preventing a cross-session stop.
 		if agent.StopRunCause(req.RunID, req.SessionID, agent.ErrRunStopped) {
 			stopped = 1
 		}
@@ -351,7 +351,7 @@ func StopAgentRun(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"stopped": stopped}, "")
 }
 
-// cleanAgentChunk 清理 agent 输出中的内部标记，只保留可展示文本。
+// cleanAgentChunk strips internal markers from agent output, keeping displayable text only.
 func cleanAgentChunk(s string) string {
 	r := strings.NewReplacer(
 		"[[action]]", "",

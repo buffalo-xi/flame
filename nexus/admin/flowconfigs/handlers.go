@@ -49,12 +49,12 @@ func Getflowconfigs(c *gin.Context) {
 
 	sysCfg, err := repo.Get("")
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load system config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load system config: "+err.Error(), "")
 		return
 	}
 	tenantCfg, err := repo.Get(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load tenant config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load tenant config: "+err.Error(), "")
 		return
 	}
 
@@ -108,14 +108,14 @@ func UpdateTenantflowconfigs(c *gin.Context) {
 
 	var req updateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 
 	// Read the system config for the checks.
 	sysCfg, err := repo.Get("")
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load system config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load system config: "+err.Error(), "")
 		return
 	}
 	var sysZero flowconfigs.FlowConfig
@@ -151,13 +151,13 @@ func UpdateTenantflowconfigs(c *gin.Context) {
 	}
 	for _, chk := range checks {
 		if err := checkNotExceed(chk.field, chk.tenantVal, chk.sysVal); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 	}
 
 	if err := repo.Upsert(cfg); err != nil {
-		xhttp.ErrJSON(c, "failed to save flow config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to save flow config: "+err.Error(), "")
 		return
 	}
 	// Delete after writing: drop the tenant's Redis cache key so the next Resolve rebuilds it from the database.

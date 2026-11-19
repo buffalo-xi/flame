@@ -177,7 +177,7 @@ func ListRuns(c *gin.Context) {
 
 	records, total, err := runRepo.ListRuns(schema, flowId, runType, status, startFrom, startTo, limit, offset)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -211,7 +211,7 @@ func GetRunDetail(c *gin.Context) {
 			xhttp.ErrCode(c, "run.not_found", nil, "Run record not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -237,13 +237,13 @@ func DeleteRun(c *gin.Context) {
 	flowId := c.Param("id")
 	runID := c.Param("runId")
 	if flowId == "" || runID == "" {
-		xhttp.ErrJSON(c, "Invalid request", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request", "")
 		return
 	}
 
 	deleted, err := runRepo.DeleteRun(authInfo.(*auth.AuthInfo).Schema, flowId, runID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if deleted == 0 {
@@ -263,13 +263,13 @@ func DeleteRuns(c *gin.Context) {
 	}
 	flowId := c.Param("id")
 	if flowId == "" {
-		xhttp.ErrJSON(c, "Invalid request", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request", "")
 		return
 	}
 
 	deleted, err := runRepo.DeleteRuns(authInfo.(*auth.AuthInfo).Schema, flowId)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": deleted}, "")

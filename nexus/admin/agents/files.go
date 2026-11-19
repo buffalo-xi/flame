@@ -30,25 +30,25 @@ import (
 )
 
 // ============================================================================
-// agent 工作区文件管理（agent 的本质是一个文件夹）
-//   全部经由 storage 抽象（local / nfs / s3 通用）
-//   skills/ 目录及其内容只读（由技能管理维护，文件接口不得改动）
+// Agent workspace file management (an agent is essentially a folder).
+//   Everything goes through the storage abstraction (local / nfs / s3 alike).
+//   skills/ and its contents are read-only (maintained by skill management; the file API must not touch them).
 // ============================================================================
 
 const (
-	// maxAgentFileBytes 单文件读写上限（避免把大文件塞进编辑器）。
+	// maxAgentFileBytes caps a single file read or write (large files must not end up in the editor).
 	maxAgentFileBytes = 2 << 20 // 2 MiB
-	// readonlyPrefix 工作区内只读的目录（agent 私有 skill，由 skills 表维护）。
+	// readonlyPrefix is the read-only directory inside a workspace (the agent's private skills, maintained by the skills table).
 	readonlyPrefix = "skills"
-	// dirKeepFile S3 没有「空目录」，建目录时写一个占位对象使其可被枚举。
+	// dirKeepFile: S3 has no empty directories, so a placeholder object is written to keep one listable.
 	dirKeepFile = ".keep"
-	// uploadDir 会话内上传落点。刻意放在会话工作目录里（而不是临时目录或用户级 files/）：
-	// 它同时是文件工具的默认根与 exec 的 cwd，只有落在这里 agent 才读得到。
+	// uploadDir is where session uploads land. Deliberately inside the session working directory (not a temp dir or a
+	// user-level files/): it is both the default root of the file tools and the exec cwd, and only here can the agent read it.
 	uploadDir = "uploads"
-	// maxSessionUploadBytes 单次上传上限（20 MiB）：太大会让 read_file 之类的工具读不动。
+	// maxSessionUploadBytes caps one upload (20 MiB): anything larger becomes unreadable for tools such as read_file.
 	maxSessionUploadBytes = 20 << 20
-	// maxRecentScanEntries 「最近文件」一次最多扫多少条（根目录 + 一层子目录）：
-	// 会话目录被 agent 塞满时，不能让一次列表请求变成几十次 LIST。
+	// maxRecentScanEntries caps how many entries "recent files" scans at once (root plus one level):
+	// when an agent has filled its session directory, one list request must not become dozens of LISTs.
 	maxRecentScanEntries = 300
 )
 
@@ -58,7 +58,7 @@ var (
 	storeErr  error
 )
 
-// getStorage 懒加载 agent 存储实例（与 service/agent.InitStorage 同配置）。
+// getStorage lazily builds the agent storage instance (the same configuration as service/agent.InitStorage).
 func getStorage() (storage.Storage, error) {
 	storeOnce.Do(func() {
 		store, storeErr = storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
@@ -66,12 +66,12 @@ func getStorage() (storage.Storage, error) {
 	return store, storeErr
 }
 
-// isReadonlyRel 判断相对路径是否落在只读区（skills 目录及其内容）。
+// isReadonlyRel reports whether a relative path falls in the read-only area (the skills directory and its contents).
 func isReadonlyRel(clean string) bool {
 	return clean == readonlyPrefix || strings.HasPrefix(clean, readonlyPrefix+"/")
 }
 
-// agentWorkspace 返回 storage 实例 + 工作区相对 key；失败时已写响应。
+// agentWorkspace returns the storage instance and the workspace key; on failure the response is already written.
 func agentWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -82,7 +82,7 @@ func agentWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 
 	inst, err := repo.GetAgent(info, c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get the agent: "+err.Error(), "")
 		return nil, "", false
 	}
 	if inst == nil {
@@ -91,14 +91,14 @@ func agentWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 	}
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return nil, "", false
 	}
 	return st, tools.AgentsKey(info.Schema, inst.Name), true
 }
 
-// agentMutable 校验 agent 允许改动：有启用（exposed=true）端点时不允许任何改动。
-// 返回 false 时已写响应，调用方直接 return 即可。
+// agentMutable checks that the agent may be changed: an exposed endpoint (exposed=true) forbids every change.
+// A false return means the response is written; the caller just returns.
 func agentMutable(c *gin.Context) bool {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -108,22 +108,22 @@ func agentMutable(c *gin.Context) bool {
 	info := authInfo.(*auth.AuthInfo)
 	inst, err := repo.GetAgent(info, c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get the agent: "+err.Error(), "")
 		return false
 	}
 	if inst == nil {
 		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return false
 	}
-	// 只有正常态允许改文件内容
+	// Only the normal state allows changing file contents
 	if !inst.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能修改（如需修改请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "the agent is deprecated and cannot be modified (switch it back to normal first)", "")
 		return false
 	}
 	return true
 }
 
-// joinKey 拼接工作区内路径（带穿越校验），返回完整 key 与相对路径。
+// joinKey joins a workspace-relative path (with traversal checks) and returns the full key plus the relative path.
 func joinKey(wsKey, rel string) (string, string, error) {
 	clean, err := tools.SafePath(rel)
 	if err != nil {
@@ -135,8 +135,8 @@ func joinKey(wsKey, rel string) (string, string, error) {
 	return path.Join(wsKey, clean), clean, nil
 }
 
-// authInfoOf 取当前登录租户（中间件已注入）。取不到时返回 false 且不写响应，
-// 由调用方决定是跳过校验还是报错。
+// authInfoOf returns the current tenant (injected by middleware). When absent it returns false and writes nothing,
+// leaving it to the caller whether to skip validation or report an error.
 func authInfoOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
 	if !exists {
@@ -146,34 +146,34 @@ func authInfoOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	return info, ok && info != nil
 }
 
-// checkEntryPath 校验用户显式给出的条目路径（新建与重命名共用）。空串表示通过。
+// checkEntryPath validates an entry path the user typed (shared by create and rename). An empty string means it passed.
 //
-// 三条规则都出自「列表里必须看得见」：. 开头的名字会被 List 过滤掉，建出来就是占着 key
-// 却查不到的东西；层级太深在界面上没法导航，S3 上还多一层前缀。
+// All three rules follow from "it must be visible in the list": a name starting with . is filtered out by List, so
+// creating one leaves something holding a key that cannot be found; deep nesting cannot be navigated in the UI and adds one more prefix on S3.
 func checkEntryPath(clean string) string {
 	if clean == "" {
 		return "path is required"
 	}
 	if strings.HasPrefix(path.Base(clean), ".") {
-		return "名字不能以 . 开头（会被列表隐藏）"
+		return "a name cannot start with . (the list hides it)"
 	}
 	if len([]rune(path.Base(clean))) > 120 {
-		return "名字过长（上限 120 字符）"
+		return "the name is too long (limit 120 characters)"
 	}
 	if len(strings.Split(clean, "/")) > 16 {
-		return "目录层级过深（上限 16 层）"
+		return "the directory is nested too deeply (limit 16 levels)"
 	}
 	return ""
 }
 
-// checkRename 校验「把 oldClean 改名成 newClean」本身是否成立。空串表示通过。
+// checkRename validates "rename oldClean to newClean" on its own. An empty string means it passed.
 //
-// 只做纯字符串判断，不碰存储（好测）；「源不存在」「目标已存在」由调用方查。
-// 两条硬规则：
-//   - 不许覆盖：重命名不是覆盖，对象存储上 CopyObject 会静默盖掉同名对象且无法回滚，
-//     而用户多半只是打错字。
-//   - 不许搬进自己的子树：dir → dir/sub 会先复制成功，再在删旧前缀时把刚搬过去的
-//     内容一起删掉（S3 前缀匹配），本地也会以 invalid argument 失败 —— 两边都得提前挡。
+// It is pure string logic and never touches storage (easy to test); the caller checks "source missing" and "target exists".
+// Two hard rules:
+//   - never overwrite: a rename is not an overwrite; on object storage CopyObject silently replaces a same-named object with no rollback,
+//     and the user usually just made a typo.
+//   - never move into your own subtree: dir -> dir/sub copies successfully, then deleting the old prefix takes the
+//     freshly moved content with it (S3 prefix matching), and locally it fails with an invalid argument - both must be blocked up front.
 func checkRename(oldClean, newClean string) string {
 	if oldClean == "" {
 		return "path is required"
@@ -182,20 +182,20 @@ func checkRename(oldClean, newClean string) string {
 		return "new_path is required"
 	}
 	if oldClean == newClean {
-		return "新名字和原名相同"
+		return "the new name is the same as the old one"
 	}
 	if msg := checkEntryPath(newClean); msg != "" {
 		return msg
 	}
 	if strings.HasPrefix(newClean, oldClean+"/") {
-		return "不能移动到自己的子目录里"
+		return "cannot move a directory into its own subtree"
 	}
 	return ""
 }
 
-// entryExists 判断路径上有没有东西（文件或目录）。
-// S3 的目录没有对象，Exists 恒为 false，所以要再用 List 看一眼里面有没有条目；
-// 本地 Stat 对目录同样返回存在，这一条把两种情况都覆盖。
+// entryExists reports whether anything (file or directory) exists at the path.
+// S3 directories have no object, so Exists is always false; a List is also needed to see whether it holds entries,
+// while a local Stat does report a directory; this covers both.
 func entryExists(ctx context.Context, st storage.Storage, abs string) bool {
 	if ex, _ := st.Exists(ctx, abs); ex {
 		return true
@@ -204,7 +204,7 @@ func entryExists(ctx context.Context, st storage.Storage, abs string) bool {
 	return err == nil && len(entries) > 0
 }
 
-// ListAgentFiles 列出工作区某目录下的条目（path 为空 = 工作区根）。
+// ListAgentFiles lists the entries of a workspace directory (an empty path = the workspace root).
 func ListAgentFiles(c *gin.Context) {
 	st, wsKey, ok := agentWorkspace(c)
 	if !ok {
@@ -212,20 +212,20 @@ func ListAgentFiles(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 
 	entries, lerr := st.List(context.Background(), abs)
 	if lerr != nil {
-		// 目录不存在视为空列表（S3 下空目录本身不存在）
+		// A missing directory counts as an empty list (an empty directory does not exist on S3)
 		xhttp.OkJSON(c, "Success", gin.H{"path": clean, "entries": []any{}}, "")
 		return
 	}
 
 	items := make([]gin.H, 0, len(entries))
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name, ".") { // 跳过隐藏文件（含 .keep 占位）
+		if strings.HasPrefix(e.Name, ".") { // skip hidden files (including the .keep placeholder)
 			continue
 		}
 		p := path.Join(clean, e.Name)
@@ -240,7 +240,7 @@ func ListAgentFiles(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean, "entries": items}, "")
 }
 
-// ReadAgentFile 读取工作区内的文件内容（skills/ 可读）。
+// ReadAgentFile reads a file inside the workspace (skills/ is readable).
 func ReadAgentFile(c *gin.Context) {
 	st, wsKey, ok := agentWorkspace(c)
 	if !ok {
@@ -248,11 +248,11 @@ func ReadAgentFile(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "agent.path_required", nil, "path is required", "")
 		return
 	}
 	data, rerr := st.ReadFile(context.Background(), abs)
@@ -261,7 +261,7 @@ func ReadAgentFile(c *gin.Context) {
 		return
 	}
 	if len(data) > maxAgentFileBytes {
-		xhttp.ErrJSON(c, "file too large to edit", nil, "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxAgentFileBytes >> 20}, "file too large to edit", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -273,18 +273,18 @@ func ReadAgentFile(c *gin.Context) {
 }
 
 // ============================================================================
-// 会话工作区文件接口（「工作区」= 某次会话的运行场地）
-//   与上面的定义域文件接口分开：这里是产物（products），不是定义（definition）。
-//   能力：列目录 / 读 / 下载 / 上传 / 删除。
-//   刻意**没有**新建与就地编辑：工作区归 agent 所有，界面只是浏览面 + 投喂面；
-//   多一个写者就会和正在运行的 agent 抢同一个目录（无锁），误写代价不可逆。
+// Session workspace file API ("workspace" = where one session runs).
+//   Separate from the definition-domain file API above: these are products, not definitions.
+//   Capabilities: list / read / download / upload / delete.
+//   Deliberately **no** create and no in-place editing: the workspace belongs to the agent, and the UI only browses and feeds it;
+//   another writer would race the running agent over the same unlocked directory, and a bad write is irreversible.
 // ============================================================================
 
-// sessionWorkspace 由 query 的 session_id 解析出该会话的工作目录 key。
+// sessionWorkspace resolves the working directory key of a session from the session_id query parameter.
 //
-// 归属校验与 UploadSessionFile 同口径：会话必须属于路由上的这个 agent。
-// 缺了这一步，任何人凭一个 session_id 就能借任意 agent 的 /session/* 路由读写别人的会话
-// 工作区 —— 返回的路径是按会话真正的 owner user 拼的，等于直接指到对方目录里。
+// Ownership is checked the same way as in UploadSessionFile: the session must belong to the agent in the route.
+// Without it anyone holding a session_id could borrow any agent's /session/* routes to read and write someone else's
+// session workspace - the returned path is built from the session's real owner user, pointing straight into their directory.
 func sessionWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -295,7 +295,7 @@ func sessionWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 
 	inst, ierr := repo.GetAgent(info, c.Param("id"))
 	if ierr != nil {
-		xhttp.ErrJSON(c, ierr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get the agent: "+ierr.Error(), "")
 		return nil, "", false
 	}
 	if inst == nil {
@@ -303,26 +303,26 @@ func sessionWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 		return nil, "", false
 	}
 
-	// 统一走 lookupSessionForUser：空 / 非 UUID / 不存在 / 不是本人
-	// 四类失败一次判完，对外合并成一句话（否则这里就成了探测 sid 是否存在的接口）。
+	// Everything goes through lookupSessionForUser: empty / not a UUID / missing / not the owner
+	// the four failures are decided at once and reported as one sentence (otherwise this becomes an API for probing whether a sid exists).
 	sess, lerr := lookupSessionForUser(info, info.Schema, c.Query("session_id"))
 	if lerr != nil {
 		respondSessionErr(c, lerr, notOwnedSession)
 		return nil, "", false
 	}
 	if sess.UserID == "" {
-		xhttp.ErrJSON(c, "session has no owner user", nil, "")
+		xhttp.ErrCode(c, "agent.session_no_owner", nil, "session has no owner user", "")
 		return nil, "", false
 	}
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return nil, "", false
 	}
 	return st, paths.UserSessionKey(info.Schema, sess.UserID, sess.ID), true
 }
 
-// ListSessionFiles 列出会话工作目录下的条目（path 为空 = 目录根）。
+// ListSessionFiles lists the entries of the session working directory (an empty path = the directory root).
 func ListSessionFiles(c *gin.Context) {
 	st, wsKey, ok := sessionWorkspace(c)
 	if !ok {
@@ -330,30 +330,30 @@ func ListSessionFiles(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 
 	entries, lerr := st.List(context.Background(), abs)
 	if lerr != nil {
-		// 目录不存在视为空列表（S3 下空目录本身不存在）
+		// A missing directory counts as an empty list (an empty directory does not exist on S3)
 		xhttp.OkJSON(c, "Success", gin.H{"path": clean, "entries": []any{}}, "")
 		return
 	}
 
 	items := make([]gin.H, 0, len(entries))
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name, ".") { // 跳过隐藏文件（含 .keep 占位）
+		if strings.HasPrefix(e.Name, ".") { // skip hidden files (including the .keep placeholder)
 			continue
 		}
 		item := gin.H{
 			"name":     e.Name,
 			"path":     path.Join(clean, e.Name),
 			"is_dir":   e.IsDir,
-			"readonly": true, // 内容不在界面里编辑（可下载 / 可删除；上传走 upload 接口）
+			"readonly": true, // content is never edited in the UI (download / delete are fine; uploads use the upload API)
 			"size":     e.Size,
 		}
-		// S3 的「目录」来自 CommonPrefixes，没有修改时间；零值就不下发，前端按空处理
+		// S3 "directories" come from CommonPrefixes and have no modification time; a zero value is omitted and the front end treats it as empty
 		if !e.ModTime.IsZero() {
 			item["mod_time"] = e.ModTime
 		}
@@ -362,7 +362,7 @@ func ListSessionFiles(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean, "entries": items}, "")
 }
 
-// ReadSessionFile 读取会话工作目录内的文件内容（只读）。
+// ReadSessionFile reads a file in the session working directory (read-only).
 func ReadSessionFile(c *gin.Context) {
 	st, wsKey, ok := sessionWorkspace(c)
 	if !ok {
@@ -370,11 +370,11 @@ func ReadSessionFile(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "agent.path_required", nil, "path is required", "")
 		return
 	}
 	data, rerr := st.ReadFile(context.Background(), abs)
@@ -383,7 +383,7 @@ func ReadSessionFile(c *gin.Context) {
 		return
 	}
 	if len(data) > maxAgentFileBytes {
-		xhttp.ErrJSON(c, "file too large to view", nil, "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxAgentFileBytes >> 20}, "file too large to view", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -394,21 +394,21 @@ func ReadSessionFile(c *gin.Context) {
 	}, "")
 }
 
-// CreateSessionEntry 在会话工作区里新建文件或目录。
+// CreateSessionEntry creates a file or directory in the session workspace.
 //
-// 与定义域的 CreateAgentEntry 同构，差别有三处：
-//   - 不挂 agentMutable：会话工作区是运行产物，agent 废弃时也照常可写；
-//   - 新建文件可以带初始内容 —— 面板不提供就地编辑（ReadSessionFile 恒 readonly），
-//     内容只能在创建时一次性写进去；
-//   - 拒绝 . 开头的名字：ListSessionFiles 会跳过这类条目（.keep 占位就靠它隐藏），
-//     放行等于建出一个"列表里看不见、还占着 key"的东西。
+// It mirrors CreateAgentEntry in the definition domain, with three differences:
+//   - no agentMutable gate: the session workspace is run output and stays writable even when the agent is deprecated;
+//   - a new file may carry initial content - the panel offers no in-place editing (ReadSessionFile is always readonly),
+//     so content can only be written once, at creation;
+//   - names starting with . are rejected: ListSessionFiles skips them (that is how the .keep placeholder hides),
+//     and allowing one would create something invisible in the list that still holds a key.
 //
-// 子目录：path 允许带 /（如 reports/2026），中间层由存储层自然建出 ——
-// 本地 WriteFile 会 MkdirAll 父链，S3 的前缀本身就是目录。
-// S3 无「空目录」：建目录时写一个 .keep 占位对象使其可被枚举。
+// Subdirectories: path may contain / (e.g. reports/2026) and the intermediate levels are created by the storage layer -
+// a local WriteFile MkdirAll-s the parent chain, and on S3 a prefix is the directory.
+// S3 has no empty directory: creating one writes a .keep placeholder object so it can be listed.
 //
-// 冲突一律报错、不静默改名：上传是"投喂一个文件"（名字冲突另存 name-2），
-// 这里是用户显式命名，悄悄改名比报错更难用。要覆盖已有文件请先删（有二次确认）再建。
+// A clash is always an error, never a silent rename: an upload feeds in a file (a clash saves as name-2),
+// while here the user named it explicitly, and a quiet rename is worse than an error. To replace a file, delete it first (that asks for confirmation).
 func CreateSessionEntry(c *gin.Context) {
 	st, wsKey, ok := sessionWorkspace(c)
 	if !ok {
@@ -425,15 +425,15 @@ func CreateSessionEntry(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, body.Path)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if msg := checkEntryPath(clean); msg != "" {
-		xhttp.ErrJSON(c, msg, nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, msg, "")
 		return
 	}
 	if !body.IsDir && len(body.Content) > maxAgentFileBytes {
-		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxAgentFileBytes >> 20}, fmt.Sprintf("内容过大（上限 %d MB）", maxAgentFileBytes>>20), "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxAgentFileBytes >> 20}, fmt.Sprintf("content too large (limit %d MB)", maxAgentFileBytes>>20), "")
 		return
 	}
 	ctx := context.Background()
@@ -442,7 +442,7 @@ func CreateSessionEntry(c *gin.Context) {
 		return
 	}
 	if !body.IsDir {
-		// 目录不占空间（S3 的 .keep 是 0 字节），只有写文件才需要过配额
+		// Directories take no space (the S3 .keep is zero bytes), so only writing a file goes through the quota
 		if _, qerr := quota.Admit(ctx, st, authInfoSchema(c), wsKey, authInfoID(c), int64(len(body.Content))); qerr != nil {
 			respondQuotaErr(c, qerr)
 			return
@@ -454,7 +454,7 @@ func CreateSessionEntry(c *gin.Context) {
 		err = st.WriteFile(ctx, abs, []byte(body.Content))
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the entry: "+err.Error(), "")
 		return
 	}
 	if !body.IsDir {
@@ -467,13 +467,13 @@ func CreateSessionEntry(c *gin.Context) {
 	}, "")
 }
 
-// DeleteSessionEntry 删除会话工作区里的文件或目录（产物清理）。
+// DeleteSessionEntry deletes a file or directory in the session workspace (cleaning up products).
 //
-// 与定义域的 DeleteAgentEntry 有一处关键差别：这里**不拒绝任何前缀**。
-// 定义域的 skills/ 由技能表维护所以只读；会话工作区里的东西（含 uploads/）全是产物，
-// 属于会话所有者，允许清理。
+// One key difference from DeleteAgentEntry in the definition domain: **no prefix is refused** here.
+// The definition-domain skills/ is read-only because the skills table maintains it; everything in a session workspace (uploads/ included) is a product
+// owned by the session owner and may be cleaned up.
 //
-// 注意：目录是递归删除且不可恢复，前端必须二次确认并写清路径。
+// Note: deleting a directory is recursive and unrecoverable, so the UI must confirm and spell out the path.
 func DeleteSessionEntry(c *gin.Context) {
 	st, wsKey, ok := sessionWorkspace(c)
 	if !ok {
@@ -481,24 +481,24 @@ func DeleteSessionEntry(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "agent.path_required", nil, "path is required", "")
 		return
 	}
-	// 删除前先算它占了多少，删成功后把用量扣回来（否则删了文件额度也不回来）
+	// Measure the size before deleting and give the usage back afterwards (otherwise deleting frees no quota)
 	freed := entrySize(context.Background(), st, abs)
-	// 文件与目录各删一次（两者都幂等、都容忍不存在）：
-	//   本地：Delete = os.Remove（非空目录会失败，忽略即可），DeletePrefix = os.RemoveAll（通吃）
-	//   S3  ：Delete 删对象，DeletePrefix 删前缀（目录）
-	// 注意：不能用 Exists 区分文件/目录 —— 本地 os.Stat 对目录同样返回存在。
+	// Delete as file and as directory (both are idempotent and tolerate a missing target):
+	//   local: Delete = os.Remove (fails on a non-empty directory, ignore it), DeletePrefix = os.RemoveAll (handles both)
+	//   S3   : Delete removes an object, DeletePrefix removes a prefix (directory)
+	// Note: Exists cannot tell a file from a directory - a local os.Stat reports a directory as existing too.
 	_ = st.Delete(context.Background(), abs)
 	_ = st.DeletePrefix(context.Background(), abs)
-	// 校验是否真的删掉（本地有效；S3 目录无对象，Exists 恒为 false）
+	// Verify it is really gone (valid locally; on S3 a directory has no object and Exists is always false)
 	if ex, _ := st.Exists(context.Background(), abs); ex {
-		xhttp.ErrJSON(c, "delete failed: "+clean, nil, "")
+		xhttp.ErrCode(c, "agent.delete_failed", nil, "delete failed: "+clean, "")
 		return
 	}
 	if freed > 0 {
@@ -507,8 +507,8 @@ func DeleteSessionEntry(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean}, "")
 }
 
-// entrySize 估算一个条目占的字节数：文件走 Stat，目录走递归求和。
-// 只用于把配额计数扣回来，估不准也只是让下一次校准多扫一次，不影响正确性。
+// entrySize estimates the bytes an entry occupies: Stat for a file, a recursive sum for a directory.
+// It only gives quota back, so an imprecise estimate just makes the next calibration scan once more; correctness is unaffected.
 func entrySize(ctx context.Context, st storage.Storage, key string) int64 {
 	if sz, _, err := st.Stat(ctx, key); err == nil {
 		return sz
@@ -525,12 +525,12 @@ func entrySize(ctx context.Context, st storage.Storage, key string) int64 {
 	return total
 }
 
-// RenameSessionEntry 重命名 / 移动会话工作区里的文件或目录（body: {path, new_path}）。
+// RenameSessionEntry renames / moves a file or directory in the session workspace (body: {path, new_path}).
 //
-// 为什么单开一个接口，而不是让前端「下载 + 重新新建」：新建的 content 是字符串，
-// 二进制文件（xlsx / zip / 图片 / 音视频）走不了那条路，而它们恰恰最需要改名。
+// Why a dedicated endpoint instead of "download and create again": a create takes content as a string,
+// and binary files (xlsx / zip / images / audio and video) cannot take that path, yet they are exactly what needs renaming.
 //
-// 与定义域不同，这里不拒绝任何前缀：会话工作区里全是产物，uploads/ 里的东西也能改。
+// Unlike the definition domain, no prefix is refused here: everything in a session workspace is a product, uploads/ included.
 func RenameSessionEntry(c *gin.Context) {
 	st, wsKey, ok := sessionWorkspace(c)
 	if !ok {
@@ -546,16 +546,16 @@ func RenameSessionEntry(c *gin.Context) {
 	}
 	oldAbs, oldClean, err := joinKey(wsKey, body.Path)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	newAbs, newClean, err := joinKey(wsKey, body.NewPath)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if msg := checkRename(oldClean, newClean); msg != "" {
-		xhttp.ErrJSON(c, msg, nil, "")
+		xhttp.ErrCode(c, "agent.invalid_rename", nil, msg, "")
 		return
 	}
 	ctx := context.Background()
@@ -563,20 +563,20 @@ func RenameSessionEntry(c *gin.Context) {
 		xhttp.ErrCode(c, "agent.file_not_found", nil, "not found: "+oldClean, "")
 		return
 	}
-	// 覆盖一律拒绝：见 checkRename 的注释
+	// Overwrites are always refused: see the checkRename comment
 	if entryExists(ctx, st, newAbs) {
-		xhttp.ErrJSON(c, "already exists: "+newClean, nil, "")
+		xhttp.ErrCode(c, "agent.file_exists", gin.H{"path": newClean}, "already exists: "+newClean, "")
 		return
 	}
 	if rerr := st.Rename(ctx, oldAbs, newAbs); rerr != nil {
-		xhttp.ErrJSON(c, "rename failed: "+rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.rename_failed", nil, "rename failed: "+rerr.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"path": newClean}, "")
 }
 
-// DownloadSessionFile 以附件形式下载会话工作目录里的文件（登录态直连，供预览/脚本调用）。
-// 浏览器导航式下载走 DownloadByTicket（带票、不需要 Authorization 头）。
+// DownloadSessionFile downloads a file from the session working directory as an attachment (authenticated direct call, for previews and scripts).
+// Navigation-style browser downloads go through DownloadByTicket (a ticket, no Authorization header).
 func DownloadSessionFile(c *gin.Context) {
 	st, wsKey, ok := sessionWorkspace(c)
 	if !ok {
@@ -584,33 +584,33 @@ func DownloadSessionFile(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "agent.path_required", nil, "path is required", "")
 		return
 	}
 	ServeDownload(c, st, abs, clean)
 }
 
 // ============================================================================
-// 预签名下载：开关 + 探针
+// Presigned downloads: switch + probe
 //
-//	presign_download: false                            → off（默认），S3 也走 nexus 转发
-//	presign_download: true                             → on，信任部署者的断言
-//	presign_download: true + presign_probe_key: <key>  → auto，探针通过才用
+//	presign_download: false                            -> off (default); S3 also streams through nexus
+//	presign_download: true                             -> on, trusting the deployer's assertion
+//	presign_download: true + presign_probe_key: <key>  -> auto, used only once the probe passes
 //
-// 三态由两个字段拼出来，不引入 off/auto/on 字符串：YAML 1.1 里 on/off 本身就是布尔
-// 字面量，解码到 string 要多一层兼容解析；而「有没有配 probe_key」已把 auto 说清楚了。
+// The three states are derived from two fields rather than an off/auto/on string: in YAML 1.1 on/off are booleans
+// themselves, so decoding into a string needs an extra compatibility pass; and "is probe_key set" already says auto.
 // ============================================================================
 
 const (
-	// presignRetryAfter 探针失败后的冷却时长：分不清「不支持」与「端点/凭据临时故障」，
-	// 一刀切永久禁用会让一次抖动变成永久降级。
+	// presignRetryAfter is the cooldown after a failed probe: "unsupported" and "a temporary endpoint / credential fault"
+	// cannot be told apart, and disabling for good would turn one blip into a permanent downgrade.
 	presignRetryAfter = 10 * time.Minute
-	// presignProbeFileName 探针签进 URL 的下载名（纯 ASCII，验的是「参数被尊重」，
-	// 中文名的 filename* 编码由 storage.contentDisposition 单独保证）。
+	// presignProbeFileName is the download name signed into the probe URL (pure ASCII; it verifies that the parameter is
+	// honoured - the filename* encoding of non-ASCII names is covered separately by storage.contentDisposition).
 	presignProbeFileName = "probe.txt"
 	presignProbeTimeout  = 5 * time.Second
 )
@@ -618,32 +618,32 @@ const (
 var (
 	probeMu   sync.Mutex
 	probeOK   bool
-	probeNext time.Time // 探针失败后的冷却截止时间
+	probeNext time.Time // end of the cooldown after a failed probe
 )
 
-// presignAllowed 预签名下载当前是否可用；false 即走降级（本进程发字节）。
+// presignAllowed reports whether presigned downloads are usable; false means the fallback (this process sends the bytes).
 func presignAllowed() bool {
 	h := config.Cfg.Agent.HTTP
 	if !h.PresignDownload {
 		return false
 	}
 	if config.Cfg.Agent.Storage.Driver != "s3" {
-		return false // local / nfs 没有「外部可达的临时链接」，签了也是空串
+		return false // local / nfs have no externally reachable temporary link, so signing yields an empty string
 	}
 	if strings.TrimSpace(h.PresignProbeKey) == "" {
-		return true // 没配探针：部署者已实测过，信任断言
+		return true // no probe configured: the deployer tested it, so trust the assertion
 	}
 	return presignProbePassed()
 }
 
-// presignProbePassed 用真实对象验一次「预签名 + 响应头覆盖」是否被这家实现尊重。
+// presignProbePassed checks once, with a real object, whether this implementation honours "presign + response header override".
 //
-// 两个不能省的点：
-//  1. 必须用 GET。SigV4 把 HTTP 方法签进 canonical request，拿 GET 预签名 URL 发 HEAD
-//     会直接 403 —— 探针反而会把「支持」误判成「不支持」。所以探针对象要够小
-//     （0 字节最好），读一个字节就断，代价可忽略。
-//  2. 状态码 200 之外还要看 Content-Disposition：有些实现既不报错也不覆盖响应头，
-//     表现为「能下载但文件名照旧乱码」，只查状态码会漏掉这一种。
+// Two points that cannot be skipped:
+//  1. it must be GET. SigV4 signs the HTTP method into the canonical request, so sending HEAD to a GET presigned URL
+//     returns 403 - the probe would misread "supported" as "unsupported". So the probe object must be small
+//     (zero bytes is best), reading a single byte and stopping, at negligible cost.
+//  2. besides status 200 the Content-Disposition must be checked: some implementations neither error nor override the header,
+//     showing up as "downloads work but the file name is still garbled"; a status check alone misses that case.
 func presignProbePassed() bool {
 	probeMu.Lock()
 	defer probeMu.Unlock()
@@ -655,7 +655,7 @@ func presignProbePassed() bool {
 	}
 	fail := func(reason string) bool {
 		probeNext = time.Now().Add(presignRetryAfter)
-		xlog.Error("预签名探针失败，%s 内降级为 nexus 转发: %s", presignRetryAfter, reason)
+		xlog.Error("presign probe failed; falling back to nexus relay for %s: %s", presignRetryAfter, reason)
 		return false
 	}
 
@@ -669,7 +669,7 @@ func presignProbePassed() bool {
 		return fail("presign: " + perr.Error())
 	}
 	if u == "" {
-		return fail("backend 不支持预签名")
+		return fail("the backend does not support presigning")
 	}
 
 	req, rerr := http.NewRequest(http.MethodGet, u, nil)
@@ -678,26 +678,26 @@ func presignProbePassed() bool {
 	}
 	resp, derr := (&http.Client{Timeout: presignProbeTimeout}).Do(req)
 	if derr != nil {
-		return fail("请求失败: " + derr.Error())
+		return fail("request failed: " + derr.Error())
 	}
 	defer resp.Body.Close()
-	_, _ = io.CopyN(io.Discard, resp.Body, 1) // 只读一个字节，别把整个对象拉下来
+	_, _ = io.CopyN(io.Discard, resp.Body, 1) // read one byte only; do not pull the whole object
 
 	if resp.StatusCode != http.StatusOK {
 		return fail(fmt.Sprintf("HTTP %d", resp.StatusCode))
 	}
 	if cd := resp.Header.Get("Content-Disposition"); !strings.HasPrefix(strings.ToLower(cd), "attachment") {
-		return fail("响应头未被覆盖（Content-Disposition=" + cd + "）")
+		return fail("the response header was not overridden (Content-Disposition=" + cd + ")")
 	}
 	probeOK = true
-	xlog.Info("预签名探针通过 key=%s", key)
+	xlog.Info("presign probe passed key=%s", key)
 	return true
 }
 
-// presignDownload 尝试把字节交付甩给对象存储。返回 true 表示已写响应，调用方直接 return。
+// presignDownload tries to hand byte delivery to the object store. A true return means the response is written; the caller just returns.
 //
-// 预签名是「加速」不是「功能」：后端返回空串（local/nfs）或签名出错时静默退回本进程发送，
-// 绝不为它把下载做成 500。
+// Presigning is an accelerator, not a feature: when the backend returns an empty string (local/nfs) or signing fails it silently
+// falls back to this process sending the bytes - never turns a download into a 500.
 func presignDownload(c *gin.Context, st storage.Storage, abs, name string) bool {
 	if !presignAllowed() {
 		return false
@@ -706,22 +706,22 @@ func presignDownload(c *gin.Context, st storage.Storage, abs, name string) bool 
 	if err != nil || u == "" {
 		return false
 	}
-	// no-store：别让浏览器缓存这个 302 —— 票是一次性的，链接会过期
+	// no-store: keep the browser from caching this 302 - the ticket is single-use and the link expires
 	c.Header("Cache-Control", "no-store")
 	c.Redirect(http.StatusFound, u)
 	return true
 }
 
-// ServeDownload 下载的统一实现，按部署形态四级分派：
-//  0. S3 + presign_download → 302 到预签名 URL，字节由对象存储发（Range / 续传天然支持）；
-//  1. nginx（agent.http.x_accel_prefix 非空）→ 回 X-Accel-Redirect，字节由 nginx 发；
-//  2. local / nfs → http.ServeContent（自带 Range / 206 / If-Modified-Since）；
-//  3. 其它（S3 关掉预签名时）→ 无 Range 的流式转发。
+// ServeDownload is the shared download implementation, dispatching on deployment shape:
+//  0. S3 + presign_download -> a 302 to the presigned URL, bytes sent by the object store (Range / resume come for free);
+//  1. nginx (agent.http.x_accel_prefix set) -> X-Accel-Redirect, bytes sent by nginx;
+//  2. local / nfs -> http.ServeContent (Range / 206 / If-Modified-Since included);
+//  3. anything else (S3 with presigning off) -> a streaming relay without Range.
 func ServeDownload(c *gin.Context, st storage.Storage, abs, clean string) {
 	ctx := context.Background()
 	name := path.Base(clean)
 
-	// 先拿元信息：既做上限检查，也给 ServeContent 提供 modTime（Content-Length 由它补）
+	// Fetch the metadata first: it feeds the size check and gives ServeContent a modTime (which also fills Content-Length)
 	size, mod, serr := st.Stat(ctx, abs)
 	if serr != nil {
 		xhttp.ErrCode(c, "agent.file_not_found", nil, "file not found", "")
@@ -729,16 +729,16 @@ func ServeDownload(c *gin.Context, st storage.Storage, abs, clean string) {
 	}
 	limit := config.Cfg.Agent.HTTP.MaxDownloadBytes()
 	if size > limit {
-		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": limit >> 20}, fmt.Sprintf("文件过大（上限 %d MB）", limit>>20), "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": limit >> 20}, fmt.Sprintf("file too large (limit %d MB)", limit>>20), "")
 		return
 	}
 
-	// 0) 对象存储预签名：换了交付方式不等于换了规则，上限检查必须在它前面
+	// 0) object-store presigning: a different delivery path is not a different rule set, so the size check comes first
 	if presignDownload(c, st, abs, name) {
 		return
 	}
 
-	// 中文名必须走 RFC 5987 的 filename*，否则浏览器存下来是乱码
+	// A non-ASCII name must use RFC 5987 filename*, or the browser saves it under a garbled name
 	c.Header("Content-Type", "application/octet-stream")
 	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(name))
 	c.Header("Cache-Control", "no-store")
@@ -769,12 +769,12 @@ func ServeDownload(c *gin.Context, st storage.Storage, abs, clean string) {
 	defer rc.Close()
 	c.Header("Content-Length", strconv.FormatInt(size, 10))
 	c.Status(http.StatusOK)
-	// 已经开始写响应，中途出错只能放弃（客户端断开是常态，不算错误）
+	// The response is already being written, so a failure ends here (a client disconnect is normal, not an error)
 	_, _ = io.Copy(c.Writer, rc)
 }
 
-// accelPath 把存储 key 转成 X-Accel-Redirect 用的 URI：逐段转义。
-// 整段 PathEscape 会把 "/" 也编码成 %2F，nginx 就找不到文件了。
+// accelPath turns a storage key into the URI for X-Accel-Redirect, escaping segment by segment.
+// Escaping the whole string would encode "/" as %2F and nginx would not find the file.
 func accelPath(prefix, key string) string {
 	segs := strings.Split(strings.TrimPrefix(key, "/"), "/")
 	for i, s := range segs {
@@ -783,7 +783,7 @@ func accelPath(prefix, key string) string {
 	return strings.TrimRight(prefix, "/") + "/" + strings.Join(segs, "/")
 }
 
-// WriteAgentFile 写入/覆盖工作区内的文件（skills/ 拒绝）。
+// WriteAgentFile writes or overwrites a file in the workspace (skills/ is refused).
 func WriteAgentFile(c *gin.Context) {
 	if !agentMutable(c) {
 		return
@@ -802,40 +802,40 @@ func WriteAgentFile(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, body.Path)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "agent.path_required", nil, "path is required", "")
 		return
 	}
 	if isReadonlyRel(clean) {
-		xhttp.ErrJSON(c, "skills directory is read-only", nil, "")
+		xhttp.ErrCode(c, "agent.skills_dir_readonly", nil, "skills directory is read-only", "")
 		return
 	}
 	if len(body.Content) > maxAgentFileBytes {
-		xhttp.ErrJSON(c, "content too large", nil, "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxAgentFileBytes >> 20}, "content too large", "")
 		return
 	}
-	// 文档里的 ${global_vars.X} 会被展开进 system prompt：密钥类型的变量必须拦在保存这一步，
-	// 否则它一旦进了 AGENT.md 就会进模型上下文与运行记录（见 globalvars.ValidateDocRefs）。
+	// ${global_vars.X} inside a document is expanded into the system prompt, so secret variables must be stopped at save
+	// time - once inside AGENT.md they reach the model context and the run records (see globalvars.ValidateDocRefs).
 	if strings.HasSuffix(strings.ToLower(clean), ".md") {
 		if info, ok := authInfoOf(c); ok {
 			if vErr := globalvars.ValidateDocRefs(info.Schema, body.Content); vErr != nil {
-				xhttp.ErrJSON(c, vErr.Error(), nil, "")
+				xhttp.ErrCode(c, "agent.invalid_doc_refs", nil, vErr.Error(), "")
 				return
 			}
 		}
 	}
 	if werr := st.WriteFile(context.Background(), abs, []byte(body.Content)); werr != nil {
-		xhttp.ErrJSON(c, werr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the file: "+werr.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean, "size": len(body.Content)}, "")
 }
 
-// DownloadAgentFile 流式下载定义域里的文件。
-// 用途：文件列表「拖出到桌面」要拿原始字节做 data: 载荷；编辑器只读不等于不能取得原件。
+// DownloadAgentFile streams a file from the definition domain.
+// Use: "drag to desktop" in the file list needs the raw bytes for a data: payload; a read-only editor does not forbid fetching the original.
 func DownloadAgentFile(c *gin.Context) {
 	st, wsKey, ok := agentWorkspace(c)
 	if !ok {
@@ -843,18 +843,18 @@ func DownloadAgentFile(c *gin.Context) {
 	}
 	abs, clean, jerr := joinKey(wsKey, c.Query("path"))
 	if jerr != nil {
-		xhttp.ErrJSON(c, jerr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, jerr.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "agent.path_required", nil, "path is required", "")
 		return
 	}
 	ServeDownload(c, st, abs, clean)
 }
 
-// CreateAgentEntry 新建文件或目录（skills/ 拒绝）。
-// S3 无「空目录」：建目录时写一个 .keep 占位对象。
+// CreateAgentEntry creates a file or directory (skills/ is refused).
+// S3 has no empty directory: creating one writes a .keep placeholder object.
 func CreateAgentEntry(c *gin.Context) {
 	if !agentMutable(c) {
 		return
@@ -873,15 +873,15 @@ func CreateAgentEntry(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, body.Path)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "agent.path_required", nil, "path is required", "")
 		return
 	}
 	if isReadonlyRel(clean) {
-		xhttp.ErrJSON(c, "skills directory is read-only", nil, "")
+		xhttp.ErrCode(c, "agent.skills_dir_readonly", nil, "skills directory is read-only", "")
 		return
 	}
 	if ex, _ := st.Exists(context.Background(), abs); ex {
@@ -894,20 +894,20 @@ func CreateAgentEntry(c *gin.Context) {
 		err = st.WriteFile(context.Background(), abs, []byte{})
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to create the entry: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean, "is_dir": body.IsDir}, "")
 }
 
-// UploadAgentFile 上传文件到 agent 定义域的指定子目录（multipart：file + dir）。
+// UploadAgentFile uploads a file into a subdirectory of the agent definition domain (multipart: file + dir).
 //
-// 与技能侧 UploadSkillFile 同构，差别在两道闸：
-//   - agentMutable：有启用端点（exposed）时定义域不可改，与其它写接口一致；
-//   - skills/ 只读：技能目录由技能表维护，文件接口不得改动。
+// It mirrors UploadSkillFile on the skill side, with two gates in between:
+//   - agentMutable: an exposed endpoint freezes the definition domain, as in every other write API;
+//   - skills/ is read-only: the skills table maintains that directory and the file API must not touch it.
 //
-// 落点没有 uploads/ 兜底：定义域根就是内容根，dir 不传即根目录。
-// 同名不覆盖：另存 name-2.ext —— 覆盖等于删掉已有文件，要替换请先删（有二次确认）再传。
+// There is no uploads/ fallback: the definition root is the content root, and omitting dir means the root.
+// No overwriting: save as name-2.ext - overwriting deletes an existing file, so delete first (that asks for confirmation) and upload again.
 func UploadAgentFile(c *gin.Context) {
 	if !agentMutable(c) {
 		return
@@ -918,56 +918,56 @@ func UploadAgentFile(c *gin.Context) {
 	}
 	fh, ferr := c.FormFile("file")
 	if ferr != nil {
-		xhttp.ErrJSON(c, "file is required", nil, "")
+		xhttp.ErrCode(c, "agent.file_required", nil, "file is required", "")
 		return
 	}
-	tooLarge := fmt.Sprintf("文件过大（上限 %d MB）", maxAgentFileBytes>>20)
+	tooLarge := fmt.Sprintf("file too large (limit %d MB)", maxAgentFileBytes>>20)
 	if fh.Size > maxAgentFileBytes {
-		xhttp.ErrJSON(c, tooLarge, nil, "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxAgentFileBytes >> 20}, tooLarge, "")
 		return
 	}
-	// 落点由「有没有提交 dir 字段」决定：不传 = 定义域根目录
+	// The destination depends on whether the dir field was submitted: absent = the definition root
 	rawDir, _ := c.GetPostForm("dir")
 	_, cleanDir, derr := joinKey(wsKey, strings.TrimSpace(rawDir))
 	if derr != nil {
-		xhttp.ErrJSON(c, derr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, derr.Error(), "")
 		return
 	}
 	if cleanDir != "" && isReadonlyRel(cleanDir) {
-		xhttp.ErrCode(c, "agent.skills_dir_readonly", nil, "skills/ 目录只读，请到技能编辑页修改", "")
+		xhttp.ErrCode(c, "agent.skills_dir_readonly", nil, "the skills/ directory is read-only; edit it on the skill page", "")
 		return
 	}
 	name := sanitizeUploadName(fh.Filename)
 	if name == "" {
-		xhttp.ErrJSON(c, "invalid file name", nil, "")
+		xhttp.ErrCode(c, "agent.invalid_file_name", nil, "invalid file name", "")
 		return
 	}
 	ctx := context.Background()
 	rel := uniqueUploadRel(ctx, st, wsKey, cleanDir, name)
-	// rel 带着 dir 前缀，dir 已挡过；这里再兜一次，防止将来改坏 uniqueUploadRel 的语义
+	// rel carries the dir prefix, which was already checked; this second check guards against future changes to uniqueUploadRel
 	if isReadonlyRel(rel) {
-		xhttp.ErrCode(c, "agent.skills_dir_readonly", nil, "skills/ 目录只读，请到技能编辑页修改", "")
+		xhttp.ErrCode(c, "agent.skills_dir_readonly", nil, "the skills/ directory is read-only; edit it on the skill page", "")
 		return
 	}
 
 	src, oerr := fh.Open()
 	if oerr != nil {
-		xhttp.ErrJSON(c, "Failed to read upload: "+oerr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.upload_failed", nil, "failed to read the upload: "+oerr.Error(), "")
 		return
 	}
 	defer src.Close()
-	// 多读一个字节用于判定「声明的大小不可信」的极端情况
+	// Read one extra byte to cover the case where the declared size cannot be trusted
 	data, rerr := io.ReadAll(io.LimitReader(src, maxAgentFileBytes+1))
 	if rerr != nil {
-		xhttp.ErrJSON(c, "Failed to read upload: "+rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.upload_failed", nil, "failed to read the upload: "+rerr.Error(), "")
 		return
 	}
 	if len(data) > maxAgentFileBytes {
-		xhttp.ErrJSON(c, tooLarge, nil, "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxAgentFileBytes >> 20}, tooLarge, "")
 		return
 	}
 	if werr := st.WriteFile(ctx, path.Join(wsKey, rel), data); werr != nil {
-		xhttp.ErrJSON(c, "Failed to save upload: "+werr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.upload_save_failed", nil, "failed to save the upload: "+werr.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -977,7 +977,7 @@ func UploadAgentFile(c *gin.Context) {
 	}, "")
 }
 
-// DeleteAgentEntry 删除工作区内的文件或目录（skills/ 拒绝）。
+// DeleteAgentEntry deletes a file or directory in the workspace (skills/ is refused).
 func DeleteAgentEntry(c *gin.Context) {
 	if !agentMutable(c) {
 		return
@@ -988,40 +988,40 @@ func DeleteAgentEntry(c *gin.Context) {
 	}
 	abs, clean, err := joinKey(wsKey, c.Query("path"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, err.Error(), "")
 		return
 	}
 	if clean == "" {
-		xhttp.ErrJSON(c, "path is required", nil, "")
+		xhttp.ErrCode(c, "agent.path_required", nil, "path is required", "")
 		return
 	}
 	if isReadonlyRel(clean) {
-		xhttp.ErrJSON(c, "skills directory is read-only", nil, "")
+		xhttp.ErrCode(c, "agent.skills_dir_readonly", nil, "skills directory is read-only", "")
 		return
 	}
-	// 文件与目录各删一次（两者都幂等、都容忍不存在）：
-	//   本地：Delete = os.Remove（非空目录会失败，忽略即可），DeletePrefix = os.RemoveAll（通吃）
-	//   S3  ：Delete 删对象，DeletePrefix 删前缀（目录）
-	// 注意：不能用 Exists 区分文件/目录 —— 本地 os.Stat 对目录同样返回存在。
+	// Delete as file and as directory (both are idempotent and tolerate a missing target):
+	//   local: Delete = os.Remove (fails on a non-empty directory, ignore it), DeletePrefix = os.RemoveAll (handles both)
+	//   S3   : Delete removes an object, DeletePrefix removes a prefix (directory)
+	// Note: Exists cannot tell a file from a directory - a local os.Stat reports a directory as existing too.
 	_ = st.Delete(context.Background(), abs)
 	_ = st.DeletePrefix(context.Background(), abs)
-	// 校验是否真的删掉（本地有效；S3 目录无对象，Exists 恒为 false）
+	// Verify it is really gone (valid locally; on S3 a directory has no object and Exists is always false)
 	if ex, _ := st.Exists(context.Background(), abs); ex {
-		xhttp.ErrJSON(c, "delete failed: "+clean, nil, "")
+		xhttp.ErrCode(c, "agent.delete_failed", nil, "delete failed: "+clean, "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean}, "")
 }
 
 // ============================================================================
-// 会话工作区：上传（chat 输入框的「+」）
-//   与上面的浏览接口同一落点（会话工作目录），区别只在于这里是**写**。
+// Session workspace: upload (the "+" in the chat input)
+//   Same destination as the browse APIs above (the session working directory); the difference is that this one **writes**.
 // ============================================================================
 
-// UploadSessionFile 接收 multipart（file + 可选 session_id），写进会话工作区的 uploads/。
+// UploadSessionFile accepts multipart (file + optional session_id) and writes into uploads/ of the session workspace.
 //
-// 会话不存在时先建会话（新对话还没发第一条消息就先选文件的场景），并把 session_id 回给前端复用 ——
-// 否则文件会落在一个「随后被丢弃」的会话目录里，agent 的 cwd 却是另一个目录，永远读不到。
+// When the session does not exist it is created first (a new chat where a file is chosen before the first message) and the session_id is returned for reuse,
+// otherwise the file lands in a session directory that is then discarded while the agent's cwd is another one, and it can never be read.
 func UploadSessionFile(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -1032,7 +1032,7 @@ func UploadSessionFile(c *gin.Context) {
 
 	inst, err := repo.GetAgent(info, c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get the agent: "+err.Error(), "")
 		return
 	}
 	if inst == nil {
@@ -1042,12 +1042,12 @@ func UploadSessionFile(c *gin.Context) {
 
 	fh, ferr := c.FormFile("file")
 	if ferr != nil {
-		xhttp.ErrJSON(c, "file is required", nil, "")
+		xhttp.ErrCode(c, "agent.file_required", nil, "file is required", "")
 		return
 	}
-	tooLarge := fmt.Sprintf("文件过大（上限 %d MB）", maxSessionUploadBytes>>20)
+	tooLarge := fmt.Sprintf("file too large (limit %d MB)", maxSessionUploadBytes>>20)
 	if fh.Size > maxSessionUploadBytes {
-		xhttp.ErrJSON(c, tooLarge, nil, "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxSessionUploadBytes >> 20}, tooLarge, "")
 		return
 	}
 
@@ -1055,20 +1055,20 @@ func UploadSessionFile(c *gin.Context) {
 	sid := strings.TrimSpace(c.PostForm("session_id"))
 	var sess *models.Session
 	if sid == "" {
-		// chat 输入框「+」的老行为：没带会话就顺手建一个
+		// The old behaviour of the chat "+": create a session when none was passed
 		sid, err = sessRepo.Create(info.Schema, models.SessionOwnerTypeAgent, inst.ID, info.ID, "")
 		if err != nil {
-			respondQuotaErr(c, err) // 会话数超限 → 507
+			respondQuotaErr(c, err) // too many sessions -> 507
 			return
 		}
 		sess, err = sessRepo.Get(info.Schema, sid)
 		if err != nil {
-			xhttp.ErrJSON(c, "Failed to get session: "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to get the session: "+err.Error(), "")
 			return
 		}
 	} else {
-		// 统一走 lookupSessionForUser：非 UUID / 不存在 / 不是本人
-		// 都归到同一套响应
+		// Everything goes through lookupSessionForUser: not a UUID / missing / not the owner
+		// all map to the same response
 		sess, err = lookupSessionForUser(info, info.Schema, sid)
 		if err != nil {
 			respondSessionErr(c, err, notOwnedSession)
@@ -1076,30 +1076,30 @@ func UploadSessionFile(c *gin.Context) {
 		}
 	}
 	if sess == nil {
-		xhttp.ErrJSON(c, notOwnedSession, nil, "")
+		xhttp.ErrCode(c, "session.not_found", nil, notOwnedSession, "")
 		return
 	}
 	if sess.UserID == "" {
-		xhttp.ErrJSON(c, "session has no owner user", nil, "")
+		xhttp.ErrCode(c, "agent.session_no_owner", nil, "session has no owner user", "")
 		return
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 
 	name := sanitizeUploadName(fh.Filename)
 	if name == "" {
-		xhttp.ErrJSON(c, "invalid file name", nil, "")
+		xhttp.ErrCode(c, "agent.invalid_file_name", nil, "invalid file name", "")
 		return
 	}
 	wsKey := paths.UserSessionKey(info.Schema, sess.UserID, sid)
-	// 落点目录：前端工作区面板传当前浏览的目录（所见即所得），chat 的「+」不传 → 仍落 uploads/。
-	// 判据必须是「有没有提交 dir 字段」，不能是「值是否为空」：在根目录上传时传的就是空串，
-	// 按值判空会把根目录的上传兜底进 uploads/，用户看到的落点和实际位置对不上。
-	// 必须过 joinKey：它会清洗并挡住 ../ 越界，不允许跳出会话目录。
+	// Destination directory: the workspace panel passes the directory being browsed (what you see is where it goes), while the chat "+" passes none -> uploads/.
+	// The test must be "was the dir field submitted", not "is the value empty": uploading at the root submits an empty string,
+	// and testing the value would push root uploads into uploads/, so the shown destination and the real one would disagree.
+	// It must pass joinKey, which cleans the path and blocks ../ escapes out of the session directory.
 	rawDir, hasDir := c.GetPostForm("dir")
 	if !hasDir {
 		rawDir = uploadDir
@@ -1107,38 +1107,38 @@ func UploadSessionFile(c *gin.Context) {
 	dir := strings.TrimSpace(rawDir)
 	_, cleanDir, derr := joinKey(wsKey, dir)
 	if derr != nil {
-		xhttp.ErrJSON(c, derr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.invalid_path", nil, derr.Error(), "")
 		return
 	}
 	rel := uniqueUploadRel(context.Background(), st, wsKey, cleanDir, name)
 
 	src, oerr := fh.Open()
 	if oerr != nil {
-		xhttp.ErrJSON(c, "Failed to read upload: "+oerr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.upload_failed", nil, "failed to read the upload: "+oerr.Error(), "")
 		return
 	}
 	defer src.Close()
-	// 多读一个字节用于判定「声明的大小不可信」的极端情况
+	// Read one extra byte to cover the case where the declared size cannot be trusted
 	data, rerr := io.ReadAll(io.LimitReader(src, maxSessionUploadBytes+1))
 	if rerr != nil {
-		xhttp.ErrJSON(c, "Failed to read upload: "+rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.upload_failed", nil, "failed to read the upload: "+rerr.Error(), "")
 		return
 	}
 	if len(data) > maxSessionUploadBytes {
-		xhttp.ErrJSON(c, tooLarge, nil, "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxSessionUploadBytes >> 20}, tooLarge, "")
 		return
 	}
-	// 配额预检：超限时先按「最旧优先」淘汰该会话的旧产物，腾不出来才拒绝（507）。
+	// Quota preflight: when over the limit, evict this session's oldest products first and reject (507) only if that frees nothing.
 	evicted, qerr := quota.Admit(context.Background(), st, info.Schema, wsKey, sess.UserID, int64(len(data)))
 	if qerr != nil {
 		respondQuotaErr(c, qerr)
 		return
 	}
 	if werr := st.WriteFile(context.Background(), path.Join(wsKey, rel), data); werr != nil {
-		xhttp.ErrJSON(c, "Failed to save upload: "+werr.Error(), nil, "")
+		xhttp.ErrCode(c, "agent.upload_save_failed", nil, "failed to save the upload: "+werr.Error(), "")
 		return
 	}
-	// 写成功才记账（失败不记，避免"文件没落地却占了额度"）
+	// Book the usage only after a successful write (a failure books nothing, so no quota is held for a file that never landed)
 	quota.Commit(context.Background(), info.Schema, wsKey, sess.UserID, int64(len(data)))
 	if evicted == nil {
 		evicted = []string{}
@@ -1148,13 +1148,13 @@ func UploadSessionFile(c *gin.Context) {
 		"name":       path.Base(rel),
 		"path":       rel,
 		"size":       len(data),
-		// 因超出会话配额被自动清理的旧文件（相对会话根），前端据此提示用户
+		// Old files evicted by the session quota (relative to the session root), reported so the UI can inform the user
 		"evicted": evicted,
 	}, "")
 }
 
-// authInfoSchema 取当前登录租户的 schema（配额解析要用）。
-// 走到这里时 sessionWorkspace 已经校验过 authInfo 必然存在，取不到只可能是代码改动引入的疏漏。
+// authInfoSchema returns the current tenant schema (needed to resolve quotas).
+// By the time this runs sessionWorkspace has proven authInfo exists, so a miss can only be a regression.
 func authInfoSchema(c *gin.Context) string {
 	if v, ok := c.Get("authInfo"); ok {
 		if info, ok2 := v.(*auth.AuthInfo); ok2 && info != nil {
@@ -1164,8 +1164,8 @@ func authInfoSchema(c *gin.Context) string {
 	return ""
 }
 
-// authInfoID 取当前登录用户的 uuid（用于按用户解析会话空间上限）。
-// 会话文件接口已由 lookupSessionForUser 保证会话归属就是本人，所以这里取登录用户即可。
+// authInfoID returns the current user id (used to resolve the per-user session quota).
+// The session file APIs already prove ownership through lookupSessionForUser, so the logged-in user is enough here.
 func authInfoID(c *gin.Context) string {
 	if v, ok := c.Get("authInfo"); ok {
 		if info, ok2 := v.(*auth.AuthInfo); ok2 && info != nil {
@@ -1175,24 +1175,26 @@ func authInfoID(c *gin.Context) string {
 	return ""
 }
 
-// respondQuotaErr 把配额错误转成 507（带上 scope/metric/used/limit），
-// 其他错误仍走普通 400。前端据 code 区分「空间满」与参数错误，给出「去清理」引导。
+// respondQuotaErr turns a quota error into 507 (with scope/metric/used/limit),
+// while other errors stay a plain 400. The front end uses the code to tell "out of space" from a bad parameter and offers a cleanup path.
 func respondQuotaErr(c *gin.Context, err error) {
 	var qe *quota.ExceededError
 	if errors.As(err, &qe) {
-		// 507 有两种情形（会话空间满 / 会话数满），文案不同：带 error 编码让前端各翻各的
+		// 507 has two shapes (session space full / session count full) with different copy, so the error code lets the front end translate each
 		xhttp.ErrQuotaCode(c, quotaErrCode(qe), nil, qe.Error(), gin.H{
 			"scope":  qe.Scope,
 			"metric": qe.Metric,
 			"used":   qe.Used,
 			"limit":  qe.Limit,
+			// Files the pre-check already deleted: the UI says so, otherwise they vanish without explanation
+			"evicted": qe.Evicted,
 		}, "")
 		return
 	}
-	xhttp.ErrJSON(c, err.Error(), nil, "")
+	xhttp.ErrCode(c, "common.internal", nil, "quota check failed: "+err.Error(), "")
 }
 
-// quotaErrCode 把配额错误的 metric 映射成业务编码（见 nexus/docs/error-codes.md）。
+// quotaErrCode maps a quota metric to a business code (see nexus/docs/error-codes.md).
 func quotaErrCode(qe *quota.ExceededError) string {
 	switch qe.Metric {
 	case "bytes":
@@ -1203,7 +1205,7 @@ func quotaErrCode(qe *quota.ExceededError) string {
 	return "quota.exceeded"
 }
 
-// sanitizeUploadName 只保留文件名本身（浏览器可能带完整路径），去掉控制字符并限制长度。
+// sanitizeUploadName keeps only the file name itself (a browser may send the whole path), strips control characters and caps the length.
 func sanitizeUploadName(raw string) string {
 	name := path.Base(strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/"))
 	name = strings.Map(func(r rune) rune {
@@ -1213,7 +1215,7 @@ func sanitizeUploadName(raw string) string {
 		return r
 	}, name)
 	name = strings.TrimSpace(name)
-	// ".." 必须挡掉：path.Join(工作区, "uploads/..") 会塌回工作区根，等于写到 uploads/ 之外
+	// ".." must be rejected: path.Join(workspace, "uploads/..") collapses to the workspace root and writes outside uploads/
 	if name == "" || name == "." || name == ".." || name == "/" {
 		return ""
 	}
@@ -1221,7 +1223,7 @@ func sanitizeUploadName(raw string) string {
 	if len(rs) > 120 {
 		ext := path.Ext(name)
 		tail := []rune(ext)
-		if len(tail) >= 20 { // 扩展名离谱长就整段丢弃，别为了后缀把主名挤没
+		if len(tail) >= 20 { // an absurdly long extension is dropped entirely rather than squeezing out the stem
 			tail, ext = nil, ""
 		}
 		name = string(rs[:120-len(tail)]) + ext
@@ -1229,12 +1231,12 @@ func sanitizeUploadName(raw string) string {
 	return name
 }
 
-// uniqueUploadRel 同名不覆盖：name、name-2.ext、name-3.ext…
-// dir 是工作区内的相对目录（chat 的「+」传 uploads，工作区面板传当前浏览的目录），
-// 返回值带上该前缀，调用方直接 path.Join(wsKey, rel) 即可。
+// uniqueUploadRel never overwrites: name, name-2.ext, name-3.ext, ...
+// dir is a workspace-relative directory (the chat "+" passes uploads, the workspace panel passes the directory being browsed)
+// and the returned value carries that prefix, so the caller just does path.Join(wsKey, rel).
 //
-// 刻意不做覆盖：覆盖等于删掉 agent 已经产出的文件，是破坏性操作，
-// 不该藏在一个上传动作里悄悄发生 —— 要替换请先删再传（删除有二次确认）。
+// Overwriting is deliberately not done: it would delete a file the agent already produced, which is destructive
+// and must not happen quietly inside an upload - to replace a file, delete it first (deleting asks for confirmation).
 func uniqueUploadRel(ctx context.Context, st storage.Storage, wsKey, dir, name string) string {
 	taken := map[string]bool{}
 	if entries, err := st.List(ctx, path.Join(wsKey, dir)); err == nil {
@@ -1256,10 +1258,10 @@ func uniqueUploadRel(ctx context.Context, st storage.Storage, wsKey, dir, name s
 	return path.Join(dir, fmt.Sprintf("%d-%s", time.Now().UnixNano(), name))
 }
 
-// attachmentPrompt 把本轮附件拼成给模型看的说明；没有可用附件时返回空串。
+// attachmentPrompt builds the note the model sees for this turn's attachments; an empty string when none is usable.
 //
-// 只认 uploads/ 下的会话工作区相对路径：越界（../、绝对路径）与不存在的文件一律跳过 ——
-// 报错会让正常对话变得脆弱，但把模型指向一个不存在的文件更糟。
+// Only workspace-relative paths under uploads/ count: escapes (../, absolute paths) and missing files are skipped -
+// an error would make normal conversations brittle, but pointing the model at a missing file is worse.
 func attachmentPrompt(st storage.Storage, schema, userID, sessionID string, files []string) string {
 	if st == nil || userID == "" || len(files) == 0 {
 		return ""
@@ -1279,16 +1281,16 @@ func attachmentPrompt(st storage.Storage, schema, userID, sessionID string, file
 	if len(lines) == 0 {
 		return ""
 	}
-	return "【用户上传的文件】已放在工作区（路径相对你的工作区根目录，也是 exec 的 cwd）：\n" +
+	return "[User-uploaded files] are in your workspace (paths are relative to your workspace root, which is also the exec cwd):\n" +
 		strings.Join(lines, "\n") +
-		"\n需要时用 read_file / list_files 等工具读取，不要凭文件名猜内容。"
+		"\nRead them with tools such as read_file / list_files when needed; do not guess their content from the file name."
 }
 
 // ============================================================================
-// 工作区「最近文件」：根目录 + 一层子目录，按修改时间倒序
+// Workspace "recent files": the root plus one level of subdirectories, newest modification first
 // ============================================================================
 
-// RecentFileItem 最近文件列表的一项（path 为会话工作区相对路径）。
+// RecentFileItem is one entry of the recent files list (path is relative to the session workspace).
 type RecentFileItem struct {
 	Path    string    `json:"path"`
 	Name    string    `json:"name"`
@@ -1296,10 +1298,10 @@ type RecentFileItem struct {
 	ModTime time.Time `json:"mod_time"`
 }
 
-// RecentSessionFiles 列出会话工作区里最近改动/生成的文件，供工作台「新生成的文件」标签使用。
+// RecentSessionFiles lists recently changed / generated files in the session workspace, for the workbench "newly generated" tab.
 //
-// 只扫根目录与一层子目录：agent 的产物基本落在根目录、uploads/、outputs/ 这类浅层目录，
-// 深度再加就是成倍的 LIST 请求（S3 按次计费），收益很小。
+// It scans the root and one level only: an agent's output mostly lands in the root or shallow directories such as uploads/ and outputs/,
+// and every extra level means multiples of LIST requests (billed per call on S3) for little gain.
 func RecentSessionFiles(c *gin.Context) {
 	st, wsKey, ok := sessionWorkspace(c)
 	if !ok {
@@ -1321,13 +1323,13 @@ func RecentSessionFiles(c *gin.Context) {
 	collect = func(dir, prefix string, depth int) {
 		entries, lerr := st.List(ctx, dir)
 		if lerr != nil {
-			return // 目录不存在 / 读失败：这一层当作空
+			return // missing directory / read failure: treat this level as empty
 		}
 		for _, e := range entries {
 			if scanned >= maxRecentScanEntries {
 				return
 			}
-			if strings.HasPrefix(e.Name, ".") { // 跳过隐藏文件（含 .keep 占位）
+			if strings.HasPrefix(e.Name, ".") { // skip hidden files (including the .keep placeholder)
 				continue
 			}
 			scanned++
@@ -1343,7 +1345,7 @@ func RecentSessionFiles(c *gin.Context) {
 	}
 	collect(wsKey, "", 0)
 
-	// 新的在前；时间相同（同一秒写入）时按路径排，保证顺序稳定
+	// Newest first; when timestamps tie (written in the same second) sort by path for a stable order
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].ModTime.Equal(files[j].ModTime) {
 			return files[i].Path < files[j].Path

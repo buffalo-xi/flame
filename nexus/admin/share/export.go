@@ -22,12 +22,12 @@ import (
 
 // Export GET /admin/share/export?kind=&ref=
 //
-// 把一个**本租户实体**现场打成资产包（zip）下载：skill / agent / workflow 用 id，
-// custom_tool 用名字。与「上架到平台」的区别是它不落平台快照、不进审核、不需要平台表，
-// 只产出一个人能带走的文件 —— 换台机器、换个站点，用「导入」装回去。
+// Packages one **entity of this tenant** into an asset bundle (zip) on the fly: skill / agent / workflow by id,
+// custom_tool by name. Unlike listing on the platform it writes no platform snapshot, goes through no review and needs no platform table,
+// it just produces a file a person can carry: another machine, another site, install it with "import".
 //
-// 打包内容与上架走同一份组装逻辑（planFor）：payload 白名单化、依赖声明、凭据脱敏都一样，
-// 所以「导出后再导入」与「上架后安装」得到的是同一份东西。
+// Packaging shares the assembly logic with listing (planFor): payload allowlisting, dependency declaration and credential masking are identical,
+// so "export then import" and "list then install" produce the same thing.
 func Export(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -37,35 +37,35 @@ func Export(c *gin.Context) {
 	kind := assetpack.Kind(strings.TrimSpace(c.Query("kind")))
 	if !kind.Valid() {
 		xhttp.ErrCode(c, "asset.invalid_kind", map[string]any{"kind": string(kind)},
-			"未知的资产类型（kind 只支持 skill / custom_tool / agent / workflow）", "")
+			"unknown asset kind (kind accepts skill / custom_tool / agent / workflow only)", "")
 		return
 	}
 	ref := strings.TrimSpace(c.Query("ref"))
 	if ref == "" {
-		xhttp.ErrCode(c, "asset.ref_required", nil, "缺少 ref（skill / agent / workflow 用 id，custom_tool 用名字）", "")
+		xhttp.ErrCode(c, "asset.ref_required", nil, "ref is required (skill / agent / workflow take an id, custom_tool takes a name)", "")
 		return
 	}
 
 	plan, err := planFor(kind, info, ref)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if plan.cleanup != nil {
 		defer plan.cleanup()
 	}
 	if err := validatePlanName(plan.kind, plan.name); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 
-	// 导出不需要快照：临时目录只为复用 PackFilesWith（它边拷边算 sha256 与体积闸）
+	// Export needs no snapshot: the temp directory only exists to reuse PackFilesWith (which hashes and size-checks while copying).
 	ctx := context.Background()
 	tmpDir := path.Join(paths.TenantsSubdir, info.Schema, ".export-tmp", uuid.NewString())
 	defer func() { _ = st.DeletePrefix(context.Background(), tmpDir) }()
@@ -73,18 +73,18 @@ func Export(c *gin.Context) {
 	files, perr := assetpack.PackFilesWith(ctx, st, plan.srcDir, tmpDir, plan.entry,
 		assetpack.DefaultLimits(), assetpack.PackOptions{SkipDirs: plan.skipDirs, Trees: plan.trees})
 	if perr != nil {
-		xhttp.ErrJSON(c, perr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, perr.Error(), "")
 		return
 	}
 
-	// 与上架同一份依赖清单：导出包也带 global_vars 名字，导入方能预检缺哪个变量
+	// The same dependency manifest as listing: the bundle carries the global_vars names so the importer can pre-check which variable is missing.
 	plan.deps.GlobalVars = mergeGlobalVarDeps(plan.deps.GlobalVars,
 		assetpack.CollectGlobalVarRefs(ctx, st, plan.srcDir, plan.payload))
 
 	clean, secretWarnings := assetpack.StripSecrets(plan.kind, plan.payload)
 	payloadJSON, jerr := json.Marshal(clean)
 	if jerr != nil {
-		xhttp.ErrJSON(c, "encode payload: "+jerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "encode payload: "+jerr.Error(), "")
 		return
 	}
 
@@ -95,9 +95,9 @@ func Export(c *gin.Context) {
 		Deps:  plan.deps,
 		Files: files,
 	}
-	// 与上架同一份指纹：导出包与平台快照描述的是同一份内容，指纹必须一致
+	// The same fingerprint as listing: bundle and platform snapshot describe the same content, so the fingerprint must match.
 	if serr := assetpack.StampManifest(&manifest, payloadJSON); serr != nil {
-		xhttp.ErrJSON(c, "compute digest: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "compute digest: "+serr.Error(), "")
 		return
 	}
 
@@ -105,7 +105,7 @@ func Export(c *gin.Context) {
 		Format:     assetpack.PackageFormat,
 		ExportedAt: time.Now(),
 		Origin: assetpack.PackageOrigin{
-			// 没有 platform-assets 行可引用：来源只记站点 / 租户 / 人，够对方展示溯源
+			// There is no platform-assets row to reference, so the source only records site / tenant / person, enough to show provenance.
 			Server:       strings.TrimSpace(config.Cfg.Server.Name),
 			SourceSchema: info.Schema,
 			ListedBy:     info.Name,
@@ -114,20 +114,20 @@ func Export(c *gin.Context) {
 		Payload:  payloadJSON,
 	}
 
-	// 先在内存里拼完再发：合计上限 128 MiB，这点内存换「出错能干干净净报错」
+	// Assemble in memory before sending: the total cap is 128 MiB, and that memory buys a clean error instead of a half-written response.
 	var buf bytes.Buffer
 	if werr := assetpack.WritePackage(ctx, st, tmpDir, pkg, &buf); werr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "打包失败: "+werr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "packaging failed: "+werr.Error(), "")
 		return
 	}
 
-	// 提示（脱敏了哪些字段、哪些私有技能没带走）没地方放进 zip：走响应头，前端解码后提示
+	// The notes (which fields were masked, which private skills did not travel) have no place in the zip, so they go in a response header for the front end to decode.
 	warnings := append(append([]string{}, plan.warnings...), secretWarnings...)
 	serveExport(c, plan.kind, plan.name, warnings, buf.Bytes())
 }
 
-// serveExport 下载响应。四类资产名现在都只允许 ASCII，但仍有中文的历史包 / 手写包，
-// 所以 Content-Disposition 继续按 RFC 5987 编码，并留一个纯 ASCII 兜底名给不认 filename* 的老客户端。
+// serveExport writes the download. All four asset names are ASCII-only now, but older or hand-made
+// bundles may still be non-ASCII, so Content-Disposition keeps the RFC 5987 encoding plus a plain ASCII fallback for old clients that ignore filename*.
 func serveExport(c *gin.Context, kind assetpack.Kind, name string, warnings []string, data []byte) {
 	filename := fmt.Sprintf("%s-%s.zip", kind, name)
 	ascii := fmt.Sprintf("%s-%s.zip", kind, asciiFallback(name))
@@ -137,7 +137,7 @@ func serveExport(c *gin.Context, kind assetpack.Kind, name string, warnings []st
 	c.Data(http.StatusOK, "application/zip", data)
 }
 
-// asciiFallback 把非 ASCII / 不适合进 header 的字符换成 "-"（只用于兜底文件名）。
+// asciiFallback replaces non-ASCII or header-unfriendly characters with "-" (the fallback file name only).
 func asciiFallback(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -155,12 +155,12 @@ func asciiFallback(s string) string {
 	return out
 }
 
-// rfc5987Escape 按 RFC 5987 编码（QueryEscape 的空格是 "+"，这里要 %20）。
+// rfc5987Escape encodes per RFC 5987 (QueryEscape turns a space into "+", here it must be %20).
 func rfc5987Escape(s string) string {
 	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }
 
-// encodeWarnings 把提示串成一行（每条 URL 编码，用 "|" 分隔），保证 header 只含 ASCII。
+// encodeWarnings joins the notes into one line (each URL-encoded, separated by "|") so the header stays ASCII.
 func encodeWarnings(warnings []string) string {
 	if len(warnings) == 0 {
 		return ""

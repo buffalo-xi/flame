@@ -11,59 +11,59 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// testRequest 测试请求体
+// testRequest is the test request body
 type testRequest struct {
-	// Provider 配置
+	// Provider config
 	Provider struct {
-		Name     string `json:"name"`     // 供应商名称，如 openai、deepseek
-		URL      string `json:"url"`      // API 地址
-		APIKey   string `json:"api_key"`  // API Key
-		Protocol string `json:"protocol"` // 协议，如 openai
-		// ExtraConfig 额外配置，原样透传进 litellm_params
-		// （api_version / vertex_project / vertex_location / vertex_credentials 等）
+		Name     string `json:"name"`     // provider name, e.g. openai, deepseek
+		URL      string `json:"url"`      // API endpoint
+		APIKey   string `json:"api_key"`  // API key
+		Protocol string `json:"protocol"` // protocol, e.g. openai
+		// ExtraConfig is passed through into litellm_params verbatim
+		// (api_version / vertex_project / vertex_location / vertex_credentials ...)
 		ExtraConfig map[string]any `json:"extra_config,omitempty"`
 	} `json:"provider"`
-	// Model 配置
+	// Model config
 	Model struct {
-		Name          string  `json:"name"`           // 模型名称，如 gpt-4o-mini、deepseek-chat
-		GatewayModel  string  `json:"gateway_model"`  // 网关模型名，注册名与 chat 请求的 model 字段都用它
-		MaxTokens     int     `json:"max_tokens"`     // 最大 token 数
-		Temperature   float64 `json:"temperature"`    // 温度
-		ContextWindow int     `json:"context_window"` // 上下文窗口
+		Name          string  `json:"name"`           // model name, e.g. gpt-4o-mini, deepseek-chat
+		GatewayModel  string  `json:"gateway_model"`  // gateway model name, used both as the registration name and the chat request's model field
+		MaxTokens     int     `json:"max_tokens"`     // max tokens
+		Temperature   float64 `json:"temperature"`    // temperature
+		ContextWindow int     `json:"context_window"` // context window
 	} `json:"model"`
-	// Chat 测试用的消息（可选，默认用 "你好，请回复 OK"）
+	// Messages are the chat messages used by the test (optional, defaults to a simple greeting)
 	Messages []gateway.Message `json:"messages,omitempty"`
-	// Schema 租户标识（可选，默认用 "test"）
+	// Schema is the tenant identifier (optional, defaults to "test")
 	Schema string `json:"schema,omitempty"`
 }
 
-// testStepResult 单步结果
+// testStepResult is the result of one step
 type testStepResult struct {
 	Step   string `json:"step"`
 	Status string `json:"status"` // "ok" | "error"
 	Detail any    `json:"detail,omitempty"`
 }
 
-// testResponse 测试响应体
+// testResponse is the test response body
 type testResponse struct {
 	Steps     []testStepResult `json:"steps"`
 	GatewayID string           `json:"gateway_id,omitempty"`
 }
 
-// RunGatewayTest 运行完整的 LiteLLM 网关测试：Provision → Generate → Deprovision
+// RunGatewayTest runs the full LiteLLM gateway test: Provision -> Generate -> Deprovision
 func RunGatewayTest(c *gin.Context) {
 	if gateway.Current == nil {
-		xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 		return
 	}
 
 	var req testRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 
-	// 默认值
+	// Defaults
 	if req.Schema == "" {
 		req.Schema = "t0"
 	}
@@ -72,7 +72,7 @@ func RunGatewayTest(c *gin.Context) {
 	}
 	if len(req.Messages) == 0 {
 		req.Messages = []gateway.Message{
-			{Role: "user", Content: "你好，请回复 OK，不要多说话。"},
+			{Role: "user", Content: "Hello, reply with OK only and nothing else."},
 		}
 	}
 
@@ -105,7 +105,7 @@ func RunGatewayTest(c *gin.Context) {
 		return
 	}
 	model.GatewayID = gatewayID
-	// chat/completions 的 model 字段读的是 GatewayModel，必须是 "<schema>:<gateway_model>"
+	// The model field of chat/completions reads GatewayModel and must be "<schema>:<gateway_model>"
 	model.GatewayModel = req.Schema + ":" + req.Model.GatewayModel
 	response.GatewayID = gatewayID
 	response.Steps = append(response.Steps, testStepResult{
@@ -115,13 +115,13 @@ func RunGatewayTest(c *gin.Context) {
 		},
 	})
 
-	// Step 2: Generate (非流式)
+	// Step 2: Generate (non-streaming)
 	genResp, err := gateway.Current.Generate(ctx, model, req.Messages, nil)
 	if err != nil {
 		response.Steps = append(response.Steps, testStepResult{
 			Step: "generate", Status: "error", Detail: err.Error(),
 		})
-		// 尝试清理
+		// Try to clean up
 		_ = gateway.Current.Deprovision(req.Schema, model, provider)
 		xhttp.OkJSON(c, "Test completed with errors", response, "")
 		return
@@ -149,16 +149,16 @@ func RunGatewayTest(c *gin.Context) {
 	xhttp.OkJSON(c, "All steps passed", response, "")
 }
 
-// ProvisionTest 单独测试 Provision
+// ProvisionTest tests Provision on its own
 func ProvisionTest(c *gin.Context) {
 	if gateway.Current == nil {
-		xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 		return
 	}
 
 	var req testRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 
@@ -185,7 +185,7 @@ func ProvisionTest(c *gin.Context) {
 
 	gatewayID, err := gateway.Current.Provision(req.Schema, model, provider)
 	if err != nil {
-		xhttp.ErrJSON(c, "Provision failed: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Provision failed: "+err.Error(), "")
 		return
 	}
 
@@ -195,10 +195,10 @@ func ProvisionTest(c *gin.Context) {
 	}, "")
 }
 
-// DeprovisionTest 单独测试 Deprovision
+// DeprovisionTest tests Deprovision on its own
 func DeprovisionTest(c *gin.Context) {
 	if gateway.Current == nil {
-		xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 		return
 	}
 
@@ -212,7 +212,7 @@ func DeprovisionTest(c *gin.Context) {
 		} `json:"provider"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 
@@ -234,17 +234,17 @@ func DeprovisionTest(c *gin.Context) {
 
 	err := gateway.Current.Deprovision(req.Schema, model, provider)
 	if err != nil {
-		xhttp.ErrJSON(c, "Deprovision failed: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Deprovision failed: "+err.Error(), "")
 		return
 	}
 
 	xhttp.OkJSON(c, "Deprovision success", req.GatewayID, "")
 }
 
-// GenerateTest 单独测试 Generate（支持 stream 参数走流式）
+// GenerateTest tests Generate on its own (the stream flag switches to streaming)
 func GenerateTest(c *gin.Context) {
 	if gateway.Current == nil {
-		xhttp.ErrJSON(c, "Gateway not initialized", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
 		return
 	}
 
@@ -263,7 +263,7 @@ func GenerateTest(c *gin.Context) {
 		Stream   bool              `json:"stream,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 
@@ -272,11 +272,11 @@ func GenerateTest(c *gin.Context) {
 	}
 	if len(req.Messages) == 0 {
 		req.Messages = []gateway.Message{
-			{Role: "user", Content: "你好，请回复 OK"},
+			{Role: "user", Content: "Hello, reply with OK."},
 		}
 	}
 
-	// chat/completions 的 model 字段读的是 GatewayModel，必须是 "<schema>:<gateway_model>"
+	// The model field of chat/completions reads GatewayModel and must be "<schema>:<gateway_model>"
 	model := gateway.ModelInput{
 		Name:         req.Model.Name,
 		GatewayModel: req.Schema + ":" + req.Model.GatewayModel,
@@ -290,16 +290,16 @@ func GenerateTest(c *gin.Context) {
 	if req.Stream {
 		ch, err := gateway.Current.Stream(ctx, model, req.Messages, nil)
 		if err != nil {
-			xhttp.ErrJSON(c, "Stream failed: "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "Stream failed: "+err.Error(), "")
 			return
 		}
 
-		// 收集流式结果
+		// Collect the streamed result
 		var content string
 		var toolCalls []gateway.ToolCall
 		for chunk := range ch {
 			if chunk.Error != nil {
-				xhttp.ErrJSON(c, "Stream error: "+chunk.Error.Error(), nil, "")
+				xhttp.ErrCode(c, "common.internal", nil, "Stream error: "+chunk.Error.Error(), "")
 				return
 			}
 			if chunk.Done {
@@ -320,7 +320,7 @@ func GenerateTest(c *gin.Context) {
 
 	genResp, err := gateway.Current.Generate(ctx, model, req.Messages, nil)
 	if err != nil {
-		xhttp.ErrJSON(c, "Generate failed: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Generate failed: "+err.Error(), "")
 		return
 	}
 
@@ -331,7 +331,7 @@ func GenerateTest(c *gin.Context) {
 	xhttp.OkJSON(c, "Generate success", detail, "")
 }
 
-// formatToolCalls 将 ToolCall 的 Args 格式化为 JSON 字符串便于阅读
+// formatToolCalls renders ToolCall.Args as JSON strings so they are readable
 func formatToolCalls(calls []gateway.ToolCall) []map[string]any {
 	result := make([]map[string]any, 0, len(calls))
 	for _, tc := range calls {

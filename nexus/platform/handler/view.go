@@ -1,6 +1,6 @@
-// Package handler 平台管理台的 HTTP 层（薄：绑定 / 校验 / 回包）。
+// Package handler is the HTTP layer of the platform console (thin: bind / validate / respond).
 //
-// 边界规则见 ../README.md：本包只依赖 nexus/shared/* 与 tools/*。
+// Boundary rules are in ../README.md: this package only depends on nexus/shared/* and tools/*.
 package handler
 
 import (
@@ -11,9 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// userView 平台用户的对外视图（**不含密码**）。
+// userView is the external view of a platform user (**without the password**).
 //
-// protected：是否是受保护管理员（固定 plat）—— 前端据此把「编辑 / 停用」置灰，**不写死名字**。
+// protected: whether this is the protected administrator (fixed plat) - the frontend greys out "edit / disable" from it and
+// **never hardcodes the name**.
 func userView(u *pmusers.User) gin.H {
 	return gin.H{
 		"id":           u.ID,
@@ -27,10 +28,10 @@ func userView(u *pmusers.User) gin.H {
 	}
 }
 
-// tenantView 租户对外视图：注册表字段 + 生效配额 + 当前用量。
+// tenantView is the external tenant view: registry fields + effective quota + current usage.
 //
-// 用量统计失败（例如租户 schema 尚未建成、已删除，或某张表不存在）按 0 计 ——
-// 列表页不该因为一个 pending 租户而整体报错。
+// A failed usage count (for example the tenant schema is not built yet, already deleted, or a table is missing) counts as 0 -
+// the list page must not fail as a whole because of one pending tenant.
 func tenantView(t *tenantsrepo.Tenant) gin.H {
 	limits := quota.Resolve(t.Schema)
 
@@ -56,7 +57,7 @@ func tenantView(t *tenantsrepo.Tenant) gin.H {
 	}
 }
 
-// countOrZero 统计出错时按 0 展示（(int, error) 的便捷包装）。
+// countOrZero shows 0 when the count fails (a convenience wrapper around (int, error)).
 func countOrZero(n int, err error) int {
 	if err != nil {
 		return 0

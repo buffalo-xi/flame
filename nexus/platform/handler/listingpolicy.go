@@ -14,24 +14,25 @@ import (
 	"github.com/lib/pq"
 )
 
-// 上架审核策略的平台侧读写。
+// Platform-side read/write of the listing review policy.
 //
-// 只影响「租户上架资产」是否要过审核；从远端市场拉取的审核看
-// peer_servers.install_policy（platform/handler/peers.go），两码事。
+// It only governs whether a tenant listing needs review; review of pulls from a remote market
+// follows peer_servers.install_policy (platform/handler/peers.go) - a different thing.
 
 // GetListingPolicy GET /platform/listing-policy
 //
-// 回全局默认 + 所有租户覆盖。前端按「跟随默认 / 强制审核 / 免审」三态渲染：
-// overrides 里没有的租户就是「跟随默认」（不存 inherit 值，避免自相矛盾的行）。
+// Returns the global default plus every tenant override. The frontend renders three states
+// "follow default / force review / no review": a tenant absent from overrides follows the default
+// (no inherit value is stored, so no self-contradicting rows).
 func GetListingPolicy(c *gin.Context) {
 	def, err := listingpolicy.Default()
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询上架策略失败", "listing_policy.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to query the listing policy", "listing_policy.sql", err), "")
 		return
 	}
 	overrides, err := listingpolicy.ListOverrides()
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询上架策略失败", "listing_policy.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to query the listing policy", "listing_policy.sql", err), "")
 		return
 	}
 	items := make([]gin.H, 0, len(overrides))
@@ -46,23 +47,23 @@ func GetListingPolicy(c *gin.Context) {
 
 // SetListingDefault PUT /platform/listing-policy  body: {require_review: bool}
 //
-// false = 所有租户上架后直接可见（不推荐），true = 一律进待审。
-// 改这个不会追溯已经上架的内容，只影响之后的上架。
+// false = a listing from any tenant is visible right after listing (not recommended), true = every
+// listing waits for review. Changing it does not apply retroactively, only to later listings.
 func SetListingDefault(c *gin.Context) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 	var req struct {
 		RequireReview *bool `json:"require_review"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.RequireReview == nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: body 需要 {\"require_review\": true|false}", "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid parameters: the body must be {\"require_review\": true|false}", "")
 		return
 	}
 	if err := listingpolicy.SetDefault(*req.RequireReview, info.ID); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("保存上架策略失败", "listing_policy.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to save the listing policy", "listing_policy.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"require_review": *req.RequireReview}, "")
@@ -70,33 +71,34 @@ func SetListingDefault(c *gin.Context) {
 
 // SetListingOverride PUT /platform/listing-policy/:schema  body: {require_review: bool|null}
 //
-// null（或字段缺失）= 删除该租户的覆盖，回到全局默认。
+// null (or a missing field) deletes that tenant's override and returns to the global default.
 func SetListingOverride(c *gin.Context) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return
 	}
 	schema := strings.TrimSpace(c.Param("schema"))
 	if schema == "" {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "缺少租户 schema", "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "missing tenant schema", "")
 		return
 	}
 	var req struct {
 		RequireReview *bool `json:"require_review"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: body 需要 {\"require_review\": true|false|null}", "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid parameters: the body must be {\"require_review\": true|false|null}", "")
 		return
 	}
 	if err := listingpolicy.SetOverride(schema, req.RequireReview, info.ID); err != nil {
-		// 外键指向 platform.tenants：租户不存在时给出可读的话，别把约束名甩给用户
+		// The foreign key points at platform.tenants: give a readable message when the tenant is
+		// missing instead of throwing the constraint name at the user
 		var pe *pq.Error
 		if errors.As(err, &pe) && pe.Code == "23503" {
-			xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "租户不存在："+schema, "")
+			xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "tenant not found: "+schema, "")
 			return
 		}
-		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("保存上架策略失败", "listing_policy.sql", err), "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("failed to save the listing policy", "listing_policy.sql", err), "")
 		return
 	}
 	var out any

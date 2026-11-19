@@ -12,17 +12,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 系统设置：platform.flow_configs / quota_configs 的**系统行**（tenant_id = ''）。
+// System settings: the **system rows** of platform.flow_configs / quota_configs (tenant_id = '').
 //
-// 两套系统行的语义一致（都是"兜底 + 硬顶"，运行期 clampMax 取 min）：
+// Both system rows mean the same thing (both are "fallback + hard ceiling", with runtime clampMax taking the min):
 //
-//	flow_configs  兜底 + 硬顶
-//	quota_configs 兜底 + 硬顶（系统行未设置时，用代码 fallback 当顶）
+//	flow_configs  fallback + hard ceiling
+//	quota_configs fallback + hard ceiling (when the system row is unset, the code fallback is the ceiling)
 //
-// 写系统行之后调用 InvalidateAll：删掉 Redis 里的系统行缓存键，各租户下次
-// Resolve 会自动重新合并；写后漏删时由 TTL（5min）兜底。
+// After writing a system row InvalidateAll is called: it drops the system-row cache key in Redis, and each tenant's next
+// Resolve re-merges automatically; if the delete is ever missed, the TTL (5min) covers it.
 
-// int32Field / intField 只用于"值不能小于 -1"的批量校验（-1 = 不限制）。
+// int32Field / intField are only used for the batch check "the value cannot be below -1" (-1 = unlimited).
 type int32Field struct {
 	name  string
 	value *int32
@@ -33,32 +33,34 @@ type intField struct {
 	value *int
 }
 
-// checkFlowSystemValues 值只能是 -1（不限制）或非负数；更小的负值没有语义，直接拒。
+// checkFlowSystemValues: a value may only be -1 (unlimited) or non-negative; smaller negatives have no meaning and are
+// rejected outright.
 func checkFlowSystemValues(fields []int32Field) error {
 	for _, f := range fields {
 		if f.value != nil && *f.value < -1 {
-			return fmt.Errorf("%s 只能是 -1（不限制）或非负数", f.name)
+			return fmt.Errorf("%s must be -1 (unlimited) or a non-negative number", f.name)
 		}
 	}
 	return nil
 }
 
-// checkQuotaSystemValues 同上，配额是 *int。
-func checkQuotaSystemValues(fields []intField) error {
+// checkQuotaSystemValues is the same, with *int quotas. It returns the offending field name as well, so the caller can
+// report quota.invalid_value with params.field; the message itself is only diagnostic text.
+func checkQuotaSystemValues(fields []intField) (string, error) {
 	for _, f := range fields {
 		if f.value != nil && *f.value < -1 {
-			return fmt.Errorf("%s 只能是 -1（不限制）或非负数", f.name)
+			return f.name, fmt.Errorf("%s must be -1 (unlimited) or a non-negative number", f.name)
 		}
 	}
-	return nil
+	return "", nil
 }
 
 // GetSystemFlowConfigs GET /platform/system/flowconfigs
-// 回系统行原始值 + 代码兜底值（界面用兜底值提示"留空会退到哪"）。
+// Returns the system row's raw values plus the code fallback (the UI uses the fallback to show where an empty field falls back to).
 func GetSystemFlowConfigs(c *gin.Context) {
 	cfg, err := flowRepo.Get("")
 	if err != nil {
-		xhttp.ErrJSON(c, "failed to load system config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to load system config: "+err.Error(), "")
 		return
 	}
 	fb := flowconfig.Fallback()
@@ -78,11 +80,12 @@ func GetSystemFlowConfigs(c *gin.Context) {
 }
 
 // UpdateSystemFlowConfigs PUT /platform/system/flowconfigs
-// 写 tenant_id = ” 行。这里**没有"不超过上级"的校验**（它就是最上级），只校验取值合法性。
+// Writes the tenant_id = '' row. There is **no "must not exceed the parent" check** here (it is the top level); only the
+// validity of the values is checked.
 func UpdateSystemFlowConfigs(c *gin.Context) {
 	var req updateFlowConfigsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	if err := checkFlowSystemValues([]int32Field{
@@ -94,7 +97,7 @@ func UpdateSystemFlowConfigs(c *gin.Context) {
 		{"max_run_records", req.MaxRunRecords},
 		{"max_session_records", req.MaxSessionRecords},
 	}); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -109,7 +112,7 @@ func UpdateSystemFlowConfigs(c *gin.Context) {
 		MaxSessionRecords: flowNullInt32(req.MaxSessionRecords),
 	}
 	if err := flowRepo.Upsert(cfg); err != nil {
-		xhttp.ErrJSON(c, "failed to save system config: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to save system config: "+err.Error(), "")
 		return
 	}
 	flowconfig.InvalidateAll()
@@ -118,11 +121,11 @@ func UpdateSystemFlowConfigs(c *gin.Context) {
 }
 
 // GetSystemQuota GET /platform/system/quota
-// quota 的 NULL 不能像 flowconfig 那样"原样回 null 就行"——它回的是原始行的三个指针。
+// A NULL quota cannot simply be echoed as null the way flowconfig can: it returns the original row's five pointers.
 func GetSystemQuota(c *gin.Context) {
 	row, err := tenantsrepo.GetQuotaRow("")
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load system quota: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load system quota: "+err.Error(), "")
 		return
 	}
 	fb := quota.Fallback()
@@ -146,38 +149,39 @@ func GetSystemQuota(c *gin.Context) {
 }
 
 // UpdateSystemQuota PUT /platform/system/quota
-// 只写系统行；租户行不会被截断（quota 没有硬顶语义，这里只是"默认值"）。
+// It writes only the system row; tenant rows are not truncated (quota has no hard-ceiling semantics here - this is just
+// "the default value").
 func UpdateSystemQuota(c *gin.Context) {
 	var req setTenantQuotaRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
-	if err := checkQuotaSystemValues([]intField{
+	if field, qerr := checkQuotaSystemValues([]intField{
 		{"max_agents", req.MaxAgents},
 		{"max_skills", req.MaxSkills},
 		{"max_flows", req.MaxFlows},
 		{"max_user_sessions", req.MaxUserSessions},
-	}); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+	}); qerr != nil {
+		xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": field, "min": -1}, qerr.Error(), "")
 		return
 	}
 	if req.MaxSessionStorageBytes != nil && *req.MaxSessionStorageBytes < -1 {
 		xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": "max_session_storage_bytes", "min": -1},
-			"max_session_storage_bytes 只能是 -1（不限制）或非负数", "")
+			"max_session_storage_bytes must be -1 (unlimited) or a non-negative number", "")
 		return
 	}
 
 	if err := tenantsrepo.SetSystemQuota(req.MaxAgents, req.MaxSkills, req.MaxFlows,
 		req.MaxSessionStorageBytes, req.MaxUserSessions); err != nil {
-		xhttp.ErrJSON(c, "Failed to set system quota: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to set system quota: "+err.Error(), "")
 		return
 	}
 	quota.InvalidateAll()
 
 	row, err := tenantsrepo.GetQuotaRow("")
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to reload system quota: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to reload system quota: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{

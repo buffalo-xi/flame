@@ -17,7 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// CreateSession 为指定 agent 新建会话。
+// CreateSession opens a new session for the given agent.
 func CreateSession(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -35,14 +35,14 @@ func CreateSession(c *gin.Context) {
 
 	sessionID, err := sessions.NewRepository().Create(ai.Schema, models.SessionOwnerTypeAgent, instance.ID, ai.ID, "")
 	if err != nil {
-		respondQuotaErr(c, err) // 会话数超限 → 507；其他错误 → 400
+		respondQuotaErr(c, err) // session count exceeded -> 507; anything else -> 400
 		return
 	}
 
 	xhttp.OkJSON(c, "Success", gin.H{"session_id": sessionID, "title": ""}, "")
 }
 
-// ListSessions 列出某 agent 的会话（updated_at 倒序）。
+// ListSessions lists the sessions of one agent (updated_at descending).
 func ListSessions(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -55,7 +55,7 @@ func ListSessions(c *gin.Context) {
 	keyword := c.Query("keyword")
 	list, err := sessions.NewRepository().ListByOwner(ai.Schema, models.SessionOwnerTypeAgent, id, ai.ID, 50, keyword)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to list the sessions: "+err.Error(), "")
 		return
 	}
 
@@ -68,10 +68,20 @@ func ListSessions(c *gin.Context) {
 			"updated_at": s.UpdatedAt,
 		})
 	}
-	xhttp.OkJSON(c, "Success", gin.H{"items": items}, "")
+	// Session-count quota alongside the list, so the panel can show "used / limit" before "new chat" hits 507.
+	// The count is bucketed by (owner_type, user_id) - the same rule Create enforces - so it spans this user's agents.
+	// A failed count degrades to 0 rather than breaking the list.
+	used, _ := quota.CountUserSessions(ai.Schema, models.SessionOwnerTypeAgent, ai.ID)
+	limit := quota.ResolveUserSessions(ai.Schema, ai.ID)
+
+	xhttp.OkJSON(c, "Success", gin.H{
+		"items":          items,
+		"sessions_used":  used,
+		"sessions_limit": limit,
+	}, "")
 }
 
-// ListSessionMessages 分页列出某会话的历史消息（旧→新，默认每页 10 轮）。
+// ListSessionMessages pages through the history of one session (old to new, 10 turns per page by default).
 func ListSessionMessages(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -81,25 +91,26 @@ func ListSessionMessages(c *gin.Context) {
 	ai := authInfo.(*auth.AuthInfo)
 	sid, perr := sessions.ParseID(c.Param("id"))
 	if perr != nil {
-		xhttp.ErrJSON(c, perr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, perr.Error(), "")
 		return
 	}
 
-	// 存在性 + 可见性：原先只看「存在」，于是租户内任何用户拿到一个 UUID
-	// 就能读到任意 agent / flow 的完整对话。这里不校验 owner（这条路由是
-	// agent / flow 泛化的），只按 user 收口 —— 与 ListSessions 同一口径。
+	// Existence plus visibility: the original code only checked existence, so any user in
+	// the tenant who obtained a UUID could read the full conversation of any agent / flow.
+	// The owner is not checked here (this route is generic across agent / flow); scoping by
+	// user matches ListSessions.
 	sess, err := sessions.NewRepository().Get(ai.Schema, sid)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to get session: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get the session: "+err.Error(), "")
 		return
 	}
 	if !sessionVisibleTo(sess, ai) {
-		// 与「不存在」同一句话：否则这里就是一个探测 sid 是否存在的接口
+		// Same wording as "not found": otherwise this endpoint becomes an sid probe
 		xhttp.ErrCode(c, "session.not_found", nil, "Session not found", "")
 		return
 	}
 
-	// 分页：limit 每页轮数（默认 10，上限 100），before 加载早于该时间的记录
+	// Paging: limit is turns per page (default 10, max 100), before loads records older than that time
 	limit := 10
 	if v := c.Query("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
@@ -113,10 +124,10 @@ func ListSessionMessages(c *gin.Context) {
 		}
 	}
 
-	// 多取一条判断是否还有更早记录
+	// Fetch one extra row to know whether older records exist
 	records, err := sessionrecords.NewRepository().ListBySessionPage(ai.Schema, sess.OwnerType, sess.OwnerID, sid, limit+1, before)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to list the session records: "+err.Error(), "")
 		return
 	}
 
@@ -136,14 +147,15 @@ func ListSessionMessages(c *gin.Context) {
 	}, "")
 }
 
-// pageRecords 处理「多取一条判断是否还有更早记录」的分页结果。
+// pageRecords handles the "fetch one extra row to know whether older records exist" paging.
 //
-// 入参 records 是 ListBySessionPage 的返回值，顺序是**旧 → 新**（SQL 先按 created_at DESC
-// 取最新的 limit+1 条，再整体反转）。所以多出来的那条落在**切片头部**（最旧），
-// 必须从头部丢 —— 曾经写成 records[:limit] 从尾部截，砍掉的恰好是**最新一条**：
-// 会话超过 10 条记录后，每次打开会话都看不到刚跑完的那一轮。
+// records is what ListBySessionPage returns, in **old to new** order (the SQL first takes the
+// newest limit+1 rows by created_at DESC, then reverses them). The extra row therefore sits at
+// the **head of the slice** (the oldest) and must be dropped from the head - an earlier version
+// used records[:limit] and cut the **newest** row instead: once a session had more than 10
+// records, every open missed the turn that had just finished.
 //
-// 返回 hasMore：是否还有更早的记录可翻。
+// hasMore says whether older records are still available.
 func pageRecords(records []models.SessionRecord, limit int) ([]models.SessionRecord, bool) {
 	if limit > 0 && len(records) > limit {
 		return records[len(records)-limit:], true
@@ -151,19 +163,23 @@ func pageRecords(records []models.SessionRecord, limit int) ([]models.SessionRec
 	return records, false
 }
 
-// sessionMessages 把会话记录转成前端要的消息列表（user/assistant 交替）。
+// sessionMessages turns session records into the message list the frontend wants (user /
+// assistant alternating).
 //
-// 与 core.RecordsToMessages 的分工：那份给 LLM 当上下文（只要 role/content）；
-// 这份给 UI —— 助手消息多带 duration_ms（执行用时）、status 与 error。
-// 存量行 duration_ms 为 0，前端据此不显示那一行；存量行 status 已被列默认值补成 ok。
+// Division of labour with core.RecordsToMessages: that one feeds the LLM context (role and
+// content only); this one feeds the UI - assistant messages also carry duration_ms (execution
+// time), status and error. Legacy rows have duration_ms = 0, which the frontend uses to hide
+// that line; a legacy empty status has already been backfilled to ok by the column default.
 //
-// 被终止 / 出错的一轮**也要出一条 assistant 消息**：那时 output 往往是空的，
-// 若按「有正文才出消息」过滤，历史里就只剩用户那句提问，看不出这轮为什么没有回答。
+// A stopped / failed turn **still produces an assistant message**: the output is often empty
+// then, and filtering on "body present" would leave only the user's question in the history,
+// with no trace of why the turn never answered.
 func sessionMessages(records []models.SessionRecord) []gin.H {
 	msgs := make([]gin.H, 0, len(records)*2)
 	for _, rec := range records {
-		// 同一轮的 user / assistant 共用记录的创建时间：用户看到的是「这条消息什么时候发的」，
-		// 而不是数据库写入时间。前端据此在消息下方显示 HH:mm。
+		// The user / assistant pair of one turn share the record's creation time: what the user
+		// sees is "when this message was sent", not when the row was written. The frontend shows
+		// HH:mm under each message from it.
 		createdAt := time.Time(rec.CreatedAt).Format(time.RFC3339)
 		msgs = append(msgs, gin.H{
 			"role":       "user",
@@ -188,7 +204,7 @@ func sessionMessages(records []models.SessionRecord) []gin.H {
 	return msgs
 }
 
-// DeleteSession 删除会话（连带删除其会话记录）。
+// DeleteSession deletes a session along with its session records.
 func DeleteSession(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -198,15 +214,16 @@ func DeleteSession(c *gin.Context) {
 	ai := authInfo.(*auth.AuthInfo)
 	sid, perr := sessions.ParseID(c.Param("id"))
 	if perr != nil {
-		xhttp.ErrJSON(c, perr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, perr.Error(), "")
 		return
 	}
 
-	// 删除同样要过可见性：这个接口会连带删掉 session_records 与**整个会话工作区目录**，
-	// 不校验就等于任何租户用户都能清空别人的产物。口径与 ListSessionMessages 一致。
+	// Deletion needs the visibility check too: this endpoint also removes the session_records
+	// and **the whole session workspace directory**, so skipping it would let any tenant user
+	// wipe someone else's artifacts. Same rule as ListSessionMessages.
 	sess, err := sessions.NewRepository().Get(ai.Schema, sid)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to get session: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get the session: "+err.Error(), "")
 		return
 	}
 	if !sessionVisibleTo(sess, ai) {
@@ -215,17 +232,19 @@ func DeleteSession(c *gin.Context) {
 	}
 
 	if derr := sessions.NewRepository().Delete(ai.Schema, sid); derr != nil {
-		xhttp.ErrJSON(c, derr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to delete the session: "+derr.Error(), "")
 		return
 	}
 
 	xhttp.OkJSON(c, "Success", sid, "")
 }
 
-// GetSessionUsage 返回会话工作区的当前用量与两个上限（工作区面板的用量条用）。
+// GetSessionUsage returns the current usage of a session workspace plus its two limits (for
+// the usage bar in the workspace panel).
 //
-// 只读计数，不扫描目录：数字可能比真实值滞后到下一次写入校准，但足够用来提示
-// 「快满了/已经满了」，不需要为了一个进度条去扫一遍存储。
+// It is a read of counters, not a directory scan: the number can lag behind reality until the
+// next write recalibrates it, which is enough to say "almost full / already full" without
+// scanning storage for a progress bar.
 func GetSessionUsage(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -235,12 +254,12 @@ func GetSessionUsage(c *gin.Context) {
 	ai := authInfo.(*auth.AuthInfo)
 	sid, perr := sessions.ParseID(c.Param("id"))
 	if perr != nil {
-		xhttp.ErrJSON(c, perr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, perr.Error(), "")
 		return
 	}
 	sess, err := sessions.NewRepository().Get(ai.Schema, sid)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to get session: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to get the session: "+err.Error(), "")
 		return
 	}
 	if !sessionVisibleTo(sess, ai) {
@@ -249,11 +268,12 @@ func GetSessionUsage(c *gin.Context) {
 	}
 
 	key := paths.UserSessionKey(ai.Schema, sess.UserID, sid)
-	// 上限按会话归属用户解析：user_quotas 有覆盖时用覆盖值，否则回退租户值
+	// Limits resolve against the session's owning user: the user_quotas override when present, the tenant value otherwise
 	used, limit := quota.Snapshot(context.Background(), ai.Schema, key, sess.UserID)
 
-	// 会话数：给前端提示「还能不能新建」，失败时按 0/未知处理，不阻断面板渲染。
-	// 上限同样按用户解析（user_quotas 可覆盖租户值）。
+	// Session count: tells the frontend whether a new session can be created. On failure it is
+	// treated as 0/unknown rather than blocking the panel render.
+	// The limit resolves per user too (user_quotas may override the tenant value).
 	sessionsUsed, _ := quota.CountUserSessions(ai.Schema, models.SessionOwnerTypeAgent, ai.ID)
 	sessionsLimit := quota.ResolveUserSessions(ai.Schema, ai.ID)
 
@@ -267,7 +287,8 @@ func GetSessionUsage(c *gin.Context) {
 	}, "")
 }
 
-// GetLatestSession 返回当前用户最近一条 agent 会话（用于进入时恢复最近对话的 agent）。
+// GetLatestSession returns the current user's most recent agent session (used to restore the
+// last conversation's agent on entry).
 func GetLatestSession(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -278,7 +299,7 @@ func GetLatestSession(c *gin.Context) {
 
 	list, err := sessions.NewRepository().ListByUser(ai.Schema, models.SessionOwnerTypeAgent, ai.ID, 1)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to list the sessions: "+err.Error(), "")
 		return
 	}
 	if len(list) == 0 {

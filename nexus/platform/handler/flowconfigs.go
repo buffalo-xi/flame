@@ -15,16 +15,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 工作流运行参数（platform.flow_configs）：平台侧按租户查看 / 调整。
+// Flow run limits (platform.flow_configs): the platform side views and adjusts them per tenant.
 //
-// 两套入口**共用同一份核心逻辑**（loadFlowBundle / saveFlowConfigs），只有权限口径不同：
-//   - 管理员：/platform/tenants/:schema/flowconfigs        —— 可操作**任意**租户
-//   - 「用户」：/platform/me/tenants/:schema/flowconfigs    —— 只能操作**自己名下**的租户
+// The two entry sets **share the same core logic** (loadFlowBundle / saveFlowConfigs) and differ only in permissions:
+//   - administrator: /platform/tenants/:schema/flowconfigs     - any tenant
+//   - "user":        /platform/me/tenants/:schema/flowconfigs  - only the tenants under their own name
 //
-// 校验口径与租户侧 /admin/flowconfigs 完全一致（同一张表、同一套"不超过系统级"规则）。
+// The validation rules match the tenant-side /admin/flowconfigs exactly (same table, same "must not exceed the system
+// level" rule).
 //
-// 注意：租户运行时的读取走 shared/flowconfig 的 TTL 缓存，
-// 所以写完必须主动失效，否则要等一个 TTL 周期（本进程立即生效；多实例下别的实例仍等 TTL）。
+// Note: tenant runtime reads go through shared/flowconfig's TTL cache, so a write must invalidate it explicitly or the
+// new value waits a whole TTL (immediate in this process; other instances still wait for their TTL).
 var flowRepo = flowrepo.NewRepository()
 
 func flowNullable(v sql.NullInt32) any {
@@ -34,7 +35,7 @@ func flowNullable(v sql.NullInt32) any {
 	return nil
 }
 
-// flowToJSON 把一行配置转成前端要的 map（NULL → null）。
+// flowToJSON turns a config row into the map the frontend expects (NULL -> null).
 func flowToJSON(cfg *flowrepo.FlowConfig) gin.H {
 	if cfg == nil {
 		return gin.H{}
@@ -50,50 +51,51 @@ func flowToJSON(cfg *flowrepo.FlowConfig) gin.H {
 	}
 }
 
-// mustTenant 取路径里的 schema 并确认租户已注册（管理员接口用）。
+// mustTenant reads the schema from the path and confirms the tenant is registered (administrator endpoints).
 func mustTenant(c *gin.Context) (string, bool) {
 	schema := strings.TrimSpace(c.Param("schema"))
 	t, err := tenantsrepo.Get(schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load tenant: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load tenant: "+err.Error(), "")
 		return "", false
 	}
 	if t == nil {
-		xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "租户不存在", "")
+		xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "tenant not found", "")
 		return "", false
 	}
 	return schema, true
 }
 
-// mustOwnTenant 取路径里的 schema，并确认它是**当前平台账号名下**的租户（「用户」自助接口用）。
+// mustOwnTenant reads the schema from the path and confirms it belongs to **the current platform account** (the
+// "user" self-service endpoints).
 //
-// 管理员不走这组接口 —— 他走 /platform/tenants/...（能操作任意租户），
-// 而且管理员永远不是 owner（开通 / 改负责人时都要求 owner 是 role=user）。
+// Administrators do not use this group - they use /platform/tenants/... (any tenant),
+// and an administrator is never an owner (provisioning and ownership transfer both require owner to have role=user).
 func mustOwnTenant(c *gin.Context) (string, bool) {
 	info, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "缺少平台身份")
+		xhttp.SendErrorResponse(c, http.StatusUnauthorized, "unauthorized", "missing platform identity")
 		return "", false
 	}
 
 	schema := strings.TrimSpace(c.Param("schema"))
 	t, err := tenantsrepo.Get(schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to load tenant: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load tenant: "+err.Error(), "")
 		return "", false
 	}
 	if t == nil {
-		xhttp.SendErrorResponse(c, http.StatusNotFound, "not_found", "租户不存在")
+		xhttp.SendErrorResponse(c, http.StatusNotFound, "not_found", "tenant not found")
 		return "", false
 	}
 	if t.OwnerUserID != info.ID {
-		xhttp.SendErrorResponse(c, http.StatusForbidden, "forbidden", "只能操作自己名下的租户")
+		xhttp.SendErrorResponse(c, http.StatusForbidden, "forbidden", "you can only operate on tenants under your own name")
 		return "", false
 	}
 	return schema, true
 }
 
-// loadFlowBundle 读该租户的配置 + 系统级（系统级只作对照，不在写入范围里）。
+// loadFlowBundle reads that tenant's config plus the system level (the system level is for comparison only, never written here).
 func loadFlowBundle(schema string) (gin.H, error) {
 	sysCfg, err := flowRepo.Get("")
 	if err != nil {
@@ -119,7 +121,7 @@ type updateFlowConfigsRequest struct {
 	MaxSessionRecords *int32 `json:"max_session_records"`
 }
 
-// flowNullInt32 nil → NULL（未设置）
+// flowNullInt32 maps nil -> NULL (unset).
 func flowNullInt32(v *int32) sql.NullInt32 {
 	if v == nil {
 		return sql.NullInt32{}
@@ -127,21 +129,21 @@ func flowNullInt32(v *int32) sql.NullInt32 {
 	return sql.NullInt32{Int32: *v, Valid: true}
 }
 
-// flowCheckNotExceed 租户值不得超过系统级（系统级未设置或 -1 时视为不限制）。
+// flowCheckNotExceed: a tenant value must not exceed the system level (an unset or -1 system level means unlimited).
 func flowCheckNotExceed(field string, tenantValue, sysValue sql.NullInt32) error {
 	if !sysValue.Valid || sysValue.Int32 == -1 || !tenantValue.Valid || tenantValue.Int32 == -1 {
 		return nil
 	}
 	if tenantValue.Int32 > sysValue.Int32 {
-		return fmt.Errorf("%s 不能超过系统级值 %d", field, sysValue.Int32)
+		return fmt.Errorf("%s cannot exceed the system value %d", field, sysValue.Int32)
 	}
 	return nil
 }
 
-// saveFlowConfigs 校验（不得超过系统级）+ 写入 + 失效缓存。
-// body 里 7 个字段都可为 null（null = 未设置，回退系统级）。
+// saveFlowConfigs validates (must not exceed the system level), writes and invalidates the cache.
+// All seven body fields may be null (null = unset, falls back to the system level).
 func saveFlowConfigs(schema string, req updateFlowConfigsRequest) (gin.H, error) {
-	// 系统级配置只读，用来做上限校验
+	// The system config is read-only here and only used for the upper-bound check
 	sysCfg, err := flowRepo.Get("")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load system config: %w", err)
@@ -184,14 +186,14 @@ func saveFlowConfigs(schema string, req updateFlowConfigsRequest) (gin.H, error)
 	if err := flowRepo.Upsert(cfg); err != nil {
 		return nil, fmt.Errorf("failed to save flow config: %w", err)
 	}
-	// 写后删：删掉该租户的 Redis 缓存键，下次 Resolve 回源 DB 重建。
+	// Delete after write: drop that tenant's Redis key so the next Resolve goes back to the database and rebuilds it
 	flowconfig.Invalidate(schema)
 
 	return gin.H{"schema": schema, "tenant": flowToJSON(cfg)}, nil
 }
 
 // GetTenantFlowConfigs GET /platform/tenants/:schema/flowconfigs
-// 管理员视角：任意租户。返回该租户的配置 + 系统级（系统级只作对照）。
+// Administrator view: any tenant. Returns that tenant's config plus the system level (for comparison only).
 func GetTenantFlowConfigs(c *gin.Context) {
 	schema, ok := mustTenant(c)
 	if !ok {
@@ -199,14 +201,14 @@ func GetTenantFlowConfigs(c *gin.Context) {
 	}
 	data, err := loadFlowBundle(schema)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", data, "")
 }
 
 // UpdateTenantFlowConfigs PUT /platform/tenants/:schema/flowconfigs
-// 管理员视角：任意租户。
+// Administrator view: any tenant.
 func UpdateTenantFlowConfigs(c *gin.Context) {
 	schema, ok := mustTenant(c)
 	if !ok {
@@ -215,20 +217,20 @@ func UpdateTenantFlowConfigs(c *gin.Context) {
 
 	var req updateFlowConfigsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 
 	data, err := saveFlowConfigs(schema, req)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", data, "")
 }
 
 // GetMyTenantFlowConfigs GET /platform/me/tenants/:schema/flowconfigs
-// 「用户」自助：只能读自己名下租户的配置（不是自己名下 → 403）。
+// "User" self-service: only the config of a tenant under their own name (otherwise 403).
 func GetMyTenantFlowConfigs(c *gin.Context) {
 	schema, ok := mustOwnTenant(c)
 	if !ok {
@@ -236,15 +238,15 @@ func GetMyTenantFlowConfigs(c *gin.Context) {
 	}
 	data, err := loadFlowBundle(schema)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", data, "")
 }
 
 // UpdateMyTenantFlowConfigs PUT /platform/me/tenants/:schema/flowconfigs
-// 「用户」自助：只能改自己名下租户的配置（不是自己名下 → 403）。
-// 校验与返回体同管理员那条 —— 共用 saveFlowConfigs。
+// "User" self-service: only the config of a tenant under their own name (otherwise 403).
+// The validation and response body match the administrator route - both share saveFlowConfigs.
 func UpdateMyTenantFlowConfigs(c *gin.Context) {
 	schema, ok := mustOwnTenant(c)
 	if !ok {
@@ -253,13 +255,13 @@ func UpdateMyTenantFlowConfigs(c *gin.Context) {
 
 	var req updateFlowConfigsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 
 	data, err := saveFlowConfigs(schema, req)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", data, "")

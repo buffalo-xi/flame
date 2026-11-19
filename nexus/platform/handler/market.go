@@ -15,27 +15,31 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 对端市场（站到站只读）。挂在 /platform/market 下，由市场令牌（market_tokens）鉴权，
-// 不是平台登录身份 —— 对端只是一台机器，不该拿到能改配置的凭据。
+// The peer market (server-to-server, read-only). Mounted under /platform/market and authenticated by a market token
+// (market_tokens), not by a platform login: a peer is just a machine and should not hold a credential that can change
+// configuration.
 //
-// 出口口径两条：
-//  1. **只出 listed**：pending / rejected / delisted 一律不出现，所以「本机审核通过」
-//     就是对端可见的唯一前提；allowlist 是租户维度，对端不受它约束（对端拉回去之后
-//     还要在它自己的平台上再审一次、再按它自己的租户可见范围安装）。
-//  2. **只出本机原创**（origin_server = ''）：导入行不再往外转发。
-//     否则 A→B、B→A 会形成环路：每次导入生成一条新行（origin 变了但仍 listed），
-//     又出现在出口目录里，同一份东西被反复复制；来源也会被改名冒充（B 站的转发件挂在
-//     A 站名下），`origin_server` 这条溯源链直接断掉。
-//     对端如果要这份资产，应当去原始站点拉。
+// Two egress rules:
+//  1. **Only listed assets go out**: pending / rejected / delisted never appear, so "reviewed here" is the only
+//     precondition for peer visibility; the allow-list is a tenant-level dimension the peer is not subject to (after
+//     pulling it back, the peer reviews it on its own platform again and installs it within its own tenants' visible
+//     scope).
+//  2. **Only local originals go out** (origin_server = ''): imported rows are not forwarded again.
+//     Otherwise A->B and B->A form a loop: each import creates a new row (the origin changed but it is still listed),
+//     which shows up in the egress catalog again, and the same thing is copied over and over; provenance could also be
+//     faked by renaming (a forwarded item from site B listed under site A's name), which breaks the origin_server
+//     provenance chain outright.
+//     A peer that wants such an asset should pull it from the original site.
 
 // ListMarketCatalog GET /platform/market/catalog?kind=&since=
 //
-// since 传 RFC3339 时只回该时间之后更新过的，用于增量同步；拿不到就全量（资产在百级）。
+// With an RFC3339 since it returns only rows updated after that time, for incremental sync; without it the list is
+// complete (assets number in the hundreds).
 func ListMarketCatalog(c *gin.Context) {
 	f := sharedassets.Filter{
 		Status:      sharedassets.StatusListed,
 		Kind:        strings.TrimSpace(c.Query("kind")),
-		OriginLocal: true, // 只出本机上架的行，见上面的出口口径 2
+		OriginLocal: true, // only rows listed on this server, see egress rule 2 above
 	}
 
 	var since time.Time
@@ -43,7 +47,7 @@ func ListMarketCatalog(c *gin.Context) {
 		t, err := time.Parse(time.RFC3339, s)
 		if err != nil {
 			xhttp.ErrCode(c, "common.invalid_params", gin.H{"param": "since"},
-				"since 需要 RFC3339 时间（如 2026-11-02T10:00:00Z）", "")
+				"since requires an RFC3339 timestamp (for example 2026-11-02T10:00:00Z)", "")
 			return
 		}
 		since = t
@@ -51,7 +55,7 @@ func ListMarketCatalog(c *gin.Context) {
 
 	list, err := sharedassets.List(f)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "查询市场目录失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to query the market catalog: "+err.Error(), "")
 		return
 	}
 
@@ -90,22 +94,23 @@ func ListMarketCatalog(c *gin.Context) {
 
 // MarketAssetPackage GET /platform/market/assets/:id/package
 //
-// 只能拉已通过审核的**本机原创**资产：目录里看不到的 id 这里也不给包，两条口子口径一致。
-// 导入行（origin_server 非空）同样 404 —— 它出不了目录，也就不该能按 id 直取；
-// 否则「只出原创」这层限制会被一个猜到的 id 绕过。
+// Only a reviewed **local-original** asset can be pulled: an id that is not in the catalog gets no package here either,
+// so the two doors agree.
+// An imported row (origin_server set) also gets 404 - it cannot appear in the catalog and therefore must not be
+// reachable by id, or the "local originals only" restriction could be bypassed with a guessed id.
 func MarketAssetPackage(c *gin.Context) {
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "查询资产失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to query the asset: "+err.Error(), "")
 		return
 	}
 	if a == nil || a.Status != sharedassets.StatusListed || a.OriginServer != "" {
-		xhttp.SendErrorResponse(c, http.StatusNotFound, "not_found", "资产不存在或未通过审核")
+		xhttp.SendErrorResponse(c, http.StatusNotFound, "not_found", "the asset does not exist or has not been reviewed")
 		return
 	}
 	data, berr := buildAssetPackage(a)
 	if berr != nil {
-		xhttp.ErrJSON(c, berr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, berr.Error(), "")
 		return
 	}
 	servePackage(c, a, data)

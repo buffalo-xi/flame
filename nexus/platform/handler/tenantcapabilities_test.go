@@ -7,55 +7,55 @@ import (
 	"flame/nexus/shared/capabilitypolicy"
 )
 
-// 三态必须分得清：null（没设过 = 未开通）与 false（显式关闭）不是一个意思。
-// 压成一个 bool 会让编辑框把「未设置」静默写成「关闭」，管理员再也分不清
-// 「我关的」和「本来就没开」。
+// The three states must stay distinguishable: null (never set = not enabled) and false (explicitly off) are not the same thing.
+// Collapsing them into one bool would let the edit form silently write "unset" as "off", and an administrator could no longer
+// tell "I turned it off" from "it was never on".
 func TestBuildCapabilityViews(t *testing.T) {
 	on := capabilitypolicy.Policy{Allowed: true}
 	off := capabilitypolicy.Policy{Allowed: false}
 
-	// 1) 都没配：未开通（缺省拒绝）
+	// 1) Nothing configured: not enabled (deny by default)
 	got := buildCapabilityViews(nil, nil)
 	if len(got) != len(capability.All()) {
-		t.Fatalf("应列出全部已知能力，got %d", len(got))
+		t.Fatalf("should list every known capability, got %d", len(got))
 	}
 	for _, v := range got {
 		if v.Allowed || v.Row != nil || v.Blocked {
-			t.Errorf("%s 无任何配置时应为「未开通 + 无行 + 不拦」，got %+v", v.Key, v)
+			t.Errorf("%s with no config should be \"not enabled + no row + not blocked\", got %+v", v.Key, v)
 		}
 	}
 
-	// 2) 租户行 true：开通；Row 原样回填给编辑框
+	// 2) Tenant row true: enabled; Row is echoed back unchanged for the edit form
 	got = buildCapabilityViews(map[string]capabilitypolicy.Policy{capability.Browser: on}, nil)
 	for _, v := range got {
 		switch v.Key {
 		case capability.Browser:
 			if !v.Allowed || v.Row == nil || !*v.Row || v.Blocked {
-				t.Errorf("browser 有允许行应为「开通 + Row=true」，got %+v", v)
+				t.Errorf("browser with an allowed row should be \"enabled + Row=true\", got %+v", v)
 			}
 		default:
 			if v.Allowed {
-				t.Errorf("%s 没配就不该开通，got %+v", v.Key, v)
+				t.Errorf("%s was not configured and must not be enabled, got %+v", v.Key, v)
 			}
 		}
 	}
 
-	// 3) 显式关闭：Allowed=false 但 Row 非 nil（编辑框要能回填「关」而不是「未设置」）
+	// 3) Explicitly off: Allowed=false but Row is not nil (the form must show "off" rather than "unset")
 	got = buildCapabilityViews(map[string]capabilitypolicy.Policy{capability.Browser: off}, nil)
 	for _, v := range got {
 		if v.Key != capability.Browser {
 			continue
 		}
 		if v.Allowed {
-			t.Error("显式关闭不应生效为开通")
+			t.Error("an explicit off must not take effect as enabled")
 		}
 		if v.Row == nil || *v.Row {
-			t.Error("Row 应原样反映本租户的 false（不能被缺省值抹平）")
+			t.Error("Row should reflect this tenant's false unchanged (it must not be flattened by the default)")
 		}
 	}
 
-	// 4) 全局闸压过租户的显式开启，但不改写原始行 —— 否则界面会显示「租户关了」，
-	//    管理员解闸后发现能力又回来了，排查方向会被带偏。
+	// 4) The global gate overrides a tenant's explicit enable without rewriting the raw row - otherwise the UI would show "the
+	// tenant turned it off", and once an administrator lifts the gate the capability comes back, misleading the investigation.
 	got = buildCapabilityViews(
 		map[string]capabilitypolicy.Policy{capability.Browser: on},
 		map[string]bool{capability.Browser: true},
@@ -65,23 +65,24 @@ func TestBuildCapabilityViews(t *testing.T) {
 			continue
 		}
 		if v.Allowed {
-			t.Error("全局闸 blocked 应压过租户行 true")
+			t.Error("a blocked global gate should override the tenant row's true")
 		}
 		if !v.Blocked {
-			t.Error("Blocked 应如实反映闸状态（界面要标出「被平台拦下」）")
+			t.Error("Blocked should reflect the gate state truthfully (the UI marks it as blocked by the platform)")
 		}
 		if v.Row == nil || !*v.Row {
-			t.Error("Row 必须仍是租户原始的 true（硬闸不修改原始配置）")
+			t.Error("Row must still be the tenant's original true (a hard gate does not modify the raw config)")
 		}
 	}
 }
 
-// 依赖只对 net.egress 生效，且是「exec 或 shell 任一」—— 两个通道都能执行任意
-// 代码，只认 exec 会把「只开 shell」的租户挡在门外。其余键都是独立的，不许凭空长出依赖。
+// Dependencies only apply to net.egress, and are "exec or shell, either one" - both channels can execute arbitrary code, so
+// accepting only exec would lock out tenants that enabled just shell. Every other key is independent and must not grow
+// dependencies out of nowhere.
 func TestCapabilityDeps(t *testing.T) {
 	deps := capabilityDeps(capability.Egress)
 	if len(deps) != 2 || deps[0] != capability.Exec || deps[1] != capability.Shell {
-		t.Errorf("capabilityDeps(%q) = %v，want [%q %q]",
+		t.Errorf("capabilityDeps(%q) = %v, want [%q %q]",
 			capability.Egress, deps, capability.Exec, capability.Shell)
 	}
 	for _, key := range capability.All() {
@@ -89,19 +90,19 @@ func TestCapabilityDeps(t *testing.T) {
 			continue
 		}
 		if got := capabilityDeps(key); len(got) != 0 {
-			t.Errorf("capabilityDeps(%q) = %v，want 无依赖", key, got)
+			t.Errorf("capabilityDeps(%q) = %v, want no dependencies", key, got)
 		}
 	}
 }
 
-// 新增键必须同时进 All / Valid / Label 三处 —— 漏一处就会出现「界面不列出」
-// 或「接口拒收」这类只在一半地方生效的偏差，而且都不会报错。
+// A new key must go into All / Valid / Label together - missing one produces a deviation that only works in half the places
+// ("not listed in the UI" or "rejected by the API"), and neither reports an error.
 func TestEgressKeyRegistered(t *testing.T) {
 	if !capability.Valid(capability.Egress) {
-		t.Error("net.egress 必须是合法键（否则 PUT 直接拒绝）")
+		t.Error("net.egress must be a valid key (otherwise PUT rejects it outright)")
 	}
 	if capability.Label(capability.Egress) == capability.Egress {
-		t.Error("net.egress 缺 Label（界面会显示裸键名）")
+		t.Error("net.egress has no Label (the UI would show the bare key name)")
 	}
 	var listed bool
 	for _, key := range capability.All() {
@@ -110,6 +111,6 @@ func TestEgressKeyRegistered(t *testing.T) {
 		}
 	}
 	if !listed {
-		t.Error("net.egress 不在 All 里（能力授权卡片不会列出这一行）")
+		t.Error("net.egress is absent from All (the capability grant card would not list this row)")
 	}
 }

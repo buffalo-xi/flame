@@ -1,12 +1,15 @@
 package skills
 
-// 技能的版本：{schema}.skill_versions。
+// Skill versions: {schema}.skill_versions.
 //
-// 只覆盖**租户级**技能（skills.agent_id IS NULL）。私有技能没有独立版本号 ——
-// 它的目录在 agent 根目录之内，版本号就是所属 agent 的版本号
-// （内容落在 versions/agents/<agent>/v<n>/skills/<skill>/）。理由见 nexus/docs/terminology.md：
-// 私有技能是 agent 唯一有写权的内容，给它独立版本号再加自发布权就等于开了个后门；
-// 捆进 agent 版本后，改技能必须经一次 agent 发布才生效，与 D32 的「禁止自发布」一致。
+// Only **tenant-level** skills are covered (skills.agent_id IS NULL). A private skill has no
+// version number of its own - its directory lives inside the agent root, so its version number is
+// the version number of the owning agent (the content lands in
+// versions/agents/<agent>/v<n>/skills/<skill>/). The reasoning is in nexus/docs/terminology.md:
+// a private skill is the only content the agent itself can write, so giving it an independent
+// version number plus self-release rights would be a back door; bundling it into the agent version
+// means a skill change only takes effect through an agent release, consistent with D32's "no
+// self-release".
 
 import (
 	"context"
@@ -16,6 +19,7 @@ import (
 	"io"
 	"path"
 	"strconv"
+	"strings"
 
 	"flame/nexus/shared/assetpack"
 	"flame/nexus/shared/auth"
@@ -30,7 +34,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// skillVersionView 列表项（不含 files 正文，只给汇总）。
+// skillVersionView is a list item (no file bodies, only the summary).
 type skillVersionView struct {
 	Version       int       `json:"version"`
 	Name          string    `json:"name"`
@@ -46,7 +50,8 @@ type skillVersionView struct {
 
 func skillVersionTable(schema string) string { return schema + ".skill_versions" }
 
-// skillDraftKey 租户级技能的草稿目录（版本域与它平级，见 shared/paths 的版本域注释）。
+// skillDraftKey is the draft directory of a tenant-level skill (the version domain sits next to
+// it, see the version-domain comment in shared/paths).
 func skillDraftKey(schema, name string) string {
 	return path.Join(paths.SkillsKey(schema), name)
 }
@@ -57,7 +62,7 @@ func ListSkillVersions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	s, ok := mustTenantSkill(c, info, "读取版本历史")
+	s, ok := mustTenantSkill(c, info, "read the version history")
 	if !ok {
 		return
 	}
@@ -71,7 +76,7 @@ func ListSkillVersions(c *gin.Context) {
 		WHERE v.skill_id = $1
 		ORDER BY v.version DESC`, s.ID)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the version history: "+err.Error(), "")
 		return
 	}
 	defer rows.Close()
@@ -81,13 +86,13 @@ func ListSkillVersions(c *gin.Context) {
 		var v skillVersionView
 		if err := rows.Scan(&v.Version, &v.Name, &v.Description, &v.IsCurrent, &v.Note,
 			&v.CreatedBy, &v.CreatedByName, &v.CreatedAt, &v.FilesCount, &v.TotalBytes); err != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to read the version history: "+err.Error(), "")
 			return
 		}
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the version history: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"versions": out}, "")
@@ -95,19 +100,20 @@ func ListSkillVersions(c *gin.Context) {
 
 // ReleaseSkillVersion POST /skills/:id/versions  body: {"note": "..."}
 //
-// 发布 = 把 skills/<name>/ 冻结成 versions/skills/<name>/v<n> 并设为当前。
-// 拷贝在事务内、持实体行锁（与他人改名 / 并发发布串行）。
+// Release = freeze skills/<name>/ into versions/skills/<name>/v<n> and make it current.
+// The copy happens inside a transaction holding the entity row lock (so a concurrent rename or
+// release serialises with it).
 func ReleaseSkillVersion(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
 		return
 	}
-	s, ok := mustTenantSkill(c, info, "发布版本")
+	s, ok := mustTenantSkill(c, info, "release a version")
 	if !ok {
 		return
 	}
 	if !s.IsModifiable() {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能发布版本（如需发布请先切回「正常」）", "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot release a version (switch it back to normal first)", "")
 		return
 	}
 
@@ -120,13 +126,13 @@ func ReleaseSkillVersion(c *gin.Context) {
 	}
 	note, err := versions.NormalizeNote(body.Note)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 	ctx := context.Background()
@@ -134,7 +140,7 @@ func ReleaseSkillVersion(c *gin.Context) {
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -146,51 +152,52 @@ func ReleaseSkillVersion(c *gin.Context) {
 			xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if !models.IsModifiable(status) {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能发布版本（如需发布请先切回「正常」）", "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot release a version (switch it back to normal first)", "")
 		return
 	}
 
 	var next int
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(version),0)+1 FROM `+skillVersionTable(info.Schema)+
 		` WHERE skill_id = $1`, s.ID).Scan(&next); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	dstKey := paths.VersionKey(info.Schema, paths.VersionSkills, s.Name, next)
 	if err := versions.EnsureAbsent(ctx, st, dstKey); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	files, err := versions.Snapshot(ctx, st, srcKey, dstKey, paths.SkillEntryFile, nil)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrCode(c, "common.internal", nil, "冻结版本失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to freeze the version: "+err.Error(), "")
 		return
 	}
 	rawFiles, err := versions.Encode(files)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
-	// 工具依赖是技能的**声明**，属定义：必须随这一版冻结。
-	// 漏了它，正式运行的 use_skill 会读到一个空依赖集 —— 正文在、工具不来，且没有任何报错。
+	// Tool dependencies are the skill's **declaration** and part of its definition: they must be
+	// frozen with this version. Without them, a production use_skill reads an empty dependency set
+	// - the body is there, the tools never arrive, and nothing reports an error.
 	deps, derr := versioning.SkillToolDepsSnapshot(info.Schema, s.ID)
 	if derr != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrCode(c, "common.internal", nil, "读取工具依赖失败: "+derr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the tool dependencies: "+derr.Error(), "")
 		return
 	}
 
 	if _, err := tx.Exec(`UPDATE `+skillVersionTable(info.Schema)+`
 		SET is_current = false WHERE skill_id = $1 AND is_current`, s.ID); err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -204,12 +211,12 @@ func ReleaseSkillVersion(c *gin.Context) {
 		s.CommandTool, s.Restricted, rawFiles, deps, note, info.ID).Scan(&createdAt)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -223,37 +230,39 @@ func ReleaseSkillVersion(c *gin.Context) {
 
 // ApplySkillVersion POST /skills/:id/versions/:version/apply
 //
-// 载入 = 该版本内容写回草稿目录，不动 is_current（线上仍跑当前版本）。
-// 技能目录就是实体，先清空再整份拷回；清单 sha256 逐条校验。
+// Apply = write that version's content back into the draft directory without touching is_current
+// (production keeps running the current version).
+// The skill directory is the entity, so it is cleared and copied back wholesale; every manifest
+// sha256 is verified.
 func ApplySkillVersion(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
 		return
 	}
-	s, ok := mustTenantSkill(c, info, "载入版本")
+	s, ok := mustTenantSkill(c, info, "apply a version")
 	if !ok {
 		return
 	}
 	if !s.IsModifiable() {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能载入版本（如需操作请先切回「正常」）", "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot apply a version (switch it back to normal first)", "")
 		return
 	}
 	target, perr := strconv.Atoi(c.Param("version"))
 	if perr != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 	ctx := context.Background()
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -261,15 +270,16 @@ func ApplySkillVersion(c *gin.Context) {
 	var status int
 	if err := tx.QueryRow(`SELECT status FROM `+info.Schema+`.skills WHERE id = $1 FOR UPDATE`, s.ID).
 		Scan(&status); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if !models.IsModifiable(status) {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能载入版本（如需操作请先切回「正常」）", "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot apply a version (switch it back to normal first)", "")
 		return
 	}
 
-	// 载入 = 整份定义回草稿：正文之外，元数据与依赖声明也在版本里冻结着
+	// Apply = the whole definition back into the draft: besides the body, the metadata and the
+	// dependency declaration are frozen in the version too
 	var (
 		rawFiles []byte
 		rawDeps  []byte
@@ -289,87 +299,90 @@ func ApplySkillVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	files, err := versions.Decode(rawFiles)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	draftKey := skillDraftKey(info.Schema, s.Name)
 	srcKey := paths.VersionKey(info.Schema, paths.VersionSkills, s.Name, target)
 	if err := st.DeletePrefix(ctx, draftKey); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "清空草稿目录失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to clear the draft directory: "+err.Error(), "")
 		return
 	}
 	missing, err := assetpack.RestoreFiles(ctx, st, srcKey, draftKey, files)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "载入版本失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to apply the version: "+err.Error(), "")
 		return
 	}
-	// 元数据与依赖声明一并回写：只铺正文的话，载入完界面还会显示「有改动」
-	// （描述 / 可见性 / 依赖仍与版本不同），用户会以为载入没生效。
+	// Write the metadata and the dependency declaration back too: copying only the body would leave
+	// the UI showing "modified" after an apply (description / visibility / dependencies would still
+	// differ from the version), and the user would think the apply did nothing.
 	m.Name = s.Name
 	if err := versioning.RestoreSkillRow(tx, info.Schema, s.ID, m); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "写回技能元数据失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the skill metadata back: "+err.Error(), "")
 		return
 	}
-	// 可见性声明随版本回滚，白名单（授权）取当前 —— restricted=true 且白名单为空时
-	// 会变成「谁都发现不了」，载入后自愈成全员可见，并在 warnings 里点名。
+	// The visibility declaration rolls back with the version while the allow-list (grants) stays as
+	// it is - restricted=true with an empty allow-list would mean "nobody can discover it", so it is
+	// healed to visible-after-apply and named in warnings.
 	visibilityReset, verr := versioning.EnsureSkillVisibility(tx, info.Schema, s.ID)
 	if verr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "校验技能可见性失败: "+verr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to verify skill visibility: "+verr.Error(), "")
 		return
 	}
 	if err := versioning.RestoreSkillDeps(tx, info.Schema, s.ID, rawDeps); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "写回工具依赖失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the tool dependencies back: "+err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	warnings := make([]string, 0, len(missing)+1)
 	for _, p := range missing {
-		warnings = append(warnings, "快照里缺少文件："+p)
+		warnings = append(warnings, "missing file in the snapshot: "+p)
 	}
 	if visibilityReset {
-		warnings = append(warnings, "该版本的可见性是「白名单」，但当前白名单为空（授权不随版本回滚）——"+
-			"已退回「全员可见」，避免谁都发现不了它")
+		warnings = append(warnings, "this version's visibility is \"allow-list\", but the current allow-list is empty (grants do not roll back with versions) - "+
+			"it was set back to \"everyone can see it\" so nobody is left unable to find it")
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target, "warnings": warnings}, "")
 }
 
 // RollbackSkillVersion POST /skills/:id/versions/:version/rollback
 //
-// 把「正在使用的版本」切到该历史版本，线上立刻生效。
+// Point "the version in use" at that historical version; it takes effect in production immediately.
 //
-// 与 apply 的分工（和工作流一致）：rollback 只切 is_current，不新增版本、**不动草稿**；
-// apply 是把该版本写回草稿（不动线上）。
+// Division of labour with apply (same as flows): rollback only flips is_current, adds no version
+// and **leaves the draft alone**; apply writes that version back into the draft (leaving production
+// alone).
 func RollbackSkillVersion(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
 		return
 	}
-	s, ok := mustTenantSkill(c, info, "切换版本")
+	s, ok := mustTenantSkill(c, info, "switch versions")
 	if !ok {
 		return
 	}
 	if !s.IsModifiable() {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能切换版本（如需切换请先切回「正常」）", "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot switch versions (switch it back to normal first)", "")
 		return
 	}
 	target, err := strconv.Atoi(c.Param("version"))
 	if err != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -381,21 +394,21 @@ func RollbackSkillVersion(c *gin.Context) {
 			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`UPDATE `+skillVersionTable(info.Schema)+`
 		SET is_current = false WHERE skill_id = $1 AND is_current`, s.ID); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`UPDATE `+skillVersionTable(info.Schema)+`
 		SET is_current = true WHERE skill_id = $1 AND version = $2`, s.ID, target); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
@@ -403,37 +416,39 @@ func RollbackSkillVersion(c *gin.Context) {
 
 // DeleteSkillVersion DELETE /skills/:id/versions/:version
 //
-// 只清历史：当前版拒绝（正式调用的定义来源），唯一版拒绝（没有别的版本可切）。
-// 先删目录、后删行：编号不复用，行没了目录在会让下次发布撞上 ErrVersionExists。
+// History only: the current version is refused (it is the definition source of live calls) and so
+// is the only version (there is nothing to switch to).
+// Directory first, row second: numbers are never reused, and a row without its directory would
+// make the next release hit ErrVersionExists.
 func DeleteSkillVersion(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
 		return
 	}
-	s, ok := mustTenantSkill(c, info, "删除版本")
+	s, ok := mustTenantSkill(c, info, "delete a version")
 	if !ok {
 		return
 	}
 	if !s.IsModifiable() {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能删除版本（如需操作请先切回「正常」）", "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot delete a version (switch it back to normal first)", "")
 		return
 	}
 	target, perr := strconv.Atoi(c.Param("version"))
 	if perr != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "skill.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 	ctx := context.Background()
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -446,43 +461,44 @@ func DeleteSkillVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if isCurrent {
 		var total int
 		if err := tx.QueryRow(`SELECT count(*) FROM `+skillVersionTable(info.Schema)+
 			` WHERE skill_id = $1`, s.ID).Scan(&total); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		if total <= 1 {
-			xhttp.ErrCode(c, "skill.last_version_undeletable", gin.H{"version": target}, fmt.Sprintf("v%d 是唯一的版本，不能删除；如需清理历史请先发布一个新版本", target), "")
+			xhttp.ErrCode(c, "skill.last_version_undeletable", gin.H{"version": target}, fmt.Sprintf("v%d is the only version and cannot be deleted; release a new version first if the history needs cleaning up", target), "")
 			return
 		}
-		xhttp.ErrJSON(c, versions.ErrCannotDeleteCurrentVersion.Error(), nil, "")
+		xhttp.ErrCode(c, "version.in_use", nil, versions.ErrCannotDeleteCurrentVersion.Error(), "")
 		return
 	}
 
 	if err := st.DeletePrefix(ctx, paths.VersionKey(info.Schema, paths.VersionSkills, s.Name, target)); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "删除版本目录失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to delete the version directory: "+err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`DELETE FROM `+skillVersionTable(info.Schema)+`
 		WHERE skill_id = $1 AND version = $2`, s.ID, target); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
 }
 
-// ===== 内部小工具 =====
+// ===== internal helpers =====
 
-// authInfo 取认证信息（本包原有 handler 各自内联这一段，新代码统一走这里）。
+// authInfo reads the auth info (the handlers already in this package inline this; new code goes
+// through here).
 func authInfo(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
 	if !exists {
@@ -491,19 +507,20 @@ func authInfo(c *gin.Context) (*auth.AuthInfo, bool) {
 	}
 	info, ok := v.(*auth.AuthInfo)
 	if !ok || info == nil {
-		xhttp.ErrJSON(c, "Invalid authentication information", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return nil, false
 	}
 	return info, true
 }
 
-// mustTenantSkill 取 skill 并挡掉「私有技能」—— 它没有独立版本号。
+// mustTenantSkill loads a skill and rejects a "private skill" - it has no version number of its own.
 //
-// 文案要把出路说清楚（发布所属 agent），否则调用方只会看到一句「不支持」。
+// The message must spell out the way out (release the owning agent), otherwise the caller is left
+// with a bare "not supported".
 func mustTenantSkill(c *gin.Context, info *auth.AuthInfo, action string) (*models.Skill, bool) {
 	s, err := skillRepo.Get(info.Schema, c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return nil, false
 	}
 	if s == nil {
@@ -511,25 +528,25 @@ func mustTenantSkill(c *gin.Context, info *auth.AuthInfo, action string) (*model
 		return nil, false
 	}
 	if string(s.AgentID) != "" {
-		owner := ""
-		if name, rerr := resolveAgentName(info.Schema, string(s.AgentID)); rerr == nil {
-			owner = name
+		// data.owner stays language-neutral: the value is the agent name (or its id when the name
+		// cannot be resolved), and the wording lives in the frontend locale bundles
+		owner := string(s.AgentID)
+		if name, rerr := resolveAgentName(info.Schema, string(s.AgentID)); rerr == nil && strings.TrimSpace(name) != "" {
+			owner = strings.TrimSpace(name)
 		}
-		hint := "所属智能体"
-		if owner != "" {
-			hint = "智能体「" + owner + "」"
-		}
-		xhttp.ErrCode(c, "skill.private_no_version", gin.H{"owner": hint, "action": action},
-			fmt.Sprintf("私有技能没有独立版本号：它的版本就是%s的版本。请先发布%s，不能%s单个私有技能",
-				hint, hint, action), "")
+		xhttp.ErrCode(c, "skill.private_no_version", gin.H{"owner": owner, "action": action},
+			fmt.Sprintf("a private skill has no version number of its own: its version is the version of agent %s. Release agent %s instead; you cannot %s for a single private skill",
+				owner, owner, action), "")
 		return nil, false
 	}
 	return s, true
 }
 
-// removeSkillVersions 删除 / 重建租户级技能时清掉它的版本域（幂等）。
+// removeSkillVersions clears a tenant-level skill's version domain when it is deleted or recreated
+// (idempotent).
 //
-// 私有技能不走这里：它没有独立版本目录，内容随所属 agent 的版本目录一起清。
+// Private skills do not come here: they have no version directory of their own, and their content
+// is cleared together with the owning agent's version directory.
 func removeSkillVersions(schema, name string) {
 	st, err := getStorage()
 	if err != nil {

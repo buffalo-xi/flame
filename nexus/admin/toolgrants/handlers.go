@@ -1,12 +1,12 @@
-// Package toolgrants 暴露工具授权体系的管理接口：
-//   - GET  /admin/toolcatalog/                     可引用目录（天然组 / 预设组 / 自定义组 / 内置工具）
-//   - GET  /admin/agents/:id/toolgrants            某 agent 的授权项 + 不限制开关
-//   - PUT  /admin/agents/:id/toolgrants            全量替换授权项（含不限制开关）
-//   - GET  /admin/agents/:id/effective-tools       实际生效工具（含来源与告警）
-//   - GET  /admin/toolgroups/                      自定义组列表
-//   - POST /admin/toolgroups/                      创建/更新自定义组（按 name upsert）
-//   - DELETE /admin/toolgroups/:name               删除自定义组（带引用检查）
-//   - GET  /admin/toolgrants/usages                某 ref 的引用明细（删除/下线前的影响面查询）
+// Package toolgrants exposes the management API of the tool grant system:
+//   - GET  /admin/toolcatalog/                     the referenceable catalog (natural groups / preset groups / custom groups / built-in tools)
+//   - GET  /admin/agents/:id/toolgrants            an agent's grants + the unrestricted switch
+//   - PUT  /admin/agents/:id/toolgrants            replace the grants wholesale (the unrestricted switch included)
+//   - GET  /admin/agents/:id/effective-tools       the tools actually in effect (with sources and warnings)
+//   - GET  /admin/toolgroups/                      custom group list
+//   - POST /admin/toolgroups/                      create / update a custom group (upsert by name)
+//   - DELETE /admin/toolgroups/:name               delete a custom group (with a reference check)
+//   - GET  /admin/toolgrants/usages                reference detail for a ref (the impact check before deleting / delisting)
 package toolgrants
 
 import (
@@ -32,7 +32,7 @@ var (
 	agentsRepo = agentsrepo.NewRepository()
 )
 
-// authOf 取当前请求的认证信息（失败时已写响应）。
+// authOf returns the request's auth info (the response is already written on failure).
 func authOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
 	if !exists {
@@ -41,25 +41,25 @@ func authOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	}
 	info, ok := v.(*auth.AuthInfo)
 	if !ok {
-		xhttp.ErrJSON(c, "Authentication info invalid", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return nil, false
 	}
 	return info, true
 }
 
-// agentIsSupervisor 判断某 agent 是否带超权属性（agents.is_supervisor）。
-// 查不到（或出错）按「非 supervisor」处理，收紧默认 —— 目录会据此隐藏
-// 「仅 supervisor 可用」的管理类工具（分类 super）。
+// agentIsSupervisor reports whether an agent carries super-user power (agents.is_supervisor).
+// A miss (or an error) counts as "not a supervisor", the tighter default - the catalog uses it to hide
+// the admin tools reserved for supervisors (category super).
 func agentIsSupervisor(info *auth.AuthInfo, agentID string) bool {
 	inst, err := agentsrepo.NewRepository().GetAgent(info, agentID)
 	return err == nil && inst != nil && inst.IsSupervisor
 }
 
-// ListToolCatalog 可引用目录：天然组 / 预设组 / 自定义组（含各自展开后的成员）+ 全部内置工具。
+// ListToolCatalog builds the referenceable catalog: natural groups / preset groups / custom groups (with their expanded members) + every built-in tool.
 //
-// 可选 query agent_id：给定时按该 agent 的身份生成目录 —— 非超级智能体会隐藏「仅超级智能体可用」
-// 的管理类工具（builtin:super 整组不产出，成员被过滤光的自定义/预设组也不产出）；
-// 不给定时返回全量（skill 工具依赖挑选器、自定义组编辑等场景需要）。
+// The optional agent_id query generates the catalog for that agent's identity - a non-super agent hides the
+// super-only admin tools (the whole builtin:super group is omitted, as are custom / preset groups whose members are all filtered out);
+// omitting it returns everything (needed by the skill tool-dependency picker, custom group editing and so on).
 func ListToolCatalog(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -69,13 +69,13 @@ func ListToolCatalog(c *gin.Context) {
 	if agentID := strings.TrimSpace(c.Query("agent_id")); agentID != "" {
 		isSupervisor = agentIsSupervisor(info, agentID)
 	}
-	// 能力视图：平台没开通 exec / browser 时，目录里照常列出但置灰 + 原因
-	// （与插件「看得见但不可用」同口径 —— 藏起来反而让人以为是工具没了）。
+	// Capability view: when the platform has not enabled exec / browser the catalog still lists them but greys them out with a reason
+	// (the same "visible but unusable" rule as plugins - hiding them makes people think the tool is gone).
 	catalog := toolgrant.NewCatalog(info.Schema, grantsRepo, isSupervisor).
 		WithCapabilities(capabilitypolicy.Snapshot(info.Schema))
 	groups, err := catalog.Groups()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -86,7 +86,7 @@ func ListToolCatalog(c *gin.Context) {
 	}, "")
 }
 
-// GetAgentToolGrants 读取某 agent 的授权项与「不限制工具」开关。
+// GetAgentToolGrants reads an agent's grants and its "unrestricted tools" switch.
 func GetAgentToolGrants(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -96,13 +96,13 @@ func GetAgentToolGrants(c *gin.Context) {
 
 	grants, err := grantsRepo.ListAgentGrants(info.Schema, agentID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
-	// 「不限制工具」是 agent 的属性（agents.tools_unrestricted），走 agents 仓储
+	// "Unrestricted tools" is an agent attribute (agents.tools_unrestricted) and goes through the agents repository
 	unrestricted, err := agentsRepo.GetUnrestricted(info, agentID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -112,7 +112,7 @@ func GetAgentToolGrants(c *gin.Context) {
 	}, "")
 }
 
-// SetAgentToolGrants 全量替换某 agent 的授权项（可选同时设置不限制开关）。
+// SetAgentToolGrants replaces an agent's grants wholesale (optionally setting the unrestricted switch too).
 // body: {"unrestricted":true,"grants":[{"grant_kind":"allow","item_type":"group","ref":"builtin:file"}]}
 func SetAgentToolGrants(c *gin.Context) {
 	info, ok := authOf(c)
@@ -126,8 +126,8 @@ func SetAgentToolGrants(c *gin.Context) {
 		Grants       []struct {
 			GrantKind string `json:"grant_kind"`
 			Ref       string `json:"ref"`
-			// 不接受 item_type：由 ref 形态推导（toolgrant.ItemTypeOfRef），
-			// 客户端额外传来的字段会被 JSON 绑定静默忽略。
+			// item_type is not accepted: it is derived from the ref shape (toolgrant.ItemTypeOfRef),
+			// and extra fields from the client are silently ignored by JSON binding.
 		} `json:"grants"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -140,21 +140,21 @@ func SetAgentToolGrants(c *gin.Context) {
 	requiredRefs := map[string]bool{}
 	for _, g := range body.Grants {
 		g.Ref = strings.TrimSpace(g.Ref)
-		// agent 侧允许引用工具组（allowGroup=true）
+		// The agent side may reference tool groups (allowGroup=true)
 		if err := toolgrant.ValidateRef(g.Ref, true); err != nil {
-			xhttp.ErrJSON(c, "invalid ref "+g.Ref+": "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "toolgrant.invalid_ref", gin.H{"ref": g.Ref}, "invalid ref "+g.Ref+": "+err.Error(), "")
 			return
 		}
 		switch g.GrantKind {
 		case models.GrantKindRequired, models.GrantKindAllow, models.GrantKindDeny:
 		default:
-			xhttp.ErrJSON(c, "invalid grant_kind for "+g.Ref, nil, "")
+			xhttp.ErrCode(c, "toolgrant.invalid_grant_kind", gin.H{"ref": g.Ref}, "invalid grant_kind for "+g.Ref, "")
 			return
 		}
-		// 存在性校验：引用必须能展开出工具（组或单工具都适用）
+		// Existence check: a ref must expand to at least one tool (groups and single tools alike)
 		list, err := catalog.ToolsOfRef(g.Ref)
 		if err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		if len(list) == 0 {
@@ -167,34 +167,34 @@ func SetAgentToolGrants(c *gin.Context) {
 		grants = append(grants, models.AgentToolGrant{
 			AgentID:   agentID,
 			GrantKind: g.GrantKind,
-			// 形态由 ref 推导（与元工具 grant_agent_tool 同源）：调用方传的 item_type 不作数，
-			// 否则能写出 item_type=tool + ref=group:x 这种矛盾行，静默污染前端勾选态。
+			// The shape comes from the ref (the same source as the grant_agent_tool meta tool): an item_type from the caller does not count,
+			// or rows such as item_type=tool with ref=group:x would be written and quietly corrupt the UI's checkbox state.
 			ItemType: toolgrant.ItemTypeOfRef(g.Ref),
 			Ref:      g.Ref,
 		})
 	}
-	// 已标为「必须导入」的引用不允许再设 deny（避免语义矛盾）
+	// A ref marked "must be granted" cannot also be denied (that would contradict itself)
 	for _, g := range grants {
 		if g.GrantKind == models.GrantKindDeny && requiredRefs[g.Ref] {
-			xhttp.ErrJSON(c, "ref is required, cannot be denied: "+g.Ref, nil, "")
+			xhttp.ErrCode(c, "toolgrant.ref_required", gin.H{"ref": g.Ref}, "ref is required, cannot be denied: "+g.Ref, "")
 			return
 		}
 	}
 
 	if err := grantsRepo.ReplaceAgentGrants(info.Schema, agentID, info.ID, grants); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if body.Unrestricted != nil {
 		if err := agentsRepo.SetUnrestricted(info, agentID, *body.Unrestricted); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"count": len(grants)}, "")
 }
 
-// GetAgentEffectiveTools 实际生效工具（含降级标记、来源与告警），供 UI 预览与排查。
+// GetAgentEffectiveTools returns the tools actually in effect (degradation flags, sources, warnings), for UI preview and diagnosis.
 func GetAgentEffectiveTools(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -202,16 +202,16 @@ func GetAgentEffectiveTools(c *gin.Context) {
 	}
 	agentID := c.Param("id")
 
-	// 与运行时同口径：候选只来自「本轮已激活」的技能（模型 use_skill 之后）。
-	// 预览发生在 run 之外，没有「已激活」这个状态 → 候选恒为空，
-	// 这里反映的是 **run 起点**的工具集（只有 required）。allow 行要等模型激活对应技能后才亮；
-	// 每条 allow「由哪个技能撑着」见 read_agent 的 grant_views（pending + via_skill）。
+	// The same rule as at run time: candidates come only from skills "activated this turn" (after the model calls use_skill).
+	// A preview happens outside a run, where no "activated" state exists, so candidates are always empty and
+	// this reflects the tool set **at run start** (required only). allow rows light up only once the model activates the skill that declares them;
+	// which skill backs each allow row is in grant_views of read_agent (pending + via_skill).
 	visible := []toolgrant.VisibleSkill{}
 
-	// 顺带取实例：身份判定与「不限制工具」开关（agent 属性）都从它来，省一次查询
+	// The instance is fetched along the way: both the identity test and the "unrestricted tools" switch (an agent attribute) come from it, saving a query
 	agent, err := agentsRepo.GetAgent(info, agentID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	isSupervisor := agent != nil && agent.IsSupervisor
@@ -219,18 +219,18 @@ func GetAgentEffectiveTools(c *gin.Context) {
 		WithCapabilities(capabilitypolicy.Snapshot(info.Schema))
 	res, err := toolgrant.NewResolver(catalog, info.Schema, visible, agent.ToolsUnrestricted).Resolve(agentID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if res.Degraded {
-		// Degraded = 有 allow 但没有候选。预览里这不是故障，而是「on-demand 尚未触发」：
-		// 不说明的话管理员会以为授权丢了。
-		res.Warnings = append(res.Warnings, "预览为 run 起点的工具集：allow 授权要等模型 use_skill 激活声明它的技能后才生效")
+		// Degraded = allow rows exist but no candidate. In a preview that is not a fault but "on-demand has not fired yet":
+		// without a word about it the admin assumes the grants are gone.
+		res.Warnings = append(res.Warnings, "this previews the tool set at run start: allow grants take effect only after the model calls use_skill to activate the skill that declares them")
 	}
 
-	// 未配置任何授权项时，运行时不用上面的解析结果，预览需如实反映：
-	//   - 超级智能体：缺省「不限制工具 + 全部内置工具」（不再依赖 config.tools）
-	//   - 其他 agent：默认不绑定任何工具
+	// With no grants configured the run time ignores the resolution above, and the preview must reflect that:
+	//   - a super agent defaults to "unrestricted tools + every built-in tool" (no longer driven by config.tools)
+	//   - any other agent binds no tools by default
 	grants, grantsErr := grantsRepo.ListAgentGrants(info.Schema, agentID)
 	noGrants := grantsErr == nil && len(grants) == 0
 	if noGrants {
@@ -242,10 +242,10 @@ func GetAgentEffectiveTools(c *gin.Context) {
 		}
 	}
 
-	// 超级智能体的「缺省全开」现在只剩**一条**判据：零授权行（自举保险丝）。
-	// 与 agent_impl.resolveGrantedTools 的零行兜底同源，否则会出现
-	// 「预览说 2 个、实际跑起来全部」的漂移。
-	// 迁移闸（「授权行里没有 core 组」）已随存量迁移完成删除。
+	// A super agent's "open by default" now rests on **one** test: zero grant rows (the bootstrap fuse).
+	// It shares its source with the zero-row fallback in agent_impl.resolveGrantedTools, or
+	// "the preview says 2, the run binds everything" would drift apart.
+	// The migration gate ("no core group in the grant rows") was removed once the backfill completed.
 	if isSupervisor && noGrants {
 		res.BuiltinDefault = true
 		res.FinalTools = mergeSupervisorBuiltins(res.FinalTools, res.DenyRefs, catalog.VisibleBuiltinTools())
@@ -255,21 +255,21 @@ func GetAgentEffectiveTools(c *gin.Context) {
 			res.FinalRefs = append(res.FinalRefs, t.Ref)
 			res.FinalNames = append(res.FinalNames, t.Name)
 		}
-		// 超级智能体的内置工具是固有基线：被平台禁用的仍列出来（标「平台未开通」），
-		// 但运行时不会绑定 —— 不说明的话「生效工具」会传达错的承诺。
+		// A super agent's built-in tools are the inherent baseline: platform-disabled ones are still listed (marked "not enabled by the platform")
+		// but never bound at run time - left unsaid, "effective tools" promises something that will not happen.
 		if blocked := unavailableRefs(res.FinalTools); len(blocked) > 0 {
-			res.Warnings = append(res.Warnings, "平台未开通，运行时不会绑定："+strings.Join(blocked, "、"))
+			res.Warnings = append(res.Warnings, "not enabled by the platform, so they are not bound at run time: "+strings.Join(blocked, ", "))
 		}
 	}
 
 	xhttp.OkJSON(c, "Success", res, "")
 }
 
-// mergeSupervisorBuiltins 把内置工具并进超级智能体的工具集（deny 优先、按名去重排序）。
+// mergeSupervisorBuiltins folds the built-in tools into a super agent's tool set (deny wins, deduplicated by name and sorted).
 //
-// builtins 必须由调用方从**带能力视图的目录**取（catalog.VisibleBuiltinTools），
-// 不能用包级 toolgrant.BuiltinTools()：那一份的 Available 恒为 true，
-// 会把平台未开通的 browser / exec 显示成可用。
+// builtins must come from the **capability-aware catalog** (catalog.VisibleBuiltinTools),
+// never from the package-level toolgrant.BuiltinTools(): its Available is always true,
+// so a platform-disabled browser / exec would show as usable.
 func mergeSupervisorBuiltins(list []toolgrant.ToolInfo, denyRefs []string, builtins []toolgrant.ToolInfo) []toolgrant.ToolInfo {
 	denied := make(map[string]bool, len(denyRefs))
 	for _, ref := range denyRefs {
@@ -295,7 +295,7 @@ func mergeSupervisorBuiltins(list []toolgrant.ToolInfo, denyRefs []string, built
 	return out
 }
 
-// unavailableRefs 不可用项的 ref（合成一条 warning，逐条加会刷屏）。
+// unavailableRefs lists the refs that are unavailable (one combined warning; one per item would flood the screen).
 func unavailableRefs(list []toolgrant.ToolInfo) []string {
 	out := make([]string, 0, len(list))
 	for _, t := range list {
@@ -306,7 +306,7 @@ func unavailableRefs(list []toolgrant.ToolInfo) []string {
 	return out
 }
 
-// GetSkillToolGrants 读取某 skill 声明的工具依赖（skill 只声明「需要」，不产生授权）。
+// GetSkillToolGrants reads the tool dependencies a skill declares (a skill only declares a need; it grants nothing).
 func GetSkillToolGrants(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -316,15 +316,15 @@ func GetSkillToolGrants(c *gin.Context) {
 
 	grants, err := grantsRepo.ListSkillGrants(info.Schema, skillID)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"skill_id": skillID, "items": grants}, "")
 }
 
-// SetSkillToolGrants 全量替换某 skill 的工具依赖。
+// SetSkillToolGrants replaces a skill's tool dependencies wholesale.
 // body: {"items":[{"item_type":"group","ref":"builtin:file"}]}
-// 与 agent 侧不同：不允许引用自定义组（避免"自建 skill 提权"），且没有 required/allow/deny 之分。
+// Unlike the agent side, custom groups cannot be referenced (that would let a hand-made skill escalate itself) and there is no required / allow / deny.
 func SetSkillToolGrants(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -335,7 +335,7 @@ func SetSkillToolGrants(c *gin.Context) {
 	var body struct {
 		Items []struct {
 			Ref string `json:"ref"`
-			// 不接受 item_type：由 ref 形态推导
+			// item_type is not accepted: it is derived from the ref shape
 		} `json:"items"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -343,8 +343,8 @@ func SetSkillToolGrants(c *gin.Context) {
 		return
 	}
 
-	// skill 工具依赖是租户级「声明需要」，与具体 agent 身份无关：
-	// 保留全量目录（含 builtin:super），供 agent-authoring / skill-authoring 声明管理类工具。
+	// A skill's tool dependencies are a tenant-level declaration of need, independent of any agent identity:
+	// the full catalog is kept (builtin:super included) so agent-authoring / skill-authoring can declare admin tools.
 	catalog := toolgrant.NewCatalog(info.Schema, grantsRepo, true)
 	grants := make([]models.SkillToolGrant, 0, len(body.Items))
 	seen := map[string]bool{}
@@ -353,14 +353,14 @@ func SetSkillToolGrants(c *gin.Context) {
 		if seen[it.Ref] {
 			continue
 		}
-		// allowGroup=false：skill 侧不允许引用工具组
+		// allowGroup=false: the skill side may not reference tool groups
 		if err := toolgrant.ValidateRef(it.Ref, false); err != nil {
-			xhttp.ErrJSON(c, "invalid ref "+it.Ref+": "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "toolgrant.invalid_ref", gin.H{"ref": it.Ref}, "invalid ref "+it.Ref+": "+err.Error(), "")
 			return
 		}
 		list, err := catalog.ToolsOfRef(it.Ref)
 		if err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		if len(list) == 0 {
@@ -372,13 +372,13 @@ func SetSkillToolGrants(c *gin.Context) {
 	}
 
 	if err := grantsRepo.ReplaceSkillGrants(info.Schema, skillID, grants); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"count": len(grants)}, "")
 }
 
-// ListToolGroups 自定义组列表（含成员）。
+// ListToolGroups lists custom groups (members included).
 func ListToolGroups(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -386,15 +386,15 @@ func ListToolGroups(c *gin.Context) {
 	}
 	groups, err := grantsRepo.ListGroups(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"items": groups}, "")
 }
 
-// UpsertToolGroup 创建/更新自定义组（按 name upsert，成员全量替换）。
-// body: {"name":"只读工具组","description":"...","items":[{"ref":"builtin:file"}]}
-// （item_type 由 ref 推导，不接收）
+// UpsertToolGroup creates / updates a custom group (upsert by name, members replaced wholesale).
+// body: {"name":"read-only tools","description":"...","items":[{"ref":"builtin:file"}]}
+// (item_type is derived from the ref and not accepted)
 func UpsertToolGroup(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -406,7 +406,7 @@ func UpsertToolGroup(c *gin.Context) {
 		Description string `json:"description"`
 		Items       []struct {
 			Ref string `json:"ref"`
-			// 不接受 item_type：由 ref 形态推导
+			// item_type is not accepted: it is derived from the ref shape
 		} `json:"items"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -416,28 +416,28 @@ func UpsertToolGroup(c *gin.Context) {
 
 	body.Name = strings.TrimSpace(body.Name)
 	if body.Name == "" {
-		xhttp.ErrJSON(c, "name is required", nil, "")
+		xhttp.ErrCode(c, "toolgrant.name_required", nil, "name is required", "")
 		return
 	}
-	// 组名合法性（复用 ref 校验：group:<name>）
+	// Group name validity (reusing the ref validator: group:<name>)
 	if err := toolgrant.ValidateRef(toolgrant.ScopeGroup+":"+body.Name, true); err != nil {
-		xhttp.ErrJSON(c, "invalid group name: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "toolgrant.invalid_group_name", nil, "invalid group name: "+err.Error(), "")
 		return
 	}
 
-	// 自定义组是租户级资源：校验用全量目录（运行时按 agent 身份再过滤，见 agent 侧 Resolve）。
+	// A custom group is a tenant-level resource, so it is validated against the full catalog (run time filters by agent identity again; see Resolve on the agent side).
 	catalog := toolgrant.NewCatalog(info.Schema, grantsRepo, true)
 	items := make([]models.ToolGroupItem, 0, len(body.Items))
 	for _, it := range body.Items {
 		it.Ref = strings.TrimSpace(it.Ref)
-		// 组成员不允许引用工具组（禁止嵌套）
+		// A group member may not reference a tool group (no nesting)
 		if err := toolgrant.ValidateRef(it.Ref, false); err != nil {
-			xhttp.ErrJSON(c, "invalid item "+it.Ref+": "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "toolgrant.invalid_item", gin.H{"ref": it.Ref}, "invalid item "+it.Ref+": "+err.Error(), "")
 			return
 		}
 		list, err := catalog.ToolsOfRef(it.Ref)
 		if err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		if len(list) == 0 {
@@ -449,13 +449,13 @@ func UpsertToolGroup(c *gin.Context) {
 
 	id, err := grantsRepo.UpsertGroup(info.Schema, body.Name, body.Description, info.ID, items)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"id": id, "name": body.Name, "items": len(items)}, "")
 }
 
-// DeleteToolGroup 删除自定义组（被 agent 授权 / skill 依赖 / 其它组引用时拒绝）。
+// DeleteToolGroup deletes a custom group (refused while an agent grant, skill dependency or another group references it).
 func DeleteToolGroup(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -463,29 +463,29 @@ func DeleteToolGroup(c *gin.Context) {
 	}
 	name := strings.TrimSpace(c.Param("name"))
 	if name == "" {
-		xhttp.ErrJSON(c, "name is required", nil, "")
+		xhttp.ErrCode(c, "toolgrant.name_required", nil, "name is required", "")
 		return
 	}
 
 	n, err := grantsRepo.CountRefUsages(info.Schema, toolgrant.ScopeGroup+":"+name)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if n > 0 {
-		xhttp.ErrJSON(c, fmt.Sprintf("group is referenced by %d place(s), remove them first", n), nil, "")
+		xhttp.ErrCode(c, "toolgrant.group_in_use", gin.H{"count": n}, fmt.Sprintf("group is referenced by %d place(s), remove them first", n), "")
 		return
 	}
 	if err := grantsRepo.DeleteGroup(info.Schema, name); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"name": name}, "")
 }
 
-// GetRefUsages 某 ref 的引用明细（agent 授权 / skill 依赖 / 自定义组成员）。
-// query：ref=<ref>（必填）；prefix=1 时连带统计子项（如 ref=mcp:fs 也匹配 mcp:fs:read_file）。
-// 用途：「工具与端点」页的「被引用 N 处」、删除前的影响面预览。
+// GetRefUsages returns the references to a ref (agent grants / skill dependencies / custom group members).
+// query: ref=<ref> (required); prefix=1 also counts children (ref=mcp:fs then matches mcp:fs:read_file too).
+// Use: the "referenced N times" count on the tools and endpoints page, and the impact preview before a delete.
 func GetRefUsages(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -493,14 +493,14 @@ func GetRefUsages(c *gin.Context) {
 	}
 	ref := strings.TrimSpace(c.Query("ref"))
 	if ref == "" {
-		xhttp.ErrJSON(c, "ref is required", nil, "")
+		xhttp.ErrCode(c, "toolgrant.ref_required", nil, "ref is required", "")
 		return
 	}
 	prefix := c.Query("prefix") == "1" || c.Query("prefix") == "true"
 
 	res, err := grantsRepo.ListRefUsages(info.Schema, ref, prefix)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", res, "")

@@ -16,16 +16,18 @@ import (
 	"github.com/lib/pq"
 )
 
-// 跨流程的运行历史（admin/running/history）。
+// Cross-flow run history (admin/running/history).
 //
-// 与 flows.ListRuns 的区别只有一个：flow_id 可以不给。
-// flowruns.ListRuns 本来就支持空 flowId 跨流程查，这个能力一直没暴露出来，
-// 导致「今天全租户跑了多少、失败几条」只能在每个工作流的编辑器里逐个翻。
+// The only difference from flows.ListRuns is that flow_id is optional.
+// flowruns.ListRuns already supports an empty flowId to query across flows, but that ability was
+// never exposed, so "how many runs did the tenant have today, how many failed" could only be
+// answered by paging through each workflow's editor.
 var historyRepo = flowruns.NewRepository()
 
-// historyItem 历史列表的一行。
-// 刻意不带 progress / run_flow_vars / run_args 这些大字段：列表页用不上，
-// 带上会让一页 20 条变成几 MB，详情仍然走 /admin/flows/:id/runs/:runId。
+// historyItem is one row of the history list.
+// It deliberately omits the large fields (progress / run_flow_vars / run_args): the list page does
+// not use them, and carrying them would turn 20 rows into several MB. Details still come from
+// /admin/flows/:id/runs/:runId.
 type historyItem struct {
 	ID         string     `json:"id"`
 	FlowID     string     `json:"flow_id"`
@@ -39,12 +41,12 @@ type historyItem struct {
 	FinishedAt *xsql.Time `json:"finished_at"`
 }
 
-// historyQuery 解析列表 / 导出 / 清理共用的筛选参数。
+// historyQuery parses the filters shared by the list / export / cleanup endpoints.
 func historyQuery(c *gin.Context) (flowID, runType, status string, from, to *time.Time) {
 	flowID = c.Query("flow_id")
 	runType = c.Query("run_type")
 	status = c.Query("status")
-	// 时间范围走 RFC3339，与 flows.ListRuns 保持同一套约定
+	// The time range is RFC3339, the same convention as flows.ListRuns
 	if v := c.Query("start_from"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			from = &t
@@ -58,10 +60,11 @@ func historyQuery(c *gin.Context) (flowID, runType, status string, from, to *tim
 	return
 }
 
-// flowNameMap 批量取工作流名。
+// flowNameMap fetches workflow names in bulk.
 //
-// 跨流程列表只拿到 flow_id，直接甩 id 给界面等于让用户去别处对照。
-// 名字取不到（工作流已删）就留空，不因为一条脏数据让整页失败。
+// A cross-flow list only has flow_id, and handing raw ids to the UI forces the user to look them
+// up elsewhere. A missing name (the workflow was deleted) is left empty, so one dirty row does
+// not fail the whole page.
 func flowNameMap(schema string, ids []string) map[string]string {
 	out := make(map[string]string, len(ids))
 	if len(ids) == 0 {
@@ -107,7 +110,7 @@ func toHistoryItems(schema string, records []*models.FlowRunRecord) []*historyIt
 	return items
 }
 
-// ListHistory 跨流程的历史运行列表
+// ListHistory lists historical runs across flows
 // GET /admin/running/history?flow_id=&status=&run_type=&start_from=&start_to=&limit=&offset=
 func ListHistory(c *gin.Context) {
 	info, ok := authInfo(c)
@@ -127,7 +130,7 @@ func ListHistory(c *gin.Context) {
 	flowID, runType, status, from, to := historyQuery(c)
 	records, total, err := historyRepo.ListRuns(info.Schema, flowID, runType, status, from, to, limit, offset)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -139,11 +142,12 @@ func ListHistory(c *gin.Context) {
 	}, "")
 }
 
-// CleanupHistory 按条件批量清理历史运行记录
+// CleanupHistory deletes historical run records in bulk by filter
 // DELETE /admin/running/history?flow_id=&status=&start_from=&start_to=
 //
-// 必须至少给一个筛选条件：这个接口一次能删掉整个租户的运行记录，
-// 无条件下发等于「一键清库」。repository 里也做了同样的拒绝，这里提前给出能看懂的话。
+// At least one filter is required: this endpoint can delete every run record of a tenant, so
+// accepting it without conditions amounts to "wipe the database in one click". The repository
+// refuses the same thing; this rejects it earlier with a readable message.
 func CleanupHistory(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
@@ -152,23 +156,24 @@ func CleanupHistory(c *gin.Context) {
 
 	flowID, _, status, from, to := historyQuery(c)
 	if flowID == "" && status == "" && from == nil && to == nil {
-		xhttp.ErrCode(c, "run.filter_required", nil, "至少要给一个筛选条件（工作流 / 状态 / 时间范围），不允许无条件清空", "")
+		xhttp.ErrCode(c, "run.filter_required", nil, "provide at least one filter (workflow / status / time range); an unconditional wipe is not allowed", "")
 		return
 	}
 
 	deleted, err := historyRepo.DeleteRunsByFilter(info.Schema, flowID, status, from, to)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": deleted}, "")
 }
 
-// ExportHistory 按筛选条件导出 CSV
-// GET /admin/running/history/export?<与列表相同的筛选参数>
+// ExportHistory exports a CSV by filter
+// GET /admin/running/history/export?<the same filters as the list>
 //
-// 上限 5000 行：导出是给人看、给 Excel 打开的，不是全量归档 —— 真要全量应当直接查库。
-// 分页拉取，避免一条 SQL 把整张表读进内存。
+// The cap is 5000 rows: an export is for a person to read in Excel, not a full archive - a real
+// archive should query the database directly. It fetches page by page so one SQL statement never
+// loads the whole table into memory.
 func ExportHistory(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
@@ -185,7 +190,7 @@ func ExportHistory(c *gin.Context) {
 	for offset := 0; offset < exportMax; {
 		batch, total, err := historyRepo.ListRuns(info.Schema, flowID, runType, status, from, to, pageSize, offset)
 		if err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		records = append(records, batch...)
@@ -195,11 +200,11 @@ func ExportHistory(c *gin.Context) {
 		}
 	}
 
-	// 数据取完再写响应头：中途失败还能正常返回错误信封
+	// Write the headers only after the data is fetched, so a mid-way failure still returns a normal error envelope
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="runs-%s.csv"`, time.Now().Format("20060102-150405")))
-	// UTF-8 BOM：不加的话 Excel 打开中文列名是乱码
+	// UTF-8 BOM: without it Excel garbles non-ASCII text
 	if _, err := c.Writer.Write([]byte("\xEF\xBB\xBF")); err != nil {
 		return
 	}

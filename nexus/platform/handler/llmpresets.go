@@ -11,14 +11,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// LLM 服务商预设（platform.llm_provider_presets）：**系统级全局共享**，由平台管理员维护。
+// LLM provider presets (platform.llm_provider_presets): **system-level and globally shared**,
+// maintained by platform administrators.
 //
-// 租户侧只读（/admin/llmproviderpresets/）；点预设是把 name / protocol / url **复制**进自己的
-// 服务商记录（无外键引用），所以这里删除预设不会破坏任何租户已有配置，也就不需要引用检查。
-// 这条链路没有缓存，写完无需失效。
+// The tenant side is read-only (/admin/llmproviderpresets/); picking a preset **copies**
+// name / protocol / url into the tenant's own provider record (no foreign key), so deleting a
+// preset here breaks no existing tenant config and needs no reference check.
+// This path has no cache, so nothing has to be invalidated after a write.
 //
-// 长度上限与建表 DDL 对齐（name 100 / icon 255 / protocol 50 / url 1024），在接口层先拦一道，
-// 避免靠 PG 报错兜底。protocol 无 CHECK 约束（值域由前端下拉给出、也允许自定义）。
+// The length limits match the table DDL (name 100 / icon 255 / protocol 50 / url 1024) and are
+// enforced at the endpoint first, so PG errors are not the fallback. protocol has no CHECK
+// constraint (the value set comes from the frontend dropdown, and custom values are allowed).
 var presetRepo = presetrepo.NewRepository()
 
 type presetRequest struct {
@@ -31,8 +34,8 @@ type presetRequest struct {
 	SortOrder   int    `json:"sort_order"`
 }
 
-// toInput 校验并归一化入参（新增与编辑共用）。
-// 长度按**字符数**校验，与 PG 的 varchar(n) 口径一致。
+// toInput validates and normalises the request (shared by create and edit).
+// Lengths are counted in **characters**, matching PG's varchar(n).
 func (r *presetRequest) toInput() (*presetrepo.PresetInput, error) {
 	name := strings.TrimSpace(r.Name)
 	icon := strings.TrimSpace(r.Icon)
@@ -41,19 +44,19 @@ func (r *presetRequest) toInput() (*presetrepo.PresetInput, error) {
 
 	switch {
 	case name == "":
-		return nil, errors.New("名称不能为空")
+		return nil, errors.New("the name cannot be empty")
 	case len([]rune(name)) > 100:
-		return nil, errors.New("名称最多 100 个字符")
+		return nil, errors.New("the name is limited to 100 characters")
 	case protocol == "":
-		return nil, errors.New("协议不能为空")
+		return nil, errors.New("the protocol cannot be empty")
 	case len([]rune(protocol)) > 50:
-		return nil, errors.New("协议最多 50 个字符")
+		return nil, errors.New("the protocol is limited to 50 characters")
 	case url == "":
-		return nil, errors.New("URL 不能为空")
+		return nil, errors.New("the URL cannot be empty")
 	case len([]rune(url)) > 1024:
-		return nil, errors.New("URL 最多 1024 个字符")
+		return nil, errors.New("the URL is limited to 1024 characters")
 	case len([]rune(icon)) > 255:
-		return nil, errors.New("图标路径最多 255 个字符")
+		return nil, errors.New("the icon path is limited to 255 characters")
 	}
 
 	return &presetrepo.PresetInput{
@@ -67,11 +70,12 @@ func (r *presetRequest) toInput() (*presetrepo.PresetInput, error) {
 	}, nil
 }
 
-// presetID 取路径里的 id 并校验是合法 uuid（非法直接 400，不让 PG 报类型错）。
+// presetID reads the id from the path and verifies it is a valid uuid (400 directly instead of
+// letting PG raise a type error).
 func presetID(c *gin.Context) (string, bool) {
 	id := strings.TrimSpace(c.Param("id"))
 	if _, err := uuid.Parse(id); err != nil {
-		xhttp.ErrCode(c, "llm.preset_invalid_id", gin.H{"id": id}, "非法的预设 id", "")
+		xhttp.ErrCode(c, "llm.preset_invalid_id", gin.H{"id": id}, "invalid preset id", "")
 		return "", false
 	}
 	return id, true
@@ -81,29 +85,30 @@ func presetID(c *gin.Context) (string, bool) {
 func ListLLMProviderPresets(c *gin.Context) {
 	items, err := presetRepo.ListAll()
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to list presets: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to list presets: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"items": items, "total": len(items)}, "")
 }
 
 // CreateLLMProviderPreset POST /platform/system/llm-provider-presets
-// id 由仓储层生成 uuid（表上无 DB 默认值），随响应回带。
+// The id is generated as a uuid by the repository (the table has no DB default) and returned in the
+// response.
 func CreateLLMProviderPreset(c *gin.Context) {
 	var req presetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	in, err := req.toInput()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	id, err := presetRepo.Create(in)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to create preset: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to create preset: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"id": id}, "")
@@ -118,22 +123,22 @@ func UpdateLLMProviderPreset(c *gin.Context) {
 
 	var req presetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
 	in, err := req.toInput()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	n, err := presetRepo.Update(id, in)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to update preset: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to update preset: "+err.Error(), "")
 		return
 	}
 	if n == 0 {
-		xhttp.ErrCode(c, "llm.preset_not_found", gin.H{"id": id}, "预设不存在", "")
+		xhttp.ErrCode(c, "llm.preset_not_found", gin.H{"id": id}, "preset not found", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"id": id, "updated": n}, "")
@@ -148,11 +153,11 @@ func DeleteLLMProviderPreset(c *gin.Context) {
 
 	n, err := presetRepo.Delete(id)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to delete preset: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to delete preset: "+err.Error(), "")
 		return
 	}
 	if n == 0 {
-		xhttp.ErrCode(c, "llm.preset_not_found", gin.H{"id": id}, "预设不存在", "")
+		xhttp.ErrCode(c, "llm.preset_not_found", gin.H{"id": id}, "preset not found", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"id": id, "deleted": n}, "")

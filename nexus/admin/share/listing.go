@@ -27,21 +27,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// buildMu 串行化「快照取号 → 写文件」这一段（理由见 assetpack.FreeBuild）。
-// 上架是低频人工操作，排一条队列比维护一张 per-asset 锁表简单。
-// 跨进程（多副本部署）的撞号窗口仍在，那一步要靠 DB 行锁。
+// buildMu serialises "allocate the build number -> write the files" (see assetpack.FreeBuild).
+// Listing is a rare manual action, so one queue is simpler than a per-asset lock table.
+// The cross-process window (multiple replicas) remains; that step relies on the DB row lock.
 var buildMu sync.Mutex
 
 type listingRequest struct {
 	Kind string `json:"kind"`
-	Ref  string `json:"ref"` // skill: id；custom_tool: 名字
+	Ref  string `json:"ref"` // skill: id; custom_tool: name
 }
 
-// mergeGlobalVarDeps 合并两批全局变量依赖（去重、升序）。
+// mergeGlobalVarDeps merges two batches of global-variable dependencies (deduplicated, sorted).
 //
-// 为什么是合并而不是覆盖：工作流的依赖在 planWorkflow 里扫（那时才拿得到整份定义），
-// 通用那段扫的是 plan.payload —— 工作流的 payload 只有名字与描述，直接覆盖会把
-// 已经扫到的引用抹掉。
+// Why merge instead of overwrite: workflow dependencies are scanned in planWorkflow (only there is the full definition at hand), while the
+// generic pass scans plan.payload - a workflow payload holds only the name and description, so overwriting would
+// erase the references already found.
 func mergeGlobalVarDeps(a, b []string) []string {
 	seen := make(map[string]struct{}, len(a)+len(b))
 	out := make([]string, 0, len(a)+len(b))
@@ -61,11 +61,11 @@ func mergeGlobalVarDeps(a, b []string) []string {
 	return out
 }
 
-// planFor 按类型取出「一次上架 / 导出需要的全部输入」。
+// planFor collects "all inputs one listing / export needs", per kind.
 //
-// 上架与导出共用这一份组装逻辑：两边都是「读本租户实体 → 白名单化 payload → 声明依赖 →
-// 整棵目录打包」，差别只在打包的落点（平台快照 vs 临时目录 → zip）。分成两份会让
-// 「导出包里带了什么」与「上架出去的内容」慢慢走偏。
+// Listing and export share this assembly: both read the tenant entity, allowlist the payload, declare dependencies and
+// pack the whole directory tree; only the destination differs (platform snapshot vs a temporary directory -> zip). Two copies would let
+// "what the bundle carries" drift from "what was listed".
 func planFor(kind assetpack.Kind, info *auth.AuthInfo, ref string) (listingPlan, error) {
 	switch kind {
 	case assetpack.KindSkill:
@@ -77,13 +77,13 @@ func planFor(kind assetpack.Kind, info *auth.AuthInfo, ref string) (listingPlan,
 	case assetpack.KindWorkflow:
 		return planWorkflow(info, ref)
 	}
-	return listingPlan{}, fmt.Errorf("未知的资产类型：%s", kind)
+	return listingPlan{}, fmt.Errorf("unknown asset kind: %s", kind)
 }
 
-// CreateListing 把本租户的一个定义域实体上架成平台资产（进入待审）。
+// CreateListing lists one definition-domain entity of this tenant as a platform asset (into review).
 //
-// 三类都开：skill / custom_tool / agent。智能体只发「本体 + 技能名 + 工具 ref」，
-// 私有技能目录不打包（见 listingAgent），装上之后的技能绑定与授权由 installAgent 重建。
+// All four kinds are enabled: skill / custom_tool / agent / workflow. An agent ships "the entity + skill names + tool refs"
+// with no private-skill directory (see listingAgent); installAgent rebuilds the skill bindings and grants afterwards.
 func CreateListing(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -98,12 +98,12 @@ func CreateListing(c *gin.Context) {
 	kind := assetpack.Kind(strings.TrimSpace(req.Kind))
 	if !kind.Valid() {
 		xhttp.ErrCode(c, "asset.invalid_kind", map[string]any{"kind": string(kind)},
-			"未知的资产类型（kind 只支持 skill / custom_tool / agent / workflow）", "")
+			"unknown asset kind (kind accepts skill / custom_tool / agent / workflow only)", "")
 		return
 	}
 	ref := strings.TrimSpace(req.Ref)
 	if ref == "" {
-		xhttp.ErrCode(c, "asset.ref_required", nil, "缺少 ref（skill / agent / workflow 用 id，custom_tool 用名字）", "")
+		xhttp.ErrCode(c, "asset.ref_required", nil, "ref is required (skill / agent / workflow take an id, custom_tool takes a name)", "")
 		return
 	}
 
@@ -119,23 +119,23 @@ func CreateListing(c *gin.Context) {
 	}
 }
 
-// listingPlan 一次上架需要的全部输入（由各类型的 listingXxx 组装）。
+// listingPlan holds every input one listing needs (assembled by the per-kind listingXxx helpers).
 type listingPlan struct {
 	kind     assetpack.Kind
-	name     string         // 资产名（= 源实体名）
-	sourceID string         // 源实体 id（工具没有稳定 id 时用生成的占位值，仅溯源）
-	entry    string         // 入口文件（快照里必须存在）
-	srcDir   string         // 源目录（storage 逻辑 key）
-	payload  map[string]any // 已白名单化的实体快照
+	name     string         // asset name (= the source entity name)
+	sourceID string         // source entity id (a generated placeholder when the tool has no stable id; provenance only)
+	entry    string         // entry file (must exist in the snapshot)
+	srcDir   string         // source directory (storage logical key)
+	payload  map[string]any // allowlisted entity snapshot
 	deps     assetpack.Deps
 	warnings []string
-	skipDirs []string             // 不随资产走的子目录（当前四类都不设：agent 的私有技能要整棵带走）
-	trees    []assetpack.PackTree // 附加进包里的目录树（依赖的自定义工具本体）
-	cleanup  func()               // 打包后要收掉的临时内容（工作流的 FLOW.json 暂存目录），可为 nil
+	skipDirs []string             // subdirectories that do not travel (none of the four kinds sets one: an agent's private skills go entirely)
+	trees    []assetpack.PackTree // directory trees added to the bundle (the bodies of dependent custom tools)
+	cleanup  func()               // temporary content to remove after packing (a workflow's FLOW.json staging directory); may be nil
 }
 
-// validatePlanName 名字校验：各类型统一走 assetpack（工作流走 ValidateWorkflowName 的
-// 措辞，理由是「名字就是对外工具名」，不是路径安全；其余三类是目录名）。
+// validatePlanName checks the name: every kind goes through assetpack (workflows use the wording of
+// ValidateWorkflowName, because there the name is the public tool name rather than path safety; the other three are directory names).
 func validatePlanName(kind assetpack.Kind, name string) error {
 	if kind == assetpack.KindWorkflow {
 		return assetpack.ValidateWorkflowName(name)
@@ -143,26 +143,26 @@ func validatePlanName(kind assetpack.Kind, name string) error {
 	return assetpack.ValidateName(name)
 }
 
-// listingEntity 打包 + 落库 + 回包（各类型的公共尾巴）。
+// listingEntity packs, persists and responds (the shared tail of every kind).
 func listingEntity(c *gin.Context, info *auth.AuthInfo, plan listingPlan) {
 	if plan.cleanup != nil {
 		defer plan.cleanup()
 	}
 	if err := validatePlanName(plan.kind, plan.name); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.storage_unavailable", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 
-	// 同名重新上架 = 覆盖同一行并 build+1（唯一索引是 kind + source_schema + lower(name)）
+	// Re-listing the same name overwrites the same row and bumps build (the unique index is kind + source_schema + lower(name)).
 	prev, qerr := findMine(plan.kind, info.Schema, plan.name)
 	if qerr != nil {
-		xhttp.ErrJSON(c, "query asset: "+qerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "query asset: "+qerr.Error(), "")
 		return
 	}
 	assetID := uuid.NewString()
@@ -172,14 +172,14 @@ func listingEntity(c *gin.Context, info *auth.AuthInfo, plan listingPlan) {
 	}
 
 	ctx := context.Background()
-	// 取号与写文件必须串行（理由见 assetpack.FreeBuild）：两路并发各自算出同一个 build，
-	// 会把两份内容交错写进同一棵目录，而行只记住其中一份的清单。
+	// Number allocation and file writing must be serial (see assetpack.FreeBuild): two concurrent paths computing the same build would
+	// interleave their content in one tree while the row records a single manifest.
 	buildMu.Lock()
 	if prev != nil {
 		b, berr := assetpack.FreeBuild(ctx, st, assetID, prev.Build+1)
 		if berr != nil {
 			buildMu.Unlock()
-			xhttp.ErrJSON(c, berr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, berr.Error(), "")
 			return
 		}
 		build = b
@@ -190,13 +190,13 @@ func listingEntity(c *gin.Context, info *auth.AuthInfo, plan listingPlan) {
 	buildMu.Unlock()
 	if perr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		xhttp.ErrJSON(c, perr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, perr.Error(), "")
 		return
 	}
 
-	// 依赖清单补上全局变量引用：包里只带名字，值在目标租户自己的 global_vars 里。
-	// 放在这里而不是各 plan* 里：agent / skill 要读定义域目录下的 AGENT.md / SKILL.md
-	// 才能扫到 ${global_vars.X}，而工作流的 srcDir 是导出临时目录，只扫 payload 就够。
+	// Complete the dependency manifest with global-variable references: the bundle carries only the names, and the values live in the target tenant's own global_vars.
+	// Done here rather than in each plan*: agents and skills must read AGENT.md / SKILL.md under the definition directory
+	// to find ${global_vars.X}, while a workflow's srcDir is the export staging directory, so scanning the payload suffices.
 	plan.deps.GlobalVars = mergeGlobalVarDeps(plan.deps.GlobalVars,
 		assetpack.CollectGlobalVarRefs(ctx, st, plan.srcDir, plan.payload))
 
@@ -206,7 +206,7 @@ func listingEntity(c *gin.Context, info *auth.AuthInfo, plan listingPlan) {
 	payloadJSON, perr2 := assetpack.EncodeJSONB(clean)
 	if perr2 != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		xhttp.ErrJSON(c, "encode payload: "+perr2.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "encode payload: "+perr2.Error(), "")
 		return
 	}
 	manifest := assetpack.Manifest{
@@ -216,23 +216,23 @@ func listingEntity(c *gin.Context, info *auth.AuthInfo, plan listingPlan) {
 		Deps:  plan.deps,
 		Files: files,
 	}
-	// 指纹要在「脱敏后的 payload + 最终文件清单」上算：同一个实体重新上架时，
-	// 只有内容真的变了，指纹才会变（build 号变、指纹不变 = 可以告诉用户「没变」）
+	// The fingerprint covers "masked payload + final file list": re-listing the same entity changes it only
+	// when the content really changed (build bumped, fingerprint unchanged = the user can be told "nothing changed").
 	if serr := assetpack.StampManifest(&manifest, payloadJSON); serr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		xhttp.ErrJSON(c, "compute digest: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "compute digest: "+serr.Error(), "")
 		return
 	}
 	manifestJSON, merr := assetpack.EncodeJSONB(manifest)
 	if merr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		xhttp.ErrJSON(c, "encode manifest: "+merr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "encode manifest: "+merr.Error(), "")
 		return
 	}
 
-	// 上架策略：免审（缺省）直接 listed，被设为「必须审核」的租户才进 pending。
-	// 读不到策略就按必须审核处理（fail closed）—— 策略表出问题时宁可多一次人工确认，
-	// 也不能让未审内容直接进市场。
+	// Listing policy: review-exempt (the default) goes straight to listed; only tenants set to "review required" land in pending.
+	// An unreadable policy counts as review-required (fail closed): a broken policy table should cost one extra manual confirmation,
+	// never let unreviewed content into the market.
 	requireReview, rerr := listingpolicy.RequireReview(info.Schema)
 	if rerr != nil {
 		requireReview = true
@@ -264,28 +264,28 @@ func listingEntity(c *gin.Context, info *auth.AuthInfo, plan listingPlan) {
 
 	var werr error
 	if prev != nil {
-		// 重新上架按同一策略落地：必须审核的租户回到 pending（内容变了不能拿上一次的通过背书），
-		// 免审租户则直接是 listed；两种都清掉上轮的审核结论（UpdateListing 里做）
+		// Re-listing follows the same policy: review-required tenants go back to pending (changed content cannot ride on the previous approval),
+		// exempt tenants land as listed; both clear the previous review verdict (done in UpdateListing).
 		werr = sharedassets.UpdateListing(a)
 	} else {
 		werr = sharedassets.Insert(a)
 	}
 	if werr != nil {
-		// 行没写成就把刚铺的快照收掉：留一份没有行指向的目录只会让人以为是历史快照
+		// If the row was not written, remove the snapshot just laid down: a directory no row points at only looks like a stale snapshot.
 		_ = st.DeletePrefix(ctx, dstDir)
-		// 并发上架：另一路已经把行推到更高的号，这次的内容作废（不算服务器错误，用户刷新即可）
+		// Concurrent listing: another request already pushed the row to a higher build, so this content is void (not a server error; the user just refreshes).
 		if errors.Is(werr, sharedassets.ErrStaleBuild) {
 			xhttp.ErrCode(c, "asset.stale_build", map[string]any{"id": a.ID},
-				"该资产刚被另一次上架覆盖（快照已前进），请刷新后重试", "")
+				"this asset was just replaced by another listing (the snapshot moved on); refresh and retry", "")
 			return
 		}
-		xhttp.ErrJSON(c, "save asset: "+werr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "save asset: "+werr.Error(), "")
 		return
 	}
 
-	// 行已指向新快照，旧快照快照就没有读者了（安装是复制、导出只打当前快照、没有回滚通道）。
-	// 不收的话「重新上架一次 = 多一份完整镜像」，磁盘只增不减。
-	// 删不掉不该让上架失败：启动时的 CleanupSnapshots 还会再收一次。
+	// The row points at the new snapshot, so the old one has no readers left (install copies, export packs the current snapshot, and there is no rollback path).
+	// Leaving it means "one re-listing = one more full image" and disk only grows.
+	// A failed delete must not fail the listing: CleanupSnapshots retries at startup.
 	_ = assetpack.PruneOldBuilds(ctx, st, assetID, build)
 
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -293,7 +293,7 @@ func listingEntity(c *gin.Context, info *auth.AuthInfo, plan listingPlan) {
 			"id": assetID, "kind": string(plan.kind), "name": plan.name,
 			"build": build, "status": status,
 		},
-		// need_review=false 表示这条已经直接上架（该租户免审），前端据此改文案
+		// need_review=false means the asset is already listed (the tenant is exempt); the front end adapts its copy.
 		"need_review": requireReview,
 		"manifest": gin.H{
 			"files": len(files), "total_size": manifest.TotalSize(), "deps": len(plan.deps.Tools),
@@ -302,11 +302,11 @@ func listingEntity(c *gin.Context, info *auth.AuthInfo, plan listingPlan) {
 	}, "")
 }
 
-// findMine 查「本租户**上架过的**同类同名资产」（重新上架判定用）；没有返回 (nil, nil)。
+// findMine looks up "a same-kind, same-name asset **listed by this tenant**" (to detect a re-listing); it returns (nil, nil) when there is none.
 //
-// OriginLocal 不能省：同一台机器上，「我上架的」与「别人导入的」可以有同名同 source_schema
-// 的行（唯一键含 origin_server）。少了这个条件，重新上架会命中导入行并把它改成自己的内容 ——
-// 既污染溯源（origin_server 还是别站名），也让真正的原创行永远停在旧快照。
+// OriginLocal cannot be dropped: on one machine "listed by me" and "imported by someone else" can share a name and source_schema
+// (the unique key includes origin_server). Without it, a re-listing would hit the imported row and rewrite it as its own content -
+// corrupting provenance (origin_server still names another site) and leaving the genuine original row stuck on an old snapshot.
 func findMine(kind assetpack.Kind, schema, name string) (*sharedassets.Asset, error) {
 	list, err := sharedassets.List(sharedassets.Filter{
 		Kind: string(kind), SourceSchema: schema, OriginLocal: true,
@@ -322,12 +322,12 @@ func findMine(kind assetpack.Kind, schema, name string) (*sharedassets.Asset, er
 	return nil, nil
 }
 
-// ===== 技能 =====
+// ===== Skills =====
 
 func listingSkill(c *gin.Context, info *auth.AuthInfo, id string) {
 	plan, err := planSkill(info, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	listingEntity(c, info, plan)
@@ -342,36 +342,36 @@ func planSkill(info *auth.AuthInfo, id string) (listingPlan, error) {
 		return listingPlan{}, errors.New("Skill not found")
 	}
 
-	// 私有技能不能单独导出 / 上架：正文住在 agents/<agent>/skills/<name>（见 paths 包顶部约定），
-	// 一旦离开那个智能体，落点只剩「提级成租户级」—— 归属永久丢失、可见性白名单不随包走，
-	// 导回来要么谁都用不了，要么是个和私有技能同名的孤立副本。私有技能的正确通道是随它的
-	// 智能体一起走（见 planAgent 的 payload.private_skills）；要共享就先提级成租户级技能。
+	// A private skill cannot be exported or listed on its own: its body lives in agents/<agent>/skills/<name> (see the convention atop package paths), so
+	// leaving that agent would force "promote to tenant level" - ownership lost for good and the visibility allowlist left behind;
+	// importing it back gives either something nobody can use or an orphan copy sharing the private name. The right channel is to ship it with its
+	// agent (see payload.private_skills in planAgent); to share it, promote it to a tenant-level skill first.
 	if string(s.AgentID) != "" {
 		agentName := string(s.AgentName)
 		if agentName == "" {
-			agentName = "已删除的智能体"
+			agentName = "deleted agent"
 		}
 		return listingPlan{}, fmt.Errorf(
-			"技能 %s 是「%s」的私有技能，不能单独导出或上架：请导出它所属的智能体（私有技能随智能体一起走），或先把它提级为租户级技能",
+			"skill %s is private to \"%s\" and cannot be exported or listed on its own: export the agent it belongs to (private skills travel with their agent), or promote it to a tenant-level skill first",
 			s.Name, agentName)
 	}
 
-	// 受保护名 / 废弃态只给提示，不阻断上架或导出：内容与身份是两件事 ——
-	// 权限、超权、归属一律不随包走（见 planAgent 与 installAgent）。
+	// Protected names and deprecated state only warn; they never block listing or export: content and identity are separate things -
+	// permissions, super-user power and ownership never travel (see planAgent and installAgent).
 	plan := listingPlan{
 		kind:     assetpack.KindSkill,
 		name:     string(s.Name),
 		sourceID: string(s.ID),
 		entry:    "SKILL.md",
-		// 租户级技能：tenants/<schema>/skills/<name>
+		// tenant-level skill: tenants/<schema>/skills/<name>
 		srcDir: paths.SkillsKey(info.Schema) + "/" + string(s.Name),
 	}
 	if models.IsProtectedSkill(string(s.Name)) {
 		plan.warnings = append(plan.warnings,
-			"这是系统内置技能（受保护名）：分发出去的是内容副本，目标租户里不会获得任何特殊身份")
+			"this is a built-in skill (protected name): what is distributed is a copy of the content, and the target tenant gains no special identity")
 	}
 	if int(s.Status) == models.StatusDeprecated {
-		plan.warnings = append(plan.warnings, "该技能处于废弃态：包内是它当前的内容")
+		plan.warnings = append(plan.warnings, "this skill is deprecated: the bundle holds its current content")
 	}
 
 	payload, berr := portableSkillPayload(info.Schema, string(s.ID))
@@ -396,10 +396,11 @@ func planSkill(info *auth.AuthInfo, id string) (listingPlan, error) {
 	return plan, nil
 }
 
-// portableSkillPayload 读 skills 行的 to_jsonb，再收敛成白名单 payload。
+// portableSkillPayload reads the to_jsonb of a skills row and narrows it to the allowlisted payload.
 //
-// 走 to_jsonb 而不是给 models.Skill 逐字段赋值：列名与类型由数据库给出，新增列不会
-// 因为这里忘了同步而静默丢失（真正的取舍在 assetpack.PortableSkill 的白名单里）。
+// It uses to_jsonb rather than assigning models.Skill field by field: the database supplies column names
+// and types, so a new column is not silently dropped because this side forgot to keep up (the real
+// filtering happens in assetpack.PortableSkill's allowlist).
 func portableSkillPayload(schema, id string) (map[string]any, error) {
 	var raw []byte
 	if err := db.DB.QueryRow(
@@ -413,11 +414,12 @@ func portableSkillPayload(schema, id string) (map[string]any, error) {
 	return assetpack.PortableSkill(row), nil
 }
 
-// portablePrivateSkills 读某 agent 的私有技能行，收敛成「可在目标租户重建」的条目。
+// portablePrivateSkills reads an agent's private skill rows and narrows them to entries that can be rebuilt
+// in the target tenant.
 //
-// 每项 = PortableSkill 白名单 + tool_grants（该私有技能自己的工具依赖）。
-// 不带 id / agent_id / 时间戳：目标租户重新生成，归属指向新 agent。
-// 废弃态不带（与 ListPrivateNames 同口径）：重建一个已废弃的技能没有意义。
+// Each item = the PortableSkill allowlist + tool_grants (that private skill's own tool dependencies).
+// No id / agent_id / timestamps: the target tenant regenerates them, with ownership pointing at the new agent.
+// Deprecated rows are skipped (same as ListPrivateNames): rebuilding a deprecated skill is pointless.
 func portablePrivateSkills(schema, agentID string) ([]map[string]any, error) {
 	if agentID == "" {
 		return nil, nil
@@ -455,20 +457,20 @@ func portablePrivateSkills(schema, agentID string) ([]map[string]any, error) {
 	return out, rows.Err()
 }
 
-// bundledToolTrees 把依赖里指向**本租户自定义工具**的那部分准备成包内附件。
+// bundledToolTrees turns the dependencies that point at **this tenant's custom tools** into bundle attachments.
 //
-// 只认 custom:<名字>：tools/ 下只有它们有本体。其余 scope 都不是本租户的文件 ——
-// builtin 是代码自带、plugin 是磁盘插件、mcp/rpc/local 是远端连接、group/preset 只是组，
-// 装到目标租户后照样能用，没有东西可带走。一层足够：自定义工具只依赖能力
-// （sandbox.exec / egress），不依赖别的自定义工具，不存在依赖图。
+// Only custom:<name> counts: those are the only ones under tools/ with a body. Every other scope is not this tenant's file -
+// builtin ships in code, plugin is an on-disk plugin, mcp/rpc/local are remote connections and group/preset are just groups, so
+// they work in the target tenant as they are and nothing can be carried. One level is enough: a custom tool depends only on capabilities
+// (sandbox.exec / egress), never on another custom tool, so there is no dependency graph.
 //
-// 这个判断上踩过两个坑，都表现为「打包莫名其妙失败或什么都没带」：
-//   - 只过滤 builtin: 时 plugin:web_search 会被当成目录名，冒号在 Windows 上是非法文件名，
-//     于是「没有本体可带」变成「打不开文件」，整个上架失败；
-//   - 反过来，custom:<名字> 若连前缀一起当名字，tools/custom:xxx 并不存在，读契约拿到
-//     ErrNoRows 被静默跳过 —— 自定义工具一个都没被带走，而这一步看不出任何异常。
+// This decision has bitten twice, both times showing up as "packing failed for no reason, or carried nothing":
+//   - filtering only builtin: treats plugin:web_search as a directory name, and a colon is an illegal file-name character on Windows,
+//     so "no body to carry" becomes "cannot open the file" and the whole listing fails;
+//   - conversely, taking custom:<name> with its prefix as the name means tools/custom:xxx does not exist, the contract read returns
+//     ErrNoRows and is skipped silently - not one custom tool travels, and nothing here looks wrong.
 //
-// 返回的 bundles 只服务展示（包内 tool_bundles），安装时以文件名清单为准。
+// The returned bundles serve display only (tool_bundles in the bundle); install goes by the file manifest.
 func bundledToolTrees(info *auth.AuthInfo, deps assetpack.Deps) ([]assetpack.PackTree, []map[string]any, error) {
 	if len(deps.Tools) == 0 {
 		return nil, nil, nil
@@ -491,14 +493,14 @@ func bundledToolTrees(info *auth.AuthInfo, deps assetpack.Deps) ([]assetpack.Pac
 		t, err := store.Get("", name)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				continue // 有声明的 ref 却没有本体（工具已被删）：不是打包失败的理由
+				continue // a declared ref with no body (the tool was deleted): not a reason to fail the pack
 			}
 			return nil, nil, err
 		}
 		trees = append(trees, assetpack.PackTree{
 			SrcDir:    paths.ToolsKey(info.Schema) + "/" + name,
 			DstPrefix: assetpack.BundledToolsPrefix + "/" + name,
-			Required:  true, // 声明了依赖却说没有本体，宁可上架失败
+			Required:  true, // a dependency is declared but the body is missing: better to fail the listing
 		})
 		bundles = append(bundles, map[string]any{
 			"name":         t.Name,
@@ -509,37 +511,37 @@ func bundledToolTrees(info *auth.AuthInfo, deps assetpack.Deps) ([]assetpack.Pac
 	return trees, bundles, nil
 }
 
-// customToolNameOfRef 从授权 ref 里取出「可随包带走」的自定义工具短名，其余一律返回空串。
+// customToolNameOfRef extracts the short name of a custom tool that may travel, and returns "" for everything else.
 //
-// 判据看 ref 的 scope，不看行里的 item_type —— 后者是从 ref 推导出来的，历史数据可能对不上。
-// 抽成独立函数是为了能被单测直接钉住：这里错一次的后果一边是上架失败（plugin: 前缀被当目录名），
-// 一边是静默少带东西（custom: 前缀被当目录名，读契约拿到 ErrNoRows 后跳过）。
+// The test looks at the ref's scope, not the row's item_type - the latter is derived from the ref and legacy rows may disagree.
+// It is a separate function so a unit test can pin it down: a mistake here either fails the listing (a plugin: prefix taken as a directory name)
+// or silently drops content (a custom: prefix taken as a directory name; the contract read returns ErrNoRows and is skipped).
 func customToolNameOfRef(ref string) string {
 	parsed, err := toolgrant.ParseRef(ref)
 	if err != nil || parsed.Scope != toolgrant.ScopeCustom {
 		return ""
 	}
-	return parsed.Subject // 目录名与工具短名都不带 custom: 前缀
+	return parsed.Subject // neither the directory name nor the tool short name carries the custom: prefix
 }
 
-// ===== 智能体 =====
+// ===== Agents =====
 
-// listingAgent 上架一个智能体。
+// listingAgent lists one agent.
 //
-// 三个开关**随包带走**（is_supervisor / tools_unrestricted / skill_discovery）：它们描述
-// 「这个智能体怎么跑」，目标租户装完后按包设置，`warnings` 里点名，不静默降权。
-// 上架/导出共用这份组装逻辑，所以「导出再导入」与「上架后安装」得到同一份东西。
+// Three switches **travel with the bundle** (is_supervisor / tools_unrestricted / skill_discovery): they describe
+// "how this agent runs" and are applied on install in the target tenant; `warnings` names them, so nothing is downgraded silently.
+// Listing and export share this assembly, so "export then import" and "list then install" produce the same thing.
 //
-// 只有 agent_relations **刻意不带出去**：它表达「谁能调用它」，是 uuid 关系、跨租户无法
-// 重映射，装完必须在目标租户重新配置。
+// Only agent_relations is **deliberately left out**: it expresses "who may call this", a uuid relation that cannot be
+// remapped across tenants, so it must be reconfigured in the target tenant after install.
 //
-// 私有技能**一起带走**：文件在 agents/<agent>/skills/**（整棵目录打包），元数据进
-// payload.private_skills，安装时重建成新 agent 的私有技能（新 id、归属指向新 agent）。
-// 仅带文件不带元数据是不行的 —— 没有 skills 行的目录在运行期完全不可见。
+// Private skills **travel along**: the files in agents/<agent>/skills/** (the whole tree is packed) and their metadata in
+// payload.private_skills, rebuilt on install as private skills of the new agent (new ids, ownership pointing at it).
+// Files without metadata will not do: a directory with no skills row is invisible at run time.
 func listingAgent(c *gin.Context, info *auth.AuthInfo, id string) {
 	plan, err := planAgent(info, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	listingEntity(c, info, plan)
@@ -553,7 +555,7 @@ func planAgent(info *auth.AuthInfo, id string) (listingPlan, error) {
 	if a == nil {
 		return listingPlan{}, errors.New("Agent not found")
 	}
-	// 没有任何实体态闸门：超权身份 / 受保护名 / 废弃态都只给提示，不阻断上架或导出。
+	// No entity-state gate at all: super-user power, protected names and deprecated state only warn; nothing blocks listing or export.
 	plan := listingPlan{
 		kind:     assetpack.KindAgent,
 		name:     a.Name,
@@ -564,9 +566,10 @@ func planAgent(info *auth.AuthInfo, id string) (listingPlan, error) {
 			"name":        a.Name,
 			"description": string(a.Description),
 			"config":      a.Config.Data,
-			// 三个开关随内容一起走：它们决定这个智能体在租户里怎么跑，不带出去就会在
-			// 目标租户装出一个行为不同的副本（包主无法预期）。三个都写明（含 false），
-			// 老版本读不到字段时按「沿用目标既有值 / 新建为 false」处理，见 installAgent。
+			// The three switches travel with the content: they decide how the agent runs in a tenant, and leaving them out
+			// would install a copy that behaves differently in the target tenant (beyond what the author
+			// expects). All three are written explicitly (including false), so
+			// an older reader falls back to "keep the target's existing value / false for a new one"; see installAgent.
 			"is_supervisor":      a.IsSupervisor,
 			"tools_unrestricted": a.ToolsUnrestricted,
 			"skill_discovery":    a.SkillDiscovery,
@@ -574,23 +577,23 @@ func planAgent(info *auth.AuthInfo, id string) (listingPlan, error) {
 	}
 	if a.IsSupervisor {
 		plan.warnings = append(plan.warnings,
-			"该智能体是超级智能体：开关随包带走，导入后目标租户里的同名实体也是超级智能体（安装时需要导入方确认）")
+			"this agent is a super agent: the switch travels with the bundle, so the same-named entity in the target tenant is a super agent too (the importer confirms at install time)")
 	}
 	if models.IsProtectedAgent(a.Name) {
 		plan.warnings = append(plan.warnings,
-			"这是系统内置智能体（受保护名）：受保护身份由名字决定，与包无关；包里带的是内容与开关")
+			"this is a built-in agent (protected name): protection follows the name, not the bundle; what travels is the content and the switches")
 	}
 	if int(a.Status) == models.StatusDeprecated {
-		plan.warnings = append(plan.warnings, "该智能体处于废弃态：包内是它当前的内容")
+		plan.warnings = append(plan.warnings, "this agent is deprecated: the bundle holds its current content")
 	}
 
 	if a.ToolsUnrestricted || a.SkillDiscovery {
 		plan.warnings = append(plan.warnings,
-			"「不限制工具」「可发现未绑定技能」两个开关随包带走：目标租户里按包内设置生效")
+			"the \"unrestricted tools\" and \"discover unbound skills\" switches travel with the bundle and take effect in the target tenant")
 	}
 
-	// 私有技能整棵带走：文件在 agents/<agent>/skills/**（不 skipDirs），元数据进 payload，
-	// 安装时按它重建 skills 行 —— 只有文件没有行，目标租户里就是一目录看不见的孤儿。
+	// Private skills travel whole: the files in agents/<agent>/skills/** (no skipDirs) and the metadata in the payload,
+	// rebuilt into skills rows on install - files without rows are just an invisible orphan directory in the target tenant.
 	privateSkills, perr := portablePrivateSkills(info.Schema, id)
 	if perr != nil {
 		return listingPlan{}, fmt.Errorf("read private skills: %w", perr)
@@ -601,8 +604,8 @@ func planAgent(info *auth.AuthInfo, id string) (listingPlan, error) {
 	}
 	if len(privates) > 0 {
 		plan.warnings = append(plan.warnings, fmt.Sprintf(
-			"该智能体的 %d 个私有技能会随包带走（%s），装到目标租户后仍是它的私有技能",
-			len(privates), strings.Join(privates, "、")))
+			"the %d private skills of this agent travel with the bundle (%s) and stay private to it in the target tenant",
+			len(privates), strings.Join(privates, ", ")))
 	}
 	plan.payload["private_skills"] = privateSkills
 
@@ -625,9 +628,9 @@ func planAgent(info *auth.AuthInfo, id string) (listingPlan, error) {
 			Type: g.ItemType, Ref: g.Ref, GrantKind: g.GrantKind,
 		})
 	}
-	// 「我能调用谁」也记进依赖：授权行不随包走（uuid 关系无法重映射），
-	// 但装上之前要能核对「目标租户有没有那个智能体」—— 否则只有运行期 call_agent
-	// 失败才发现（导入前的依赖检查就是拿这份清单去比对）。
+	// "who I may call" is recorded as a dependency too: the grant rows do not travel (uuid relations cannot be remapped),
+	// but the install must be able to check "does the target tenant have that agent" - otherwise only a run-time call_agent
+	// failure reveals it (the pre-import dependency check compares against this list).
 	calls, cerr := relationRepo.ListCallableByCaller(info.Schema, id)
 	if cerr != nil {
 		return listingPlan{}, fmt.Errorf("read call relations: %w", cerr)
@@ -638,8 +641,8 @@ func planAgent(info *auth.AuthInfo, id string) (listingPlan, error) {
 	}
 	if len(deps.Agents) > 0 {
 		plan.warnings = append(plan.warnings, fmt.Sprintf(
-			"该智能体可调用 %d 个其他智能体（%s）；调用授权本身不随包迁移，装完要在「调用授权」里重新配置",
-			len(deps.Agents), strings.Join(deps.Agents, "、")))
+			"this agent may call %d other agents (%s); the call grants themselves do not migrate, so reconfigure them under call grants after install",
+			len(deps.Agents), strings.Join(deps.Agents, ", ")))
 	}
 	plan.deps = deps
 	if err := attachToolBundles(info, &plan); err != nil {
@@ -648,10 +651,10 @@ func planAgent(info *auth.AuthInfo, id string) (listingPlan, error) {
 	return plan, nil
 }
 
-// attachToolBundles 把「依赖的自定义工具本体」挂进包：文件进 trees，元数据进 payload。
+// attachToolBundles attaches the bodies of dependent custom tools to the bundle: files into trees, metadata into the payload.
 //
-// 智能体与技能共用：两者都可能依赖自定义工具，而工具目录不在它们自己的目录下，
-// 不挂进来装到目标租户就只剩一条指向不存在工具的授权行。
+// Shared by agents and skills: both may depend on custom tools, whose directories live outside their own, so
+// without this the target tenant would get only a grant row pointing at a tool that is not there.
 func attachToolBundles(info *auth.AuthInfo, plan *listingPlan) error {
 	trees, bundles, err := bundledToolTrees(info, plan.deps)
 	if err != nil {
@@ -665,23 +668,23 @@ func attachToolBundles(info *auth.AuthInfo, plan *listingPlan) error {
 			names = append(names, asString(b["name"]))
 		}
 		plan.warnings = append(plan.warnings, fmt.Sprintf(
-			"依赖的 %d 个自定义工具会随包带走（%s），装到目标租户后一并安装（启用态）",
-			len(bundles), strings.Join(names, "、")))
+			"the %d dependent custom tools travel with the bundle (%s) and are installed alongside it (enabled)",
+			len(bundles), strings.Join(names, ", ")))
 	}
 	return nil
 }
 
-// ===== 自定义工具 =====
+// ===== Custom tools =====
 
-// listingTool 上架一个脚本工具。
+// listingTool lists one script tool.
 //
-// 工具的定义真源是目录里的 TOOL.json（见 models.ToolFile 注释），所以这里以文件为准：
-// 读契约 → 校验 → 整棵目录打包。payload 只带展示用的两三个字段，参数/语言/入口
-// 全部由 TOOL.json 随文件一起走，装到目标租户后再从文件解析成行。
+// A tool's definition of record is TOOL.json in its directory (see the models.ToolFile comment), so the file wins here:
+// read the contract, validate, pack the whole directory. The payload carries only the two or three display fields; parameters, language and entry
+// all travel inside TOOL.json with the files, and the target tenant parses them back into a row.
 func listingTool(c *gin.Context, info *auth.AuthInfo, name string) {
 	plan, err := planTool(info, name)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	listingEntity(c, info, plan)
@@ -700,17 +703,17 @@ func planTool(info *auth.AuthInfo, name string) (listingPlan, error) {
 	dir := paths.ToolsKey(info.Schema) + "/" + name
 	raw, rerr := st.ReadFile(ctx, path.Join(dir, models.ToolFileName))
 	if rerr != nil {
-		return listingPlan{}, fmt.Errorf("工具缺少契约文件 %s，无法上架", models.ToolFileName)
+		return listingPlan{}, fmt.Errorf("the tool is missing its contract file %s and cannot be listed", models.ToolFileName)
 	}
 	tf, perr := models.ParseToolFile(raw)
 	if perr != nil {
-		return listingPlan{}, fmt.Errorf("%s 解析失败: %w", models.ToolFileName, perr)
+		return listingPlan{}, fmt.Errorf("failed to parse %s: %w", models.ToolFileName, perr)
 	}
 	if err := tf.Validate(name); err != nil {
 		return listingPlan{}, err
 	}
 
-	// 表行只提供 status 与 id（定义在文件里）；目录在、行缺失也算正常，状态按正常处理
+	// The table row only supplies status and id (the definition lives in the file); a directory without a row is fine and counts as normal.
 	sourceID := uuid.NewString()
 	status := models.StatusNormal
 	if t, gerr := customtoolstore.New(config.Cfg.Agent.RootDir, info.Schema).Get("", name); gerr == nil && t != nil {
@@ -719,7 +722,7 @@ func planTool(info *auth.AuthInfo, name string) (listingPlan, error) {
 	} else if gerr != nil && !errors.Is(gerr, sql.ErrNoRows) {
 		return listingPlan{}, fmt.Errorf("read tool row: %w", gerr)
 	}
-	// 没有任何实体态闸门：废弃态只给提示
+	// No entity-state gate: deprecated state only warns.
 	plan := listingPlan{
 		kind:     assetpack.KindTool,
 		name:     name,
@@ -737,29 +740,29 @@ func planTool(info *auth.AuthInfo, name string) (listingPlan, error) {
 		},
 	}
 	if status == models.StatusDeprecated {
-		plan.warnings = append(plan.warnings, "该工具处于废弃态：包内是它当前的内容")
+		plan.warnings = append(plan.warnings, "this tool is deprecated: the bundle holds its current content")
 	}
 	if tf.Egress {
-		plan.warnings = append(plan.warnings, "该工具声明了出网（egress）：目标租户需开通 net.egress 才能安装")
+		plan.warnings = append(plan.warnings, "this tool declares egress: the target tenant must enable net.egress to install it")
 	}
 	return plan, nil
 }
 
-// ===== 工作流 =====
+// ===== Workflows =====
 
-// listingWorkflow 上架一个工作流。
+// listingWorkflow lists one workflow.
 //
-// 工作流的本体在 {schema}.flows 的一行 JSONB 里（diagram + 变量 + 限额），盘上没有目录。
-// 为了让「打包 → 审核 → 导出包 → 导入 → 安装」这条文件管线原样复用，这里先把整行序列化成
-// FLOW.json 写进一个临时目录，交给 listingEntity 打包，收尾时删掉临时目录 ——
-// 快照（platform-assets/…）才是唯一真源，临时目录不留在租户树里。
+// A workflow's body is one JSONB row in {schema}.flows (diagram + variables + limits); there is no directory on disk.
+// So that the "pack -> review -> bundle -> import -> install" file pipeline can be reused as is, the whole row is serialised into
+// FLOW.json in a temporary directory, handed to listingEntity for packing, and removed afterwards -
+// the snapshot (platform-assets/...) is the only source of truth, and no temporary directory stays in the tenant tree.
 //
-// 三样刻意不带出去（见 assetpack.WorkflowSnapshot 的注释）：id / status / endpoints，
-// 以及 created_by。装上按「正常」态落地，等使用方核对依赖后再发布版本。
+// Three things are deliberately left out (see the assetpack.WorkflowSnapshot comment): id / status / endpoints,
+// and created_by. An install lands as normal; the consumer checks the dependencies and then releases a version.
 func listingWorkflow(c *gin.Context, info *auth.AuthInfo, id string) {
 	plan, err := planWorkflow(info, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	listingEntity(c, info, plan)
@@ -771,9 +774,9 @@ func planWorkflow(info *auth.AuthInfo, id string) (listingPlan, error) {
 		return listingPlan{}, fmt.Errorf("read workflow: %w", err)
 	}
 	if f == nil {
-		return listingPlan{}, errors.New("工作流不存在")
+		return listingPlan{}, errors.New("workflow not found")
 	}
-	// 没有任何实体态闸门：废弃态只给提示
+	// No entity-state gate: deprecated state only warns.
 	plan := listingPlan{
 		kind:     assetpack.KindWorkflow,
 		name:     f.Name,
@@ -781,7 +784,7 @@ func planWorkflow(info *auth.AuthInfo, id string) (listingPlan, error) {
 		entry:    assetpack.WorkflowFileName,
 	}
 	if int(f.Status) == models.StatusDeprecated {
-		plan.warnings = append(plan.warnings, "该工作流处于废弃态：包内是它当前的内容")
+		plan.warnings = append(plan.warnings, "this workflow is deprecated: the bundle holds its current content")
 	}
 
 	def := map[string]any{
@@ -799,16 +802,16 @@ func planWorkflow(info *auth.AuthInfo, id string) (listingPlan, error) {
 		"max_run_records":     int(f.MaxRunRecords),
 		"max_session_records": int(f.MaxSessionRecords),
 	}
-	// 定义整份进 FLOW.json，凭据也就整份扫一遍（env_vars 与节点配置里的 api_key 都在里面）
+	// The whole definition goes into FLOW.json, so credentials are scanned across all of it (env_vars and the api_key values in node configs).
 	clean, secretWarnings := assetpack.StripSecrets(assetpack.KindWorkflow, def)
 	raw, merr := json.Marshal(clean)
 	if merr != nil {
 		return listingPlan{}, fmt.Errorf("encode workflow: %w", merr)
 	}
-	// 依赖清单在这里扫：工作流的 plan.payload 只有名字与描述，全局变量引用躺在
-	// diagram 与 env_vars 里（见下面 plan.payload 的赋值）。不在这儿扫，
-	// 工作流资产的 GlobalVars 会永远是空的，导入时也就不会提示缺哪个变量。
-	// 用脱敏后的 clean 扫：引用名会保留，内联凭据已被清成空串。
+	// Dependencies are scanned here: a workflow's plan.payload holds only the name and description, while global-variable references sit in
+	// the diagram and env_vars (see the plan.payload assignment below). Without this,
+	// a workflow asset's GlobalVars would always be empty and an import would never report a missing variable.
+	// It scans the masked clean copy: reference names survive and inline credentials are already blanked.
 	plan.deps.GlobalVars = assetpack.CollectGlobalVarRefs(context.Background(), nil, "", clean)
 
 	st, serr := getStorage()
@@ -819,19 +822,19 @@ func planWorkflow(info *auth.AuthInfo, id string) (listingPlan, error) {
 	tmpDir := path.Join(paths.TenantsSubdir, info.Schema, ".listing-tmp", uuid.NewString())
 	if werr := st.WriteFile(ctx, path.Join(tmpDir, assetpack.WorkflowFileName), raw); werr != nil {
 		_ = st.DeletePrefix(context.Background(), tmpDir)
-		return listingPlan{}, fmt.Errorf("写入工作流快照失败: %w", werr)
+		return listingPlan{}, fmt.Errorf("failed to write the workflow snapshot: %w", werr)
 	}
 
 	plan.warnings = append(plan.warnings,
-		"工作流里的模型 / 工具 / 子流程引用不会随资产迁移，装到目标租户后要在编辑器里逐项重配",
-		"装上后是编辑态，可直接修改；核对完引用再启用")
+		"model / tool / sub-flow references in the workflow do not migrate with the asset; reconfigure them one by one in the editor after installing",
+		"an install lands as a draft you can edit; enable it once the references are checked")
 	plan.warnings = append(plan.warnings, secretWarnings...)
 	plan.srcDir = tmpDir
 	plan.payload = map[string]any{
 		"name":        f.Name,
 		"description": string(f.Description),
 	}
-	// 临时目录只为让工作流复用文件管线；快照 / 导出包才是真源，收尾必须删掉
+	// The temporary directory only lets a workflow reuse the file pipeline; the snapshot / bundle is the source of truth, so it must be removed at the end.
 	plan.cleanup = func() { _ = st.DeletePrefix(context.Background(), tmpDir) }
 	return plan, nil
 }

@@ -1,16 +1,21 @@
 package customtools
 
-// 自定义工具的版本：{schema}.tool_versions。
+// Custom tool versions: {schema}.tool_versions.
 //
-// 与 agent / skill 的差别只有两点，其余（发布 / 列表 / 载入 / 删除）同构：
-//  1. 工具的 name 创建后不可改（已写进 agent_tool_grants.ref），所以没有改名搬运，
-//     版本目录只按 name 键；
-//  2. 工具是「目录即实体、TOOL.json 是定义」（见 shared/customtoolstore）。版本必须
-//     自带合法 TOOL.json，否则从快照读出来的定义会退化到表行 —— 发布时若草稿里缺或坏，
-//     用合并视图补写一份进版本目录，并且只写快照，不动草稿。
+// Only two things differ from agent / skill versions; the rest (release / list / apply /
+// delete) is isomorphic:
+//  1. a tool's name cannot change after creation (it is already written into
+//     agent_tool_grants.ref), so there is no rename migration and version directories are
+//     keyed by name only;
+//  2. a tool is "the directory is the entity, TOOL.json is the definition" (see
+//     shared/customtoolstore). A version must carry a valid TOOL.json, otherwise the
+//     definition read back from the snapshot degrades to the table row - so if the draft
+//     lacks or has a broken one at release time, write one from the merged view into the
+//     version directory, and only into the snapshot, leaving the draft alone.
 //
-// 配置值（configs）不进版本：它是运行时配置，不是定义。版本行里写 '{}'，
-// 载入历史版本也不会把别人的密钥一起恢复出来。
+// Config values (configs) are not versioned: they are runtime configuration, not
+// definition. Version rows store '{}', and applying a historical version never restores
+// someone else's secrets together with it.
 
 import (
 	"context"
@@ -35,7 +40,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// toolVersionView 列表项。不返回 files 正文（可能上百条），只给两个汇总数。
+// toolVersionView is a list item. It does not return the file bodies (there may be
+// hundreds); two aggregate numbers are enough.
 type toolVersionView struct {
 	Version     int       `json:"version"`
 	Name        string    `json:"name"`
@@ -51,15 +57,16 @@ type toolVersionView struct {
 	TotalBytes  int64     `json:"total_bytes"`
 }
 
-// toolVerStore 工具版本用的存储实例。
+// toolVerStore is the storage instance used for tool versions.
 //
-// 固定用 rootDir 上的本地文件系统实现：工具链路本来就要求宿主路径可达
-// （脚本是沙箱的挂载源），S3 部署下工具本身就跑不起来，版本没必要另开一套后端。
+// It always uses the local filesystem implementation on rootDir: the tool pipeline already
+// requires host paths to be reachable (the scripts are the sandbox mount source), tools do
+// not run at all on an S3 deployment, and versions have no reason to grow a second backend.
 func toolVerStore() storage.Storage {
 	return storage.NewFilesystemStorage(config.Cfg.Agent.RootDir)
 }
 
-// toolVersionTable 版本表的 schema 限定名。
+// toolVersionTable is the schema-qualified version table name.
 func toolVersionTable(schema string) string { return schema + ".tool_versions" }
 
 // ListToolVersions GET /customtools/:name/versions
@@ -70,8 +77,9 @@ func ListToolVersions(c *gin.Context) {
 	}
 	name := c.Param("name")
 
-	// 存在性以「策略行」为准：草稿目录被误删时，历史版本仍要能管理（版本在 tool_versions 里）。
-	// 用草稿目录判断会让版本历史跟着草稿一起 404。
+	// Existence is judged by the policy row: if the draft directory was deleted by mistake,
+	// the historical versions must still be manageable (they live in tool_versions).
+	// Judging by the draft directory would make the version history 404 along with the draft.
 	var toolID string
 	if err := db.DB.QueryRow(`SELECT id FROM `+info.Schema+`.custom_tools WHERE name = $1`, name).
 		Scan(&toolID); err != nil {
@@ -79,7 +87,7 @@ func ListToolVersions(c *gin.Context) {
 			errToolNotFound(c)
 			return
 		}
-		xhttp.ErrCode(c, "common.internal", nil, "读取自定义工具失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the custom tool: "+err.Error(), "")
 		return
 	}
 
@@ -93,7 +101,7 @@ func ListToolVersions(c *gin.Context) {
 		WHERE t.name = $1
 		ORDER BY v.version DESC`, name)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the version history: "+err.Error(), "")
 		return
 	}
 	defer rows.Close()
@@ -104,13 +112,13 @@ func ListToolVersions(c *gin.Context) {
 		if err := rows.Scan(&v.Version, &v.Name, &v.DisplayName, &v.Description, &v.Lang,
 			&v.Entry, &v.IsCurrent, &v.Note, &v.CreatedBy, &v.CreatedAt,
 			&v.FilesCount, &v.TotalBytes); err != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to read the version history: "+err.Error(), "")
 			return
 		}
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the version history: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"versions": out}, "")
@@ -118,8 +126,10 @@ func ListToolVersions(c *gin.Context) {
 
 // ReleaseToolVersion POST /customtools/:name/versions  body: {"note": "..."}
 //
-// 发布 = 把当前草稿目录冻结成 versions/tools/<name>/v<n> 并设为当前版本。
-// 拷贝在事务内、持实体行锁：并发发布在这里排队取号，不会算出同一个 n 撞主键。
+// Release = freeze the current draft directory into versions/tools/<name>/v<n> and make it
+// the current version. The copy happens inside a transaction holding the entity row lock, so
+// concurrent releases queue up for their number here and never compute the same n and collide
+// on the primary key.
 func ReleaseToolVersion(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -134,11 +144,11 @@ func ReleaseToolVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取自定义工具失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the custom tool: "+err.Error(), "")
 		return
 	}
 	if t.Status != models.StatusNormal {
-		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能发布版本（如需发布请先切回「正常」）", "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "this tool is locked or deprecated and cannot release a version; switch it back to normal first", "")
 		return
 	}
 
@@ -151,20 +161,21 @@ func ReleaseToolVersion(c *gin.Context) {
 	}
 	note, err := versions.NormalizeNote(body.Note)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 「目录即实体」允许盘上有工具、表里没行。版本行的 tool_id 有外键，
-	// 所以发布前先把策略行补齐（缺行 = 正常态、无配置，见 customtoolstore）。
+	// "The directory is the entity" allows a tool on disk with no table row. The version row
+	// has a foreign key on tool_id, so the policy row is created first (a missing row means
+	// normal status with no config, see customtoolstore).
 	if t.ID == "" {
 		if err := store.Upsert(t); err != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "登记工具失败: "+err.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to register the tool: "+err.Error(), "")
 			return
 		}
 	}
 	if t.ID == "" {
-		xhttp.ErrCode(c, "common.internal", nil, "工具尚未登记（缺少 id），无法发布版本", "")
+		xhttp.ErrCode(c, "common.internal", nil, "the tool is not registered yet (no id), so a version cannot be released", "")
 		return
 	}
 
@@ -172,18 +183,19 @@ func ReleaseToolVersion(c *gin.Context) {
 	st := toolVerStore()
 	draftKey, err := paths.EntityDraftKey(info.Schema, paths.VersionTools, name)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// 锁实体行：发布与「载入/删除版本」串行，也挡住发布途中的状态变更
+	// Lock the entity row: release serialises with apply / delete version, and a status change
+	// in the middle of a release is blocked too
 	var status int
 	if err := tx.QueryRow(`SELECT status FROM `+info.Schema+`.custom_tools WHERE id = $1 FOR UPDATE`, t.ID).
 		Scan(&status); err != nil {
@@ -191,45 +203,45 @@ func ReleaseToolVersion(c *gin.Context) {
 			errToolNotFound(c)
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if status != models.StatusNormal {
-		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能发布版本（如需发布请先切回「正常」）", "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "this tool is locked or deprecated and cannot release a version; switch it back to normal first", "")
 		return
 	}
 
 	var next int
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(version),0)+1 FROM `+toolVersionTable(info.Schema)+
 		` WHERE tool_id = $1`, t.ID).Scan(&next); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	dstKey := paths.VersionKey(info.Schema, paths.VersionTools, name, next)
 	if err := versions.EnsureAbsent(ctx, st, dstKey); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	files, err := versions.Snapshot(ctx, st, draftKey, dstKey, t.Entry, nil)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrCode(c, "common.internal", nil, "冻结版本失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to freeze the version: "+err.Error(), "")
 		return
 	}
 
-	// 快照必须自带合法 TOOL.json：补写合并视图并同步清单摘要（见文件头注释）。
+	// The snapshot must carry a valid TOOL.json: write the merged view and refresh the manifest digest (see the file header)
 	norm := models.ToolFileOf(t)
 	data, merr := models.MarshalToolFile(norm)
 	if merr != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrCode(c, "common.internal", nil, "生成契约文件失败: "+merr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to build the contract file: "+merr.Error(), "")
 		return
 	}
 	hostDst := filepath.Join(config.Cfg.Agent.RootDir, filepath.FromSlash(dstKey))
 	if werr := toolfile.WriteAt(hostDst, norm); werr != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrCode(c, "common.internal", nil, "写入版本契约文件失败: "+werr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the version contract file: "+werr.Error(), "")
 		return
 	}
 	files = versions.PutEntry(files, models.ToolFileName, data)
@@ -237,14 +249,14 @@ func ReleaseToolVersion(c *gin.Context) {
 	rawFiles, err := versions.Encode(files)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	if _, err := tx.Exec(`UPDATE `+toolVersionTable(info.Schema)+`
 		SET is_current = false WHERE tool_id = $1 AND is_current`, t.ID); err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -260,13 +272,13 @@ func ReleaseToolVersion(c *gin.Context) {
 		Scan(&createdAt)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -280,11 +292,14 @@ func ReleaseToolVersion(c *gin.Context) {
 
 // ApplyToolVersion POST /customtools/:name/versions/:version/apply
 //
-// 载入 = 把该版本的内容写回草稿目录，**不动** is_current（线上不受影响）。
-// 与「回滚」分开：载入是「以旧版本为起点继续改」，改完仍要再发布才生效。
+// Apply = write that version's content back into the draft directory, **leaving is_current
+// alone** (production is untouched). It is separate from rollback: apply means "keep editing
+// from this older version as a starting point", and a release is still needed for it to take
+// effect.
 //
-// 工具目录就是实体本身，所以先清空再整份拷回；清单里的 sha256 逐条校验，
-// 对不上说明快照被改过，直接失败而不是把坏文件铺到草稿里。
+// The tool directory is the entity itself, so it is cleared and copied back wholesale; every
+// sha256 in the manifest is verified, and a mismatch means the snapshot was modified, so this
+// fails instead of spreading broken files into the draft.
 func ApplyToolVersion(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -293,7 +308,7 @@ func ApplyToolVersion(c *gin.Context) {
 	name := c.Param("name")
 	target, perr := strconv.Atoi(c.Param("version"))
 	if perr != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
@@ -301,15 +316,15 @@ func ApplyToolVersion(c *gin.Context) {
 	st := toolVerStore()
 	draftKey, err := paths.EntityDraftKey(info.Schema, paths.VersionTools, name)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	srcKey := paths.VersionKey(info.Schema, paths.VersionTools, name, target)
 
-	// 锁实体行：与发布串行，避免「拷到一半草稿被改写」
+	// Lock the entity row: serialise with release so the draft cannot be rewritten halfway through the copy
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -321,15 +336,16 @@ func ApplyToolVersion(c *gin.Context) {
 			errToolNotFound(c)
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if status != models.StatusNormal {
-		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能载入版本（如需操作请先切回「正常」）", "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "this tool is locked or deprecated and cannot apply a version; switch it back to normal first", "")
 		return
 	}
 
-	// 载入 = 整份定义回草稿：脚本目录之外，契约元数据（参数 schema / 入口 / 超时…）也在版本里
+	// Apply = the whole definition back to the draft: besides the script directory, the contract
+	// metadata (parameter schema / entry / timeout ...) lives in the version too
 	var (
 		rawFiles, rawParams, rawOutput, rawFields []byte
 		displayName, desc, lang, entry            string
@@ -351,26 +367,27 @@ func ApplyToolVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	files, err := versions.Decode(rawFiles)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	if err := st.DeletePrefix(ctx, draftKey); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "清空草稿目录失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to clear the draft directory: "+err.Error(), "")
 		return
 	}
 	missing, err := assetpack.RestoreFiles(ctx, st, srcKey, draftKey, files)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "载入版本失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to apply the version: "+err.Error(), "")
 		return
 	}
-	// 契约元数据回写：只铺脚本的话，载入完仍显示「有改动」（参数 schema / 描述仍不同）。
-	// configs 不动 —— 那是运行时填的值，不是定义。
+	// Write the contract metadata back: copying only the scripts would still show "modified"
+	// after an apply (the parameter schema / description would differ).
+	// configs stay untouched - they are runtime values, not definition.
 	var output any
 	if len(rawOutput) > 0 {
 		output = string(rawOutput)
@@ -382,27 +399,29 @@ func ApplyToolVersion(c *gin.Context) {
 		    WHERE name = $1`,
 		name, displayName, desc, string(rawParams), output, lang, entry,
 		timeoutMS, maxOutput, egress, string(rawFields)); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "写回工具契约失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to write the tool contract back: "+err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	warnings := make([]string, 0, len(missing))
 	for _, p := range missing {
-		warnings = append(warnings, "快照里缺少文件："+p)
+		warnings = append(warnings, "missing file in the snapshot: "+p)
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target, "warnings": warnings}, "")
 }
 
 // RollbackToolVersion POST /customtools/:name/versions/:version/rollback
 //
-// 把「正在使用的版本」切到该历史版本，线上立刻生效。
+// Point "the version in use" at that historical version; it takes effect in production
+// immediately.
 //
-// 与 apply 的分工（和工作流一致）：rollback 只切 is_current，不新增版本、**不动草稿**；
-// apply 是把该版本写回草稿（不动线上）。
+// Division of labour with apply (same as flows): rollback only flips is_current, adds no
+// version and **leaves the draft alone**; apply writes that version back into the draft
+// (leaving production alone).
 func RollbackToolVersion(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -411,7 +430,7 @@ func RollbackToolVersion(c *gin.Context) {
 	name := c.Param("name")
 	target, perr := strconv.Atoi(c.Param("version"))
 	if perr != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 	t, err := storeFor(info.Schema).Get(info.Schema, name)
@@ -420,18 +439,18 @@ func RollbackToolVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取自定义工具失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the custom tool: "+err.Error(), "")
 		return
 	}
-	// 切版本会改线上行为，与发布同口径
+	// Switching versions changes production behaviour, so it follows the release rule
 	if t.Status != models.StatusNormal {
-		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能切换版本（如需切换请先切回「正常」）", "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "this tool is locked or deprecated and cannot switch versions; switch it back to normal first", "")
 		return
 	}
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -443,21 +462,21 @@ func RollbackToolVersion(c *gin.Context) {
 			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`UPDATE `+toolVersionTable(info.Schema)+`
 		SET is_current = false WHERE tool_id = $1 AND is_current`, t.ID); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`UPDATE `+toolVersionTable(info.Schema)+`
 		SET is_current = true WHERE tool_id = $1 AND version = $2`, t.ID, target); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
@@ -465,11 +484,13 @@ func RollbackToolVersion(c *gin.Context) {
 
 // DeleteToolVersion DELETE /customtools/:name/versions/:version
 //
-// 只清历史：线上跑的还是 is_current 那一版，草稿也不动。
-// 当前版本一律拒绝 —— 它是正式调用的定义来源；唯一版本也拒绝（没有别的版本可切）。
+// History only: production still runs the is_current version, and the draft is untouched.
+// The current version is always rejected - it is the definition source of live calls; the only
+// version is rejected too (there is nothing to switch to).
 //
-// 顺序是先删目录、后删行：行在目录没了还可以重发一次补上，目录在行没了会让
-// 下一次发布撞上 ErrVersionExists（编号不复用，MAX+1 会正好落到这个洞上）。
+// The order is directory first, row second: with the row gone the directory can be re-released
+// to fill the hole, while a row without a directory would make the next release hit
+// ErrVersionExists (numbers are never reused, so MAX+1 lands exactly on that hole).
 func DeleteToolVersion(c *gin.Context) {
 	info, ok := mustAuth(c)
 	if !ok {
@@ -478,7 +499,7 @@ func DeleteToolVersion(c *gin.Context) {
 	name := c.Param("name")
 	target, perr := strconv.Atoi(c.Param("version"))
 	if perr != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
@@ -487,7 +508,7 @@ func DeleteToolVersion(c *gin.Context) {
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -499,11 +520,11 @@ func DeleteToolVersion(c *gin.Context) {
 			errToolNotFound(c)
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if status != models.StatusNormal {
-		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能删除版本（如需操作请先切回「正常」）", "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "this tool is locked or deprecated and cannot delete a version; switch it back to normal first", "")
 		return
 	}
 
@@ -517,45 +538,46 @@ func DeleteToolVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if isCurrent {
 		var total int
 		if err := tx.QueryRow(`SELECT count(*) FROM `+toolVersionTable(info.Schema)+
 			` WHERE tool_id = $1`, toolID).Scan(&total); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		if total <= 1 {
 			xhttp.ErrCode(c, "tool.last_version_undeletable", gin.H{"version": target},
-				fmt.Sprintf("v%d 是唯一的版本，不能删除；如需清理历史请先发布一个新版本", target), "")
+				fmt.Sprintf("v%d is the only version and cannot be deleted; release a new version first if the history needs cleaning up", target), "")
 			return
 		}
-		xhttp.ErrJSON(c, versions.ErrCannotDeleteCurrentVersion.Error(), nil, "")
+		xhttp.ErrCode(c, "version.in_use", nil, versions.ErrCannotDeleteCurrentVersion.Error(), "")
 		return
 	}
 
 	if err := st.DeletePrefix(ctx, paths.VersionKey(info.Schema, paths.VersionTools, name, target)); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "删除版本目录失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to delete the version directory: "+err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`DELETE FROM `+toolVersionTable(info.Schema)+`
 		WHERE tool_id = $1 AND version = $2`, toolID, target); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
 }
 
-// PurgeToolVersions 删除工具时清掉它的版本域（幂等）。
+// PurgeToolVersions clears a tool's version domain when the tool is deleted (idempotent).
 //
-// 与草稿目录一起删的理由：版本目录按 name 键，同名重建会「继承」旧实体的历史
-// （DB 里虽然没有行，但盘上留着，发布顺序与打包都会对不上）。
+// They are deleted along with the draft directory because version directories are keyed by
+// name: recreating a same-named tool would "inherit" the old entity's history (no rows in the
+// database, but the disk keeps them, and release order and packaging would both be off).
 func PurgeToolVersions(schema, name string) {
 	st := toolVerStore()
 	_ = st.DeletePrefix(context.Background(), paths.VersionEntityKey(schema, paths.VersionTools, name))
