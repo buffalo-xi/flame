@@ -2,23 +2,23 @@
 
 本文是施工依据，不是提案。分四层，成本差一个数量级，**不要混在一起做**。
 
-## 现状（2026-11 盘点）
+## 现状（2026-11 盘点，2026-11-19 更新）
 
 | 层 | 现状 | 规模 |
 |---|---|---|
-| 文档 | 全中文：`README.md` + `nexus/docs/*.md` | 小，约 1 天可翻 |
-| 前端 UI | **零 i18n 基建**：`desktop/package.json` 无 `vue-i18n`，`main.js` 直接 `app.use(ElementPlus)`，界面文案全部硬编码中文 | 至少 157 个文件含中文（实际约 180–200），可见部分累计 8000+ 行 |
-| 后端文案 | `xhttp` 信封 `{code, msg, data, trace}`，`msg` 是中文硬编码，前端直接展示 | 分散在各 handler，机械但量大 |
-| 代码注释 | 全中文 | 万行量级 |
+| 文档 | **英文为主**：`README.md` 英文主版，中文对照见 `README.zh.md`；`nexus/docs/en/` 按需增量 | 小 |
+| 前端 UI | **已落地**：`vue-i18n` + `desktop/src/locales/{zh-CN,en}/` 各 14 个模块包（`error` 在内），组件统一 `t()` + `formatError()`；长段设计说明仍中文（见坑 5） | 剩余零散硬编码 |
+| 后端文案 | **已错误码化**：`ErrCode` / `ErrCodeData` 铺满 `nexus`，`nexus` 内「`ErrJSON` + 中文」零残留，见 `error-codes.md` | 新代码按规范加 |
+| 代码注释 | 全中文 | 万行量级（不翻） |
 
 热点文件：`Workbench.vue`（403 行含中文）、`Flows.vue`（348）、`AdminAssetsView.vue`（340）、`AdminTenantsView.vue`（315）、`MainWindow.vue`（242）。
 
 ## 分层与成本
 
-### L1 文档双语（1–1.5 天）— 已落地
+### L1 文档双语（1–1.5 天）— 已落地（2026-11 起改为英文主版）
 
-- `README.en.md` 与 `README.md` 顶部互相链接
-- 中文是**唯一真源**；英文文件头标注 may lag behind
+- `README.md`（英文主版）与 `README.zh.md`（中文对照）顶部互相链接
+- **英文是主版本**：新内容先写英文，中文版随后对齐（原独立的英文文件已并入 `README.md`）
 - `nexus/docs/en/` 按需增量，暂不批量翻
 
 选择理由：零回归风险，直接改善 GitHub 可发现性。外国访客先看 README，能跑起来才看 UI。
@@ -77,6 +77,12 @@ desktop/src/locales/
 同类还有按 label 判重、按中文状态字符串做分支的地方。**这些不是文案，是业务常量**，塞进语言包会改变行为。
 迁移前先搜一遍「中文字面量参与比较 / 拼接 / 持久化」的位置，改成常量或枚举。
 
+已处置的样本：`Workbench.vue` / `SkillFileEditor.vue` / `AgentFileEditor.vue` 原来比对
+`body.msg === 'already exists'`，后端改成 `agent.file_exists` / `skill.file_exists` 后，前端改判
+`body.error === '...'`；`MainWindow.vue` 的「没配默认模型」也从双语正则改成优先认
+`llm.model_not_found`（无 `error` 字段时才退回文案匹配，兼容老后端）。
+**新写的判断一律认 `error` 编码，不要认 `msg`。**
+
 ### 3. 字符串拼接 vs 复数
 
 `${n} 个节点` 这类拼接，中文无复数变化，英文有（`1 node` / `2 nodes`）。
@@ -109,9 +115,9 @@ desktop/src/locales/
 
 ```
 已完成   L1 文档双语
-下一步   L2 错误码规范定稿（先定协议，不全改）
-再下一步 L3 骨架 + 5 个高频页面  →  可对外展示「英文界面」
-之后     L4 按模块分批，不设截止
+已完成   L2 错误码规范 + 全库落地（error-codes.md）
+已完成   L3 骨架 + 14 个模块语言包 + 语言切换
+进行中   L4 剩余零散硬编码、长段设计说明按需翻
 不做     L0 注释翻译
 ```
 

@@ -1,43 +1,70 @@
-# 术语约定（改代码前先读）
+# Terminology (read before changing code)
 
-四个领域的动作词各有一套，**不要跨领域借词**，也不要为了“更顺口”在某一层换说法。
+Each of the four domains has its own action verbs — **do not borrow across domains**, and do not rephrase at one layer just
+to sound smoother.
 
-本文件只是**入口摘要与红线**；完整对照、状态机、已落地范围以 `nexus/docs/terminology.md` 为准。
-两处若不一致，改本文件去对齐主文档，不要反过来。
+This file is only an **entry summary and a set of red lines**; the full mapping, state machine and shipped scope live in
+`nexus/docs/terminology.md`. If the two ever disagree, fix this file to match the main document — never the other way round.
 
-| 领域 | 动作 | 状态 / 字段 | 库 |
+| Domain | Action | State / field | Storage |
 |---|---|---|---|
-| 资产市场 | `list` / `delist` | `listed` / `delisted` | `platform.shared_assets.status`、`listed_by` |
-| 端点 | `expose` / `retract` | `exposed`（bool） | `svc_endpoints.exposed`、镜像 JSON 键 `exposed` |
-| 授权 / 凭证 | `revoke` | — | `revoke_agent_tool` 等 |
-| 版本 / 部署 | `release` / `deploy`；回滚 `rollback`；载入 `apply` | `is_current` | 版本目录 `versions/` + `is_current` |
+| Asset marketplace | `list` / `delist` | `listed` / `delisted` | `platform.shared_assets.status`, `listed_by` |
+| Endpoints | `expose` / `retract` | `exposed` (bool) | `svc_endpoints.exposed`, mirror JSON key `exposed` |
+| Grant / credential | `revoke` | — | `revoke_agent_tool` and friends |
+| Version / deployment | `release` / `deploy`; roll back with `rollback`; load with `apply` | `is_current` | version directory `versions/` + `is_current` |
 
-版本域已落地：`rollback` 只切 `is_current`（不动草稿），`apply` 只写草稿（不动线上）；
-`revoke` 取的是当前授权，回滚与载入都不回写它。
+The version domain is already shipped: `rollback` flips only `is_current` (the draft is left alone), `apply` writes only the
+draft (production is left alone); `revoke` reads the current grant, and neither rollback nor apply writes it back.
 
-**禁止混用**：
-- 不要用 `publish` / `published` 表示资产或端点（资产域已改 `listing`，端点域已改 `expose`）；
-- 不要用 `revoke` 表示“收回端点对外”，那是 `retract`；
-- 不要用 `hide` 表示端点收回，那是可调用性而非可见性；
-- 界面文案与代码/库必须同词：资产「上架 / 下架」，端点「对外开放 / 收回对外」。
+**Never mix them**:
 
-**看到混用怎么办**：报告，不要擅自改名。改名需要同时改：
-符号、接口字段、数据库列/状态值与镜像 JSON、前端、文档、迁移脚本。
+- do not use `publish` / `published` for assets or endpoints (the asset domain is `listing`, the endpoint domain is `expose`);
+- do not use `revoke` for "taking an endpoint back from outside" — that is `retract`;
+- do not use `hide` for retracting an endpoint — that is callability, not visibility;
+- UI copy and code / database must use the same word: assets `list` / `delist` (UI: 上架 / 下架), endpoints `expose` /
+  `retract` (UI: 对外开放 / 收回对外).
 
-## 模块地图
+**When you spot a mix-up**: report it; do not rename on your own. A rename has to change, together: symbols, API fields,
+database columns / state values and the mirror JSON, the frontend, the docs, and migration scripts.
 
-四个 Go module，靠 `replace` 串联，没有 go.work：
+## System definition-domain files and built-in tool copy must be English
 
-| 目录 | module | 说明 |
+"System entities" = `main` (the preinstalled super agent) + the four preinstalled skills (`skill-authoring` /
+`agent-authoring` / `custom-tool-authoring` / `flow-authoring`); the single source of truth for that list is
+`protectedAgents` / `protectedSkills` in `nexus/shared/models/protected.go` — **do not invent a second list**. These files are
+part of the product's system prompt, so whatever is written into them must be **English**, regardless of the user's or
+tenant's language:
+
+- coverage: `nexus/platform/provision/template/files/agents/main/AGENT.md`;
+  `nexus/platform/provision/template/files/skills/{skill-authoring,agent-authoring,custom-tool-authoring,flow-authoring}/**`
+  (`SKILL.md`, `references/`, `templates/`, and the comments and prose inside `scripts/`);
+- after changing them you must sync the same files under `nexus/data/tenants/t0/` (templates are only materialised when a new
+  tenant is provisioned), verify each one with `Get-FileHash`, and compare the file sets on both sides (the template is
+  embedded via `//go:embed template`, so new tenants also require a rebuild);
+- the **model-visible copy** of built-in tools must be English too: `ToolMeta.Description`, the tool `Label`, and the
+  `description` / `enum` text of argument schemas (`nexus/service/agent/tools/**`). They are all English today — keep it that
+  way and never add Chinese;
+- **not covered**: tenant-built agents / skills (follow the user's language — Chinese for Chinese users) and Go source
+  comments / internal error strings (keep the repository's existing Chinese convention).
+
+This rule constrains only **the body text written into files**; it does not affect reply language — replies still follow the
+user, see `responseLanguageRule` in `nexus/service/agent/agent_impl.go`.
+
+## Module map
+
+Four Go modules wired together with `replace`, no `go.work`:
+
+| Directory | module | Purpose |
 |---|---|---|
-| `nexus/` | `flame/nexus` | 主服务：平台 API、租户 API、admin API |
-| `sandboxd/` | `flame/sandboxd` | 执行沙箱守护进程（隔离、worker 池、浏览器） |
-| `sandboxg/` | `flame/sandboxg` | 沙箱网关（对外代理、按租户选节点） |
-| `tools/` | `flame/tools` | 三方共用的本地库（`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …） |
+| `nexus/` | `flame/nexus` | main service: platform API, tenant API, admin API |
+| `sandboxd/` | `flame/sandboxd` | execution sandbox daemon (isolation, worker pool, browser) |
+| `sandboxg/` | `flame/sandboxg` | sandbox gateway (external proxy, per-tenant node selection) |
+| `tools/` | `flame/tools` | local library shared by the three services (`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …) |
 
-依赖方向单向：三个服务用 `replace flame/tools => ../tools` 引用本地库，**`tools` 不反向依赖任何服务**。
+Dependency direction is one-way: the three services reference the local library with
+`replace flame/tools => ../tools`, and **`tools` never depends on any service in reverse**.
 
-验证：
+Verification:
 
-- 只改某个服务：在该目录跑 `go build ./...`
-- 改 `tools/`：必须把 `nexus`、`sandboxd`、`sandboxg` 三个都编一遍，否则下游编译错误不会暴露
+- changing one service only: run `go build ./...` in that directory
+- changing `tools/`: build all three — `nexus`, `sandboxd` and `sandboxg` — otherwise downstream compile errors stay hidden

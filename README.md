@@ -1,97 +1,107 @@
 # flame
 
-中文 | [English](README.en.md)
+[中文](README.zh.md) | English
 
-Go 写的多租户 AI Agent 平台。把「智能体 / 技能 / 工具 / 工作流」这些构建物管起来，把它们暴露成对外可调的端点（MCP / RPC），并在一个统一的运行台账里看到所有正在跑的东西。
+A Go-based, multi-tenant AI agent platform. It manages agents, skills, tools and workflows as first-class build artifacts,
+exposes them as callable endpoints (MCP / RPC), and shows everything currently running in a single runtime ledger.
 
-配套一个 Vue 3 管理台（`desktop/`），租户端与平台端共用一套前端。
+Ships with a Vue 3 admin console (`desktop/`), shared by the tenant side and the platform side.
 
-## 功能
+## Features
 
-**构建物**
+**Build artifacts**
 
-- **智能体**：提示词 + 模型 + 工具 + 技能的组合，可挂知识、可配工具权限
-- **技能**（Skill）：`SKILL.md` + 脚本的能力包，脚本在沙箱里跑
-- **工具**：工具目录（MCP / RPC 等入向能力）、插件、自定义工具
-- **工作流**：可视化编排（节点 / 连线 / 变量），带调试器、版本与发布
+- **Agents** — prompt + model + tools + skills, with knowledge bases and tool permissions
+- **Skills** — a capability package of `SKILL.md` plus scripts, executed inside the sandbox
+- **Tools** — a tool catalog (MCP / RPC and other inbound capabilities), plugins, and custom tools
+- **Workflows** — visual orchestration (nodes / edges / variables) with a debugger, versions and releases
 
-**运行**
+**Runtime**
 
-- **运行台账**：跨实例看「现在在跑什么」（智能体 + 工作流），按类型 / 耗时过滤，可终止
-- **运行历史**：跑完落库的记录，按工作流 / 状态 / 时间段查，可导出 CSV、单条或按条件清理
-- **端点**：把智能体 / 工作流暴露成 MCP 或 RPC 入口，按租户开关「对外开放 / 收回对外」
-- **沙箱**：脚本与命令在独立单元里执行（docker / nsjail / none 三档），带资源上限与断网开关
+- **Runtime ledger** — a cross-instance view of what is running (agents + workflows), filterable by type / duration, and cancellable
+- **Run history** — persisted records, queryable by workflow / status / time range, exportable as CSV, cleanable per record or by filter
+- **Endpoints** — expose an agent or a workflow as an MCP or RPC entry point, with a per-tenant "expose / retract" switch
+- **Sandbox** — scripts and commands run in isolated units (docker / nsjail / none) with resource limits and a network kill switch
 
-**平台**
+**Platform**
 
-- **多租户**：每租户一个 PostgreSQL schema，平台端统一开租户、发账号
-- **资产市场**：跨租户上架 / 安装资产（上架 `listed` / 下架 `delisted`）
-- **设置**：模型与连接、服务端认证（apikey / oauth）、全局变量（secret 静态加密）
+- **Multi-tenancy** — one PostgreSQL schema per tenant; tenants and their accounts are provisioned from the platform console
+- **Asset market** — list and install assets across tenants (`listed` / `delisted`)
+- **Settings** — models and connections, server-side auth (apikey / oauth), global variables (secrets encrypted at rest)
 
-## 界面一览
+## Screenshots
 
-| 运行台账 · 跨实例看「谁在跑」、跑了多久，可按类型 / 耗时过滤并直接终止 | 运行历史 · 跑完落库的记录，按工作流 / 状态 / 时间段查，可导出 CSV |
+| Runtime ledger · who is running what across instances, filterable by type / duration, cancellable | Run history · persisted records, queryable by workflow / status / time range, exportable as CSV |
 |---|---|
-| ![运行台账](docs/screenshots/01-runtime.png) | ![运行历史](docs/screenshots/02-runtime-history.png) |
-| 工作流编排 · 节点 / 连线 / 变量，带调试器、版本与发布 | 智能体 · 提示词 + 模型 + 工具 + 技能的装配面 |
-| ![工作流编排](docs/screenshots/03-flow-editor.png) | ![智能体](docs/screenshots/04-agent.png) |
-| 端点 · 把智能体 / 工作流暴露成 MCP / RPC，按租户开关对外 | 工具 · 工具目录 / 插件 / 自定义工具，三种来源统一管理 |
-| ![端点](docs/screenshots/05-endpoints.png) | ![工具](docs/screenshots/06-capabilities.png) |
+| ![Runtime ledger](docs/screenshots/01-runtime.png) | ![Run history](docs/screenshots/02-runtime-history.png) |
+| Workflow editor · nodes / edges / variables, with debugger, versions and releases | Agent · prompt + model + tools + skills assembly |
+| ![Workflow editor](docs/screenshots/03-flow-editor.png) | ![Agent](docs/screenshots/04-agent.png) |
+| Endpoints · expose agents / workflows as MCP / RPC, toggle exposure per tenant | Tools · catalog / plugins / custom tools, three sources in one place |
+| ![Endpoints](docs/screenshots/05-endpoints.png) | ![Tools](docs/screenshots/06-capabilities.png) |
 
-## 组成
+## Components
 
-| 目录 | 语言 | 作用 |
+| Directory | Language | Purpose |
 |---|---|---|
-| `nexus/` | Go | 主服务：平台 API、租户 API、管理 API（默认 `:27006`） |
-| `sandboxd/` | Go | 执行沙箱守护进程：脚本 / 命令 / 浏览器的隔离执行（默认 `:27081`） |
-| `sandboxg/` | Go | 沙箱网关：对 `nexus` 暴露统一 `/v1/*`，后端做负载均衡与粘性路由（默认 `:27080`） |
-| `tools/` | Go | 三个服务共用的本地库（`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …） |
-| `desktop/` | Vue 3 + Vite | 管理台（开发端口 `:5173`） |
+| `nexus/` | Go | Main service: platform API, tenant API, admin API (default `:27006`) |
+| `sandboxd/` | Go | Sandbox daemon: isolated execution of scripts / commands / browser (default `:27081`) |
+| `sandboxg/` | Go | Sandbox gateway: unified `/v1/*` for `nexus`, with load balancing and sticky routing (default `:27080`) |
+| `tools/` | Go | Shared local libraries used by all three services (`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …) |
+| `desktop/` | Vue 3 + Vite | Admin console (dev port `:5173`) |
 
-依赖方向是单向的：三个服务用 `replace flame/tools => ../tools` 引用本地库，`tools` 不反向依赖任何服务。
+Dependency direction is one-way: the three services reference the local libraries via `replace flame/tools => ../tools`;
+`tools` never depends back on any service.
 
 ```
-浏览器 ── desktop ──> nexus ──┬──> PostgreSQL    业务数据（每租户一个 schema）
-                              ├──> Redis         运行台账 / 停止信号 / 配额
-                              ├──> LiteLLM       模型调用
-                              └──> sandboxg ──> sandboxd ──> 隔离单元
-                                                    （docker / nsjail / none）
+browser ── desktop ──> nexus ──┬──> PostgreSQL    business data (one schema per tenant)
+                               ├──> Redis         runtime ledger / stop signals / quotas
+                               ├──> LiteLLM       model calls
+                               └──> sandboxg ──> sandboxd ──> isolated unit
+                                                              (docker / nsjail / none)
 ```
 
-## 设计要点
+## Design highlights
 
-几条贯穿全仓的取舍，决定了这套东西在速度和边界上的表现。细节见 [`nexus/docs/design-highlights.md`](nexus/docs/design-highlights.md)。
+A few decisions that run through the whole repository and shape both speed and boundaries. The full write-up (Chinese) lives
+in [`nexus/docs/design-highlights.md`](nexus/docs/design-highlights.md).
 
-- **端点在本租户进程内直调**：`rpc` 节点调 flow / agent 不走网络；stdio MCP 会话按连接复用子进程，配置变更才重建。
-- **防环靠深度 + 祖先链，不靠计数器**：每次跨 run 都会新建 `ExecContext`、执行计数归零，所以只能让「层数」收敛。配置成 `-1` / `0`（不限）在这里**刻意不认** —— 纯 flow 的环只有这一道闸。
-- **多租户 = 一租户一 schema + SQL 显式限定**：不依赖 `search_path`（连接池复用下不可靠）。配额与运行参数都是「系统硬顶 → 租户收紧 → 用户再收紧」的三层 clamp。
-- **端点是一行「目标 × 协议」**：`exposed` 只表达「对外可见」，租户内部直调不受它限制；授权绑的是**目标**（agent / flow），不是端点 —— 端点可以重建，目标才是稳定身份。
-- **热路径上少查一次库**：端点目录按运行快照、配置与配额走 Redis 读穿缓存（含负缓存）、运行参数在 run 开始时冻结一次。
+- **Endpoints are called in-process** within the owning tenant: an `rpc` node invoking a flow or an agent pays no network hop,
+  and stdio MCP sessions reuse one child process per connection, rebuilt only when the configuration fingerprint changes.
+- **Recursion is bounded by a depth limit plus an ancestor-chain check, not a counter**: every cross-run hop creates a fresh
+  `ExecContext`, so per-run counters reset. Configuring the limit as `-1` / `0` ("unlimited") is deliberately refused here — for
+  pure flow chains this is the only gate.
+- **Multi-tenancy is schema-per-tenant with explicit schema qualification**: no reliance on `search_path`, which is unsafe once
+  connections are pooled. Quotas and runtime limits are clamped through "system ceiling → tenant → user".
+- **An endpoint is one row of target × protocol**: `exposed` only means "visible outside the tenant"; in-tenant calls ignore it.
+  Authorization binds to the **target** (agent / flow), not the endpoint, because endpoints can be recreated while targets are
+  stable identities.
+- **Fewer database reads on the hot path**: the endpoint catalog comes from a run-time snapshot; configuration and quotas use a
+  Redis read-through cache (including negative caching); runtime parameters are frozen once when a run starts.
 
-## 环境要求
+## Requirements
 
 - Go **1.25+**
-- Node **18+**（前端构建）
+- Node **18+** (frontend build)
 - PostgreSQL **14+**
 - Redis **7+**
-- LiteLLM Proxy（模型调用；不用模型可以关掉 `litellm.enabled`）
-- 可选：Docker（`sandboxd` 的 `mode: docker`，生产推荐）、Consul（服务发现）
+- LiteLLM Proxy (model calls; disable with `litellm.enabled` if you don't need models)
+- Optional: Docker (`mode: docker` for `sandboxd`, recommended in production), Consul (service discovery)
 
-## 快速开始
+## Quick start
 
-### 1. 起依赖
+### 1. Start dependencies
 
-本地起 PostgreSQL 与 Redis（默认端口 `5432` / `6379`），按需起 LiteLLM（`:4000`）。
+Run PostgreSQL and Redis locally (default ports `5432` / `6379`), and LiteLLM (on `:4000`) if you need models.
 
-### 2. 配 nexus
+### 2. Configure nexus
 
 ```bash
 cp nexus/config.example.yaml nexus/config.yaml
 ```
 
-然后编辑 `nexus/config.yaml`，至少改这几项：数据库连接、`jwt.secret_key`、`litellm.master_key`。
+Then edit `nexus/config.yaml`; at minimum change the database connection, `jwt.secret_key` and `litellm.master_key`.
 
-也可以全部走环境变量（`${VAR}` 会在 YAML 解析前展开）：
+Everything can also come from environment variables (`${VAR}` is expanded before YAML parsing):
 
 ```bash
 # Linux / macOS
@@ -101,26 +111,26 @@ export LITELLM_MASTER_KEY="sk-..."
 $env:JWT_SECRET = [Convert]::ToBase64String([byte[]](1..48 | ForEach-Object { Get-Random -Maximum 256 }))
 ```
 
-> `jwt.secret_key` 泄露等于任何人都能自签 token 操作任意租户，务必用随机值，不要提交到仓库。
-> 真正的 `nexus/config.yaml` 已被 `.gitignore` 排除。
+> A leaked `jwt.secret_key` means anyone can self-sign a token and operate on any tenant. Always use a random value and never
+> commit it. The real `nexus/config.yaml` is excluded by `.gitignore`.
 
-### 3. 起服务
+### 3. Start the services
 
 ```bash
 # nexus
 cd nexus && go run ./cmd
 
-# sandboxd（另开一个终端）
+# sandboxd (in another terminal)
 cd sandboxd && go run ./cmd/sandboxd
 
-# 网关（可选，多后端负载均衡时才需要）
+# gateway (optional, only needed for multi-backend load balancing)
 cd sandboxg && go run .
 ```
 
-`sandboxd` 默认 `mode: none`（宿主直通、只用于本机开发）。生产请切到 `docker` 或 `nsjail`，
-配置见 `sandboxd/config.yaml`。
+`sandboxd` defaults to `mode: none` (direct host execution, local development only). In production switch to `docker` or
+`nsjail`; see `sandboxd/config.yaml`.
 
-### 4. 起前端
+### 4. Start the frontend
 
 ```bash
 cd desktop
@@ -128,39 +138,39 @@ npm install
 npm run dev      # http://localhost:5173
 ```
 
-开发服务器把 `/nexus` 代理到 `http://localhost:27006`（见 `desktop/vite.config.js`）。
+The dev server proxies `/nexus` to `http://localhost:27006` (see `desktop/vite.config.js`).
 
-## 目录结构
+## Repository layout
 
 ```
 nexus/
-  admin/          管理端接口（平台 + 租户）
-  service/        业务服务（agent / flow / capability / market …）
-  shared/         配置、仓储、鉴权、日志
-  platform/       平台初始化与租户模板（含 agent 定义域模板）
-  docs/           术语、沙箱设计、工作区布局等文档
-sandboxd/         隔离执行（docker / nsjail / none）+ codehost + browserhost
-sandboxg/         沙箱网关
-tools/            公共库
-desktop/          Vue 3 管理台
+  admin/          admin endpoints (platform + tenant)
+  service/        business services (agent / flow / capability / market …)
+  shared/         config, repositories, auth, logging
+  platform/       platform bootstrap and tenant template (including agent definition files)
+  docs/           terminology, sandbox design, workspace layout
+sandboxd/         isolated execution (docker / nsjail / none) + codehost + browserhost
+sandboxg/         sandbox gateway
+tools/            shared libraries
+desktop/          Vue 3 admin console
 ```
 
-## 文档
+## Docs
 
-- `nexus/docs/terminology.md` — 术语与动作词约定（改代码前建议先读）
-- `nexus/docs/sandbox-design.md` — 沙箱隔离设计与三条执行通道
-- `nexus/docs/workspace-layout-and-supervisor-power.md` — 租户工作区布局
-- `nexus/docs/design-highlights.md` — 设计要点：调用链防环、多租户配额、端点模型
-- `nexus/docs/i18n-plan.md` — 中英双语的分层方案、成本与坑位
-- `nexus/docs/error-codes.md` — 业务错误码规范（UI 双语的前置条件）
-- `AGENTS.md` — 模块地图与跨领域红线
+- `nexus/docs/terminology.md` — terminology and verb conventions (read this before changing code)
+- `nexus/docs/sandbox-design.md` — sandbox isolation design and the three execution channels
+- `nexus/docs/workspace-layout-and-supervisor-power.md` — tenant workspace layout
+- `nexus/docs/design-highlights.md` — design highlights: call-chain recursion, multi-tenant quotas, endpoint model
+- `nexus/docs/i18n-plan.md` — the layered bilingual plan, its costs and pitfalls
+- `nexus/docs/error-codes.md` — business error-code conventions (a prerequisite for a bilingual UI)
+- `AGENTS.md` — module map and cross-domain ground rules
 
-## 安全提示
+## Security notes
 
-- `nexus/config.yaml`、`desktop/.env` 都是本机配置，不入库。
-- `nexus/data/`（租户工作区）被忽略，不会被提交。
-- 生产部署前请改掉默认口令，并给 `sandbox` / `sandboxg` 配 token。
+- `nexus/config.yaml` and `desktop/.env` are machine-local configuration and are not committed.
+- `nexus/data/` (tenant workspaces) is ignored and never committed.
+- Change default credentials before deploying, and configure tokens for `sandbox` / `sandboxg`.
 
-## 许可
+## License
 
 [Apache License 2.0](LICENSE)
