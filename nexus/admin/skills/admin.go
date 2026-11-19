@@ -133,7 +133,7 @@ func ListSkills(c *gin.Context) {
 		Keyword string `json:"keyword"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request parameters", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 	if req.Page <= 0 {
@@ -257,7 +257,7 @@ func CreateSkill(c *gin.Context) {
 
 	var req skillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -357,7 +357,7 @@ func UpdateSkill(c *gin.Context) {
 
 	var req skillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -561,7 +561,7 @@ func SetSkillStatus(c *gin.Context) {
 		Status int `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	switch body.Status {
@@ -648,7 +648,7 @@ func SetSkillVisibility(c *gin.Context) {
 		AgentIDs   []string `json:"agent_ids"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 

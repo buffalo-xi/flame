@@ -128,7 +128,7 @@ func CreateTenant(c *gin.Context) {
 
 	var req createTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -238,7 +238,7 @@ func UpdateTenant(c *gin.Context) {
 
 	var req updateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -288,7 +288,7 @@ func SetTenantStatus(c *gin.Context) {
 	schema := strings.TrimSpace(c.Param("schema"))
 	var req setTenantStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	status := strings.TrimSpace(req.Status)
@@ -331,7 +331,7 @@ func SetMyTenantStatus(c *gin.Context) {
 
 	var req setTenantStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	status := strings.TrimSpace(req.Status)
@@ -366,7 +366,7 @@ func SetTenantQuota(c *gin.Context) {
 	schema := strings.TrimSpace(c.Param("schema"))
 	var req setTenantQuotaRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	if err := checkQuotaSystemValues([]intField{
@@ -442,7 +442,7 @@ func UpdateMyTenantQuota(c *gin.Context) {
 
 	var req setMyTenantQuotaRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	if err := checkQuotaSystemValues([]intField{

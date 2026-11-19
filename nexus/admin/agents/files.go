@@ -420,7 +420,7 @@ func CreateSessionEntry(c *gin.Context) {
 		Content string `json:"content"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	abs, clean, err := joinKey(wsKey, body.Path)
@@ -541,7 +541,7 @@ func RenameSessionEntry(c *gin.Context) {
 		NewPath string `json:"new_path"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	oldAbs, oldClean, err := joinKey(wsKey, body.Path)
@@ -797,7 +797,7 @@ func WriteAgentFile(c *gin.Context) {
 		Content string `json:"content"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	abs, clean, err := joinKey(wsKey, body.Path)
@@ -868,7 +868,7 @@ func CreateAgentEntry(c *gin.Context) {
 		IsDir bool   `json:"is_dir"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	abs, clean, err := joinKey(wsKey, body.Path)

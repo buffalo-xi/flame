@@ -56,7 +56,7 @@ func ChatAgent(c *gin.Context) {
 
 	var req chatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	message := strings.TrimSpace(req.Message)
@@ -323,7 +323,7 @@ func StopAgentRun(c *gin.Context) {
 
 	var req stopRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	if req.SessionID == "" {

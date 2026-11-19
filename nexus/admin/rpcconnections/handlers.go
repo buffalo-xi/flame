@@ -45,7 +45,7 @@ func CreateRpcConnection(c *gin.Context) {
 
 	var conn models.RpcConnection
 	if err := c.ShouldBindJSON(&conn); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -92,7 +92,7 @@ func UpdateRpcConnection(c *gin.Context) {
 
 	var conn models.RpcConnection
 	if err := c.ShouldBindJSON(&conn); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -149,7 +149,7 @@ func SetRpcConnectionEnabled(c *gin.Context) {
 		IsActive bool `json:"is_active"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -234,7 +234,7 @@ func ListRpcConnections(c *gin.Context) {
 
 	var req rpcrepo.ListRpcConnectionsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request parameters", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 

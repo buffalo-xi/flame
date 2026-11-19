@@ -364,7 +364,7 @@ func PullAsset(c *gin.Context) {
 	}
 	var req pullRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	peerName := strings.TrimSpace(req.Peer)

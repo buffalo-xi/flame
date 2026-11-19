@@ -66,7 +66,7 @@ func CreateLLMModel(c *gin.Context) {
 		Capabilities  xsql.JSONB `json:"capabilities"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -112,7 +112,7 @@ func UpdateLLMModel(c *gin.Context) {
 		Capabilities  xsql.JSONB `json:"capabilities"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -215,7 +215,7 @@ func ListLLMModels(c *gin.Context) {
 	// 解析请求参数
 	var req repository.ListLLMModelsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request parameters", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 
@@ -249,7 +249,7 @@ func ListLLMModelsByProviderID(c *gin.Context) {
 	// 解析请求参数
 	var req repository.ListLLMModelsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request parameters", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 

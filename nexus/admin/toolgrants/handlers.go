@@ -131,7 +131,7 @@ func SetAgentToolGrants(c *gin.Context) {
 		} `json:"grants"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -339,7 +339,7 @@ func SetSkillToolGrants(c *gin.Context) {
 		} `json:"items"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -410,7 +410,7 @@ func UpsertToolGroup(c *gin.Context) {
 		} `json:"items"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 

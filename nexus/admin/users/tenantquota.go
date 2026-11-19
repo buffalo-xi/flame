@@ -111,7 +111,7 @@ func UpdateTenantQuota(c *gin.Context) {
 
 	var req setTenantQuotaRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 

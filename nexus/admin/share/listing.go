@@ -92,7 +92,7 @@ func CreateListing(c *gin.Context) {
 
 	var req listingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	kind := assetpack.Kind(strings.TrimSpace(req.Kind))

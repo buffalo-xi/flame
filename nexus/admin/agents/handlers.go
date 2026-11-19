@@ -92,7 +92,7 @@ func ListAgents(c *gin.Context) {
 	// 解析请求参数
 	var req repository.ListAgentsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request parameters", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 
@@ -235,7 +235,7 @@ func CreateAgent(c *gin.Context) {
 
 	var req agentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -399,7 +399,7 @@ func SetAgentRelations(c *gin.Context) {
 		CalledByIDs []string `json:"called_by_ids"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -489,7 +489,7 @@ func SetAgentSkillBindings(c *gin.Context) {
 		Discovery *bool `json:"discovery"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -539,7 +539,7 @@ func UpdateAgent(c *gin.Context) {
 
 	var req agentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -750,7 +750,7 @@ func SetAgentStatus(c *gin.Context) {
 		Status int `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	switch body.Status {

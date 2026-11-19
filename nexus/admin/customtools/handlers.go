@@ -247,7 +247,7 @@ func CreateCustomTool(c *gin.Context) {
 	}
 	var body saveReq
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	name := strings.TrimSpace(body.Name)
@@ -326,7 +326,7 @@ func UpdateCustomTool(c *gin.Context) {
 	toolfile.Load(config.Cfg.Agent.RootDir, info.Schema, cur)
 	var body saveReq
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -463,7 +463,7 @@ func RunCustomTool(c *gin.Context) {
 
 	var body runReq
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	args := body.Args

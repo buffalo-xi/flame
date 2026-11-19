@@ -181,7 +181,7 @@ func SetPluginGate(c *gin.Context) {
 	}
 	var body setPluginGateReq
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	blocked := body.Blocked != nil && *body.Blocked
@@ -215,7 +215,7 @@ func DeletePluginGate(c *gin.Context) {
 func writePluginPolicy(c *gin.Context, tenantID, name string) {
 	var req setPolicyReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 

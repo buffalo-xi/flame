@@ -165,7 +165,7 @@ func ReviewAsset(c *gin.Context) {
 	}
 	var req reviewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -249,7 +249,7 @@ func GetAssetVisibility(c *gin.Context) {
 func SetAssetVisibility(c *gin.Context) {
 	var req visibilityRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	vis := strings.TrimSpace(req.Visibility)

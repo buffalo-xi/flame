@@ -86,7 +86,7 @@ func CreateDownloadTicket(c *gin.Context) {
 		Path      string `json:"path"`
 	}
 	if berr := c.ShouldBindJSON(&body); berr != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 

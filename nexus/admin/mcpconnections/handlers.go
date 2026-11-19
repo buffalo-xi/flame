@@ -45,7 +45,7 @@ func CreateMcpConnection(c *gin.Context) {
 
 	var conn models.McpConnection
 	if err := c.ShouldBindJSON(&conn); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -92,7 +92,7 @@ func UpdateMcpConnection(c *gin.Context) {
 
 	var conn models.McpConnection
 	if err := c.ShouldBindJSON(&conn); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -149,7 +149,7 @@ func SetMcpConnectionEnabled(c *gin.Context) {
 		IsActive bool `json:"is_active"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -234,7 +234,7 @@ func ListMcpConnections(c *gin.Context) {
 
 	var req mcprepo.ListMcpConnectionsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request parameters", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 

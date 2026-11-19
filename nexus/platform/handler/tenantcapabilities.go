@@ -138,7 +138,7 @@ func SetTenantCapabilityPolicy(c *gin.Context) {
 	}
 	var body setCapabilityReq
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	allowed := body.Allowed != nil && *body.Allowed
@@ -205,7 +205,7 @@ func SetCapabilityGate(c *gin.Context) {
 	}
 	var body setGateReq
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	blocked := body.Blocked != nil && *body.Blocked

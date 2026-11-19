@@ -137,7 +137,7 @@ func InspectAsset(c *gin.Context) {
 	}
 	var req inspectInstallRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	asset, m, kind, name, rerr := resolveInstallTarget(info, req.AssetID, req.Name)

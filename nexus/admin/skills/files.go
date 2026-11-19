@@ -187,7 +187,7 @@ func WriteSkillFile(c *gin.Context) {
 		Content string `json:"content"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	abs, clean, err := joinSkillKey(rootKey, body.Path)
@@ -233,7 +233,7 @@ func CreateSkillEntry(c *gin.Context) {
 		IsDir bool   `json:"is_dir"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	abs, clean, err := joinSkillKey(rootKey, body.Path)

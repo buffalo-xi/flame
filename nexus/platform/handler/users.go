@@ -115,7 +115,7 @@ type createPlatformUserRequest struct {
 func CreateUser(c *gin.Context) {
 	var req createPlatformUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -192,7 +192,7 @@ func UpdateUser(c *gin.Context) {
 
 	var req updatePlatformUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	role := strings.TrimSpace(req.Role)
@@ -277,7 +277,7 @@ func ResetUserPassword(c *gin.Context) {
 
 	var req resetPlatformPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	switch {

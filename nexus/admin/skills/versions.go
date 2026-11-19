@@ -115,7 +115,7 @@ func ReleaseSkillVersion(c *gin.Context) {
 		Note string `json:"note"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	note, err := versions.NormalizeNote(body.Note)

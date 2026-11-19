@@ -100,7 +100,7 @@ func SetFlowStatus(c *gin.Context) {
 		Status int `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	switch body.Status {
@@ -143,7 +143,7 @@ func ListFlows(c *gin.Context) {
 	// 解析请求参数
 	var req repository.ListFlowsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request parameters", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 
@@ -298,7 +298,7 @@ func CreateFlow(c *gin.Context) {
 		Breakpoints       []string        `json:"breakpoints"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -413,7 +413,7 @@ func UpdateFlow(c *gin.Context) {
 		Breakpoints       []string        `json:"breakpoints"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -639,7 +639,7 @@ func SetBreakpoint(c *gin.Context) {
 		On     bool   `json:"on"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	if req.NodeID == "" {
