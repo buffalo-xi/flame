@@ -14,7 +14,7 @@ import (
 
 var repo = flowconfigs.NewRepository()
 
-// nullable 将 sql.NullInt32 转为 interface{}（Valid 时返回数值，否则返回 nil）
+// nullable turns a sql.NullInt32 into an interface{} (the number when Valid, nil otherwise).
 func nullable(v sql.NullInt32) interface{} {
 	if v.Valid {
 		return v.Int32
@@ -22,7 +22,7 @@ func nullable(v sql.NullInt32) interface{} {
 	return nil
 }
 
-// toJSON 将 flowconfig 转为 JSON 友好 map（NULL 字段为 null）
+// toJSON renders a flowconfig as a JSON-friendly map (NULL columns become null).
 func toJSON(cfg *flowconfigs.FlowConfig) gin.H {
 	if cfg == nil {
 		return gin.H{}
@@ -38,7 +38,7 @@ func toJSON(cfg *flowconfigs.FlowConfig) gin.H {
 	}
 }
 
-// Getflowconfigs 返回系统级配置 + 租户配置（系统级作为参考展示）
+// Returns the system-wide config plus the tenant's (the system one is shown for reference).
 func Getflowconfigs(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -64,7 +64,7 @@ func Getflowconfigs(c *gin.Context) {
 	}, "")
 }
 
-// updateRequest 前端提交的租户配置（null 表示未设置，由后端存 NULL）
+// updateRequest is the tenant config submitted by the frontend (null means unset, stored as NULL).
 type updateRequest struct {
 	MaxTimeout        *int32 `json:"max_timeout"`
 	MaxRecursionDepth *int32 `json:"max_recursion_depth"`
@@ -75,7 +75,7 @@ type updateRequest struct {
 	MaxSessionRecords *int32 `json:"max_session_records"`
 }
 
-// toNullInt32 将 *int32 转为 sql.NullInt32（nil 表示未设置）
+// toNullInt32 turns *int32 into sql.NullInt32 (nil means unset).
 func toNullInt32(v *int32) sql.NullInt32 {
 	if v == nil {
 		return sql.NullInt32{}
@@ -83,7 +83,7 @@ func toNullInt32(v *int32) sql.NullInt32 {
 	return sql.NullInt32{Int32: *v, Valid: true}
 }
 
-// checkNotExceed 校验租户 max_* 不超过系统级（系统为 -1 或未设置时不限制）
+// checkNotExceed keeps the tenant max_* within the system value (no limit when it is -1 or unset).
 func checkNotExceed(field string, tenantVal, sysVal sql.NullInt32) error {
 	if !sysVal.Valid || sysVal.Int32 == -1 {
 		return nil
@@ -92,12 +92,12 @@ func checkNotExceed(field string, tenantVal, sysVal sql.NullInt32) error {
 		return nil
 	}
 	if tenantVal.Int32 > sysVal.Int32 {
-		return fmt.Errorf("%s 不能超过系统级值 %d", field, sysVal.Int32)
+		return fmt.Errorf("%s must not exceed the system value %d", field, sysVal.Int32)
 	}
 	return nil
 }
 
-// UpdateTenantflowconfigs 更新当前租户的 flow 配置（保存前校验不超过系统级）
+// Updates the flow config of the current tenant (checked against the system value before saving).
 func UpdateTenantflowconfigs(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -112,7 +112,7 @@ func UpdateTenantflowconfigs(c *gin.Context) {
 		return
 	}
 
-	// 读取系统级配置用于校验
+	// Read the system config for the checks.
 	sysCfg, err := repo.Get("")
 	if err != nil {
 		xhttp.ErrJSON(c, "failed to load system config: "+err.Error(), nil, "")
@@ -123,7 +123,7 @@ func UpdateTenantflowconfigs(c *gin.Context) {
 		sysZero = *sysCfg
 	}
 
-	// 组装租户配置
+	// Assemble the tenant config.
 	cfg := &flowconfigs.FlowConfig{
 		TenantID:          info.Schema,
 		MaxTimeout:        toNullInt32(req.MaxTimeout),
@@ -135,7 +135,7 @@ func UpdateTenantflowconfigs(c *gin.Context) {
 		MaxSessionRecords: toNullInt32(req.MaxSessionRecords),
 	}
 
-	// 校验 max_* 不超过系统级
+	// Check max_* against the system values.
 	checks := []struct {
 		field     string
 		tenantVal sql.NullInt32
@@ -160,7 +160,7 @@ func UpdateTenantflowconfigs(c *gin.Context) {
 		xhttp.ErrJSON(c, "failed to save flow config: "+err.Error(), nil, "")
 		return
 	}
-	// 写后删：删掉该租户的 Redis 缓存键，下次 Resolve 回源 DB 重建。
+	// Delete after writing: drop the tenant's Redis cache key so the next Resolve rebuilds it from the database.
 	flowconfig.Invalidate(info.Schema)
 
 	xhttp.OkJSON(c, "Success", gin.H{"tenant": toJSON(cfg)}, "")

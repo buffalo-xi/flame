@@ -17,15 +17,15 @@ func GetNodeCapabilities(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", caps, "")
 }
 
-// GetCodeLanguages 返回**工作流编辑器**的语言下拉：脚本节点能选哪些语言。
+// GetCodeLanguages returns the language dropdown of the **flow editor**: which languages a script node may use.
 //
-// 真源是沙箱：只有它知道当前 mode 下配了哪些双工语言（sandboxd 的 script.pools，
-// 与 /v1/code 拒语言的 unsupported_lang 同源）。本地不再保留任何语言名单 ——
-// 语言选择完全由沙箱决定，想增删语言去 sandboxd 侧改 script.pools 即可。
+// The source of truth is the sandbox: only it knows which duplex languages the current mode has (sandboxd's script.pools,
+// the same source as the unsupported_lang rejection on /v1/code). No language list is kept locally any more:
+// the sandbox owns the choice, so adding or removing a language means editing script.pools in sandboxd.
 //
-// 拿不到沙箱能力快照（没起来 / 未配置 / 旧版本 sandboxd 不上报 script_langs）时
-// 返回空列表：前端在空响应时保底成 ["lua"]（flows/Flow.vue 只在 data.length > 0 时
-// 覆盖），保证编辑器仍可用，而不是退回一份可能已过时的本地名单。
+// Without a sandbox capability snapshot (not running / not configured / an older sandboxd that does not
+// report script_langs) the list is empty: the front end falls back to ["lua"] for an empty response (flows/Flow.vue
+// only overrides when data.length > 0), so the editor stays usable instead of falling back to a stale local list.
 func GetCodeLanguages(c *gin.Context) {
 	if langs, ok := sandboxinfo.CodeLangs(); ok {
 		xhttp.OkJSON(c, "Success", orderLangs(langs), "")
@@ -34,15 +34,15 @@ func GetCodeLanguages(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", []string{}, "")
 }
 
-// langOrder 下拉的展示顺序：lua 打头，其余按字典序。
+// langOrder is the display order of the dropdown: lua first, then alphabetical.
 //
-// 为什么不照搬沙箱的字典序：前端拿 scriptLanguages[0] 当缺省语言（flows/Flow.vue
-// 注入给各节点属性面板的 defaultLang），而 lua 是那个**该**当缺省的语言 ——
-// µs 级高频调用，分支/循环条件用得最多。所以这个顺序是接口的一部分，不是装饰。
+// Why not follow the sandbox order: the front end takes scriptLanguages[0] as the default language (flows/Flow.vue
+// injects it into every node property panel as defaultLang), and lua is the one that **should** be the default -
+// microsecond-level hot path, used most in branch and loop conditions. So the order is part of the API, not decoration.
 var langOrder = []string{"lua", "python", "js"}
 
-// orderLangs 按 langOrder 重排；不在 langOrder 里的语言按字典序追加在尾部
-// （沙箱新增一种语言，不该因为这里不认识就被吞掉）。
+// orderLangs re-orders by langOrder and appends unknown languages alphabetically at the end
+// (a language newly added by the sandbox must not be swallowed just because this list does not know it).
 func orderLangs(langs []string) []string {
 	seen := make(map[string]bool, len(langs))
 	out := make([]string, 0, len(langs))
@@ -64,7 +64,7 @@ func orderLangs(langs []string) []string {
 	return append(out, rest...)
 }
 
-// GetWorkflowLimits 获取工作流系统限制配置
+// GetWorkflowLimits returns the system-wide flow limits.
 func GetWorkflowLimits(c *gin.Context) {
 	limits := gin.H{}
 	if authInfo, exists := c.Get("authInfo"); exists {

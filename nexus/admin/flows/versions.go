@@ -13,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ListFlowVersions 工作流版本历史（新到旧，不含 diagram）。
+// ListFlowVersions lists the version history (newest first, no diagram).
 //
 // GET /admin/flows/:id/versions
 func ListFlowVersions(c *gin.Context) {
@@ -32,12 +32,12 @@ func ListFlowVersions(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"versions": list}, "")
 }
 
-// ReleaseFlowVersion 把当前工作副本冻结成一个新版本并设为当前。
+// ReleaseFlowVersion freezes the working copy into a new version and makes it current.
 //
 // POST /admin/flows/:id/versions  body: {"note": "..."}
 //
-// 发布不是「上线开关」：正式入口用的就是这个版本，所以发布后线上行为立刻切到这一版，
-// 旧版本仍留在历史里可回滚。发布前的草稿改动只影响编辑页调试。
+// Release is not a "go live" switch: production uses this version, so releasing switches production
+// immediately; older versions stay in the history for rollback, and draft edits before a release only affect debug runs.
 func ReleaseFlowVersion(c *gin.Context) {
 	raw, exists := c.Get("authInfo")
 	if !exists {
@@ -66,11 +66,11 @@ func ReleaseFlowVersion(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", v, "")
 }
 
-// RollbackFlowVersion 把「正在使用的版本」切到该历史版本（线上立刻生效）。
+// RollbackFlowVersion points "the version in use" at this historical version (production changes immediately).
 //
 // POST /admin/flows/:id/versions/:version/rollback
 //
-// 纯指针操作：不新增版本、不动画布。想基于旧版本继续改，用下面的 ApplyFlowVersion。
+// A pure pointer flip: no new version, canvas untouched. To keep editing from an old version use ApplyFlowVersion below.
 func RollbackFlowVersion(c *gin.Context) {
 	raw, exists := c.Get("authInfo")
 	if !exists {
@@ -97,12 +97,12 @@ func RollbackFlowVersion(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", v, "")
 }
 
-// ApplyFlowVersion 把该版本的内容载入画布（工作副本），不发布。
+// ApplyFlowVersion loads this version into the canvas (the working copy) without releasing.
 //
 // POST /admin/flows/:id/versions/:version/apply
 //
-// 与回滚分开：这是「以旧版本为起点继续改」，线上当前版本不受影响；
-// 载入后工作副本与当前版本不一致，界面会显示「有改动」，发布后才生效。
+// Kept apart from rollback: this is "keep editing from an old version", and the current production version is unaffected;
+// afterwards the working copy differs from the current version, the UI shows "modified", and nothing takes effect until the next release.
 func ApplyFlowVersion(c *gin.Context) {
 	raw, exists := c.Get("authInfo")
 	if !exists {
@@ -128,12 +128,12 @@ func ApplyFlowVersion(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
 }
 
-// DeleteFlowVersion 删除一条历史版本（当前版本不可删）。
+// DeleteFlowVersion deletes one historical version (the current one cannot be deleted).
 //
 // DELETE /admin/flows/:id/versions/:version
 //
-// 只清历史：线上跑的还是 is_current 那一版，画布草稿也不动。
-// 要删当前版本，先用 POST .../rollback 把线上切到别的版本 —— 删除不该兼职停服。
+// History only: production still runs the is_current version and the canvas draft is untouched.
+// To delete the current one, POST .../rollback to another version first - deleting must not double as a service stop.
 func DeleteFlowVersion(c *gin.Context) {
 	raw, exists := c.Get("authInfo")
 	if !exists {
@@ -154,7 +154,7 @@ func DeleteFlowVersion(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, repository.ErrCannotDeleteCurrentVersion) {
-			// 文案原样透出：这是给人看的指引（先去切线上），不是 400 参数错误
+			// The text is passed through as is: it is guidance for a human (roll back first), not a 400 parameter error.
 			xhttp.ErrJSON(c, err.Error(), nil, "")
 			return
 		}

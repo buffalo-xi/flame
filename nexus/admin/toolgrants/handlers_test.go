@@ -6,22 +6,22 @@ import (
 	"flame/nexus/service/agent/toolgrant"
 )
 
-// 超级智能体的合并必须**保留**不可用标记，而不是把不可用项过滤掉：
-// 内置工具是固有基线，平台禁用时仍要列出来（标「平台未开通」），
-// 直接藏掉会让用户以为工具丢了。
+// Merging for the super agent must **keep** the unavailable marker instead of filtering the item out:
+// the built-in tools are the fixed baseline, so a platform-disabled one is still listed (marked "not enabled"),
+// hiding it would make the user think the tool disappeared.
 func TestMergeSupervisorBuiltinsKeepsUnavailable(t *testing.T) {
 	browser := toolgrant.ToolInfo{
 		Ref: "builtin:browser", Name: "browser",
 		Available:         false,
 		UnavailableKind:   toolgrant.UnavailableCapability,
-		UnavailableReason: "平台未开通",
+		UnavailableReason: "platform not enabled",
 	}
 	read := toolgrant.ToolInfo{Ref: "builtin:read_file", Name: "read_file", Available: true}
 	plugin := toolgrant.ToolInfo{Ref: "plugin:web_search", Name: "web_search", Available: true}
 
 	out := mergeSupervisorBuiltins([]toolgrant.ToolInfo{plugin}, nil, []toolgrant.ToolInfo{browser, read})
 	if len(out) != 3 {
-		t.Fatalf("合并后应有 3 项（插件 + 2 个内置），got %d: %+v", len(out), out)
+		t.Fatalf("expected 3 merged items (plugin + 2 built-ins), got %d: %+v", len(out), out)
 	}
 
 	var got *toolgrant.ToolInfo
@@ -31,26 +31,26 @@ func TestMergeSupervisorBuiltinsKeepsUnavailable(t *testing.T) {
 		}
 	}
 	if got == nil {
-		t.Fatal("不可用的内置工具被丢掉了 —— 预览会显示成「工具不存在」而不是「平台未开通」")
+		t.Fatal("the unavailable built-in was dropped - the preview would say \"tool not found\" instead of \"not enabled\"")
 	}
 	if got.Available {
-		t.Error("browser 被标成可用：能力闸在合并这一步丢了")
+		t.Error("browser was marked available: the capability gate was lost during the merge")
 	}
 	if got.UnavailableKind != toolgrant.UnavailableCapability {
-		t.Errorf("归因 = %q, want %q", got.UnavailableKind, toolgrant.UnavailableCapability)
+		t.Errorf("reason = %q, want %q", got.UnavailableKind, toolgrant.UnavailableCapability)
 	}
 }
 
-// deny 优先：内置基线也不能覆盖显式拒绝。
+// deny wins: even the built-in baseline cannot override an explicit denial.
 func TestMergeSupervisorBuiltinsDenyWins(t *testing.T) {
 	browser := toolgrant.ToolInfo{Ref: "builtin:browser", Name: "browser", Available: false}
 	out := mergeSupervisorBuiltins(nil, []string{"builtin:browser"}, []toolgrant.ToolInfo{browser})
 	if len(out) != 0 {
-		t.Fatalf("deny 项仍被合并进来：%+v", out)
+		t.Fatalf("a denied item was merged in: %+v", out)
 	}
 }
 
-// 告警只列不可用项，且合成一条（逐条加会刷屏）。
+// The warning lists unavailable items only, as a single line (one per item would flood the UI).
 func TestUnavailableRefs(t *testing.T) {
 	list := []toolgrant.ToolInfo{
 		{Ref: "builtin:read_file", Available: true},
@@ -59,9 +59,9 @@ func TestUnavailableRefs(t *testing.T) {
 	}
 	got := unavailableRefs(list)
 	if len(got) != 2 || got[0] != "builtin:browser" || got[1] != "builtin:exec" {
-		t.Fatalf("不可用 refs = %v, want [builtin:browser builtin:exec]", got)
+		t.Fatalf("unavailable refs = %v, want [builtin:browser builtin:exec]", got)
 	}
 	if len(unavailableRefs(nil)) != 0 {
-		t.Error("空列表应返回空")
+		t.Error("an empty list should return empty")
 	}
 }
