@@ -15,57 +15,61 @@ import (
 	"flame/tools/xlog"
 )
 
-// ===== 运行台账（跨实例可见）=====
+// ===== The run ledger (visible across instances) =====
 //
-// 为什么需要：agent 的 runRegistry 是进程内 map，flow 的 flow_run_records 只在跑完
-// 才落库 —— 两边「运行中」都不可见。多副本时管理端既看不到别的实例上跑着什么，
-// /stop 也找不对地方。这里把「本进程在跑的 run」写进 Redis，读侧合并成一份租户视图。
+// Why it is needed: the agent's runRegistry is an in-process map, and a flow's flow_run_records are only written
+// once the run finishes — so neither side's "running" state is visible. With several replicas the admin console
+// cannot see what is running on another instance, and /stop cannot find the right one. This writes "the runs
+// this process is executing" into Redis, and the read side merges them into one tenant view.
 //
-// 为什么放在 Redis：它已是本服务的硬依赖（缓存）；台账写失败只会让列表变窄，
-// **绝不影响运行本身**（所有台账调用都是 best-effort，错误只记日志）。
+// Why Redis: it is already a hard dependency of this service (the cache); a failed ledger write only makes the
+// list narrower and **never affects the run itself** (every ledger call is best-effort, and errors are only
+// logged).
 //
-// 键布局：租户一个 hash —— run:active:{schema}，字段 = run_id，值 = Snapshot JSON。
-//   - 不用 SAdd + SCAN：xredis 目前只暴露 hash / string 两类命令；
-//   - 字段没有独立 TTL（Redis 7.4 之前不支持），存活靠三条兜底：
-//     1) 心跳（heartbeat_at，每 runLedgerInterval 刷一次）；
-//     2) 读时裁剪（超过 runLedgerTTL 没心跳 = 实例崩了 / 掉线了，读的时候顺手删掉）；
-//     3) 键级 TTL（ledgerTTL，每次写入 / 心跳续期）—— 没人读的时候也能自愈。
+// Key layout: one hash per tenant — run:active:{schema}, field = run_id, value = Snapshot JSON.
+//   - no SAdd + SCAN: xredis only exposes hash / string commands today;
+//   - fields have no TTL of their own (unsupported before Redis 7.4), so liveness rests on three fallbacks:
+//     1) heartbeat (heartbeat_at, refreshed every runLedgerInterval);
+//     2) trimming on read (no heartbeat for more than runLedgerTTL = the instance crashed / went away, so it is
+//        deleted while reading);
+//     3) a key-level TTL (ledgerTTL, renewed on every write / heartbeat) — so it heals even when nobody reads.
 const (
-	// KindAgent 智能体运行。
+	// KindAgent is an agent run.
 	KindAgent = "agent"
-	// KindFlow 工作流运行。
+	// KindFlow is a workflow run.
 	KindFlow = "flow"
 )
 
 const (
-	// runLedgerTTL 多久没心跳就判定这条 run 已失效。
-	// 取心跳周期的 4 倍多：偶发一次 Redis 抖动不至于让列表抖动。
+	// runLedgerTTL is how long without a heartbeat before this run is considered gone.
+	// A bit more than 4 heartbeats: one occasional Redis hiccup should not make the list flicker.
 	runLedgerTTL = 90 * time.Second
-	// runLedgerInterval 心跳周期。
+	// runLedgerInterval is the heartbeat period.
 	runLedgerInterval = 20 * time.Second
-	// ledgerTTL 台账键的整体过期时间，每次写入 / 心跳都续期。
+	// ledgerTTL is the overall expiry of the ledger key, renewed on every write / heartbeat.
 	//
-	// 为什么需要它：字段级 TTL Redis 7.4 之前不支持，而「读时裁剪」有个缺口 ——
-	// 某租户的实例崩了、之后一直没人打开运行页，脏条目就会永久留在 hash 里。
-	// 加上键级 TTL 后，只要这个租户彻底没有活着的实例在跑，键会自己消失。
-	// 取 runLedgerTTL 的 2 倍：还有活实例在刷心跳时，绝对不会掉。
+	// Why it is needed: field-level TTLs are unsupported before Redis 7.4, and "trim on read" has a gap — if a
+	// tenant's instances crash and nobody opens the runs page afterwards, the dirty entries stay in the hash for
+	// good. With a key-level TTL the key disappears on its own as long as no live instance of that tenant is
+	// running anything.
+	// Twice runLedgerTTL: while a live instance keeps sending heartbeats it can never expire.
 	ledgerTTL = 2 * runLedgerTTL
 )
 
-// Entry 一次运行的登记信息（agent 与 flow 共用）。
+// Entry is one run's registration information (shared by agent and flow).
 type Entry struct {
 	Kind       string // KindAgent / KindFlow
 	RunID      string
 	SessionID  string
 	Schema     string
 	TargetID   string // agent_id / flow_id
-	TargetName string // agent 名 / flow 名
+	TargetName string // agent name / flow name
 	UserID     string
 	RunType    string // call / rpc / mcp / flow / agent / debug / preview
 	StartedAt  time.Time
 }
 
-// Snapshot 台账里的一条（列表返回的形状）。
+// Snapshot is one ledger entry (the shape the list returns).
 type Snapshot struct {
 	Kind       string `json:"kind"`
 	RunID      string `json:"run_id"`
@@ -76,27 +80,29 @@ type Snapshot struct {
 	RunType    string `json:"run_type"`
 	Instance   string `json:"instance"`
 	StartedAt  int64  `json:"started_at"`   // unix ms
-	Heartbeat  int64  `json:"heartbeat_at"` // unix ms，超过 runLedgerTTL 未更新即失效
-	// Local 这条就在当前实例上（读侧补的，不落 Redis）：
-	// 只有它能被本进程的 /stop 直接命中。
+	Heartbeat  int64  `json:"heartbeat_at"` // unix ms; stale once runLedgerTTL passes without an update
+	// Local means this one is on the current instance (filled in by the read side, never stored in Redis):
+	// only such a run can be hit directly by this process's /stop.
 	Local bool `json:"local"`
-	// UserName 用户展示名（同样读侧补，不落 Redis）：台账里只存 user_id，
-	// 名字留在 users 表 —— 用户改名后这里应该立刻跟着变，而不是台账里留一份旧快照。
+	// UserName is the user's display name (also filled in by the read side, never stored): the ledger keeps only
+	// user_id and the name lives in the users table — a renamed user should change here immediately rather than
+	// leaving an old snapshot in the ledger.
 	UserName string `json:"user_name,omitempty"`
 }
 
-// Store 台账用到的 Redis 能力（抽出来是为了单测能替换成内存实现）。
+// Store is the Redis capability the ledger uses (extracted so unit tests can swap in an in-memory
+// implementation).
 type Store interface {
 	HSetMultiple(key string, values map[string]interface{}) error
 	HGetAll(key string) (map[string]string, error)
 	HDel(key string, fields ...string) error
 	HLen(key string) (int64, error)
 	Del(keys ...string) error
-	// Expire 给整个台账键续命（见 ledgerTTL）：没人读的时候也能清掉脏条目。
+	// Expire renews the whole ledger key (see ledgerTTL): so dirty entries are cleaned up even when nobody reads.
 	Expire(key string, expiration time.Duration) error
 }
 
-// 本进程在跑的条目：心跳与「Redis 不可用时的兜底视图」都读它。
+// The entries running in this process: both the heartbeat and the "Redis unavailable" fallback view read it.
 var local = struct {
 	mu      sync.Mutex
 	entries map[string]Entry
@@ -108,8 +114,8 @@ var (
 	instanceName string
 )
 
-// LocalInstanceID 本实例标识：host:port（配置未加载时退化为 host）。
-// 只用于台账展示与 Local 判断，不参与任何路由。
+// LocalInstanceID is this instance's identifier: host:port (degrading to host when the config is not loaded).
+// It is only used for display in the ledger and for the Local flag, never for routing.
 func LocalInstanceID() string {
 	instanceOnce.Do(func() {
 		host, err := os.Hostname()
@@ -125,10 +131,11 @@ func LocalInstanceID() string {
 	return instanceName
 }
 
-// Register 登记一次运行（写台账 + 纳入心跳），返回幂等的注销函数。
+// Register records one run (writes the ledger and starts heartbeating) and returns an idempotent unregister
+// function.
 //
-// schema 为空（无租户语义的调用）或 Redis 未启用时退化为「只记内存」：
-// 不影响运行本身，只是跨实例看不见。
+// An empty schema (a call without tenant semantics) or a disabled Redis degrades to "memory only": the run
+// itself is unaffected, it is just invisible across instances.
 func Register(e Entry) func() {
 	if e.RunID == "" || e.Schema == "" {
 		return func() {}
@@ -143,11 +150,11 @@ func Register(e Entry) func() {
 
 	if s := currentStore(); s != nil {
 		if err := record(s, e, time.Now()); err != nil {
-			logErr("写入运行台账失败 schema=%s kind=%s run=%s: %v", e.Schema, e.Kind, e.RunID, err)
+			logErr("failed to write the run ledger schema=%s kind=%s run=%s: %v", e.Schema, e.Kind, e.RunID, err)
 		}
 		startHeartbeat()
-		// 停止信号的订阅依赖 Redis：启动时它可能还没就绪，所以在每次登记时补一次
-		// 「确保已订阅」（已订阅时是空操作）。
+		// Subscribing to stop signals depends on Redis, which may not be ready at startup, so every registration
+		// retries "make sure it is subscribed" (a no-op once subscribed).
 		ensureStopSubscription()
 	}
 
@@ -159,16 +166,17 @@ func Register(e Entry) func() {
 			local.mu.Unlock()
 			if s := currentStore(); s != nil {
 				if err := drop(s, e.Schema, e.RunID); err != nil {
-					logErr("清理运行台账失败 schema=%s run=%s: %v", e.Schema, e.RunID, err)
+					logErr("failed to clean the run ledger schema=%s run=%s: %v", e.Schema, e.RunID, err)
 				}
 			}
 		})
 	}
 }
 
-// List 列出某租户当前在跑的运行：Redis 台账（跨实例）+ 本进程兜底。
+// List lists a tenant's currently running runs: the Redis ledger (across instances) plus the local fallback.
 //
-// kind 为空 = 全部。err 非 nil 表示台账没读全（此时列表只剩本进程的那些）。
+// An empty kind means all. A non-nil err means the ledger could not be read in full (the list then holds only
+// this process's runs).
 func List(schema, kind string) ([]Snapshot, error) {
 	var (
 		remote []Snapshot
@@ -182,7 +190,8 @@ func List(schema, kind string) ([]Snapshot, error) {
 	for _, snap := range remote {
 		byID[snap.RunID] = snap
 	}
-	// 本地兜底：Redis 不可用、或心跳还没来得及写进去的那一瞬间，至少能看到本进程的。
+	// Local fallback: when Redis is unavailable, or in the instant before a heartbeat landed, at least this
+	// process's runs are visible.
 	for _, snap := range localSnapshots(schema, time.Now()) {
 		if prev, ok := byID[snap.RunID]; ok {
 			if prev.Instance == "" {
@@ -209,15 +218,17 @@ func List(schema, kind string) ([]Snapshot, error) {
 	return out, rerr
 }
 
-// ===== 停止信号（跨实例）=====
+// ===== Stop signals (across instances) =====
 //
-// 为什么需要：运行只存在于跑它的那台机器的内存里（agent 的 runRegistry、flow 的
-// ExecContext），而 /stop 是一条可能被负载均衡分到任意实例的 HTTP 请求。台账解决
-// 「在哪台」，这里解决「告诉那台」：停止意图发到 Redis 频道，所有实例都收到，
-// 只有持有这条运行的实例能命中，其余忽略即可（取消本身是幂等的）。
+// Why they are needed: a run lives only in the memory of the machine running it (the agent's runRegistry, a
+// flow's ExecContext), while /stop is an HTTP request the load balancer may route to any instance. The ledger
+// answers "which machine"; this answers "tell that machine": the stop intent goes to a Redis channel, every
+// instance receives it, only the one holding the run matches, and the rest simply ignore it (cancellation is
+// idempotent anyway).
 const stopChannelPattern = "run:stop:*"
 
-// StopSignal 一条停止意图。RunID 为空 = 停整个会话（只有 agent 支持会话级）。
+// StopSignal is one stop intent. An empty RunID means "stop the whole session" (only the agent supports
+// session-level stops).
 type StopSignal struct {
 	Schema    string `json:"schema"`
 	Kind      string `json:"kind"`
@@ -233,8 +244,9 @@ type stopSubscriber interface {
 	SubscribePattern(handler func(channel string, payload []byte), patterns ...string) (func() error, error)
 }
 
-// BroadcastStop 把停止意图广播给所有实例（经 Redis PUBLISH；含本进程 —— 本地已处理过
-// 也无妨，取消是幂等的）。返回 false 表示 Redis 不可用：广播没发出去，只能指望本地命中。
+// BroadcastStop broadcasts a stop intent to every instance (over Redis PUBLISH; this process included — handling
+// it locally already is harmless, cancellation is idempotent). A false return means Redis is unavailable: the
+// broadcast did not go out and only a local hit can be hoped for.
 func BroadcastStop(sig StopSignal) (bool, error) {
 	if sig.Schema == "" || (sig.RunID == "" && sig.SessionID == "") {
 		return false, nil
@@ -259,10 +271,10 @@ var stopHub = struct {
 	started  bool
 }{}
 
-// SubscribeStop 注册停止信号的本地处理函数；进程内只保留一份 Redis 订阅。
+// SubscribeStop registers a local stop-signal handler; only one Redis subscription is kept per process.
 //
-// 订阅在第一次拿到 Redis 客户端时建立（Register 会补试），所以启动顺序不重要：
-// 注册时 Redis 还没就绪，也不会永久失去订阅。
+// The subscription is established the first time a Redis client is available (Register retries), so the startup
+// order does not matter: registering before Redis is ready does not lose the subscription for good.
 func SubscribeStop(handler func(StopSignal)) {
 	if handler == nil {
 		return
@@ -294,11 +306,11 @@ func ensureStopSubscription() {
 	stopHub.mu.Unlock()
 
 	if _, err := sub.SubscribePattern(dispatchStop, stopChannelPattern); err != nil {
-		// 订阅没建立起来：把标记放回去，等下一次 Register 再试
+		// The subscription was not established: put the flag back and retry on the next Register
 		stopHub.mu.Lock()
 		stopHub.started = false
 		stopHub.mu.Unlock()
-		logErr("订阅运行停止频道失败: %v", err)
+		logErr("failed to subscribe to the run stop channel: %v", err)
 	}
 }
 
@@ -318,16 +330,16 @@ func dispatchStop(channel string, payload []byte) {
 	}
 }
 
-// ---- 内部实现 ----
+// ---- internals ----
 
 func currentStore() Store {
 	if redis.Client == nil {
 		return nil
 	}
-	return redis.Client // xredis.Client 满足 Store（只用到 hash / string 命令）
+	return redis.Client // xredis.Client satisfies Store (only hash / string commands are used)
 }
 
-// ledgerKey 本租户的运行台账（xredis 前缀在客户端统一叠加）。
+// ledgerKey is this tenant's run ledger (the xredis prefix is added uniformly by the client).
 func ledgerKey(schema string) string { return "run:active:" + schema }
 
 func snapshot(e Entry, now time.Time) Snapshot {
@@ -354,7 +366,8 @@ func record(s Store, e Entry, now time.Time) error {
 	if err := s.HSetMultiple(key, map[string]interface{}{e.RunID: string(b)}); err != nil {
 		return err
 	}
-	// 续期失败不影响这份台账可用（字段已经写进去了），下次心跳还会再试。
+	// A failed renewal does not make this entry unusable (the field is already written); the next heartbeat tries
+	// again.
 	_ = s.Expire(key, ledgerTTL)
 	return nil
 }
@@ -364,7 +377,7 @@ func drop(s Store, schema, runID string) error {
 	if err := s.HDel(key, runID); err != nil {
 		return err
 	}
-	// 最后一条走了就删键，别在键树里留空 hash。
+	// Delete the key once the last entry is gone, so no empty hash is left in the key tree.
 	if n, err := s.HLen(key); err == nil && n == 0 {
 		return s.Del(key)
 	}
@@ -382,11 +395,11 @@ func list(s Store, schema string, now time.Time) ([]Snapshot, error) {
 	for runID, val := range raw {
 		var snap Snapshot
 		if err := json.Unmarshal([]byte(val), &snap); err != nil {
-			stale = append(stale, runID) // 坏数据：顺手清掉
+			stale = append(stale, runID) // bad data: clean it up while here
 			continue
 		}
 		if snap.Heartbeat == 0 || now.Sub(time.UnixMilli(snap.Heartbeat)) > runLedgerTTL {
-			stale = append(stale, runID) // 实例崩溃 / 掉线留下的条目
+			stale = append(stale, runID) // an entry left behind by a crashed / disconnected instance
 			continue
 		}
 		if snap.RunID == "" {
@@ -431,7 +444,7 @@ func startHeartbeat() {
 	})
 }
 
-// heartbeat 刷新本进程所有在跑条目的心跳（按租户一次往返）。
+// heartbeat refreshes the heartbeat of every run in this process (one round trip per tenant).
 func heartbeat() {
 	s := currentStore()
 	if s == nil {
@@ -452,7 +465,7 @@ func heartbeat() {
 	for _, e := range entries {
 		b, err := json.Marshal(snapshot(e, now))
 		if err != nil {
-			continue // 单条坏数据不该挡住整批心跳
+			continue // one bad entry must not block the whole heartbeat batch
 		}
 		m := bySchema[e.Schema]
 		if m == nil {
@@ -464,15 +477,16 @@ func heartbeat() {
 	for schema, values := range bySchema {
 		key := ledgerKey(schema)
 		if err := s.HSetMultiple(key, values); err != nil {
-			logErr("刷新运行台账心跳失败 schema=%s: %v", schema, err)
+			logErr("failed to refresh the run ledger heartbeat schema=%s: %v", schema, err)
 			return
 		}
-		// 心跳同时也是键的续期：活着的实例一直在，键就不会过期。
+		// The heartbeat doubles as the key renewal: as long as live instances keep beating, the key never expires.
 		_ = s.Expire(key, ledgerTTL)
 	}
 }
 
-// errLogAt 台账错误限流：Redis 故障时心跳每 20s 一次，别把日志刷满。
+// errLogAt rate-limits ledger errors: when Redis is broken the heartbeat runs every 20s, which must not flood
+// the log.
 var errLogAt atomic.Int64
 
 func logErr(format string, args ...interface{}) {

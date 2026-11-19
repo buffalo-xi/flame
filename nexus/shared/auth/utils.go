@@ -10,9 +10,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// parseClaims 校验 token 字符串并解析出 AuthInfo。供 header 鉴权与 WebSocket 首条消息鉴权复用。
+// parseClaims validates a token string and parses out the AuthInfo. Shared by header authentication and the
+// first-message authentication of a WebSocket.
 func parseClaims(tokenString string) (*AuthInfo, error) {
-	// 验证token
+	// Validate the token
 	claims, err := xjwt.ValidateTokenWithMapClaims(tokenString, xjwt.JWTConfig(config.Cfg.JWT))
 	if err != nil {
 		return nil, err
@@ -20,7 +21,7 @@ func parseClaims(tokenString string) (*AuthInfo, error) {
 
 	schemaObj, ok := claims["schema"]
 	if !ok {
-		return nil, errors.New("没有schema信息")
+		return nil, errors.New("no schema claim")
 	}
 	schema, ok := schemaObj.(string)
 	_ = schema
@@ -30,7 +31,7 @@ func parseClaims(tokenString string) (*AuthInfo, error) {
 
 	idObj, ok := claims["id"]
 	if !ok {
-		return nil, errors.New("没有id信息")
+		return nil, errors.New("no id claim")
 	}
 	id, ok := idObj.(string)
 	_ = id
@@ -40,7 +41,7 @@ func parseClaims(tokenString string) (*AuthInfo, error) {
 
 	nameObj, ok := claims["name"]
 	if !ok {
-		return nil, errors.New("没有name信息")
+		return nil, errors.New("no name claim")
 	}
 	name, ok := nameObj.(string)
 	_ = name
@@ -56,21 +57,22 @@ func parseClaims(tokenString string) (*AuthInfo, error) {
 	return &authInfo, nil
 }
 
-// ValidateToken 直接校验 token 字符串，返回 AuthInfo。供 WebSocket 首条消息鉴权等无法在 header 传 token 的场景复用。
+// ValidateToken validates a token string directly and returns the AuthInfo. It is shared by the cases that
+// cannot pass a token in a header, such as the first-message authentication of a WebSocket.
 func ValidateToken(tokenString string) (*AuthInfo, error) {
 	return parseClaims(tokenString)
 }
 
-// GetAuthInfo 从header中获取并解析认证信息
+// GetAuthInfo reads and parses the authentication information from the header
 func GetAuthInfo(c *gin.Context) (*AuthInfo, error) {
 
-	//从请求头中获取Authorization token
+	// Read the Authorization token from the request header
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" || (!strings.HasPrefix(authHeader, "Bearer ") && !strings.HasPrefix(authHeader, "Admin ")) {
 		return nil, errors.New("Authorization header is required")
 	}
 
-	// 提取token
+	// Extract the token
 	tokenString := ""
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		tokenString = strings.TrimPrefix(authHeader, "Bearer ")
@@ -81,7 +83,7 @@ func GetAuthInfo(c *gin.Context) (*AuthInfo, error) {
 	return parseClaims(tokenString)
 }
 
-// AuthMiddleware 认证中间件
+// AuthMiddleware is the authentication middleware
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authInfo, err := GetAuthInfo(c)
@@ -91,7 +93,7 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// 将认证信息存储到context
+		// Store the authentication information in the context
 		c.Set("authInfo", authInfo)
 		c.Next()
 	}

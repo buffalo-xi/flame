@@ -6,23 +6,26 @@ import (
 	"strings"
 )
 
-// 文档里的引用写法：${global_vars.NAME}
+// The reference form inside a document: ${global_vars.NAME}
 //
-// 为什么文档不用 Go 模板（{{.global_vars.X}}）：AGENT.md / SKILL.md 是文档，
-// markdown 与代码示例里 {{ }} 太常见，一旦被当模板执行就是灾难（{{range}} 之类）。
-// 这里只做一趟带命名空间的正则替换，命中范围可控。
+// Why documents do not use Go templates ({{.global_vars.X}}): AGENT.md / SKILL.md are documents, and {{ }} is
+// far too common in markdown and code samples — executing one as a template would be a disaster ({{range}} and
+// the like). Here it is a single namespaced regex substitution, with a bounded scope.
 var docRefRe = regexp.MustCompile(`\$\{global_vars\.([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// Expand 把文档里的 ${global_vars.NAME} 替换成值。
+// Expand replaces ${global_vars.NAME} in a document with its value.
 //
-// 语义要点：
-//   - 没引用 → 原样返回，不查库（绝大多数文档里没有引用，别为此付一次 Resolve）；
-//   - 变量不存在 → 返回 error。既不保留 ${...} 字面量（模型会照着读），也不换成空串
-//     （配置缺失看起来像「用户就是这么配的」）；
-//   - 引用了 kind=secret 的变量 → 返回 error。保存时有 ValidateDocRefs 拦，但资产包
-//     安装进来的文档不经过那条校验，所以运行期这里必须再拦一次：展开之后就是一段
-//     普通文本，分不出哪几个字来自密钥，而它会进 system prompt、session_records 与 SSE；
-//   - schema 为空（平台级、单测）→ 原样返回：不属于任何租户，没有可解析的值。
+// The semantics that matter:
+//   - no reference -> returned as is, no database query (the vast majority of documents hold no reference, so
+//     do not pay for a Resolve);
+//   - an unknown variable -> an error. Neither the ${...} literal is kept (the model would read it) nor an
+//     empty string substituted (a missing configuration would look like "this is how the user configured it");
+//   - a reference to a kind=secret variable -> an error. ValidateDocRefs blocks it on save, but a document
+//     installed from an asset package did not go through that check, so it has to be blocked again here at
+//     runtime: once expanded it is ordinary text and there is no telling which characters came from a secret,
+//     while it reaches the system prompt, session_records and SSE;
+//   - an empty schema (platform level, unit tests) -> returned as is: it belongs to no tenant, so there is no
+//     value to resolve.
 func Expand(schema, text string) (string, error) {
 	if text == "" || schema == "" || !strings.Contains(text, "${global_vars.") {
 		return text, nil
@@ -52,19 +55,20 @@ func Expand(schema, text string) (string, error) {
 		return fmt.Sprint(value)
 	})
 	if len(missing) > 0 {
-		return "", fmt.Errorf("文档引用的全局变量不存在：%s（请先在「设置 → 全局变量」创建）",
-			strings.Join(missing, "、"))
+		return "", fmt.Errorf("the document references global variables that do not exist: %s (create them first under Settings → Global variables)",
+			strings.Join(missing, ", "))
 	}
 	if len(blocked) > 0 {
-		return "", fmt.Errorf("文档不能引用密钥类型的全局变量：%s（值会进模型上下文与运行记录）",
-			strings.Join(blocked, "、"))
+		return "", fmt.Errorf("a document may not reference secret global variables: %s (the value would reach the model context and the run records)",
+			strings.Join(blocked, ", "))
 	}
 	return out, nil
 }
 
-// DocRefs 返回文档里引用到的全局变量名（去重后按出现顺序）。
+// DocRefs returns the global variable names a document references (deduplicated, in order of appearance).
 //
-// 保存前的校验用：可以直接对着这份清单判「引用了不存在的变量」「引用了密钥类型」。
+// Used by the pre-save validation: this list is enough to decide "it references a variable that does not exist"
+// and "it references a secret".
 func DocRefs(text string) []string {
 	if text == "" {
 		return nil

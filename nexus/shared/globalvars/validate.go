@@ -6,15 +6,17 @@ import (
 	repo "flame/nexus/shared/repository/globalvars"
 )
 
-// ValidateDocRefs 保存前的校验：文档（AGENT.md / SKILL.md）里引用的全局变量不能是密钥类型。
+// ValidateDocRefs is the pre-save validation: a global variable referenced by a document (AGENT.md / SKILL.md)
+// must not be a secret.
 //
-// 只拦这一条，不拦「引用了还不存在的变量」：
-//   - 密钥会进模型上下文、进 session_records、进 SSE —— 一旦写进提示词就是泄漏，
-//     而当事人往往以为「引用的是变量名，不是值」；
-//   - 不存在的变量不拦：先写文档再建变量是正常顺序，而且运行期取不到会硬失败、
-//     错误信息里带着变量名，不会静默跑错。
+// Only that one rule is enforced, not "it references a variable that does not exist yet":
+//   - a secret reaches the model context, session_records and SSE — once written into a prompt it is a leak,
+//     and the author usually believes "I referenced the name, not the value";
+//   - a nonexistent variable is not blocked: writing the document before creating the variable is a normal
+//     order, and at runtime a missing value fails hard with the variable name in the message rather than
+//     running wrongly in silence.
 //
-// schema 为空（平台级）直接放行：没有租户就没有全局变量可查。
+// An empty schema (platform level) passes outright: without a tenant there are no global variables to look up.
 func ValidateDocRefs(schema, text string) error {
 	if schema == "" || text == "" {
 		return nil
@@ -24,21 +26,22 @@ func ValidateDocRefs(schema, text string) error {
 		return nil
 	}
 
-	// 直接查库而不是走 Resolve：Resolve 有 5s 缓存，刚改成密钥的变量可能还不在缓存里，
-	// 而这种校验「宁可刚一点」—— 缓存过期前放过去一条，就是一次真实泄漏。
+	// Query the database rather than going through Resolve: Resolve has a 5s cache, and a variable just changed
+	// to secret may not be in it yet, while this check should err on the strict side — letting one through
+	// before the cache expires is a real leak.
 	store := repo.NewRepository()
 	for _, name := range refs {
 		v, err := store.Get(schema, name)
 		if err != nil {
-			return fmt.Errorf("校验全局变量 %s 失败: %w", name, err)
+			return fmt.Errorf("failed to validate global variable %s: %w", name, err)
 		}
 		if v == nil {
-			continue // 还没建：允许先写文档
+			continue // not created yet: writing the document first is allowed
 		}
 		if v.Kind == repo.KindSecret {
 			return fmt.Errorf(
-				"不能引用密钥类型的全局变量 %s：它会进模型上下文与运行记录（${global_vars.%s}）。"+
-					"密钥请只用于连接 / 工具配置，或改用 text 类型的变量", name, name)
+				"a secret global variable cannot be referenced: %s reaches the model context and the run records (${global_vars.%s}). "+
+					"Use secrets only in connection / tool configuration, or switch to a text variable", name, name)
 		}
 	}
 	return nil

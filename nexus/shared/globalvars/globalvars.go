@@ -11,22 +11,26 @@ import (
 	"flame/tools/xlog"
 )
 
-// 取值层：把 <schema>.global_vars 里的行转成「可直接注入模板」的 map。
+// The value layer: it turns the rows of <schema>.global_vars into a map that can be injected into a template
+// directly.
 //
-// 与 shared/repository/globalvars 的分工：那份管 SQL，这份管缓存 + 类型转换。
-// 调用方（节点执行、环境变量解析）只应该看到 Resolve，别自己查库。
+// How it divides the work with shared/repository/globalvars: that one owns the SQL, this one owns the cache and
+// the type conversion. A caller (node execution, environment variable resolution) should only see Resolve and
+// never query the database itself.
 
-// cacheTTL 进程内缓存时长。
+// cacheTTL is how long the in-process cache lives.
 //
-// 为什么不做 Redis 缓存：值与密钥同表，写进 Redis 等于把明文再复制一份到另一个
-// 访问面；而变量的读取频率是「每次运行一次快照」，5 秒 TTL 足够削掉绝大部分
-// 重复查询。多实例下改值后最多 5 秒生效，与 Redis 方案同量级。
+// Why no Redis cache: the values live in the same table as secrets, so writing them into Redis means copying
+// the plaintext onto another access surface; and the read frequency is "one snapshot per run", which a 5
+// second TTL is enough to cut almost all duplicates of. Across instances a change takes at most 5 seconds to
+// take effect, the same order of magnitude as a Redis scheme.
 const cacheTTL = 5 * time.Second
 
 type entry struct {
 	values map[string]any
-	// secrets 与 values 一起缓存：判断「某个引用是不是密钥类型」的调用点在
-	// 节点执行的热路径上（每次渲染提示词前），单独查库不值得。
+	// secrets is cached together with values: the call sites that decide "is this reference a secret" sit on
+	// the hot path of node execution (before every prompt render), and a separate database query is not worth
+	// it.
 	secrets map[string]bool
 	at      time.Time
 }
@@ -36,11 +40,11 @@ var cache = struct {
 	m map[string]entry
 }{m: make(map[string]entry)}
 
-// Resolve 返回某租户的全局变量（按 kind 转成原生类型：number→float64、bool→bool）。
+// Resolve returns a tenant's global variables (converted to native types by kind: number→float64, bool→bool).
 //
-// 失败一律返回 error，**不降级成空 map** —— 空 map 会让
-// 「没配置也能跑」变成线上现实：节点输入取到 nil 之后，脚本/请求会带着空值继续跑，
-// 那种错误排查起来比直接失败贵得多。
+// A failure always returns an error and **never degrades to an empty map** — an empty map would make "it runs
+// even when unconfigured" the production reality: once a node input resolves to nil, the script or request
+// carries on with an empty value, and that kind of error is far more expensive to trace than a plain failure.
 func Resolve(schema string) (map[string]any, error) {
 	e, err := snapshot(schema)
 	if err != nil {
@@ -49,10 +53,11 @@ func Resolve(schema string) (map[string]any, error) {
 	return copyValues(e.values), nil
 }
 
-// SecretNames 返回该租户里 kind=secret 的变量名集合。
+// SecretNames returns the set of variable names with kind=secret in this tenant.
 //
-// 用途是「拦住不该出现的地方」：提示词、会话记录、SSE 里一旦出现密钥真值就是泄漏，
-// 而这些通道拿到的是渲染后的字符串，事后分不出哪一段来自密钥 —— 只能在渲染前判。
+// Its purpose is "blocking the places where they must not appear": once a secret value shows up in a prompt, a
+// session record or SSE it is a leak, and those channels receive the rendered string, which no longer says
+// which part came from a secret — so the decision has to happen before rendering.
 func SecretNames(schema string) (map[string]bool, error) {
 	e, err := snapshot(schema)
 	if err != nil {
@@ -65,10 +70,10 @@ func SecretNames(schema string) (map[string]bool, error) {
 	return out, nil
 }
 
-// snapshot 取缓存，过期或未命中则回源重建。
+// snapshot takes the cache entry, rebuilding it from the source when it is stale or missing.
 func snapshot(schema string) (entry, error) {
 	if schema == "" {
-		return entry{}, fmt.Errorf("全局变量：租户 schema 为空（租户未初始化）")
+		return entry{}, fmt.Errorf("global variables: the tenant schema is empty (the tenant is not initialised)")
 	}
 
 	cache.RLock()
@@ -80,9 +85,10 @@ func snapshot(schema string) (entry, error) {
 
 	rows, err := repo.NewRepository().List(schema)
 	if err != nil {
-		// 读失败不写缓存：下一次请求立刻重试，而不是把「坏了」缓存 5 秒
-		xlog.Error("读取全局变量失败 schema=%s: %v", schema, err)
-		return entry{}, fmt.Errorf("读取全局变量失败: %w", err)
+		// A failed read is not cached: the next request retries immediately rather than caching "broken" for 5
+		// seconds
+		xlog.Error("failed to read global variables schema=%s: %v", schema, err)
+		return entry{}, fmt.Errorf("failed to read global variables: %w", err)
 	}
 
 	values := make(map[string]any, len(rows))
@@ -105,15 +111,16 @@ func snapshot(schema string) (entry, error) {
 	return e, nil
 }
 
-// Invalidate 让本实例的缓存立刻失效（写完变量后调用；多实例靠 TTL 自然过期）。
+// Invalidate expires this instance's cache immediately (called after a variable is written; other instances
+// rely on the TTL).
 func Invalidate(schema string) {
 	cache.Lock()
 	delete(cache.m, schema)
 	cache.Unlock()
 }
 
-// copyValues 浅拷贝：值都是标量，浅拷贝就够；
-// 返回内部 map 的引用会让调用方（哪怕是误改）把缓存带脏。
+// copyValues is a shallow copy: the values are all scalars, so shallow is enough; returning a reference to the
+// internal map would let a caller (even by accident) dirty the cache.
 func copyValues(src map[string]any) map[string]any {
 	out := make(map[string]any, len(src))
 	for k, v := range src {
@@ -122,8 +129,8 @@ func copyValues(src map[string]any) map[string]any {
 	return out
 }
 
-// convert 按 kind 转成原生类型，让模板里能直接比较 / 参与运算，
-// 而不是所有变量都变成字符串。
+// convert turns a value into its native type by kind, so a template can compare and compute with it directly
+// instead of every variable being a string.
 func convert(row repo.GlobalVar) (any, error) {
 	switch row.Kind {
 	case repo.KindNumber:
@@ -135,22 +142,22 @@ func convert(row repo.GlobalVar) (any, error) {
 		}
 		f, err := strconv.ParseFloat(strings.TrimSpace(row.Value), 64)
 		if err != nil {
-			return nil, fmt.Errorf("全局变量 %s 声明为 number，但值 %q 不是数字", row.Name, row.Value)
+			return nil, fmt.Errorf("global variable %s is declared as number but its value %q is not a number", row.Name, row.Value)
 		}
 		return f, nil
 	case repo.KindBool:
-		// 宽松解析：配置里写 true/false 之外，也接受 1/0、yes/no、on/off
+		// Lenient parsing: besides true/false the config also accepts 1/0, yes/no and on/off
 		switch strings.ToLower(strings.TrimSpace(row.Value)) {
 		case "", "false", "0", "no", "off":
 			return false, nil
 		case "true", "1", "yes", "on":
 			return true, nil
 		default:
-			return nil, fmt.Errorf("全局变量 %s 声明为 bool，但值 %q 不是布尔", row.Name, row.Value)
+			return nil, fmt.Errorf("global variable %s is declared as bool but its value %q is not a boolean", row.Name, row.Value)
 		}
 	case repo.KindSecret, repo.KindText:
 		return row.Value, nil
 	default:
-		return nil, fmt.Errorf("全局变量 %s 的类型 %q 不受支持（只支持 text / secret / number / bool）", row.Name, row.Kind)
+		return nil, fmt.Errorf("the type %q of global variable %s is not supported (only text / secret / number / bool)", row.Kind, row.Name)
 	}
 }

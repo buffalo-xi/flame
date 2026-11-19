@@ -1,11 +1,12 @@
-// Package toolfile 自定义工具契约文件（TOOL.json）的读写。
+// Package toolfile reads and writes the custom tool contract file (TOOL.json).
 //
-// 分工：
-//   - models.ToolFile：纯数据结构与「契约 → 表行」的语义（不碰文件系统）
-//   - 本包：磁盘布局、原子写、读失败时的降级口径
+// Division of labour:
+//   - models.ToolFile: the pure data structure and the "contract -> table row" semantics (no filesystem)
+//   - this package: the on-disk layout, atomic writes, and the degraded behaviour when a read fails
 //
-// 读失败一律**降级到表**（Source="table" + warning），绝不因为一个坏文件让工具消失：
-// 契约是「描述」，没了描述工具照样能跑；把它变成不可用只会让人以为工具坏了。
+// A failed read always **degrades to the table** (Source="table" plus a warning) and never makes a tool
+// disappear because of one bad file: the contract is a description, and a tool still runs without one; turning
+// it into "unavailable" only makes people believe the tool is broken.
 package toolfile
 
 import (
@@ -18,23 +19,25 @@ import (
 	"flame/nexus/shared/paths"
 )
 
-// Contract 契约来源与告警：管理端据此显示「这份契约是从哪来的」。
+// Contract is the contract's source and warnings: the admin console shows "where does this contract come
+// from" from it.
 type Contract struct {
-	Source   string   `json:"source"`             // file：来自 TOOL.json；table：回退表定义
-	Warnings []string `json:"warnings,omitempty"` // 解析失败 / 名字不符 / 入口缺失等
+	Source   string   `json:"source"`             // file: from TOOL.json; table: fell back to the table definition
+	Warnings []string `json:"warnings,omitempty"` // parse failure / name mismatch / missing entry and so on
 }
 
-// Dir 工具目录的宿主绝对路径：{root}/tenants/{schema}/tools/{name}。
+// Dir is the host absolute path of a tool directory: {root}/tenants/{schema}/tools/{name}.
 func Dir(rootDir, schema, name string) string {
 	return filepath.Join(paths.ResolveToolsDir(rootDir, schema), name)
 }
 
-// Path 契约文件的宿主绝对路径。
+// Path is the host absolute path of the contract file.
 func Path(rootDir, schema, name string) string {
 	return filepath.Join(Dir(rootDir, schema, name), models.ToolFileName)
 }
 
-// Read 读契约文件。文件不存在返回 (nil, nil) —— 灰度期缺文件是正常态，不是错误。
+// Read reads the contract file. A missing file returns (nil, nil) — during the rollout a missing file is a
+// normal state, not an error.
 func Read(rootDir, schema, name string) (*models.ToolFile, error) {
 	if err := checkRoot(rootDir); err != nil {
 		return nil, err
@@ -52,10 +55,11 @@ func Read(rootDir, schema, name string) (*models.ToolFile, error) {
 	return models.ParseToolFile(data)
 }
 
-// Write 原子写契约文件：先写同目录的 .tmp 再 rename。
+// Write writes the contract file atomically: write a .tmp in the same directory, then rename.
 //
-// 不做「直接覆盖」：执行侧可能在读，半个 JSON 会让它判定成解析失败并回退表 ——
-// 一秒钟的窗口里工具描述忽然变成旧的，比写失败更难查。
+// It does not overwrite in place: the execution side may be reading, and half a JSON document makes it decide
+// the parse failed and fall back to the table — a one-second window in which the tool description suddenly
+// turns stale is harder to trace than a failed write.
 func Write(rootDir, schema, name string, f *models.ToolFile) error {
 	if err := checkRoot(rootDir); err != nil {
 		return err
@@ -66,8 +70,10 @@ func Write(rootDir, schema, name string, f *models.ToolFile) error {
 	return WriteAt(Dir(rootDir, schema, name), f)
 }
 
-// ReadAt 读**指定目录**里的契约文件（与 WriteAt 对称；正式运行从版本目录读定义）。
-// 文件不存在返回 (nil, nil)：调用方按「版本缺契约」决定是报错还是跳过。
+// ReadAt reads the contract file in **the given directory** (symmetric with WriteAt; a real run reads its
+// definition from the version directory).
+// A missing file returns (nil, nil): the caller decides whether "the version has no contract" is an error or
+// something to skip.
 func ReadAt(dir string) (*models.ToolFile, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, fmt.Errorf("toolfile: empty dir")
@@ -82,11 +88,13 @@ func ReadAt(dir string) (*models.ToolFile, error) {
 	return models.ParseToolFile(data)
 }
 
-// WriteAt 把契约写进**指定目录**（版本快照用：目录不是草稿根，但写入口径必须一致）。
+// WriteAt writes the contract into **the given directory** (for version snapshots: the directory is not the
+// draft root, but the write conventions have to match).
 //
-// 快照为什么需要它：工具的版本必须自带合法 TOOL.json（定义以文件为准，缺文件会
-// 退化到表行）。草稿里缺或坏时，发布动作要把合并视图补写进版本目录 —— 且只写快照，
-// 不动草稿：发布不该顺手改用户正在编辑的内容。
+// Why a snapshot needs it: a tool version must carry a valid TOOL.json of its own (the definition follows the
+// file, and a missing file degrades to the table row). When the draft lacks one or it is broken, the release
+// has to write the merged view into the version directory — and only the snapshot: the draft is left alone,
+// because releasing should not quietly edit what the user is still working on.
 func WriteAt(dir string, f *models.ToolFile) error {
 	if strings.TrimSpace(dir) == "" {
 		return fmt.Errorf("toolfile: empty dir")
@@ -110,24 +118,27 @@ func WriteAt(dir string, f *models.ToolFile) error {
 	return nil
 }
 
-// WriteOf 由表行生成并写入契约文件（管理端与元工具共用的唯一写入口）。
+// WriteOf builds the contract from a table row and writes it (the single write path shared by the admin console
+// and the meta tool).
 //
-// 两处写行的地方（admin API、超级智能体的元工具）都必须调用它：读路径是「文件优先」，
-// 只改表不写文件的话，下一次读取会把旧契约盖回去，用户看到「保存成功但没变」。
+// Both places that write a row (the admin API and the super agent's meta tool) must call it: the read path
+// prefers the file, so writing only the table means the next read puts the old contract back and the user sees
+// "saved successfully but nothing changed".
 func WriteOf(rootDir, schema string, t *models.CustomTool) error {
 	return Write(rootDir, schema, t.Name, models.ToolFileOf(t))
 }
 
-// Load 把盘上的契约应用到表行上，并报告来源。
+// Load applies the contract on disk to the table row and reports where it came from.
 //
-// 三条降级（都不阻断）：解析失败、name 与目录不一致、entry 越界 → 用表定义；
-// 入口文件缺失只告警 —— 执行时（尤其是试跑）会给出更准确的错误。
+// Three degradations (none blocking): a parse failure, a name that disagrees with the directory, or an entry
+// outside the tool directory all fall back to the table definition; a missing entry file is only a warning —
+// execution (a trial run especially) gives a more precise error.
 func Load(rootDir, schema string, t *models.CustomTool) Contract {
 	f, err := Read(rootDir, schema, t.Name)
 	if err != nil {
 		return Contract{
 			Source:   "table",
-			Warnings: []string{fmt.Sprintf("TOOL.json 解析失败，已回退表定义：%v", err)},
+			Warnings: []string{fmt.Sprintf("failed to parse TOOL.json, fell back to the table definition: %v", err)},
 		}
 	}
 	if f == nil {
@@ -136,7 +147,7 @@ func Load(rootDir, schema string, t *models.CustomTool) Contract {
 	if verr := f.Validate(t.Name); verr != nil {
 		return Contract{
 			Source:   "table",
-			Warnings: []string{fmt.Sprintf("%v（已回退表定义，请修好 TOOL.json）", verr)},
+			Warnings: []string{fmt.Sprintf("%v (fell back to the table definition; fix TOOL.json)", verr)},
 		}
 	}
 	f.Apply(t)
@@ -144,14 +155,16 @@ func Load(rootDir, schema string, t *models.CustomTool) Contract {
 	c := Contract{Source: "file"}
 	entry := filepath.Join(Dir(rootDir, schema, t.Name), filepath.FromSlash(t.Entry))
 	if _, serr := os.Stat(entry); serr != nil {
-		c.Warnings = append(c.Warnings, fmt.Sprintf("TOOL.json 声明的入口文件不存在：%s", t.Entry))
+		c.Warnings = append(c.Warnings, fmt.Sprintf("the entry file declared by TOOL.json does not exist: %s", t.Entry))
 	}
 	return c
 }
 
-// EnsureAll 为「有表行、缺文件」的工具补写契约（迁移入口，幂等）。
+// EnsureAll writes contracts for tools that "have a table row but no file" (a migration entry point,
+// idempotent).
 //
-// 只在管理端打开列表时调用：读路径不写文件，避免「看一眼就把盘改了」。
+// It is only called when the admin console opens the list: the read path never writes a file, so that "looking
+// at it" cannot change the disk.
 func EnsureAll(rootDir, schema string, list []models.CustomTool) (written int, errs []string) {
 	for i := range list {
 		t := &list[i]
@@ -186,28 +199,30 @@ func hasFile(rootDir, schema, name string) (bool, error) {
 	return !st.IsDir(), nil
 }
 
-// checkRoot 存储根必须已配置。
+// checkRoot requires the storage root to be configured.
 //
-// 空 rootDir 会让 Path 变成 "tenants/t0/tools/..." 这样的**相对路径**：
-// 读会读到工作目录里的同名文件、写会在进程 cwd 下造一棵假目录树 ——
-// 比直接报错难查得多，所以这里显式拒掉。
+// An empty rootDir turns Path into a **relative** path such as "tenants/t0/tools/...": a read would find a file
+// of the same name in the working directory and a write would build a fake directory tree under the process
+// cwd — far harder to trace than an outright error, so it is rejected here explicitly.
 func checkRoot(rootDir string) error {
 	if strings.TrimSpace(rootDir) == "" {
-		return fmt.Errorf("存储根未初始化（agent.root_dir）")
+		return fmt.Errorf("the storage root is not initialised (agent.root_dir)")
 	}
 	return nil
 }
 
-// safeName 名字只能是一级目录名：拒绝分隔符与 ..（否则 Path 会跳出 tools/）。
+// safeName requires a name to be exactly one directory level: separators and .. are rejected (otherwise Path
+// can escape tools/).
 //
-// 表里有 name 唯一约束，但写盘函数也会被管理端/迁移直接调用，这里兜住。
+// The table has a unique constraint on name, but the disk-writing functions are also called directly by the
+// admin console and migrations, so this is the backstop.
 func safeName(name string) error {
 	n := strings.TrimSpace(name)
 	if n == "" {
-		return fmt.Errorf("工具名为空")
+		return fmt.Errorf("the tool name is empty")
 	}
 	if n != name || strings.ContainsAny(n, `/\`) || n == "." || n == ".." {
-		return fmt.Errorf("非法工具名 %q（只能是单级目录名）", name)
+		return fmt.Errorf("invalid tool name %q (must be a single directory name)", name)
 	}
 	return nil
 }

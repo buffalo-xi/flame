@@ -10,26 +10,28 @@ import (
 	"flame/nexus/shared/paths"
 )
 
-// Entry 扫描到的一个工具目录（目录存在且契约可用）。
+// Entry is one scanned tool directory (the directory exists and the contract is usable).
 type Entry struct {
 	Name string
 	Dir  string
 	File *models.ToolFile
 }
 
-// ScanIssue 一个「看起来像工具、但不能当工具用」的目录或记录。
+// ScanIssue is a directory or record that "looks like a tool but cannot be used as one".
 //
-// 为什么不静默跳过：目录里躺着代码、平台上却看不见，是这一步最容易被抱怨的
-// 形态（以前只有表里有的才算工具，盘上的孤儿连报错都没有）。现在至少能列出来。
+// Why not skip silently: code sitting in the directory while the platform shows nothing is the shape of this
+// step that gets complained about most (previously only what was in the table counted as a tool, and an orphan
+// on disk produced no error at all). Now at least it can be listed.
 type ScanIssue struct {
 	Path  string `json:"path"`
 	Error string `json:"error"`
 }
 
-// Scan 扫描租户的 tools/ 目录，返回可用工具与逐条问题。
+// Scan walks a tenant's tools/ directory and returns the usable tools plus one issue per problem.
 //
-// 只认「目录 + 合法 TOOL.json」：契约是声明式的，绝不为了读契约去执行租户代码
-// （插件可以，因为插件是平台方写的；这里不行）。
+// Only "a directory plus a valid TOOL.json" counts: the contract is declarative, and tenant code is never
+// executed just to read a contract (a plugin may do that, because a plugin is written by the platform; here it
+// may not).
 func Scan(rootDir, schema string) ([]Entry, []ScanIssue) {
 	if err := checkRoot(rootDir); err != nil {
 		return nil, []ScanIssue{{Path: schema, Error: err.Error()}}
@@ -38,7 +40,7 @@ func Scan(rootDir, schema string) ([]Entry, []ScanIssue) {
 	dirs, err := os.ReadDir(base)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil // 还没建过 tools/ = 没有工具，不是错误
+			return nil, nil // tools/ was never created = no tools, not an error
 		}
 		return nil, []ScanIssue{{Path: base, Error: err.Error()}}
 	}
@@ -48,15 +50,15 @@ func Scan(rootDir, schema string) ([]Entry, []ScanIssue) {
 	for _, d := range dirs {
 		name := d.Name()
 		if !d.IsDir() || strings.HasPrefix(name, ".") {
-			continue // .tmp 之类的中间文件、隐藏目录不参与
+			continue // intermediate files such as .tmp and hidden directories do not take part
 		}
 		f, rerr := Read(rootDir, schema, name)
 		if rerr != nil {
-			issues = append(issues, ScanIssue{Path: name, Error: "TOOL.json 解析失败：" + rerr.Error()})
+			issues = append(issues, ScanIssue{Path: name, Error: "failed to parse TOOL.json: " + rerr.Error()})
 			continue
 		}
 		if f == nil {
-			issues = append(issues, ScanIssue{Path: name, Error: "缺 TOOL.json（无法确定工具契约）"})
+			issues = append(issues, ScanIssue{Path: name, Error: "TOOL.json is missing (the tool contract cannot be determined)"})
 			continue
 		}
 		if verr := f.Validate(name); verr != nil {
