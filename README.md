@@ -165,6 +165,7 @@ desktop/          Vue 3 admin console
   ([中文](nexus/docs/design-highlights.zh.md))
 - `nexus/docs/i18n-plan.md` — the layered bilingual plan, its costs and pitfalls
 - `nexus/docs/error-codes.md` — business error-code conventions (a prerequisite for a bilingual UI)
+  ([中文](nexus/docs/error-codes.zh.md))
 - `AGENTS.md` — module map and cross-domain ground rules
 
 ## Security notes
