@@ -118,6 +118,12 @@ foreach ($line in $lines) {
 > **必须全程 UTF-8 读写**。PowerShell 的 `Get-Content` 默认按系统 ANSI 解码，
 > 会把 `COMMENT ON … IS '中文'` 读成乱码再写回去（`-f` 加 `ReadAllLines(..., UTF8)` 可避开）。
 
+> **保持 dump 的语句顺序**。`pg_dump --schema-only` 先输出全部 `CREATE TABLE`，最后才用
+> `ALTER TABLE … ADD CONSTRAINT` 补主键 / 唯一 / 外键。把 `REFERENCES` 写在列上就会炸：
+> PostgreSQL 要求被引用表的主键此时已存在，否则报 42830，整份脚本中止，
+> 新库上 `CreateTenant` 直接失败（2026-11：四张 `*_versions` 表就是手写成列内联的）。
+> 要挪约束，挪到文件末尾的外键区，不要挪进列定义。
+
 预置文件（`files/`）来自开发机上 t0 的定义域目录，只在改模板时同步一次：
 
 ```powershell

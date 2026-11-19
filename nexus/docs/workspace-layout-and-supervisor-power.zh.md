@@ -74,7 +74,7 @@ tenants/{schema}/workspace/{agent}/
 | D10 | agent **不能写自己的定义域** | 定义只走元工具。**技能子目录已由 D23 收窄**；`AGENT.md` 仍归元工具（**读**已由 D32 放开） |
 | D11 | exec 挂载：`/workspace` ← 运行域工作目录（rw、cwd）；`/agent` ← 自己的定义域（ro） | 沙箱内逻辑路径，映射源为已算好的宿主路径 |
 | D12 | 超级智能体的 exec **不挂 `/tenant`** | 会绕过 D2 闸门，且黑盒 shell 有越权读整租户风险 |
-| D13 | 删 session 即删目录（`DeletePrefix`）；`Create` 后建目录（S3 写 `.keep`） | 配额 / 保留期以后再说 |
+| D13 | 删 session 即删目录（`DeletePrefix`）；`Create` 后建目录（S3 写 `.keep`） | 配额已落地（见会话配额一节）；保留期仍未定 |
 | D14 | 老数据**不迁移** | 存量产物只有 `workspace/poet/sfds`（空文件），删掉即可 → 无需定 `uid` |
 | D15 | 路径：仅 超级智能体支持 `/` 前缀 = 从**租户根**算（三域命名空间） | 普通路径语义不变，向后兼容 |
 | D16 | `main`、`skill-authoring`、`agent-authoring` 属**删除/改名保护名单**：不可删除、不可改名（其它字段可改） | 与 D2 的 status 闸门**正交叠加**；实现为 `models.IsProtectedAgent` / `models.IsProtectedSkill` |
@@ -494,8 +494,13 @@ HAVING count(DISTINCT owner_type) > 1
   由人手工删除旧会话 —— 聊天记录不替用户做决定；
 - **协议端点**（`sessions.CreateWithID`，RPC / MCP 自带新 `session_id` 时）：超限自动回收该桶内
   `updated_at` 最旧的会话（连带 `session_records`、工作区目录、用量计数），腾出位置再建，并记日志
-  `会话数达到上限，自动回收最旧会话 ... evicted=N`。端点凭证通常绑定独立账号，不会挤掉控制台会话；
+  `[QUOTA_ALERT] session count at the limit, reclaimed oldest sessions ... evicted=N`（日志一律英文）。端点凭证通常绑定独立账号，不会挤掉控制台会话；
   回收后仍超限（并发抢位、上限为 0）才返回 `-32000` / 507。
+
+**删除智能体 / 工作流会连同它的会话一起删掉**（`sessions.DeleteByOwner`，两个删除入口都会调）：
+行、`session_records`、工作区目录、用量计数一并清理。否则这些会话既仍占着 `max_user_sessions`，
+控制台又列不出来（会话面板按智能体 / 工作流展示），
+已经到上限的用户会彻底没有可删的东西、被永久挡住。
 
 ---
 

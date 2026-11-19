@@ -138,6 +138,24 @@ resource governance, and a future dimension only touches that table.
 
 Implementation: `nexus/shared/quota/quota.go`, `nexus/shared/agentconfig/agentconfig.go`.
 
+### A session is a working venue, not an asset
+
+A session carries two limits, and both are enforced at write time instead of by a background reaper:
+
+- **Workspace bytes** — the counter is read first (O(1)); over the limit the workspace is scanned and deleted oldest-first
+  until this write fits. `skills/` and anything modified in the last five minutes are spared (the first is part of the agent
+  definition, the second is very likely what the agent is writing right now), and one request deletes at most 50 files.
+  Still no room → 507 `quota.session_storage_exceeded`, so the human cleans up rather than the platform guessing at what is
+  disposable.
+- **Sessions per user** — the console refuses with 507 `quota.user_sessions_exceeded` and leaves the choice to the human;
+  RPC / MCP sessions are recycled oldest-first instead, because their callers bring their own UUIDs and have no delete API,
+  so a plain refusal would lock an integration out forever.
+
+Accounting is `Admit` → write → `Commit`: a failed write charges nothing, so the counter never inflates. A failed scan or a
+failed counter read **fails open** — a broken counter must not cost a user their write.
+
+Implementation: `nexus/shared/quota/admit.go`.
+
 ### Grants bind to the target, not the endpoint
 
 The same agent usually has both an rpc and an mcp endpoint. Granting per endpoint produces "only rpc was ticked, so the MCP

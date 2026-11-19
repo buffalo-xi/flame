@@ -99,12 +99,20 @@ Verification:
 
 - changing one service only: run `go build ./...` in that directory
 - changing `tools/`: build all three — `nexus`, `sandboxd` and `sandboxg` — otherwise downstream compile errors stay hidden
-- changing `nexus/platform/sql/`: run `powershell -File scripts/verify-sql.ps1` against a local PostgreSQL. SQL never reaches
-  the compiler, so a mangled identifier (2026-11: every `s` / `c` silently became `o`, e.g. `platform.tenant_oapabilitieo`)
-  survives `go build`, review and the locale checks, and only fails when someone runs it on a fresh environment. The script
-  creates a throwaway database, runs every script that can run on an empty schema in dependency order, and drops it again.
+- changing `nexus/platform/sql/` or `nexus/platform/provision/template/*.sql`: run
+  `powershell -File scripts/verify-sql.ps1` against a local PostgreSQL. SQL never reaches the compiler, so a mangled
+  identifier (2026-11: every `s` / `c` silently became `o`, e.g. `platform.tenant_oapabilitieo`) survives `go build`,
+  review and the locale checks, and only fails when someone runs it on a fresh environment. The script creates a throwaway
+  database, runs every script that can run on an empty schema in dependency order, then applies the tenant template
+  (`schema.sql` + `seed.sql`) into a throwaway schema with `search_path` set — the way `CreateTenant` does — and drops the
+  database again. The template is dump-ordered: tables first, every PK / FK last, never a column-level `REFERENCES`.
 - running the tests: `powershell -File scripts/run-tests.ps1` covers all four modules (separate modules, no `go.work`). The
   sandboxd E2E packages are skipped and listed when Docker is unreachable; `-RequireDocker` turns that into a failure.
+- checking tenant provisioning through the driver: `FLAME_TEST_DSN='postgres://postgres:pg@localhost:5432/postgres?sslmode=disable'
+  go test ./platform/provision -run Template` runs `template/schema.sql` + `seed.sql` the way `CreateTenant` does (one
+  multi-statement `Exec` inside a transaction with a transaction-scoped `search_path`) and asserts the seeded `main` agent.
+  `verify-sql.ps1` covers the SQL text via psql, but not the driver path; the test skips itself when the variable is unset.
 - checking the copy rules: `powershell -File scripts/check-locale.ps1` reports the Chinese left in Go sources, the
-  user-visible copy that never reaches a locale bundle (`ErrJSON` without a code, hardcoded Chinese display fields), and the
+  user-visible copy that never reaches a locale bundle (a response without a code, an `ErrCode` whose code has no bundle
+entry, hardcoded Chinese display fields), and the
   code-versus-bundle diff for `en` / `zh-CN`. It is a baseline, not a gate.

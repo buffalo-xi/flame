@@ -80,7 +80,7 @@ Consequences (all have actually happened or are reproducible):
 | D10 | An agent **cannot write its own definition domain** | definitions go through meta tools only. **The skill subdirectory was narrowed by D23**; `AGENT.md` still belongs to meta tools (**reads** were opened up by D32) |
 | D11 | exec mounts: `/workspace` ← runtime working directory (rw, cwd); `/agent` ← its own definition domain (ro) | logical paths inside the sandbox, mapped from already-computed host paths |
 | D12 | The supervisor's exec **does not mount `/tenant`** | it would bypass the D2 gate, and a black-box shell could read the whole tenant without authorization |
-| D13 | Deleting a session deletes the directory (`DeletePrefix`); `Create` creates the directory (S3 writes `.keep`) | quotas / retention are for later |
+| D13 | Deleting a session deletes the directory (`DeletePrefix`); `Create` creates the directory (S3 writes `.keep`) | quotas were added later (see the session-quota section); retention is still open |
 | D14 | Old data is **not migrated** | the only existing artifact was `workspace/poet/sfds` (empty file), which can simply be deleted → no need to decide a `uid` |
 | D15 | Paths: only the supervisor supports a `/` prefix = resolved from the **tenant root** (three-domain namespace) | normal path semantics unchanged, backward compatible |
 | D16 | `main`, `skill-authoring`, `agent-authoring` are on the **delete/rename protection list**: cannot be deleted or renamed (other fields may change) | **orthogonally stacked** on the D2 status gate; implemented as `models.IsProtectedAgent` / `models.IsProtectedSkill` |
@@ -550,9 +550,15 @@ differ.
 - **protocol endpoints** (`sessions.CreateWithID`, when RPC / MCP bring their own new `session_id`): over the limit
   automatically reclaims the session with the oldest `updated_at` in that bucket (together with its `session_records`,
   workspace directory and usage counters), frees the slot and creates the new one, logging
-  `会话数达到上限，自动回收最旧会话 ... evicted=N`. Endpoint credentials are usually bound to a separate account, so console
+  `[QUOTA_ALERT] session count at the limit, reclaimed oldest sessions ... evicted=N`. Endpoint credentials are usually
+  bound to a separate account, so console
   sessions are not squeezed out; if it is still over the limit after reclaiming (concurrent grab, cap of 0), it returns
   `-32000` / 507.
+
+**Deleting an agent or a flow deletes its sessions** (`sessions.DeleteByOwner`, called from both delete handlers): rows,
+`session_records`, workspace directories and usage counters. Without it they would still count against `max_user_sessions`
+while the console can no longer list them (the session panel is per agent / flow), so a user sitting at the cap would be
+locked out with nothing left to delete.
 
 ---
 

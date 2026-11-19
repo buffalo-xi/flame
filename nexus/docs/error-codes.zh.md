@@ -19,6 +19,10 @@
 - `msg` 是拼好的中文，前端只能原样展示，无法翻译；
 - 拼进去的参数（`poet`）与文案粘连，前端即使用正则会拆，也没法处理单复数与语序。
 
+截至 2026-11，第一个问题已经消除：`nexus/` 里 `xhttp.ErrJSON` 调用点**归零**（函数本身也已从 `tools/xhttp` 删除），
+每个 handler 的响应都带 `error` 码（纯运维失败也带，统一是 `common.internal`）；前端中英两份文案包
+（`desktop/src/locales/{en,zh-CN}/error.json`）对后端会发出的每个码都有条目，用户能看到的错误不再回落到 `msg`。
+
 ## 目标形状
 
 `code` 保留数字语义不变（兼容前端既有判断），新增 `error` 字段承载业务编码：
@@ -52,20 +56,20 @@
 | `auth` | `auth.invalid_credentials` | 登录失败（不与「用户不存在」区分） |
 | `tenant` | `tenant.not_found`、`tenant.schema_taken` | `schema_taken` 对应 409 |
 | `endpoint` | `endpoint.not_found`、`endpoint.not_exposed` | 端点域用 expose/retract 用词 |
-| `asset` | `asset.not_found`、`asset.not_available` | `not_available` = 存在但未对本租户开放 |
+| `asset` | `asset.not_found`、`asset.not_available`、`asset.storage_unavailable`、`asset.build_conflict`（`params.build`、`data.existing`） | `not_available` = 存在但未对本租户开放 |
 | `flow` | `flow.not_released`、`flow.deprecated` | 与 `models.StatusDeprecated`「废弃」同词，界面也叫废弃 |
 | `agent` | `agent.call_depth_exceeded`、`agent.not_found` | |
 | `skill` | `skill.not_found` | |
 | `tool` | `tool.not_found`、`tool.contract_readonly` | 自定义工具（`customtools`）；`contract_readonly` 覆盖 TOOL.json 的建 / 改 / 删 / 上传 |
 | `version` | `version.not_found` | 版本域，与 release / rollback / apply 同域 |
 | `llm` | `llm.model_not_found`、`llm.provider_not_found` | |
-| `user` | `user.not_found` | 平台用户 / 租户用户 |
+| `user` | `user.not_found`、`user.invalid_role`、`user.invalid_status`、`user.password_too_long` | 平台用户 / 租户用户 |
 | `session` | `session.not_found` | 会话本身；令牌失效是 `auth.session_expired` |
 | `run` | `run.not_found` | 运行台账的记录 |
-| `mcp` / `rpc` | `mcp.connection_not_found`、`rpc.connection_not_found` | 连接域，两个协议各用各的 |
-| `binding` | `binding.not_found` | 端点 / 工具的授权绑定 |
-| `toolgrant` | `toolgrant.ref_not_found`、`toolgrant.item_not_found` | ref / item 下没有任何可用工具 |
-| `plugin` | `plugin.not_found`、`plugin.not_enabled_for_tenant` | 插件本体在磁盘上被发现，不是租户实体 |
+| `mcp` / `rpc` | `mcp.connection_not_found`、`rpc.connection_not_found`、`mcp.auth_type_required` / `rpc.auth_type_required`、`mcp.invalid_auth_type` / `rpc.invalid_auth_type` | 连接域，两个协议各用各的；`auth_type` 两个来自服务端配置接口 |
+| `binding` | `binding.not_found`、`binding.invalid_auth_type`、`binding.external_subject_required`、`binding.invalid_target_type`、`binding.target_id_required` | 端点 / 工具的授权绑定 |
+| `toolgrant` | `toolgrant.ref_not_found`、`toolgrant.item_not_found`、`toolgrant.invalid_ref`、`toolgrant.invalid_item`、`toolgrant.invalid_grant_kind`、`toolgrant.invalid_group_name`、`toolgrant.ref_required`、`toolgrant.name_required`、`toolgrant.group_in_use`（`params.count`） | ref / item 下没有任何可用工具；`invalid_*` 表示 ref 自身格式非法 |
+| `plugin` | `plugin.not_found`、`plugin.not_enabled_for_tenant`、`plugin.invalid_selection` | 插件本体在磁盘上被发现，不是租户实体 |
 | `globalvar` | `globalvar.not_found`、`globalvar.in_use` | `in_use` = 引用面扫不出来；`referenced` = 扫出来了且确实有引用（带 `params.count`） |
 | `peer` | `peer.not_found`、`peer.unreachable` | 对端市场（`platform/handler/peers.go`）；`unreachable` = 连不上或令牌不对 |
 | `capability` | `capability.dependency_missing` | 能力开闭的依赖准入（`params.deps` 是「 / 」连接的候选清单） |
@@ -79,6 +83,16 @@
 「可操作性」类编码（以 agent 为例，其它域同理）：`agent.deprecated`（废弃后不可改 / 删 / 发布 /
 载入 / 切版本）、`agent.invalid_name`、`agent.invalid_status`、`agent.file_too_large`（`params.limit_mb`）、
 `agent.skills_dir_readonly`、`agent.last_version_undeletable`（`params.version`）、`agent.rename_failed`。
+工作区文件接口每类被拒操作一个编码，调用方不必读 `msg`：`agent.path_required`、`agent.invalid_path`
+（`tools.SafePath` / `checkEntryPath` 的任一规则）、`agent.invalid_rename`、`agent.file_exists`（`params.path`）、
+`agent.file_required`、`agent.invalid_file_name`、`agent.delete_failed`、`agent.upload_failed`、
+`agent.upload_save_failed`、`agent.session_no_owner`、`agent.invalid_doc_refs`（`.md` 里引用了密钥型全局变量）。
+技能文件接口在 `skill.*` 下有一组同名后缀：`skill.path_required`、`skill.invalid_path`、`skill.file_too_large`、
+`skill.file_exists`、`skill.entry_undeletable`、`skill.delete_failed`、`skill.upload_failed`、
+`skill.upload_save_failed`、`skill.invalid_doc_refs`，技能 CRUD 另加 `skill.protected`、`skill.name_taken`、
+`skill.owner_agent_not_modifiable`、`skill.private_no_visibility`。
+自定义工具的文件接口在 `tool.*` 下用同一组后缀：`tool.path_required`、`tool.invalid_path`、`tool.file_too_large`、
+`tool.file_required`、`tool.invalid_file_name`、`tool.delete_failed`、`tool.upload_failed`、`tool.upload_save_failed`。
 纯运维失败（`xx 失败: <err>`）不进新编码，统一 `common.internal`，原始错误留在 `msg` 里给日志和 curl。
 
 禁止：
@@ -106,7 +120,8 @@
    参数非法与内部故障分别用 `common.invalid_params` / `common.internal`；
    租户：`tenant.not_found`（`platform/handler` 下 9 处，`params.name` 带 schema）；
    配额：`quota.session_storage_exceeded` / `quota.user_sessions_exceeded`，
-   507 统一从 `respondQuotaErr` 发出，用 `xhttp.ErrQuotaCode`（配额按 `metric` 分编码）；
+   507 统一从 `respondQuotaErr` 发出，用 `xhttp.ErrQuotaCode`（配额按 `metric` 分编码；
+  `data` 带 `scope` / `metric` / `used` / `limit`，另有 `evicted` —— 预检已经删掉的文件，界面据此说明「什么消失了」）；
    flow 运行入口（RPC 服务端）：`flow.not_released`、`flow.deprecated`，
    走 `writeRPCErrorCode` 落在 `error.data.error`。MCP 服务端按本文末节不改造；
    flow 执行层（executors 的 `rpc_target`）与被调方内部错误仍只有文案（没有编码通道）；
@@ -125,6 +140,8 @@
    `user.cannot_modify_self` / `user.last_admin_undeletable` / `user.password_*`（必填 / 过短 /
    未变 / 不正确 / 服务用户不可设），配额用 `quota.invalid_value` / `quota.self_lockout` /
    `quota.exceeds_tenant_limit` / `quota.exceeds_system_limit`（`params.field` 带字段名）；
+   新建撞到租户数量上限时用 `quota.agent_limit_reached` / `quota.skill_limit_reached` / `quota.flow_limit_reached`
+   （`params.used` / `params.limit`）—— 以前这里报的是 `common.internal`，等于告诉管理员"你自己的配额是服务器故障"；
    `admin/customtools`(54) 已铺：`tool.invalid_name` / `tool.name_taken` / `tool.not_found` /
    `tool.invalid_contract` / `tool.deprecated` / `tool.contract_readonly`（TOOL.json 四个写口同码）/
    `tool.entry_exists` / `tool.entry_readonly` / `tool.invalid_path` / `tool.file_too_large` /

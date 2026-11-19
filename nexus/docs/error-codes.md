@@ -22,6 +22,11 @@ Problems:
 - the parameter baked into it (`poet`) is fused with the copy, so even a frontend that splits it with a regex cannot handle
   plurals or word order.
 
+As of 2026-11 the first problem is gone: `nexus/` has **zero** `xhttp.ErrJSON` call sites left (the helper itself was
+removed from `tools/xhttp`), so every handler answer carries an `error` code — operational failures included, as
+`common.internal`. Both desktop bundles (`desktop/src/locales/{en,zh-CN}/error.json`) have an entry for every code the
+backend emits, so no user-visible error falls back to `msg` any more.
+
 ## Target shape
 
 `code` keeps its numeric meaning unchanged (so existing frontend checks keep working), and a new `error` field carries the
@@ -57,20 +62,20 @@ Constraints:
 | `auth` | `auth.invalid_credentials` | login failure (not distinguished from "user does not exist") |
 | `tenant` | `tenant.not_found`, `tenant.schema_taken` | `schema_taken` maps to 409 |
 | `endpoint` | `endpoint.not_found`, `endpoint.not_exposed` | the endpoint domain uses expose / retract |
-| `asset` | `asset.not_found`, `asset.not_available` | `not_available` = exists but is not listed to this tenant |
+| `asset` | `asset.not_found`, `asset.not_available`, `asset.storage_unavailable`, `asset.build_conflict` (`params.build`, `data.existing`) | `not_available` = exists but is not listed to this tenant |
 | `flow` | `flow.not_released`, `flow.deprecated` | same word as `models.StatusDeprecated`; the UI says "deprecated" too |
 | `agent` | `agent.call_depth_exceeded`, `agent.not_found` | |
 | `skill` | `skill.not_found` | |
 | `tool` | `tool.not_found`, `tool.contract_readonly` | custom tools (`customtools`); `contract_readonly` covers create / update / delete / upload of TOOL.json |
 | `version` | `version.not_found` | the version domain, same domain as release / rollback / apply |
 | `llm` | `llm.model_not_found`, `llm.provider_not_found` | |
-| `user` | `user.not_found` | platform users / tenant users |
+| `user` | `user.not_found`, `user.invalid_role`, `user.invalid_status`, `user.password_too_long` | platform users / tenant users |
 | `session` | `session.not_found` | the session itself; token expiry is `auth.session_expired` |
 | `run` | `run.not_found` | a runtime ledger record |
-| `mcp` / `rpc` | `mcp.connection_not_found`, `rpc.connection_not_found` | the connection domain, one per protocol |
-| `binding` | `binding.not_found` | the grant binding of an endpoint / tool |
-| `toolgrant` | `toolgrant.ref_not_found`, `toolgrant.item_not_found` | no usable tool under the ref / item |
-| `plugin` | `plugin.not_found`, `plugin.not_enabled_for_tenant` | a plugin is discovered on disk; it is not a tenant entity |
+| `mcp` / `rpc` | `mcp.connection_not_found`, `rpc.connection_not_found`, `mcp.auth_type_required` / `rpc.auth_type_required`, `mcp.invalid_auth_type` / `rpc.invalid_auth_type` | the connection domain, one per protocol; the `auth_type` codes come from the server-config endpoints |
+| `binding` | `binding.not_found`, `binding.invalid_auth_type`, `binding.external_subject_required`, `binding.invalid_target_type`, `binding.target_id_required` | the grant binding of an endpoint / tool |
+| `toolgrant` | `toolgrant.ref_not_found`, `toolgrant.item_not_found`, `toolgrant.invalid_ref`, `toolgrant.invalid_item`, `toolgrant.invalid_grant_kind`, `toolgrant.invalid_group_name`, `toolgrant.ref_required`, `toolgrant.name_required`, `toolgrant.group_in_use` (`params.count`) | no usable tool under the ref / item; the `invalid_*` codes mean the ref itself is malformed |
+| `plugin` | `plugin.not_found`, `plugin.not_enabled_for_tenant`, `plugin.invalid_selection` | a plugin is discovered on disk; it is not a tenant entity |
 | `globalvar` | `globalvar.not_found`, `globalvar.in_use` | `in_use` = the reference surface could not be scanned; `referenced` = it was scanned and references do exist (with `params.count`) |
 | `peer` | `peer.not_found`, `peer.unreachable` | peer market (`platform/handler/peers.go`); `unreachable` = cannot connect or the token is wrong |
 | `capability` | `capability.dependency_missing` | dependency admission for capability toggles (`params.deps` is the candidate list joined with " / ") |
@@ -85,6 +90,17 @@ File cases uniformly use `<domain>.file_not_found` (`agent.file_not_found` / `sk
 Actionable codes (agents shown, other domains analogous): `agent.deprecated` (once deprecated: no update / delete / release /
 apply / switch), `agent.invalid_name`, `agent.invalid_status`, `agent.file_too_large` (`params.limit_mb`),
 `agent.skills_dir_readonly`, `agent.last_version_undeletable` (`params.version`), `agent.rename_failed`.
+The workspace file API adds one code per rejected operation, so the caller does not have to read `msg`: `agent.path_required`,
+`agent.invalid_path` (any rule of `tools.SafePath` / `checkEntryPath`), `agent.invalid_rename`, `agent.file_exists`
+(`params.path`), `agent.file_required`, `agent.invalid_file_name`, `agent.delete_failed`, `agent.upload_failed`,
+`agent.upload_save_failed`, `agent.session_no_owner`, `agent.invalid_doc_refs` (a secret global variable referenced in a
+`.md` file). The skill file API mirrors it under `skill.*` with the same suffixes (`skill.path_required`,
+`skill.invalid_path`, `skill.file_too_large`, `skill.file_exists`, `skill.entry_undeletable`, `skill.delete_failed`,
+`skill.upload_failed`, `skill.upload_save_failed`, `skill.invalid_doc_refs`, plus `skill.protected`,
+`skill.name_taken`, `skill.owner_agent_not_modifiable` and `skill.private_no_visibility` from the skill CRUD paths). The
+custom tool file API uses the same suffixes under `tool.*` (`tool.path_required`, `tool.invalid_path`,
+`tool.file_too_large`, `tool.file_required`, `tool.invalid_file_name`, `tool.delete_failed`, `tool.upload_failed`,
+`tool.upload_save_failed`).
 Pure operational failures (`<op> failed: <err>`) get no new code; they all use `common.internal`, with the original error left
 in `msg` for logs and curl.
 
@@ -115,7 +131,8 @@ Three steps, which can be rolled out in batches; every step ships independently:
    `common.internal` for invalid arguments and internal failures respectively;
    tenant: `tenant.not_found` (9 places under `platform/handler`, `params.name` carries the schema);
    quota: `quota.session_storage_exceeded` / `quota.user_sessions_exceeded`, with 507 always emitted from `respondQuotaErr`
-   via `xhttp.ErrQuotaCode` (quota codes are split by `metric`);
+   via `xhttp.ErrQuotaCode` (quota codes are split by `metric`; `data` carries `scope` / `metric` / `used` / `limit`, plus
+   `evicted` - the files the pre-check already deleted, so the UI can say what disappeared);
    the flow run entry points (RPC server): `flow.not_released`, `flow.deprecated` through `writeRPCErrorCode`, landing in
    `error.data.error`. The MCP server is not converted, per the last section;
    the flow execution layer (executors' `rpc_target`) and callee-internal errors still carry copy only (no code channel);
@@ -134,7 +151,10 @@ Three steps, which can be rolled out in batches; every step ships independently:
    `admin/users` (32) is covered: `user.invalid_name` / `user.name_taken` / `user.primary_readonly` /
    `user.cannot_modify_self` / `user.last_admin_undeletable` / `user.password_*` (required / too short / unchanged /
    incorrect / cannot be set on a service user), with `quota.invalid_value` / `quota.self_lockout` /
-   `quota.exceeds_tenant_limit` / `quota.exceeds_system_limit` for quotas (`params.field` carries the field name);
+   `quota.exceeds_tenant_limit` / `quota.exceeds_system_limit` for quotas (`params.field` carries the field name) and
+   `quota.agent_limit_reached` / `quota.skill_limit_reached` / `quota.flow_limit_reached` when a create hits the per-tenant
+   count cap (`params.used` / `params.limit`) - these used to be reported as `common.internal`, which told an admin their
+   own quota was a server fault;
    `admin/customtools` (54) is covered: `tool.invalid_name` / `tool.name_taken` / `tool.not_found` / `tool.invalid_contract` /
    `tool.deprecated` / `tool.contract_readonly` (the same code for all four TOOL.json write entry points) /
    `tool.entry_exists` / `tool.entry_readonly` / `tool.invalid_path` / `tool.file_too_large` / `tool.contract_write_failed` /

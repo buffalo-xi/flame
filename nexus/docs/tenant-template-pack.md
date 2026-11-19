@@ -126,6 +126,12 @@ foreach ($line in $lines) {
 > **UTF-8 throughout is mandatory**. PowerShell's `Get-Content` decodes with the system ANSI code page by default, so
 > `COMMENT ON … IS '<Chinese>'` is read as garbage and written back that way (`-f` plus `ReadAllLines(..., UTF8)` avoids it).
 
+> **Keep the dump's statement order**. `pg_dump --schema-only` emits `CREATE TABLE` for everything first and only then
+> `ALTER TABLE … ADD CONSTRAINT` for the primary / unique / foreign keys. A column-level `REFERENCES` therefore breaks:
+> PostgreSQL wants the target's `PRIMARY KEY` to exist already, raises 42830 and the whole script aborts, so
+> `CreateTenant` fails on a fresh database (2026-11: the four `*_versions` tables had been hand-written that way).
+> If you ever move a constraint up, move it into the FK block at the end, not into the column list.
+
 The seeded files (`files/`) come from t0's definition-domain directories on the development machine and are synced only when the
 template changes:
 
