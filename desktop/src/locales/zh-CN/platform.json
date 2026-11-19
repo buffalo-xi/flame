@@ -464,6 +464,7 @@
       "tabPolicy": "上架策略",
       "tabAccess": "对外接入",
       "originAll": "全部来源",
+      "originLocal": "本机上架",
       "originOption": "{label}（{count}）",
       "searchPlaceholder": "搜索名称 / 说明，回车搜索",
       "importPackage": "导入资产包",

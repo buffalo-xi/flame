@@ -9,7 +9,7 @@ export const authHeaders = (json = false) => ({
 
 /**
  * 检查后端响应是否业务成功。
- * 后端 xhttp.ErrJSON 虽然 HTTP 状态码 200，但 body.code 为 400 —— 只看 response.ok 会漏判。
+ * 后端业务错误的 HTTP 状态码仍是 200，但 body.code 为 400（配额 507）—— 只看 response.ok 会漏判。
  *
  * 错误文案统一走 formatError：后端带了 error 编码就按当前语言翻译，没带就回退 msg。
  * 这里是租户侧业务错误的收口点之一，改这一处即可覆盖全部调用方，

@@ -808,7 +808,7 @@ const checkDefaultLLM = async () => {
   }
 
   // 后端有缺省模型 → code=200 直接返回；
-  // 没有时是 ErrJSON("Default LLM model not found")，只认这一种情况
+  // 没有时是业务错误 llm.model_not_found（老后端只有 msg），只认这一种情况
   if (body?.code === 200) {
     console.info(t('llmCheck.hasDefault'), body?.data?.name)
     return

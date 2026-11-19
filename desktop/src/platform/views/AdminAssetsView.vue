@@ -57,7 +57,7 @@
           <el-option
             v-for="o in origins"
             :key="o.server"
-            :label="t('platform.assets.originOption', { label: o.label, count: o.count })"
+            :label="t('platform.assets.originOption', { label: o.server || t('platform.assets.originLocal'), count: o.count })"
             :value="o.server || 'local'"
           />
         </el-select>

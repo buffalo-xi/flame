@@ -5,6 +5,8 @@
       "not_exposed": "服务端点未对外开放：{name}"
     },
     "asset": {
+      "build_conflict": "该资产（build {build}）此前已导入过，请确认覆盖或换一个 build。",
+      "storage_unavailable": "资产存储未就绪，请检查存储配置。",
       "not_found": "资产不存在",
       "not_available": "该资产未对你所在的租户开放",
       "invalid_kind": "未知的资产类型：{kind}",
@@ -27,6 +29,12 @@
       "overwrite_unsupported": "{kind}暂不支持覆盖导入：同名时会给出建议名，改名后重试即可"
     },
     "tool": {
+      "delete_failed": "删除失败：条目仍然存在，请重试或检查存储权限。",
+      "file_required": "请选择要上传的文件。",
+      "invalid_file_name": "文件名不合法。",
+      "path_required": "请先选择路径。",
+      "upload_failed": "读取上传文件失败，请重试。",
+      "upload_save_failed": "保存上传文件失败，请重试。",
       "not_found": "自定义工具不存在：{name}",
       "file_not_found": "文件不存在",
       "file_exists": "文件或目录已存在：{path}",
@@ -37,7 +45,8 @@
       "contract_readonly": "TOOL.json 是工具契约，只能通过表单修改，不能直接创建 / 编辑 / 删除 / 覆盖",
       "entry_exists": "入口文件 {entry} 已存在；要改入口请修改表单里的 entry",
       "entry_readonly": "入口文件 {entry} 不能删除：删了工具还在，但一跑就报「入口不存在」",
-      "invalid_path": "{path} 是目录，不能当文件写入",
+      "invalid_path": "路径不合法。",
+      "path_is_dir": "{path} 是目录，不能当文件写入",
       "file_too_large": "文件过大（上限 {limit_mb} MB）",
       "contract_write_failed": "设置已保存，但写入契约文件失败（已回退为表定义），请重试保存",
       "entry_write_failed": "设置已保存，但写入实现文件失败，请重试保存",
@@ -45,6 +54,18 @@
       "last_version_undeletable": "v{version} 是唯一的版本，不能删除；如需清理历史请先发布一个新版本"
     },
     "agent": {
+      "delete_failed": "删除失败：条目仍然存在，请重试或检查存储权限。",
+      "file_required": "请选择要上传的文件。",
+      "invalid_doc_refs": "文档里不能引用密钥型全局变量，请改用普通变量。",
+      "invalid_file_name": "文件名不合法。",
+      "invalid_path": "路径不合法。",
+      "invalid_rename": "不允许这样重命名（同名、移进自己的子目录，或新名称不合法）。",
+      "message_required": "请输入消息或先添加附件。",
+      "path_required": "请先选择路径。",
+      "session_no_owner": "该会话没有归属用户，因此没有工作目录。",
+      "storage_unavailable": "工作区存储未就绪，请检查存储配置。",
+      "upload_failed": "读取上传文件失败，请重试。",
+      "upload_save_failed": "保存上传文件失败，请重试。",
       "not_found": "智能体不存在",
       "file_not_found": "文件不存在",
       "file_exists": "文件或目录已存在：{path}",
@@ -59,6 +80,21 @@
       "relations_failed": "智能体已创建，但保存调用授权失败。请检查该智能体后重试。"
     },
     "skill": {
+      "delete_failed": "删除失败：条目仍然存在，请重试或检查存储权限。",
+      "entry_undeletable": "{file} 是技能入口文件，不能删除。",
+      "file_required": "请选择要上传的文件。",
+      "file_too_large": "文件过大（上限 {limit_mb} MB）。",
+      "invalid_doc_refs": "文档里不能引用密钥型全局变量，请改用普通变量。",
+      "invalid_file_name": "文件名不合法。",
+      "invalid_path": "路径不合法。",
+      "name_taken": "本租户已有同名技能。",
+      "owner_agent_not_modifiable": "所属智能体不存在或已废弃，其私有技能不可变更。",
+      "path_required": "请先选择路径。",
+      "private_no_visibility": "私有技能的可见性跟随所属智能体，不能单独配置。",
+      "protected": "{name} 是内置受保护技能，不允许改名或删除。",
+      "storage_unavailable": "技能存储未就绪，请检查存储配置。",
+      "upload_failed": "读取上传文件失败，请重试。",
+      "upload_save_failed": "保存上传文件失败，请重试。",
       "not_found": "技能不存在",
       "file_not_found": "文件不存在",
       "file_exists": "文件或目录已存在：{path}",
@@ -67,7 +103,7 @@
       "invalid_status": "状态只能是 1（正常）或 3（废弃）",
       "last_version_undeletable": "v{version} 是唯一的版本，不能删除；如需清理历史请先发布一个新版本",
       "rename_failed": "技能已改名，但版本目录迁移失败，请重试或手工搬运",
-      "private_no_version": "私有技能没有独立版本号：它的版本就是{owner}的版本，请直接对{owner}执行该操作"
+      "private_no_version": "私有技能没有独立版本号：它的版本就是智能体 {owner} 的版本，请直接对智能体 {owner} 执行该操作"
     },
     "version": {
       "not_found": "版本不存在",
@@ -84,6 +120,7 @@
       "gateway_model_taken": "网关模型名 {name} 已被其它启用中的模型使用，会导致路由歧义，请换一个"
     },
     "user": {
+      "password_too_long": "密码过长，请缩短后重试。",
       "not_found": "用户不存在",
       "invalid_name": "登录名只允许字母、数字、下划线、横线，长度 1-64",
       "name_taken": "登录名已存在：{name}",
@@ -100,10 +137,14 @@
       "protected_account": "受保护管理员账号 {name} 不可修改（由环境初始数据预置）"
     },
     "mcp": {
+      "auth_type_required": "请在查询参数里指定 auth_type（apikey / oauth）。",
+      "invalid_auth_type": "auth_type 只能是 apikey 或 oauth。",
       "connection_not_found": "MCP 连接不存在",
       "discovery_failed": "工具发现失败，未启用该连接"
     },
     "rpc": {
+      "auth_type_required": "请在查询参数里指定 auth_type（apikey / oauth）。",
+      "invalid_auth_type": "auth_type 只能是 apikey 或 oauth。",
       "connection_not_found": "RPC 连接不存在",
       "discovery_failed": "工具发现失败，未启用该连接"
     },
@@ -118,14 +159,26 @@
       "flow_stop_needs_run_id": "工作流只能按 run_id 终止"
     },
     "binding": {
+      "external_subject_required": "OAuth 绑定必须填写 external_subject（sub）。",
+      "invalid_auth_type": "auth_type 只能是 apikey 或 oauth。",
+      "invalid_target_type": "target_type 只能是 agent 或 flow。",
+      "target_id_required": "请先选择目标智能体或工作流。",
       "not_found": "授权绑定不存在",
       "target_not_exposed": "target {target} 没有对外开放端点，无法授权"
     },
     "toolgrant": {
+      "group_in_use": "该工具组仍被 {count} 处引用，请先解除这些引用。",
+      "invalid_grant_kind": "{ref} 的授权类型不合法。",
+      "invalid_group_name": "工具组名称不合法。",
+      "invalid_item": "成员 {ref} 不合法。",
+      "invalid_ref": "ref {ref} 不合法。",
+      "name_required": "请填写工具组名称。",
+      "ref_required": "缺少 ref。",
       "ref_not_found": "该 ref 下没有可用工具",
       "item_not_found": "该项下没有可用工具"
     },
     "plugin": {
+      "invalid_selection": "所选实现 / 兜底 / 配置组合不合法。",
       "name_required": "插件名不能为空",
       "not_found": "插件 {name} 不在磁盘清单里（先放进 plugins/tools/{name}/ 再刷新）",
       "invalid_impl": "实现 {impl} 不在插件清单里",
@@ -171,6 +224,9 @@
       "session_storage_exceeded": "会话工作区空间已满，请清理不再需要的文件后重试",
       "user_sessions_exceeded": "会话数量已达上限，请删除不再使用的会话后再试",
       "exceeded": "配额不足，请清理后重试",
+      "agent_limit_reached": "智能体数量已达上限（{used}/{limit}），请先删除不再使用的智能体",
+      "skill_limit_reached": "技能数量已达上限（{used}/{limit}），请先删除不再使用的技能",
+      "flow_limit_reached": "工作流数量已达上限（{used}/{limit}），请先删除不再使用的工作流",
       "invalid_value": "{field} 只能是 -1（不限制）或非负数",
       "self_lockout": "不能把自己的配额 {field} 设为 0（会把自己锁成只读，且自己再改不回来）",
       "exceeds_tenant_limit": "{field} 不能超过租户上限（{limit}）",

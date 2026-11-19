@@ -464,6 +464,7 @@
       "tabPolicy": "Listing policy",
       "tabAccess": "Inbound access",
       "originAll": "All sources",
+      "originLocal": "Listed on this server",
       "originOption": "{label} ({count})",
       "searchPlaceholder": "Search name / description, press Enter",
       "importPackage": "Import package",

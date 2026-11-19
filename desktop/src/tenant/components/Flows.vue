@@ -545,7 +545,7 @@ const applyFlowDetail = (wfData) => {
   loadVersions()
 }
 
-// 拉一次最新定义。注意后端 xhttp.ErrJSON 的错误响应也是 HTTP 200，业务码在 body。
+// 拉一次最新定义。注意后端业务错误的响应也是 HTTP 200，成否看 body.code、编码看 body.error。
 const fetchFlowDetail = async (flowId) => {
   const token = getToken()
   if (!token) return null

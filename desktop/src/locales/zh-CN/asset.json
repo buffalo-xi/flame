@@ -44,6 +44,7 @@
     "listNew": "上架资产",
     "filterAll": "全部",
     "originAll": "全部来源",
+    "originLocal": "本机上架",
     "originOption": "{label}（{count}）",
     "searchPlaceholder": "搜索名称 / 描述，回车搜索",
     "peerAll": "全部站点",

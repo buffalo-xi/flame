@@ -62,7 +62,7 @@
             <el-option
               v-for="o in origins"
               :key="o.server"
-              :label="t('assetMarket.originOption', { label: o.label, count: o.count })"
+              :label="t('assetMarket.originOption', { label: o.server || t('assetMarket.originLocal'), count: o.count })"
               :value="o.server || 'local'"
             />
           </el-select>

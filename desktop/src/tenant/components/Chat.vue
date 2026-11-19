@@ -6,6 +6,13 @@
         <div class="session-new" :class="{ disabled: !selectedAgentId }" @click="startNewChat">
           <el-icon><Plus /></el-icon>
           <span>{{ t('chat.newChat') }}</span>
+          <!-- 会话数配额：只在配置了上限时显示（-1 = 不限制），接近上限变红 -->
+          <span
+            v-if="sessionsQuotaText"
+            class="session-quota"
+            :class="{ warn: sessionsQuotaWarn }"
+            :title="t('chat.sessionsQuotaTip', { used: sessionsUsed, limit: sessionsLimit })"
+          >{{ sessionsQuotaText }}</span>
         </div>
         <el-input
           v-model="sessionSearch"
@@ -468,6 +475,13 @@ const agents = ref([])
 const selectedAgentId = ref('')
 const sessions = ref([])
 const currentSessionId = ref('')
+// 会话数配额：随列表一起返回（limit === -1 表示不限制，不显示）
+const sessionsUsed = ref(0)
+const sessionsLimit = ref(-1)
+const sessionsQuotaText = computed(() =>
+  sessionsLimit.value === -1 ? '' : `${sessionsUsed.value}/${sessionsLimit.value}`)
+const sessionsQuotaWarn = computed(() =>
+  sessionsLimit.value > 0 && sessionsUsed.value >= sessionsLimit.value)
 const messages = ref([])
 const input = ref('')
 const streaming = ref(false)
@@ -631,6 +645,11 @@ const fetchSessions = async (keyword = '') => {
       return
     }
     sessions.value = data.data.items || []
+    // 列表和配额一起返回：配额只用于展示（计数可能略滞后，拦不拦由后端 507 决定）
+    if (data.data.sessions_limit !== undefined) {
+      sessionsUsed.value = data.data.sessions_used || 0
+      sessionsLimit.value = data.data.sessions_limit ?? -1
+    }
   } catch (e) {
     console.error('load sessions failed:', e)
     ElMessage.error(t('chat.loadSessionsNetError'))
@@ -686,16 +705,20 @@ const createSession = async () => {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     })
-    if (!response.ok) return
-    const data = await response.json()
-    if (data.code === 200) {
-      currentSessionId.value = data.data.session_id
-      messages.value = []
-      clearAttachments()
-      fetchSessions()
+    // 失败必须说出来：会话数超限返回 507（error=quota.user_sessions_exceeded），
+    // 这里静默 return 会让人以为「新对话」按钮坏了。
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || data.code !== 200) {
+      reportLoadError(t('chat.createSessionFailed'), response, data)
+      return
     }
+    currentSessionId.value = data.data.session_id
+    messages.value = []
+    clearAttachments()
+    fetchSessions()
   } catch (e) {
     console.error('新建会话失败:', e)
+    ElMessage.error(t('chat.createSessionNetError'))
   }
 }
 
@@ -783,17 +806,20 @@ const deleteSession = (s) => {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       })
-      if (!response.ok) return
-      const data = await response.json()
-      if (data.code === 200) {
-        if (currentSessionId.value === s.id) {
-          currentSessionId.value = ''
-          messages.value = []
-        }
-        fetchSessions()
+      // 删会话是用户腾配额的手段，失败必须说出来：静默失败会让人以为删掉了、额度却没回来
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || data.code !== 200) {
+        reportLoadError(t('chat.deleteSessionFailed'), response, data)
+        return
       }
+      if (currentSessionId.value === s.id) {
+        currentSessionId.value = ''
+        messages.value = []
+      }
+      fetchSessions()
     } catch (e) {
       console.error('删除会话失败:', e)
+      ElMessage.error(t('chat.deleteSessionNetError'))
     }
   }).catch(() => {})
 }
@@ -1001,7 +1027,12 @@ const uploadAttachments = async (picked) => {
           body: fd
         })
         const body = await res.json().catch(() => ({}))
-        if (!res.ok || body.code !== 200) throw new Error(formatError(body) || t('chat.uploadFailed'))
+        if (!res.ok || body.code !== 200) {
+          // 507：预检可能已经删掉旧产物才判定放不下，先说删了什么，否则文件像凭空消失
+          const n = Array.isArray(body.data && body.data.evicted) ? body.data.evicted.length : 0
+          if (n) ElMessage.warning(t('chat.evicted', { n }))
+          throw new Error(formatError(body) || t('chat.uploadFailed'))
+        }
         const d = body.data || {}
         if (d.session_id && !currentSessionId.value) {
           currentSessionId.value = d.session_id
@@ -1268,6 +1299,17 @@ onMounted(async () => {
 .session-new.disabled:hover {
   background-color: transparent;
   color: #c0c4cc;
+}
+
+/* 会话数配额：本账号已用 / 上限（跨智能体计），超限变红 */
+.session-quota {
+  margin-left: auto;
+  font-size: 12px;
+  color: #909399;
+}
+
+.session-quota.warn {
+  color: #f56c6c;
 }
 
 .session-search {

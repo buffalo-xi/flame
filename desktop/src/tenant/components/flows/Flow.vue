@@ -1520,7 +1520,7 @@ const saveDiagram = async () => {
         max_session_records: flowLimits.max_session_records ?? -1
       })
     })
-    // 注意：后端 xhttp.ErrJSON 错误响应也返回 HTTP 200，业务错误码在 body 的 code 字段。
+    // 注意：后端业务错误的响应也是 HTTP 200——成败看 body.code，具体编码看 body.error。
     // 因此不能只看 resp.ok，必须解析 body 检查 code === 200。
     const data = await resp.json()
     if (data.code !== 200) {

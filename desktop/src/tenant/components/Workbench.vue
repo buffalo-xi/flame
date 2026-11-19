@@ -478,6 +478,13 @@ const loadWsUsage = async () => {
   } catch { /* 用量条是辅助信息，不因它弹错 */ }
 }
 
+// 预检已经删掉的旧文件：无论最终写入成功还是 507，都要说出来 ——
+// 否则文件像是凭空消失的，用户下一步会去找它们
+const warnEvicted = (data) => {
+  const n = Array.isArray(data && data.evicted) ? data.evicted.length : 0
+  if (n) ElMessage.warning(t('workbench.evicted', { n }))
+}
+
 // 507：空间满时给一条可操作的引导，而不是只丢一句红字
 const showQuotaHint = async (msg) => {
   try {
@@ -922,6 +929,7 @@ const wsCreateEntry = async (rawName, isDir, content = '') => {
       ? t('workbench.exists', { path: full })
       : (formatError(data) || t('workbench.createFailed')))
     err.code = data.code // 507 = 会话空间满，调用方据此给「去清理」引导
+    err.data = data.data // 507 时带 evicted：预检已经删掉的文件，必须一并告诉用户
     throw err
   }
   return full
@@ -979,8 +987,10 @@ const wsCreateFile = async () => {
     wsNewOpen.value = false
     await afterWsCreated(full, false)
   } catch (err) {
-    if (err.code === 507) await showQuotaHint(err.message)
-    else ElMessage.error(err.message || t('workbench.createFailed'))
+    if (err.code === 507) {
+      warnEvicted(err.data)
+      await showQuotaHint(err.message)
+    } else ElMessage.error(err.message || t('workbench.createFailed'))
   } finally {
     wsNewSaving.value = false
   }
@@ -1022,6 +1032,7 @@ const uploadToWsDir = async (files) => {
   wsUploading.value = true
   let ok = 0
   let quotaMsg = ''
+  let quotaData = null
   const failed = []
   try {
     for (const f of files) {
@@ -1037,13 +1048,13 @@ const uploadToWsDir = async (files) => {
         })
         const data = await res.json().catch(() => ({}))
         if (data.code !== 200) {
-          if (data.code === 507) quotaMsg = formatError(data) || t('workbench.quotaFull')
+          if (data.code === 507) {
+            quotaMsg = formatError(data) || t('workbench.quotaFull')
+            quotaData = data.data
+          }
           throw new Error(formatError(data) || t('workbench.uploadFailed'))
         }
-        if (Array.isArray(data.data && data.data.evicted) && data.data.evicted.length) {
-          // 后端为腾空间删了旧产物：必须告诉用户，别让人以为文件凭空消失
-          ElMessage.warning(t('workbench.evicted', { n: data.data.evicted.length }))
-        }
+        warnEvicted(data.data)
         ok++
       } catch {
         failed.push(f.name)
@@ -1060,7 +1071,10 @@ const uploadToWsDir = async (files) => {
     ElMessage.success(t('workbench.uploaded', { n: ok, where }))
   }
   await wsList()
-  if (quotaMsg) await showQuotaHint(quotaMsg)
+  if (quotaMsg) {
+    warnEvicted(quotaData) // 已删除但仍放不下：先说删了什么，再说「去清理」
+    await showQuotaHint(quotaMsg)
+  }
 }
 
 // 拖拽上传：dragleave 在子元素之间移动时会连续触发，必须用计数器防抖，

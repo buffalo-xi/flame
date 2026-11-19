@@ -360,7 +360,7 @@ const resolveIcon = (icon) => {
 }
 
 // 工具：检查后端响应是否业务成功
-// 后端 xhttp.ErrJSON 虽然 HTTP 状态码为 200，但 body.code 为 400
+// 后端业务错误虽然 HTTP 状态码为 200，但 body.code 为 400
 const checkBizOk = async (response) => {
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`)
