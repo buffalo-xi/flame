@@ -72,8 +72,7 @@ English is the source: write the English version first, then align the Chinese m
 update the other in the same commit — a half-updated pair is worse than a single language.
 
 Documents not yet migrated (`asset-sharing.md`, `sandbox-design.md`, `tenant-template-pack.md`,
-`workspace-layout-and-supervisor-power.md`, `i18n-plan.md`) stay Chinese until they are translated; do not half-translate a
-file in place.
+`workspace-layout-and-supervisor-power.md`) stay Chinese until they are translated; do not half-translate a file in place.
 
 ## Module map
 
