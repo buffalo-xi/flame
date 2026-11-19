@@ -61,13 +61,28 @@ CREATE INDEX IF NOT EXISTS tenants_owner_idx  ON platform.tenants (owner_user_id
 CREATE INDEX IF NOT EXISTS tenants_status_idx ON platform.tenants (status);
 
 -- ---------------------------------------------------------------------------
--- 3) 配额（复用既有 platform.quota_configs，不在此建表）
+-- 3) 配额（platform.quota_configs）
 --
 --   列：tenant_id(PK) / max_agents / max_skills / max_flows
+--       + max_session_storage_bytes / max_user_sessions（会话配额，见 quota_storage.sql）
 --   语义：tenant_id = '' 为系统行；NULL = 未设置（回退系统行）；-1 = 不限制
 --   平台侧写配额的实现见 nexus/platform/repository/tenants.SetQuota（事务内先删后插，
 --   不依赖该表上唯一的约束名/形态），写完调用 shared/quota.Invalidate。
+--
+--   这张表历史上来自最初的 dump，本文件原本只写注释「复用既有表」—— 结果是**新库根本没有它**：
+--   限额还能按代码默认值工作，但管理台「保存配额」会失败（DELETE / INSERT 找不到表）。
+--   所以这里补建表。IF NOT EXISTS：老环境原样保留，quota_storage.sql 里那两个 ADD COLUMN
+--   对已经存在的列是 no-op。
 -- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS platform.quota_configs (
+    tenant_id                 text   NOT NULL,
+    max_agents                int    NULL,
+    max_skills                int    NULL,
+    max_flows                 int    NULL,
+    max_session_storage_bytes bigint NULL,
+    max_user_sessions         int    NULL,
+    CONSTRAINT quota_configs_pkey PRIMARY KEY (tenant_id)
+);
 
 -- ---------------------------------------------------------------------------
 -- 4) 首个平台管理员
@@ -83,9 +98,10 @@ CREATE INDEX IF NOT EXISTS tenants_status_idx ON platform.tenants (status);
 -- ============================================================================
 -- 执行后核对
 -- ============================================================================
--- a) 两张表与约束是否就位
+-- a) 三张表与约束是否就位
 --   \d platform.users
 --   \d platform.tenants
+--   \d platform.quota_configs
 --
 -- b) 当前平台身份分布
 --   SELECT role, status, count(*) FROM platform.users GROUP BY role, status;

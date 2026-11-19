@@ -1,24 +1,26 @@
-// Package provision 开通租户：一个事务内建好「新租户能登录控制台」所需的一切。
+// Package provision creates a tenant: everything needed for "the new tenant can sign in to the console" inside one transaction.
 //
-// 编排（顺序即设计）：
-//  1. 先做全部校验（schema 名 / 是否被占用 / 管理员账号与密码规则）—— 任何一步不通过都不碰库
-//  2. 单个事务内完成数据库侧全部动作：
+// Orchestration (the order is the design):
+//  1. run every check first (schema name / whether it is taken / admin account and password rules) - nothing touches the
+//     database unless all of them pass
+//  2. do all database-side actions inside a single transaction:
 //     CREATE SCHEMA "<schema>"
-//     SELECT set_config('search_path', $1, true)   —— 事务级、参数化（不拼字符串）
-//     执行模板包 template/schema.sql              —— 全部表结构
-//     执行模板包 template/seed.sql                —— main + 受保护技能 + 授权绑定
-//     INSERT INTO users ...                     —— 该租户首个 manage 用户
-//     物化模板包 template/files/                   —— 写 tenants/<schema>/ 下的定义域文件
-//     INSERT INTO platform.tenants ...             —— 注册表行（平台 schema，显式限定）
-//     PostgreSQL 支持事务性 DDL，任一步失败整体回滚，不会留下半成品 schema。
-//  3. 提交后失效缓存（shared/tenants 白名单 + quota）——
-//     否则新租户最多要等一个 TTL 周期才能登录。
+//     SELECT set_config('search_path', $1, true)   - transaction-scoped, parameterised (no string concatenation)
+//     run the template package's template/schema.sql   - every table definition
+//     run the template package's template/seed.sql     - main + protected skills + grant bindings
+//     INSERT INTO users ...                            - the tenant's first manage user
+//     materialise the template package's template/files/ - write the definition-domain files under tenants/<schema>/
+//     INSERT INTO platform.tenants ...                 - the registry row (platform schema, explicitly qualified)
+//     PostgreSQL supports transactional DDL, so any failure rolls everything back and no half-built schema is left behind.
+//  3. invalidate caches after commit (the shared/tenants allow-list + quota) -
+//     otherwise the new tenant waits a whole TTL before it can sign in.
 //
-// 文件放在提交之前写：失败就回滚事务并 DeletePrefix 回收已写目录，
-// 保证「要么是一个完整租户，要么什么都没留下」。
+// Files are written before the commit: on failure the transaction is rolled back and DeletePrefix reclaims what was written, so
+// it is "either a complete tenant or nothing left behind".
 //
-// schema 可以留空：NextSchema 自动探索（t0、t1、t2… 取第一个未被占用的）；
-// 落库时被抢占则返回 ErrSchemaTaken，由接口层回 409，让操作者确认新候选后重试。
+// The schema may be empty: NextSchema finds one automatically (t0, t1, t2... the first unused one);
+// if it is taken by the time of the write, ErrSchemaTaken is returned and the API layer answers 409 so the operator confirms a
+// new candidate and retries.
 package provision
 
 import (
@@ -49,32 +51,34 @@ import (
 	"github.com/lib/pq"
 )
 
-// templateAssets 租户创建资源方案的模板包（整体嵌入，运行时不再依赖任何具体租户）：
+// templateAssets is the template package for tenant creation resources (embedded as a whole, so the runtime depends on no
+// specific tenant):
 //
-//	template/schema.sql  全部表结构（由 t0 dump 转换而来，对象名不带 schema 前缀）
-//	template/seed.sql    预置资产的行（main + 四个受保护技能 + 授权 / 绑定，固定 uuid）
-//	template/files/      定义域文件（agents/main/AGENT.md、skills/<name>/SKILL.md）
+//	template/schema.sql  every table definition (converted from a t0 dump; object names carry no schema prefix)
+//	template/seed.sql    rows for the preinstalled assets (main + four protected skills + grants / bindings, fixed uuids)
+//	template/files/      definition-domain files (agents/main/AGENT.md, skills/<name>/SKILL.md)
 //
-// 放在本包目录下是因为 //go:embed 只能嵌入本包及子目录。
+// It lives under this package because //go:embed can only embed this package and its subdirectories.
 //
 //go:embed template
 var templateAssets embed.FS
 
-// templateFilesRoot 包内文件树的根；物化时按相对路径写到 tenants/<schema>/ 下。
+// templateFilesRoot is the root of the file tree inside the package; on materialisation the relative paths are written under
+// tenants/<schema>/.
 const templateFilesRoot = "template/files"
 
-// Request 开通租户入参。
+// Request is the tenant creation input.
 type Request struct {
-	Schema        string // 新租户 schema 名：^[a-z][a-z0-9_]{1,31}$
-	DisplayName   string // 展示名；空则用 schema 名
-	Plan          string // 套餐标记，可空
-	OwnerUserID   string // 负责人（平台「用户」id），可空 = 管理员代管
-	AdminName     string // 该租户首个 manage 用户（登录名）
-	AdminPassword string // 至少 account.MinPasswordLength 位
-	CreatedBy     string // 操作者（平台管理员 id），仅记录
+	Schema        string // new tenant schema name: ^[a-z][a-z0-9_]{1,31}$
+	DisplayName   string // display name; the schema name when empty
+	Plan          string // plan tag, may be empty
+	OwnerUserID   string // owner (a platform "user" id); empty = admin-managed
+	AdminName     string // the tenant's first manage user (login name)
+	AdminPassword string // at least account.MinPasswordLength characters
+	CreatedBy     string // operator (platform administrator id), recorded only
 }
 
-// Result 开通结果（供接口回显，尤其是"首个管理员账号"要告诉调用方）。
+// Result is the creation result (echoed by the API, in particular "the first admin account" which the caller must be told).
 type Result struct {
 	Schema      string
 	DisplayName string
@@ -83,11 +87,11 @@ type Result struct {
 }
 
 var (
-	// schemaPattern 与 platform.tenants 的 CHECK 约束一致（DB 侧还有兜底）
+	// schemaPattern matches the CHECK constraint on platform.tenants (the database is a second line of defence)
 	schemaPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,31}$`)
-	// adminPattern 与平台用户登录名规则一致（handler/users.go 的 namePattern）
+	// adminPattern matches the platform user login-name rule (namePattern in handler/users.go)
 	adminPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	// reservedSchemas 系统保留 schema，禁止开成租户
+	// reservedSchemas are system schemas that may never be turned into a tenant
 	reservedSchemas = map[string]bool{
 		"pg_catalog":         true,
 		"information_schema": true,
@@ -96,27 +100,32 @@ var (
 	}
 )
 
-// DefaultAdminName 新租户首个管理员的登录名（管理台固定用它，不再让操作者手填）。
+// DefaultAdminName is the login name of a new tenant's first administrator (the console always uses it and no longer asks the
+// operator to type one).
 //
-// 取值来自 shared/tenants.PrimaryUserName：租户侧按同一个常量做"根账号不可修改 / 不可删除"的守卫，
-// 两边必须同源（platform 不能 import nexus/admin，反之亦然，所以常量放在 shared）。
+// The value comes from shared/tenants.PrimaryUserName: the tenant side uses the same constant for the "root account cannot be
+// modified / deleted" guard, and both sides must share the source (platform cannot import nexus/admin or vice versa, hence the
+// constant in shared).
 const DefaultAdminName = sharedtenants.PrimaryUserName
 
-// ErrSchemaTaken schema 已被占用：注册表已有该行，或库里已存在同名 schema。
-// 接口层据此回 409 + 一个新候选，让操作者确认后重试。
-var ErrSchemaTaken = errors.New("schema 已被占用")
+// ErrSchemaTaken means the schema is taken: the registry already has the row, or a schema of that name already exists in the
+// database.
+// The API layer answers 409 plus a new candidate so the operator can confirm and retry.
+var ErrSchemaTaken = errors.New("schema already taken")
 
-// schemaAutoMax 自动探索尝试上限（t0…t9999），避免异常数据下死循环。
+// schemaAutoMax bounds automatic discovery attempts (t0...t9999), preventing an endless loop on abnormal data.
 const schemaAutoMax = 10000
 
-// SchemaAvailable schema 是否可用于开租户：注册表没有它，且库里没有同名 schema。
+// SchemaAvailable reports whether a schema can be used for a tenant: the registry does not have it and the database has no
+// schema of that name.
 //
-// 两处都要查：软删的注册行可能已 DROP SCHEMA；反过来，建到一半留下的孤儿 schema
-// （或人工建的）可能没有注册行 —— 只看一处都会在 CREATE SCHEMA 撞墙。
+// Both must be checked: a soft-deleted registry row may already have had its schema dropped, while conversely an orphan schema
+// left by a half-finished creation (or created by hand) may have no registry row - checking only one would hit the wall at
+// CREATE SCHEMA.
 func SchemaAvailable(schema string) (bool, error) {
 	exists, err := tenantsrepo.Exists(schema)
 	if err != nil {
-		return false, fmt.Errorf("检查租户注册表失败: %w", err)
+		return false, fmt.Errorf("failed to check the tenant registry: %w", err)
 	}
 	if exists {
 		return false, nil
@@ -124,14 +133,14 @@ func SchemaAvailable(schema string) (bool, error) {
 	var n int
 	if err := db.DB.QueryRow(
 		`SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = $1`, schema).Scan(&n); err != nil {
-		return false, fmt.Errorf("检查数据库 schema 失败: %w", err)
+		return false, fmt.Errorf("failed to check database schemas: %w", err)
 	}
 	return n == 0, nil
 }
 
-// NextSchema 探索第一个可用租户 schema：t0、t1、t2…（从 0 起逐个 +1 试），跳过系统保留名。
+// NextSchema finds the first available tenant schema: t0, t1, t2... (counting up from 0), skipping reserved system names.
 //
-// 先一次取全量已占用名单，再在内存里逐个试，避免每个候选一次数据库往返。
+// It fetches all taken names at once and then tries candidates in memory, avoiding one database round-trip per candidate.
 func NextSchema() (string, error) {
 	taken, err := takenSchemas()
 	if err != nil {
@@ -144,17 +153,17 @@ func NextSchema() (string, error) {
 		}
 		return cand, nil
 	}
-	return "", fmt.Errorf("连续尝试 %d 个 schema 均被占用，请先清理无用租户", schemaAutoMax+1)
+	return "", fmt.Errorf("tried %d schemas in a row and all are taken; clean up unused tenants first", schemaAutoMax+1)
 }
 
-// takenSchemas 全部已占用的 schema 名 = 库里的 schema ∪ 注册表（两套事实都要算）。
+// takenSchemas is every taken schema name = the database's schemas UNION the registry (both sets of facts count).
 func takenSchemas() (map[string]bool, error) {
 	rows, err := db.DB.Query(
 		`SELECT schema_name FROM information_schema.schemata
 		 UNION
 		 SELECT schema_name FROM ` + pq.QuoteIdentifier(config.Cfg.Database.PlatformSchema) + `.tenants`)
 	if err != nil {
-		return nil, fmt.Errorf("读取已占用 schema 失败: %w", err)
+		return nil, fmt.Errorf("failed to read taken schemas: %w", err)
 	}
 	defer rows.Close()
 
@@ -169,42 +178,43 @@ func takenSchemas() (map[string]bool, error) {
 	return taken, rows.Err()
 }
 
-// isDuplicateSchema 是否是「库中已存在同名 schema」（PG 42P06 duplicate_schema）。
+// isDuplicateSchema reports whether this is "a schema of that name already exists" (PG 42P06 duplicate_schema).
 func isDuplicateSchema(err error) bool {
 	var pqErr *pq.Error
 	return errors.As(err, &pqErr) && pqErr.Code == "42P06"
 }
 
-// Provision 开通一个租户（幂等性：已注册则直接报错，不会重复创建）。
+// Provision creates a tenant (idempotency: an already registered schema errors out directly, never created twice).
 func Provision(req Request) (*Result, error) {
 	schema := strings.TrimSpace(req.Schema)
 	displayName := strings.TrimSpace(req.DisplayName)
 	adminName := strings.TrimSpace(req.AdminName)
 
-	// ---- 1) 校验（不碰库） ----
+	// ---- 1) Checks (no database access) ----
 	if !schemaPattern.MatchString(schema) {
-		return nil, fmt.Errorf("schema 名不合法：只允许小写字母开头、字母/数字/下划线，长度 2-32")
+		return nil, fmt.Errorf("invalid schema name: it must start with a lower-case letter, contain only letters/digits/underscores and be 2-32 characters")
 	}
 	if reservedSchemas[schema] {
-		return nil, fmt.Errorf("schema 名 %q 是系统保留名", schema)
+		return nil, fmt.Errorf("schema name %q is a reserved system name", schema)
 	}
 	if !adminPattern.MatchString(adminName) {
-		return nil, fmt.Errorf("管理员登录名不合法：只允许字母/数字/下划线/横线，长度 1-64")
+		return nil, fmt.Errorf("invalid administrator login name: only letters/digits/underscores/hyphens, 1-64 characters")
 	}
 	switch {
 	case len(req.AdminPassword) < account.MinPasswordLength:
-		return nil, fmt.Errorf("管理员密码至少 %d 位", account.MinPasswordLength)
+		return nil, fmt.Errorf("the administrator password must be at least %d characters", account.MinPasswordLength)
 	case len(req.AdminPassword) > account.MaxPasswordBytes:
 		return nil, account.ErrPasswordTooLong
 	}
 
-	// 占用有两种：注册表里已有 / 库里已有同名 schema（含建到一半的孤儿）
+	// "Taken" has two forms: already in the registry / a schema of that name already in the database (including half-built
+	// orphans)
 	available, err := SchemaAvailable(schema)
 	if err != nil {
 		return nil, err
 	}
 	if !available {
-		return nil, fmt.Errorf("%w：%q 已在注册表中或库中已有同名 schema（如需重建请先处理旧租户）", ErrSchemaTaken, schema)
+		return nil, fmt.Errorf("%w: %q is already in the registry or a schema of that name already exists in the database (handle the old tenant first if a rebuild is intended)", ErrSchemaTaken, schema)
 	}
 	if displayName == "" {
 		displayName = schema
@@ -212,62 +222,65 @@ func Provision(req Request) (*Result, error) {
 
 	adminHash, err := account.HashPassword(req.AdminPassword)
 	if err != nil {
-		return nil, fmt.Errorf("密码哈希失败: %w", err)
+		return nil, fmt.Errorf("failed to hash the password: %w", err)
 	}
 	adminID := uuid.NewString()
 
-	// ---- 2) 单个事务：建 schema + 模板建表 + 首管理员 + 注册表行 ----
-	// DDL 一律走主连接池：原先可配 platform.ddl_dsn 指向独立 DDL 账号，该配置已删除。
+	// ---- 2) A single transaction: create the schema + tables from the template + first admin + registry row ----
+	// DDL always goes through the main pool: platform.ddl_dsn could once point at a separate DDL account, and that setting is
+	// gone.
 	tx, err := db.DB.Begin()
 	if err != nil {
-		return nil, fmt.Errorf("开启事务失败: %w", err)
+		return nil, fmt.Errorf("failed to begin the transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }() // 提交后再 Rollback 是无害的 no-op
+	defer func() { _ = tx.Rollback() }() // rolling back after a commit is a harmless no-op
 
-	// schema 名已过正则，这里仍用 QuoteIdentifier 转义（纵深防御）
+	// The schema name already passed the regex; QuoteIdentifier escaping is still applied (defence in depth)
 	if _, err := tx.Exec(`CREATE SCHEMA ` + pq.QuoteIdentifier(schema)); err != nil {
-		// 上面检查到这一步之间被抢占（并发开通 / 有人手工建了同名 schema）
+		// Taken between the check above and this point (concurrent creation / someone created a schema by hand)
 		if isDuplicateSchema(err) {
-			return nil, fmt.Errorf("%w：%q 在库中已存在", ErrSchemaTaken, schema)
+			return nil, fmt.Errorf("%w: %q already exists in the database", ErrSchemaTaken, schema)
 		}
-		return nil, fmt.Errorf("创建 schema 失败: %w", err)
+		return nil, fmt.Errorf("failed to create the schema: %w", err)
 	}
-	// 事务级 search_path：模板里的对象名全部不限定 schema，靠它落到新 schema 上
+	// Transaction-scoped search_path: every object name in the template is unqualified and lands in the new schema through it
 	if _, err := tx.Exec(`SELECT set_config('search_path', $1, true)`, schema); err != nil {
-		return nil, fmt.Errorf("设置 search_path 失败: %w", err)
+		return nil, fmt.Errorf("failed to set search_path: %w", err)
 	}
-	// 模板包：先结构，再预置资产。两份脚本都假设 search_path 已指向新 schema。
+	// Template package: structure first, then the preinstalled assets. Both scripts assume search_path already points at the
+	// new schema.
 	schemaSQL, err := templateAssets.ReadFile("template/schema.sql")
 	if err != nil {
-		return nil, fmt.Errorf("读取模板表结构失败: %w", err)
+		return nil, fmt.Errorf("failed to read the template table definitions: %w", err)
 	}
 	seedSQL, err := templateAssets.ReadFile("template/seed.sql")
 	if err != nil {
-		return nil, fmt.Errorf("读取模板预置资产失败: %w", err)
+		return nil, fmt.Errorf("failed to read the template's preinstalled assets: %w", err)
 	}
 	if _, err := tx.Exec(string(schemaSQL)); err != nil {
-		return nil, fmt.Errorf("执行模板表结构失败: %w", err)
+		return nil, fmt.Errorf("failed to run the template table definitions: %w", err)
 	}
-	// seed 用固定 uuid，重复执行会撞主键 —— 开通是一次性动作，不做幂等
+	// The seed uses fixed uuids, so a second run would hit the primary key - creation is a one-shot action, not idempotent
 	if _, err := tx.Exec(string(seedSQL)); err != nil {
-		return nil, fmt.Errorf("写入预置资产失败: %w", err)
+		return nil, fmt.Errorf("failed to write the preinstalled assets: %w", err)
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO users (id, name, display_name, email, phone, password, role, status, created_at, updated_at)
 		VALUES ($1, $2, $3, '', '', $4, 'manage', 'active', NOW(), NOW())`,
 		adminID, adminName, adminName, adminHash); err != nil {
-		return nil, fmt.Errorf("创建租户管理员失败: %w", err)
+		return nil, fmt.Errorf("failed to create the tenant administrator: %w", err)
 	}
 
-	// 定义域文件在提交前物化：包内 files/ → tenants/<schema>/
-	// 失败就回滚事务 + 清目录，不留「库建好了、main 却没有 AGENT.md」的半残租户
+	// Definition-domain files are materialised before the commit: the package's files/ -> tenants/<schema>/
+	// On failure the transaction is rolled back and the directory cleaned, so no half-built tenant is left ("database built, but
+	// main has no AGENT.md")
 	if err := materializeTemplateFiles(context.Background(), schema); err != nil {
 		cleanupTenantDir(schema)
 		return nil, err
 	}
 
-	// 此刻 search_path 指向新租户 schema，平台表必须显式限定
-	// （列口径与 repository/tenants.Create 保持一致，改列时两处同改）
+	// At this point search_path points at the new tenant schema, so platform tables must be explicitly qualified
+	// (the column list matches repository/tenants.Create; change both when changing it)
 	platformSchema := pq.QuoteIdentifier(config.Cfg.Database.PlatformSchema)
 	if _, err := tx.Exec(
 		`INSERT INTO `+platformSchema+`.tenants
@@ -275,93 +288,98 @@ func Provision(req Request) (*Result, error) {
 		 VALUES ($1, $2, 'active', $3, NULLIF($4, '')::uuid, '', NOW(), NOW(), NULLIF($5, '')::uuid)`,
 		schema, displayName, strings.TrimSpace(req.Plan),
 		strings.TrimSpace(req.OwnerUserID), strings.TrimSpace(req.CreatedBy)); err != nil {
-		return nil, fmt.Errorf("写入租户注册表失败: %w", err)
+		return nil, fmt.Errorf("failed to write the tenant registry row: %w", err)
 	}
 
-	// 缺省能力授权：新租户开箱可用全部已登记能力（exec / shell / code / browser / egress）。
-	// 平台仍可逐项关闭，全局闸仍可急停 —— 这里写的是租户行，不绕开任何一层。
+	// Default capability grants: a new tenant can use every registered capability out of the box (exec / shell / code / browser
+	// / egress).
+	// The platform can still turn them off one by one and the global gate can still emergency-stop them - what is written here
+	// is a tenant row and bypasses no layer.
 	if err := grantDefaultCapabilities(tx, schema); err != nil {
 		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("提交失败: %w", err)
+		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
 
-	// ---- 4) 缓存失效（提交后再做，避免回滚时白失效） ----
+	// ---- 4) Cache invalidation (after the commit, so a rollback does not invalidate for nothing) ----
 	sharedtenants.Invalidate(schema)
 	quota.Invalidate(schema)
 
-	xlog.Info("[platform-provision] 已开通租户 %s（首个管理员 %s）", schema, adminName)
+	xlog.Info("[platform-provision] created tenant %s (first administrator %s)", schema, adminName)
 	return &Result{Schema: schema, DisplayName: displayName, AdminName: adminName, AdminUserID: adminID}, nil
 }
 
-// ErrTenantNotFound 注册表里没有这个租户：删除接口据此区分「本来就没有」与「删到一半失败」。
-var ErrTenantNotFound = errors.New("租户不存在")
+// ErrTenantNotFound means the registry does not have this tenant: the delete endpoint uses it to tell "never existed" from
+// "failed halfway".
+var ErrTenantNotFound = errors.New("tenant not found")
 
-// Remove 彻底删除一个租户：注册表行 + 平台侧按 tenant_id 归属的配置 + 整个租户 schema。
+// Remove deletes a tenant outright: the registry row + the platform-side config rows owned by that tenant_id + the whole tenant
+// schema.
 //
-// 顺序即设计（与 Provision 严格反向）：
-//  1. 先确认注册表里有这一行 —— 只删「平台认识」的租户，
-//     避免手滑把别的 schema（人工建的对象、别人的库）当成租户 DROP 掉
-//  2. 单个事务内：清平台侧租户行 → DROP SCHEMA ... CASCADE → 删注册表行
-//     注册表行放最后：它删掉后 SchemaAvailable 才会认为这个名字可用，
-//     中途失败整体回滚，不会留下「注册表没了但 schema 还在」的孤儿
-//  3. 存储目录不在这里删（本包只碰数据库）：由接口层调 storage.DeletePrefix
+// The order is the design (strictly the reverse of Provision):
+//  1. confirm the registry has the row - only "tenants the platform knows" are deleted, so a slip cannot DROP some other schema
+//     (hand-made objects, someone else's database) as a tenant
+//  2. inside one transaction: clear the platform-side tenant rows -> DROP SCHEMA ... CASCADE -> delete the registry row
+//     The registry row goes last: only once it is gone does SchemaAvailable consider the name free, and a mid-way failure rolls
+//     everything back, so no orphan of "registry gone but schema still there" is left
+//  3. the storage directory is not deleted here (this package only touches the database): the API layer calls
+//     storage.DeletePrefix
 //
-// 不可逆：该租户的智能体、技能、工作流、用户、会话记录全部随 schema 一起消失。
+// Irreversible: that tenant's agents, skills, flows, users and session records all disappear with the schema.
 func Remove(schema string) error {
 	schema = strings.TrimSpace(schema)
 	if !schemaPattern.MatchString(schema) {
-		return fmt.Errorf("schema 名不合法：只允许小写字母开头、字母/数字/下划线，长度 2-32")
+		return fmt.Errorf("invalid schema name: it must start with a lower-case letter, contain only letters/digits/underscores and be 2-32 characters")
 	}
 	if reservedSchemas[schema] {
-		return fmt.Errorf("schema 名 %q 是系统保留名", schema)
+		return fmt.Errorf("schema name %q is a reserved system name", schema)
 	}
 
 	exists, err := tenantsrepo.Exists(schema)
 	if err != nil {
-		return fmt.Errorf("检查租户注册表失败: %w", err)
+		return fmt.Errorf("failed to check the tenant registry: %w", err)
 	}
 	if !exists {
-		return fmt.Errorf("%w：%q", ErrTenantNotFound, schema)
+		return fmt.Errorf("%w: %q", ErrTenantNotFound, schema)
 	}
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		return fmt.Errorf("开启事务失败: %w", err)
+		return fmt.Errorf("failed to begin the transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// 平台侧的租户行：插件授权、能力授权、配额、工作流运行参数、智能体运行参数
+	// Platform-side tenant rows: plugin grants, capability grants, quotas, flow run limits, agent run limits
 	for _, table := range []string{
 		"tenant_plugins", "tenant_capabilities", "quota_configs", "flow_configs", "agent_configs",
 	} {
 		if err := deleteTenantRows(tx, table, schema); err != nil {
-			return fmt.Errorf("清理 %s 失败: %w", table, err)
+			return fmt.Errorf("failed to clean %s: %w", table, err)
 		}
 	}
 
-	// schema 名已过正则，这里仍用 QuoteIdentifier 转义（纵深防御）
+	// The schema name already passed the regex; QuoteIdentifier escaping is still applied (defence in depth)
 	if _, err := tx.Exec(`DROP SCHEMA IF EXISTS ` + pq.QuoteIdentifier(schema) + ` CASCADE`); err != nil {
-		return fmt.Errorf("删除 schema 失败: %w", err)
+		return fmt.Errorf("failed to drop the schema: %w", err)
 	}
 
 	platformSchema := pq.QuoteIdentifier(config.Cfg.Database.PlatformSchema)
 	if _, err := tx.Exec(`DELETE FROM `+platformSchema+`.tenants WHERE schema_name = $1`, schema); err != nil {
-		return fmt.Errorf("删除租户注册表行失败: %w", err)
+		return fmt.Errorf("failed to delete the tenant registry row: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("提交失败: %w", err)
+		return fmt.Errorf("failed to commit: %w", err)
 	}
 	return nil
 }
 
-// deleteTenantRows 清掉某张平台表里归属该租户的行。
+// deleteTenantRows clears the rows belonging to one tenant in a platform table.
 //
-// 用 to_regclass 先探测：各部署的脚本执行进度可能不同（比如早期没有 agent_configs），
-// 不能让一张可选表缺失把整次删除拖垮。
+// to_regclass probes first: deployments may be at different script progress points (for example agent_configs did not exist
+// early on), and one optional table missing must not bring the whole delete down.
 func deleteTenantRows(tx *sql.Tx, table string, tenantID string) error {
 	ps := config.Cfg.Database.PlatformSchema
 	var exists sql.NullString
@@ -377,13 +395,13 @@ func deleteTenantRows(tx *sql.Tx, table string, tenantID string) error {
 	return err
 }
 
-// grantDefaultCapabilities 给新租户写入全部能力的允许行（缺省全开）。
+// grantDefaultCapabilities writes an allowed row for every capability to a new tenant (allowed by default).
 //
-// 为什么要物化而不是"缺省放行"：capabilitypolicy 的语义是**缺省拒绝**，没有行 = 未开通。
-// 想让新租户开箱可用，只能把行写出来；一旦改成"没行就放行"，
-// 平台侧这层闸对所有存量租户会整体失效（等于回到"租户自己说了算"）。
+// Why materialise rather than "allow by default": capabilitypolicy means **deny by default**, and no row = not enabled.
+// To make a new tenant usable out of the box the rows must be written; changing it to "no row means allowed" would make this
+// platform-side gate fail open for every existing tenant (back to "the tenant decides").
 //
-// 全局闸（platform.capability_gates）仍压过这里：被急停的能力照样不可用。
+// The global gate (platform.capability_gates) still overrides this: an emergency-stopped capability stays unusable.
 func grantDefaultCapabilities(tx *sql.Tx, tenantID string) error {
 	keys := capability.All()
 	if len(keys) == 0 {
@@ -403,24 +421,24 @@ func grantDefaultCapabilities(tx *sql.Tx, tenantID string) error {
 		tenantID, pq.Array(normalized))
 	if err != nil {
 		if strings.Contains(err.Error(), "does not exist") {
-			return fmt.Errorf("写入能力授权失败（请先执行 nexus/platform/sql/tenant_capabilities.sql）: %w", err)
+			return fmt.Errorf("failed to write capability grants (run nexus/platform/sql/tenant_capabilities.sql first): %w", err)
 		}
-		return fmt.Errorf("写入能力授权失败: %w", err)
+		return fmt.Errorf("failed to write capability grants: %w", err)
 	}
 	return nil
 }
 
-// materializeTemplateFiles 把包里的定义域文件写到新租户目录：
+// materializeTemplateFiles writes the package's definition-domain files into the new tenant directory:
 //
-//	template/files/agents/main/AGENT.md → tenants/<schema>/agents/main/AGENT.md
-//	template/files/skills/<name>/**     → tenants/<schema>/skills/<name>/**
+//	template/files/agents/main/AGENT.md -> tenants/<schema>/agents/main/AGENT.md
+//	template/files/skills/<name>/**     -> tenants/<schema>/skills/<name>/**
 //
-// 只写文件、不建目录：本地实现 WriteFile 会自动 MkdirAll，
-// S3 写对象即产生前缀（见 shared/storage）。
+// It only writes files and creates no directories: the local implementation's WriteFile does MkdirAll itself, and on S3 writing
+// an object creates the prefix (see shared/storage).
 func materializeTemplateFiles(ctx context.Context, schema string) error {
 	st, err := templateStorage()
 	if err != nil {
-		return fmt.Errorf("初始化存储失败: %w", err)
+		return fmt.Errorf("failed to initialise storage: %w", err)
 	}
 
 	return fs.WalkDir(templateAssets, templateFilesRoot, func(p string, d fs.DirEntry, walkErr error) error {
@@ -430,31 +448,31 @@ func materializeTemplateFiles(ctx context.Context, schema string) error {
 		if d.IsDir() {
 			return nil
 		}
-		// io/fs 的路径恒用正斜杠，直接当相对路径拼进租户根
+		// io/fs paths always use forward slashes, so they can be joined straight into the tenant root
 		rel := strings.TrimPrefix(p, templateFilesRoot+"/")
 		data, err := templateAssets.ReadFile(p)
 		if err != nil {
 			return err
 		}
 		if err := st.WriteFile(ctx, path.Join(paths.TenantsSubdir, schema, rel), data); err != nil {
-			return fmt.Errorf("写入 %s 失败: %w", rel, err)
+			return fmt.Errorf("failed to write %s: %w", rel, err)
 		}
 		return nil
 	})
 }
 
-// cleanupTenantDir 清掉某租户在存储里的全部文件（开通失败时回收半成品）。
+// cleanupTenantDir clears all files of one tenant in storage (reclaiming a half-built tenant when creation fails).
 func cleanupTenantDir(schema string) {
 	st, err := templateStorage()
 	if err != nil {
 		return
 	}
 	if derr := st.DeletePrefix(context.Background(), path.Join(paths.TenantsSubdir, schema)); derr != nil {
-		xlog.Error("[platform-provision] 回收租户 %s 的存储目录失败: %v", schema, derr)
+		xlog.Error("[platform-provision] failed to reclaim the storage directory of tenant %s: %v", schema, derr)
 	}
 }
 
-// templateStorage 懒加载存储实例（与 service/agent.InitStorage 同配置）。
+// templateStorage lazily creates the storage instance (same config as service/agent.InitStorage).
 var (
 	provStoreOnce sync.Once
 	provStore     storage.Storage

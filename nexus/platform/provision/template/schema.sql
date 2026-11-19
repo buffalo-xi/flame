@@ -149,7 +149,7 @@ COMMENT ON COLUMN flows.status IS '1:正常,3:废弃（工作流不设「锁定�
 -- （正文进 agent_versions.files，元数据进 agent_versions.skills）。
 -- 工作流例外：本体就是 flows.diagram 这一列，镜像过来即可，没有目录。
 CREATE TABLE flow_versions (
-    flow_id uuid NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+    flow_id uuid NOT NULL,
     version integer NOT NULL,
     name character varying NOT NULL,
     description character varying,
@@ -174,7 +174,7 @@ CREATE UNIQUE INDEX flow_versions_current_idx ON flow_versions (flow_id) WHERE i
 COMMENT ON TABLE flow_versions IS '工作流版本历史：每发布一次插一行，is_current 唯一指向当前版本';
 
 CREATE TABLE agent_versions (
-    agent_id uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    agent_id uuid NOT NULL,
     version integer NOT NULL,
     name character varying(128) NOT NULL,
     description text,
@@ -197,7 +197,7 @@ CREATE UNIQUE INDEX agent_versions_current_idx ON agent_versions (agent_id) WHER
 COMMENT ON TABLE agent_versions IS '智能体版本历史：镜像 agents 的定义列，files 是 AGENT.md 与附属文件清单，skills 是私有技能元数据快照';
 
 CREATE TABLE skill_versions (
-    skill_id uuid NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    skill_id uuid NOT NULL,
     version integer NOT NULL,
     name character varying(64) NOT NULL,
     description text,
@@ -220,7 +220,7 @@ CREATE UNIQUE INDEX skill_versions_current_idx ON skill_versions (skill_id) WHER
 COMMENT ON TABLE skill_versions IS '技能版本历史：租户级与 agent 私有共用一张表，按 skill_id 区分';
 
 CREATE TABLE tool_versions (
-    tool_id uuid NOT NULL REFERENCES custom_tools(id) ON DELETE CASCADE,
+    tool_id uuid NOT NULL,
     version integer NOT NULL,
     name character varying(64) NOT NULL,
     display_name character varying(64),
@@ -661,3 +661,16 @@ ALTER TABLE ONLY svc_auth_binding_targets
     ADD CONSTRAINT svc_auth_binding_targets_binding_id_fkey FOREIGN KEY (binding_id) REFERENCES svc_auth_bindings(id) ON DELETE CASCADE;
 ALTER TABLE ONLY tool_group_items
     ADD CONSTRAINT tool_group_items_group_id_fkey FOREIGN KEY (group_id) REFERENCES tool_groups(id) ON DELETE CASCADE;
+
+-- 版本表的四个外键刻意放在这里、而不是写在列上（列内联的写法在空库上会让整份脚本失败）：
+-- 文件按 pg_dump 的顺序执行 —— 先建全部表，最后统一加主键与外键。若把 REFERENCES 写进 CREATE TABLE，
+-- 此时被引用表（flows / agents / skills / custom_tools）的 PRIMARY KEY 还没加，PostgreSQL 会直接报
+-- 42830 (no unique constraint matching given keys)，新增租户就卡在「执行模板建表」这一步。
+ALTER TABLE ONLY flow_versions
+    ADD CONSTRAINT flow_versions_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
+ALTER TABLE ONLY agent_versions
+    ADD CONSTRAINT agent_versions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE;
+ALTER TABLE ONLY skill_versions
+    ADD CONSTRAINT skill_versions_skill_id_fkey FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE;
+ALTER TABLE ONLY tool_versions
+    ADD CONSTRAINT tool_versions_tool_id_fkey FOREIGN KEY (tool_id) REFERENCES custom_tools(id) ON DELETE CASCADE;

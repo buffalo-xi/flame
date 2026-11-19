@@ -13,8 +13,15 @@
 
     Not every script under nexus/platform/sql can run on an empty database: some are incremental
     migrations that ALTER a table the repository has no DDL for (legacy tables carried over from the
-    original dump, see platform.sql "reuses the existing platform.quota_configs"). Those are listed
-    in $skipped with the reason; do not add them here unless you also commit their table DDL.
+    original dump). Those are listed in $skipped with the reason. The fix is to commit the missing
+    table DDL, not to keep skipping: platform.quota_configs used to be the one entry here until its
+    CREATE TABLE moved into platform.sql, which is what let quota_storage.sql become a real check.
+
+    After the platform scripts, the tenant template (nexus/platform/provision/template/schema.sql +
+    seed.sql) is applied into a throwaway schema with search_path pointing at it - the same way
+    provision.CreateTenant runs it. That file is a pg_dump-ordered script (create every table, then
+    add every PK / FK); an inline "REFERENCES" whose target has no PRIMARY KEY yet makes PostgreSQL
+    raise 42830 and tenant creation fail on a fresh database, which no Go test would ever catch.
 
 .PARAMETER Keep
     Do not drop the temporary database (for inspecting a failure by hand).
@@ -46,7 +53,8 @@ $env:PGPASSWORD = $Password
 # Dependency order matters: the incremental migrations below reference tables created by the
 # scripts that come first. Alphabetical order does not work (asset_* need shared_assets).
 $steps = @(
-    @{ File = 'platform.sql';                Note = 'core platform tables' }
+    @{ File = 'platform.sql';                Note = 'core platform tables (incl. platform.quota_configs)' }
+    @{ File = 'quota_storage.sql';           Note = 'session-quota columns on quota_configs' }
     @{ File = 'tenant_capabilities.sql';     Note = 'per-tenant capability grants' }
     @{ File = 'capability_gates.sql';        Note = 'global kill switch' }
     @{ File = 'capability_code_rename.sql';  Note = 'needs capability_gates' }
@@ -61,9 +69,8 @@ $steps = @(
     @{ File = 'customtool_capability_exec.sql'; Note = 'backfills tenant schemas (no-op on an empty DB)' }
 )
 
-$skipped = @(
-    @{ File = 'quota_storage.sql'; Note = 'ALTERs the legacy platform.quota_configs, which has no DDL in this repository' }
-)
+# Kept for the next legacy-table case: SQL that ALTERs a table whose DDL is not in this repository cannot run here.
+$skipped = @()
 
 function Invoke-Psql {
     param(
@@ -116,6 +123,40 @@ try {
         Write-Host ("  skip  {0}  ({1})" -f $step.File, $step.Note) -ForegroundColor Yellow
     }
 
+    # ---- Tenant template: the script that actually creates a tenant's tables ----
+    # provision.CreateTenant runs it with a transaction-scoped search_path, so PGOPTIONS does the same here. Both files
+    # must run in order: schema.sql builds every table and then adds the constraints, seed.sql writes the preinstalled
+    # agents / skills on top.
+    $tplDir = Join-Path $repoRoot 'nexus/platform/provision/template'
+    if ((Invoke-Psql -Database $dbName -Arguments @('-c', 'CREATE SCHEMA t0')) -ne 0) {
+        Write-Host '  FAIL  CREATE SCHEMA t0 (tenant template)' -ForegroundColor Red
+        $failed += 'template:CREATE SCHEMA'
+    }
+    else {
+        $env:PGOPTIONS = '-c search_path=t0'
+        try {
+            foreach ($file in @('schema.sql', 'seed.sql')) {
+                $path = Join-Path $tplDir $file
+                $label = "template/$file"
+                if (-not (Test-Path $path)) {
+                    Write-Host ("  FAIL  {0}  ({1})" -f $label, 'file not found') -ForegroundColor Red
+                    $failed += $label
+                    continue
+                }
+                if ((Invoke-Psql -Database $dbName -Arguments @('-f', $path)) -ne 0) {
+                    Write-Host ("  FAIL  {0}  ({1})" -f $label, 'tenant template') -ForegroundColor Red
+                    $failed += $label
+                }
+                else {
+                    Write-Host ("  ok    {0}" -f $label) -ForegroundColor Green
+                }
+            }
+        }
+        finally {
+            $env:PGOPTIONS = ''
+        }
+    }
+
     if ($failed.Count -gt 0) {
         Write-Host ""
         Write-Host ("{0} script(s) failed: {1}" -f $failed.Count, ($failed -join ', ')) -ForegroundColor Red
@@ -123,7 +164,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host ("all {0} scripts executed against an empty database" -f $steps.Count) -ForegroundColor Green
+    Write-Host ("all {0} platform script(s) and the tenant template executed against an empty database" -f $steps.Count) -ForegroundColor Green
 }
 finally {
     if ($Keep) {

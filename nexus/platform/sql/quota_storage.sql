@@ -13,6 +13,10 @@
 --   max_session_storage_bytes 单个会话工作区（users/{uid}/sessions/{sid}/）的字节上限
 --   max_user_sessions         单个用户拥有的会话数量上限（超限拒绝新建，不删旧会话）
 --
+-- 建表：platform.sql 已经建 platform.quota_configs（含下面两列，IF NOT EXISTS）。本文件只负责
+-- 把老环境的表补到同一形状，因此新库上那两条 ADD COLUMN 是 no-op。
+-- 本文件已纳入 scripts/verify-sql.ps1 的自动校验（空库上跑一遍，验证语句可执行且幂等）。
+--
 -- 幂等：可重复执行。
 -- ============================================================================
 
@@ -25,7 +29,7 @@ ALTER TABLE platform.quota_configs
 -- ----------------------------------------------------------------------------
 -- 会话用量计数表（租户 schema 内，每个租户一份）
 --
--- 只在「没有 Redis」的部署里作为计数后端使用（见 shared/quota/usage.go 的 PGStore）：
+-- 只在「没有 Redis」的部署里作为计数后端使用（见 shared/quota/usage.go 的 pgStore）：
 -- 有 Redis 时计数在 Redis，本表不写。
 -- 放在租户 schema 里是为了随租户 DROP SCHEMA 一起消失，不需要额外清理逻辑。
 --
