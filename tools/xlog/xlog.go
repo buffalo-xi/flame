@@ -11,16 +11,16 @@ import (
 )
 
 const (
-	// MaxLogFileSize 最大日志文件大小（30MB）
+	// MaxLogFileSize is the maximum size of a single log file (30MB).
 	MaxLogFileSize = 30 * 1024 * 1024
 )
 
 var (
-	// InfoLogger 信息日志
+	// InfoLogger writes informational logs.
 	InfoLogger *log.Logger
-	// ErrorLogger 错误日志
+	// ErrorLogger writes error logs.
 	ErrorLogger *log.Logger
-	// DebugLogger 调试日志
+	// DebugLogger writes debug logs.
 	DebugLogger *log.Logger
 
 	logFile     *os.File
@@ -29,23 +29,23 @@ var (
 	currentDate string
 	fileSize    int64
 
-	// mirrorConsole 日志是否同时写 stdout（控制台）。
+	// mirrorConsole controls whether logs also go to stdout (the console).
 	//
-	// 判据是「stdout 是不是连着终端」：直接双击 / 在窗口里跑 → 是，日志上屏；
-	// 重定向到文件或由服务管理器接管 → 不是，只落盘，不会出现两份。
-	// 需要强制打开/关闭时用环境变量 XLOG_CONSOLE=1 / 0。
+	// The test is "is stdout attached to a terminal": double-clicked or run in a window → yes, logs
+	// show up; redirected to a file or taken over by a service manager → no, file only, so nothing is
+	// duplicated. Use XLOG_CONSOLE=1 / 0 to force it on or off.
 	mirrorConsole bool
 
 	mu sync.Mutex
 )
 
-// Init 初始化日志系统。prefix 决定日志文件名的前缀（如 "nexus"、"sandboxd"），
-// 由调用方按实际服务名传入，最终生成 <prefix>-<date>[-<n>].log。
+// Init initialises the logging system. prefix decides the log file name prefix ("nexus", "sandboxd"),
+// passed in by the caller after the actual service name, producing <prefix>-<date>[-<n>].log.
 //
-// 日志默认「落盘 + 上屏」双写（上屏仅在 stdout 是终端时生效）。
-// 上屏的意义：启动阶段的有效信息（监听地址、生效的隔离方式、浏览器是否可用）
-// 本来只写进文件，前台跑服务的人看不到，只能去翻日志——这与「配置必须一眼可见」
-// 的初衷相悖。
+// Logs are written to both the file and the console by default (the console part only when stdout is a
+// terminal). Why mirror at all: the useful facts from startup (listening address, isolation mode in
+// effect, whether the browser is available) used to go to a file only, so whoever ran the service in
+// the foreground had to go digging — the opposite of "configuration must be visible at a glance".
 func Init(dir, prefix string) error {
 	logDir = dir
 	filePrefix = prefix
@@ -66,16 +66,16 @@ func Init(dir, prefix string) error {
 	ErrorLogger = log.New(w, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile)
 	DebugLogger = log.New(w, "DEBUG: ", log.Ldate|log.Ltime|log.Lshortfile)
 
-	// 启动日志检查协程
+	// Start the log rotation goroutine.
 	go checkLogFile()
 
 	return nil
 }
 
-// wantConsole 判断是否要把日志同时打到控制台。
+// wantConsole decides whether logs should also go to the console.
 //
-// 环境变量优先（XLOG_CONSOLE=1/0），否则看 stdout 是不是字符设备：
-// Windows 控制台、Unix 终端都是；重定向到文件 / 管道则不是。
+// The environment variable wins (XLOG_CONSOLE=1/0); otherwise it checks whether stdout is a character
+// device: a Windows console or a Unix terminal is one, a file or a pipe is not.
 func wantConsole() bool {
 	switch os.Getenv("XLOG_CONSOLE") {
 	case "1", "true", "on":
@@ -97,10 +97,11 @@ func consoleWriter() io.Writer {
 	return io.MultiWriter(fileWriter{}, os.Stdout)
 }
 
-// fileWriter 把日志写进当前日志文件并累计大小。
+// fileWriter writes logs into the current log file and accumulates its size.
 //
-// 用 writer 而不是让 logger 直接持有 *os.File，是为了让 fileSize 真的能增长：
-// 之前的实现只在没人调用的 Write() 里累加，导致「按大小轮转」永远不会触发。
+// It is a writer rather than the logger holding *os.File directly so that fileSize actually grows: the
+// previous implementation accumulated only inside a Write() nobody called, which meant "rotate by size"
+// never triggered.
 type fileWriter struct{}
 
 func (fileWriter) Write(p []byte) (int, error) {
@@ -114,13 +115,14 @@ func (fileWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// rotateLocked 轮转日志文件。调用方必须已持有 mu。
+// rotateLocked rotates the log file. The caller must already hold mu.
 //
-// 注意：checkLogFile 过去持锁再调 rotateLogFile（内部又 Lock 一次），
-// sync.Mutex 不可重入 —— 一到跨天或超过 MaxLogFileSize，日志协程就会永久卡死，
-// 之后任何一次写日志都会跟着阻塞。所以这里拆成「已持锁」版本。
+// Note: checkLogFile used to hold the lock and then call rotateLogFile (which locked again), and
+// sync.Mutex is not reentrant — as soon as the day changed or MaxLogFileSize was exceeded, the logging
+// goroutine deadlocked forever and every later log write blocked with it. Hence the "already holding
+// the lock" variant.
 func rotateLocked() error {
-	// 关闭当前日志文件
+	// Close the current log file.
 	if logFile != nil {
 		_ = logFile.Close()
 	}
@@ -163,7 +165,7 @@ func rotateLocked() error {
 	}
 }
 
-// checkLogFile 按天 / 按大小轮转。
+// checkLogFile rotates on day change and on size.
 func checkLogFile() {
 	for {
 		time.Sleep(1 * time.Minute)
@@ -177,12 +179,12 @@ func checkLogFile() {
 	}
 }
 
-// Write 把 p 写进日志文件（供外部把它当 io.Writer 用的场景）。
+// Write writes p into the log file (for callers that need to treat this package as an io.Writer).
 func Write(p []byte) (n int, err error) {
 	return fileWriter{}.Write(p)
 }
 
-// Close 关闭日志文件
+// Close closes the log file.
 func Close() error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -193,14 +195,15 @@ func Close() error {
 	return nil
 }
 
-// fallbackLogger 未 Init 时的兜底输出（stderr）。
+// fallbackLogger is the output used before Init (stderr).
 //
-// 存在的理由：InfoLogger 等是 Init 里才赋值的包变量，未初始化时直接
-// Printf 是对 nil 方法接收者的调用 —— 不是「日志没了」，而是整个进程 panic。
-// 启动早期（配置还没读完）、单测里调用日志都属这一类，不该被打成崩溃。
+// Why it exists: InfoLogger and friends are package variables assigned inside Init; calling Printf on
+// them before initialisation is a call on a nil method receiver — not "the log line is lost" but a
+// panic of the whole process. Early startup (configuration not read yet) and unit tests both fall into
+// that category and must not become crashes.
 var fallbackLogger = log.New(os.Stderr, "", log.LstdFlags)
 
-// orFallback 返回可用的 logger：未初始化时退到 stderr。
+// orFallback returns a usable logger, falling back to stderr before initialisation.
 func orFallback(l *log.Logger) *log.Logger {
 	if l != nil {
 		return l
@@ -208,17 +211,17 @@ func orFallback(l *log.Logger) *log.Logger {
 	return fallbackLogger
 }
 
-// Info 记录信息日志
+// Info logs an informational message.
 func Info(format string, v ...interface{}) {
 	orFallback(InfoLogger).Printf(format, v...)
 }
 
-// Error 记录错误日志
+// Error logs an error message.
 func Error(format string, v ...interface{}) {
 	orFallback(ErrorLogger).Printf(format, v...)
 }
 
-// Debug 记录调试日志
+// Debug logs a debug message.
 func Debug(format string, v ...interface{}) {
 	orFallback(DebugLogger).Printf(format, v...)
 }

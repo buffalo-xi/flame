@@ -1,14 +1,14 @@
-// Package xhttp 统一 nexus 的 HTTP 响应信封。
+// Package xhttp is the single HTTP response envelope for nexus.
 //
-// 两套信封并存，边界必须守住：
-//   - 业务结果（成功 / 参数错误 / 配额不足）→ {code, msg, data, trace}，
-//     恒为 HTTP 200，成败看 body.code（200 / 400 / 507）。这是与
-//     desktop/src/platform/api.js 的既有约定，不要改成真实 HTTP 状态码。
-//   - 传输层 / 路由层错误（401 / 403 / 503）→ {error, message}，配真实 HTTP
-//     状态码，由 SendErrorResponse 发出。
+// Two envelopes coexist and the boundary between them must hold:
+//   - business results (success / bad request / over quota) → {code, msg, data, trace}, always HTTP
+//     200, with success or failure in body.code (200 / 400 / 507). This is the existing contract with
+//     desktop/src/platform/api.js — do not turn it into real HTTP status codes.
+//   - transport / routing errors (401 / 403 / 503) → {error, message} with a real HTTP status code,
+//     emitted by SendErrorResponse.
 //
-// 不要再引入第三套写法。直接写 c.JSON 只允许用于健康 / 就绪探测这类需要
-// 裸 JSON + 真实状态码的端点（见 nexus/cmd/router.go）。
+// Do not invent a third form. Writing c.JSON directly is only allowed for health / readiness probes
+// that need bare JSON plus a real status code (see nexus/cmd/router.go).
 package xhttp
 
 import (
@@ -17,17 +17,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 业务码。注意这是 body.code 的取值，与 HTTP 状态码是两回事。
+// Business codes. These are values of body.code, which is a different thing from the HTTP status.
 const (
-	codeOK      = 200 // 成功
-	codeInvalid = 400 // 参数错误 / 业务失败
-	codeQuota   = 507 // 配额不足（空间 / 会话数已满）
+	codeOK      = 200 // success
+	codeInvalid = 400 // invalid arguments / business failure
+	codeQuota   = 507 // quota exhausted (storage or session count)
 )
 
-// respond 写出 {code, msg, data, trace} 信封。
+// respond writes the {code, msg, data, trace} envelope.
 //
-// trace 为空时取 Host+Path：排障时要能区分同一条路径落在哪个实例上。
-// HTTP 状态恒为 200 —— 业务成败由 body.code 表达。
+// An empty trace falls back to Host+Path: while debugging you must be able to tell which instance a
+// given path landed on. The HTTP status is always 200 — success and failure live in body.code.
 func respond(c *gin.Context, code int, msg string, data interface{}, trace string) {
 	if trace == "" {
 		trace = c.Request.Host + c.Request.URL.Path
@@ -40,40 +40,41 @@ func respond(c *gin.Context, code int, msg string, data interface{}, trace strin
 	})
 }
 
-// OkJSON 返回成功信封（body.code = 200，HTTP 200）。
-// msg: 响应消息
-// data: 响应数据
-// trace: 调用路径，为空时取 Host+Path
+// OkJSON returns the success envelope (body.code = 200, HTTP 200).
+// msg: response message
+// data: response payload
+// trace: caller path, defaulting to Host+Path
 func OkJSON(c *gin.Context, msg string, data interface{}, trace string) {
 	respond(c, codeOK, msg, data, trace)
 }
 
-// ErrJSON 返回业务错误信封：HTTP 200 + body.code = 400。
+// ErrJSON returns the business error envelope: HTTP 200 with body.code = 400.
 //
-// 注意 HTTP 状态码是 200 而非 400 —— 这是与前端约定的信封，前端读 body.code
-// 判断成败；按「HTTP 400」写判断会永远不成立。
-// msg: 错误消息
-// data: 错误相关数据
-// trace: 调用路径，为空时取 Host+Path
+// Note the HTTP status is 200, not 400 — this envelope is the frontend contract, and the frontend reads
+// body.code to decide success or failure; a check written against "HTTP 400" never fires.
+// msg: error message
+// data: data related to the error
+// trace: caller path, defaulting to Host+Path
 func ErrJSON(c *gin.Context, msg string, data interface{}, trace string) {
 	respond(c, codeInvalid, msg, data, trace)
 }
 
-// ErrQuota 配额不足（body.code = 507，HTTP 仍为 200）。
+// ErrQuota reports an exhausted quota (body.code = 507, HTTP still 200).
 //
-// 与 ErrJSON 同为 HTTP 200 + body.code 的信封，只是 code 用 507：
-// 前端据此把「空间/会话数已满」与普通参数错误区分开，给出「去清理」这类引导，
-// 而不是只弹一个红条。
+// Same HTTP 200 + body.code envelope as ErrJSON, only the code differs: the frontend uses it to tell
+// "storage / sessions full" apart from a plain argument error and can offer guidance such as "go clean
+// up" instead of just a red bar.
 //
-// data 建议带上定位信息：{"scope":"session","metric":"bytes","used":..,"limit":..}
+// data should carry locator information: {"scope":"session","metric":"bytes","used":..,"limit":..}
 func ErrQuota(c *gin.Context, msg string, data interface{}, trace string) {
 	respond(c, codeQuota, msg, data, trace)
 }
 
-// ErrQuotaCode 配额不足 + 机器可读编码（body.code = 507，HTTP 仍为 200）。
+// ErrQuotaCode is "over quota" plus a machine-readable code (body.code = 507, HTTP still 200).
 //
-// 与 ErrQuota 只差 error / params：507 的两种情形（会话空间满、会话数满）文案不同，
-// 前端靠 error 区分，不能只凭 body.code 猜。data 继续带 scope/metric/used/limit。
+// It differs from ErrQuota only in error / params: the two 507 cases (session storage full, session
+// count full) need different copy, and the frontend tells them apart by error rather than guessing from
+// body.code. data still carries scope/metric/used/limit.
 func ErrQuotaCode(c *gin.Context, errCode string, params map[string]any, msg string, data interface{}, trace string) {
 	if trace == "" {
 		trace = c.Request.Host + c.Request.URL.Path
@@ -88,15 +89,19 @@ func ErrQuotaCode(c *gin.Context, errCode string, params map[string]any, msg str
 	})
 }
 
-// ErrCode 业务错误 + 机器可读编码（前端据此翻译，见 nexus/docs/error-codes.md）。
+// ErrCode is a business error plus a machine-readable code (the frontend translates it, see
+// nexus/docs/error-codes.md).
 //
-// 与 ErrJSON 只差一点：多带 error（编码）与 params（渲染参数）。
-// msg 仍然返回中文原文 —— 日志、curl、旧前端都用它；翻译由前端按 error 查表完成，
-// 后端不关心 language。查不到对应语言条目时前端回退 msg，所以这个函数可以渐进替换。
+// Compared with ErrJSON it only adds error (the code) and params (the values to render). msg is the
+// diagnostic text (currently Chinese; the msg batch switches it to English) used by logs, curl and old
+// frontends — translation is the frontend's job through error, and the backend does not care about
+// language. When no entry is found the frontend falls back to msg, so this function can replace ErrJSON
+// incrementally.
 //
-// 参数名用 params 而不是复用 data：data 在既有信封里是「给对方的数据」，
-// 这里是「文案变量」（名字、数量、上限），混用会让前端误判。
-// params 只放可展示的标量，不要放内网地址、SQL 或堆栈。
+// The parameter is named params rather than reusing data: in the existing envelope data means "payload
+// for the other side", while this is "copy variables" (name, count, limit) and mixing them would
+// mislead the frontend. params carries displayable scalars only — never internal addresses, SQL or stack
+// traces.
 func ErrCode(c *gin.Context, errCode string, params map[string]any, msg string, trace string) {
 	if trace == "" {
 		trace = c.Request.Host + c.Request.URL.Path
@@ -111,11 +116,13 @@ func ErrCode(c *gin.Context, errCode string, params map[string]any, msg string, 
 	})
 }
 
-// ErrCodeData 业务错误 + 机器可读编码 + 附加数据（body.code = 400，HTTP 仍为 200）。
+// ErrCodeData is a business error plus a machine-readable code and attached data (body.code = 400, HTTP
+// still 200).
 //
-// 与 ErrCode 只差 data：有些错误除了文案还要给对方结构化信息（例如同名冲突的
-// suggested_name / can_overwrite，前端据此把红条变成「确认覆盖」按钮）。
-// 这类响应不能只用 ErrCode，否则 data 会丢成 null、界面退化成「只能改名」。
+// It differs from ErrCode only in data: some errors carry structured information besides the copy (for
+// example a name clash's suggested_name / can_overwrite, which turns the red bar into a "confirm
+// overwrite" button). Those responses cannot use plain ErrCode, or data collapses to null and the UI
+// degrades to "rename only".
 func ErrCodeData(c *gin.Context, errCode string, params map[string]any, msg string, data interface{}, trace string) {
 	if trace == "" {
 		trace = c.Request.Host + c.Request.URL.Path
@@ -130,12 +137,12 @@ func ErrCodeData(c *gin.Context, errCode string, params map[string]any, msg stri
 	})
 }
 
-// SendErrorResponse 返回传输层/路由层错误（前置校验失败时专用）。
+// SendErrorResponse returns a transport / routing error (for front-gate failures).
 //
-// 与上面的业务信封不同：返回体用顶层 "error"（字符串枚举 reason）+ "message"，
-// 不复用 "code" 字段，避免与 OkJSON/ErrJSON 的整数 code 以及 JSON-RPC error.code 混淆。
-// reason 应为 snake_case 枚举：invalid_request / not_found / unauthorized /
-// forbidden / rate_limited / internal_error。
+// Unlike the business envelopes above, the body uses a top-level "error" (a reason enum string) plus
+// "message" and does not reuse the "code" field, so it cannot be confused with the integer code of
+// OkJSON / ErrJSON or with JSON-RPC error.code. reason should be a snake_case enum: invalid_request /
+// not_found / unauthorized / forbidden / rate_limited / internal_error.
 func SendErrorResponse(c *gin.Context, status int, reason, message string) {
 	c.JSON(status, gin.H{"error": reason, "message": message})
 }

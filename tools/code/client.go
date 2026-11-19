@@ -1,10 +1,10 @@
-// Package code 提供「代码片段会话」客户端：把双工执行委托给远端沙箱服务 sandboxd
-// 的 /v1/code 通道（2026-10 由 /v1/script 更名）。
+// Package code is the "code snippet session" client: it delegates duplex execution to the remote
+// sandbox service sandboxd over the /v1/code channel (renamed from /v1/script in 2026-10).
 //
-// 与旧设计的最大差异：本侧不再持有 worker 池。
-//   - 池是否存在、隔离方式用哪种，全部由 sandboxd 决定；
-//   - 每次 Execute 建立一条到 sandboxd 的会话连接，结束后关闭；
-//   - 片段是纯「输入 → 返回」，不再有回调交互。
+// The biggest difference from the old design: this side no longer owns a worker pool.
+//   - whether a pool exists and which isolation is used is decided entirely by sandboxd;
+//   - each Execute opens one session connection to sandboxd and closes it when done;
+//   - a snippet is purely "input → return", with no callback interaction any more.
 package code
 
 import (
@@ -15,35 +15,36 @@ import (
 	"flame/tools/sandbox"
 )
 
-// 错误码定义
+// Error codes.
 //
-// ⚠️ 其中 timeout / busy / unsupported_lang 是**线上协议值**：由 sandboxd 在 error 帧里
-// 原样回传（见 sandboxd/internal/daemon/handle_code.go 的同名常量），本包只是接收端。
-// 改动必须两端同步 —— 改单边只会让节点拿到一个谁也认不出的码。
+// ⚠️ timeout / busy / unsupported_lang are **wire protocol values**: sandboxd sends them back verbatim
+// in the error frame (see the same-named constants in sandboxd/internal/daemon/handle_code.go); this
+// package is only the receiving end. Changes must be made on both sides — editing one side leaves the
+// node holding a code nobody recognises.
 const (
-	ErrCodeUnsupportedLang = "unsupported_lang" // 不支持的语言
-	ErrCodeConnectFail     = "connect_fail"     // 连接 sandboxd 失败
-	ErrCodeSendFail        = "send_fail"        // 发送请求失败
-	ErrCodeTimeout         = "timeout"          // 执行超时
-	ErrCodeBusy            = "busy"             // 沙箱繁忙：并发额度耗尽，取槽等待超时被拒（脚本未执行）
-	ErrCodeWorkerComm      = "worker_comm"      // worker 通信错误
-	ErrCodeScriptError     = "script_error"     // 脚本执行错误
-	ErrCodeUnknownAction   = "unknown_action"   // 未知 action
-	ErrCodeCancel          = "cancel"           // 上下文取消/超时
+	ErrCodeUnsupportedLang = "unsupported_lang" // language not supported
+	ErrCodeConnectFail     = "connect_fail"     // cannot connect to sandboxd
+	ErrCodeSendFail        = "send_fail"        // cannot send the request
+	ErrCodeTimeout         = "timeout"          // execution timed out
+	ErrCodeBusy            = "busy"             // sandbox busy: concurrency quota exhausted, slot wait rejected (the script never ran)
+	ErrCodeWorkerComm      = "worker_comm"      // worker communication error
+	ErrCodeScriptError     = "script_error"     // script execution error
+	ErrCodeUnknownAction   = "unknown_action"   // unknown action
+	ErrCodeCancel          = "cancel"           // context cancelled / timed out
 )
 
-// defaultTimeout 调用方未指定超时时的兜底。
+// defaultTimeout is used when the caller passes no timeout.
 const defaultTimeout = 30 * time.Second
 
-// Error /v1/code 通道返回的错误，包含错误码和原始错误。
+// Error is an error returned by the /v1/code channel, carrying the code and the original error.
 //
-// 名字不再叫 ScriptError：它标识的是**通道**（code）而不是被执行的片段，
-// 片段自身出错只是其中一种 Code（ErrCodeScriptError）。
+// It is no longer called ScriptError: it identifies the **channel** (code), not the snippet being run;
+// a snippet failing is merely one of its codes (ErrCodeScriptError).
 type Error struct {
-	Code    string // 错误码，如上 ErrCodeXxx 常量
-	Message string // 错误信息
-	Logs    string // 错误时的完整 stderr（含 traceback / stack）
-	Err     error  // 原始错误（可选，用于 errors.Unwrap）
+	Code    string // error code, one of the ErrCodeXxx constants above
+	Message string // error message
+	Logs    string // full stderr on failure (including traceback / stack)
+	Err     error  // original error (optional, for errors.Unwrap)
 }
 
 func (e *Error) Error() string {
@@ -58,55 +59,57 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.Err }
 
-// NewError 创建 Error
+// NewError builds an Error.
 func NewError(code, message string, err error) *Error {
 	return &Error{Code: code, Message: message, Err: err}
 }
 
-// Result 一次脚本执行的产出：脚本返回值 + print 输出（logs）。
+// Result is the output of one script execution: the returned value plus the print output (logs).
 type Result struct {
-	Value any    // 脚本返回值（原 result）
-	Logs  string // print 输出全文（可能被截断）
+	Value any    // value returned by the script (formerly result)
+	Logs  string // full print output (may be truncated)
 }
 
-// Client 脚本会话客户端。
+// Client is the script session client.
 //
-// 无状态、可并发复用：每次 Execute 独立建立一条会话连接，
-// 因此嵌套调用（如 binding transform 内再执行脚本）不会自我阻塞。
+// Stateless and safe to reuse concurrently: every Execute opens its own session connection, so nested
+// calls (running a script inside a binding transform, say) do not block themselves.
 type Client struct {
-	endpoint string         // 形如 ws://sandboxd:8080/v1/code
-	token    string         // 可选 Bearer 令牌
-	limits   sandbox.Limits // 默认资源上限（除 timeout 外一般由 sandboxd 决定）
+	endpoint string         // of the form ws://sandboxd:8080/v1/code
+	token    string         // optional Bearer token
+	limits   sandbox.Limits // default resource limits (apart from timeout, sandboxd usually decides)
 
-	// onReady 可选的交互观测钩子：sandboxd 回 ready 后触发一次，
-	// 带上它分配的 script ID（沙箱侧的 worker ID）与是否复用了池中对象。
+	// onReady is an optional interaction observer: fired once sandboxd reports ready, carrying the
+	// script ID it assigned (the sandbox-side worker ID) and whether it reused a pooled object.
 	//
-	// 存在的意义：容器与解释器的身份只存在于 sandboxd 侧，本侧能拿到的唯一线索
-	// 就是这个 script ID —— 不接住它，两边的日志就无从对账（sandboxd 记 container，
-	// 本侧记业务上下文，靠 script 串起来）。
-	// 约定：启动时设置一次、之后只读，因此不加锁；并发 Execute 期间不要再改。
+	// Why it matters: the container and interpreter identity exist only on the sandboxd side, and this
+	// script ID is the only clue available here — without catching it the two logs cannot be reconciled
+	// (sandboxd records the container, this side records the business context, and the script ties them
+	// together).
+	// Contract: set once at startup and read-only afterwards, hence no lock; do not change it while
+	// Execute calls are in flight.
 	onReady func(scriptID string, reused bool)
 }
 
-// NewClient 创建脚本会话客户端。
+// NewClient creates a script session client.
 func NewClient(endpoint, token string, limits sandbox.Limits) *Client {
 	return &Client{endpoint: endpoint, token: token, limits: limits}
 }
 
-// SetOnReady 设置「交互就绪」观测钩子（可选，默认不记录）。
-// 必须在任何 Execute 之前调用一次（并发约定见 Client.onReady）。
+// SetOnReady installs the "interaction ready" observer (optional; nothing is recorded by default).
+// It must be called once before any Execute (see Client.onReady for the concurrency contract).
 func (c *Client) SetOnReady(fn func(scriptID string, reused bool)) { c.onReady = fn }
 
-// Close 保留以兼容旧的 defer 调用（客户端无池，无需释放）。
+// Close is kept so existing defer calls still compile (the client has no pool and nothing to release).
 func (c *Client) Close() {}
 
-// Execute 执行一次脚本。
+// Execute runs one script.
 //
-//	ctx     - 上下文，用于取消
-//	lang    - 语言："lua" / "python" / "js"
-//	script  - 脚本内容
-//	inputs  - 输入变量
-//	timeout - 超时时间（秒），<=0 使用 defaultTimeout
+//	ctx     - context, for cancellation
+//	lang    - language: "lua" / "python" / "js"
+//	script  - script body
+//	inputs  - input variables
+//	timeout - timeout in seconds; <=0 uses defaultTimeout
 func (c *Client) Execute(ctx context.Context, lang, script string, inputs map[string]any,
 	timeout int) (*Result, error) {
 
@@ -122,11 +125,13 @@ func (c *Client) Execute(ctx context.Context, lang, script string, inputs map[st
 	}
 	defer func() { _ = conn.Close() }()
 
-	// 资源上限：只带 timeout（其余由 sandboxd 的用途默认值决定并 clamp）
+	// Resource limits: only the timeout is sent (everything else is decided by sandboxd's per-purpose
+	// defaults and clamped there).
 	lim := c.limits
 	lim.Timeout = execTimeout
 
-	// 1) open：双工只传 lang + limits —— worker 脚本路径与挂载由 sandboxd 自决
+	// 1) open: the duplex channel carries lang + limits only — the worker script path and mounts are
+	// sandboxd's decision.
 	if err := conn.SendFrame(&sandbox.Frame{
 		Type: sandbox.FrameOpen,
 		Lang: lang,
@@ -135,15 +140,15 @@ func (c *Client) Execute(ctx context.Context, lang, script string, inputs map[st
 		return nil, NewError(ErrCodeSendFail, fmt.Sprintf("send open: %v", err), err)
 	}
 
-	// 2) 等 ready
+	// 2) Wait for ready.
 	rf, _, rerr := conn.Recv()
 	if rerr != nil {
 		return nil, NewError(ErrCodeWorkerComm, fmt.Sprintf("wait ready: %v", rerr), rerr)
 	}
 	switch rf.Type {
 	case sandbox.FrameReady:
-		// 接住 script ID：这是与 sandboxd 日志对账的唯一键 ——
-		// 它知道这次调用落在哪个容器，本侧不知道，但它把这个 ID 回传了。
+		// Catch the script ID: it is the only key for reconciling with sandboxd's logs — sandboxd knows
+		// which container this call landed in, this side does not, and it sends the ID back.
 		if c.onReady != nil {
 			c.onReady(rf.ScriptID, rf.Reused)
 		}
@@ -163,7 +168,7 @@ func (c *Client) Execute(ctx context.Context, lang, script string, inputs map[st
 		return nil, NewError(ErrCodeSendFail, fmt.Sprintf("send execute: %v", err), err)
 	}
 
-	// 4) 结果循环（等待 done / error / exit）
+	// 4) Result loop (waiting for done / error / exit).
 	deadline := time.NewTimer(execTimeout)
 	defer deadline.Stop()
 
@@ -175,7 +180,8 @@ func (c *Client) Execute(ctx context.Context, lang, script string, inputs map[st
 	recvCh := make(chan recvResult, 1)
 
 	abort := func(code, msg string, cause error) (*Result, error) {
-		// 主动 kill：远端会销毁 worker（不回池），避免半截状态被复用
+		// Kill actively: the remote side destroys the worker (it does not go back to the pool), so a
+		// half-finished state is never reused.
 		_ = conn.SendFrame(&sandbox.Frame{Type: sandbox.FrameKill})
 		return nil, NewError(code, msg, cause)
 	}
@@ -202,12 +208,12 @@ func (c *Client) Execute(ctx context.Context, lang, script string, inputs map[st
 				fmt.Sprintf("worker communication: %v", r.err), r.err)
 		}
 		if r.f == nil {
-			continue // 双工不使用二进制帧
+			continue // the duplex channel does not use binary frames
 		}
 
 		switch r.f.Type {
 		case sandbox.FrameDone:
-			// 正常结束 → 告知沙箱服务可回收该 worker
+			// Normal completion → tell the sandbox service this worker can be reclaimed.
 			_ = conn.SendFrame(&sandbox.Frame{Type: sandbox.FrameClose})
 			return &Result{Value: r.f.Result, Logs: r.f.Logs}, nil
 
@@ -224,12 +230,12 @@ func (c *Client) Execute(ctx context.Context, lang, script string, inputs map[st
 			return nil, NewError(ErrCodeWorkerComm, "worker exited unexpectedly", nil)
 
 		default:
-			// 未知帧：忽略（前向兼容）
+			// Unknown frame: ignore it (forward compatibility).
 		}
 	}
 }
 
-// orCode 空错误码时回退到通用脚本错误。
+// orCode falls back to the generic script error when the code is empty.
 func orCode(code string) string {
 	if code == "" {
 		return ErrCodeScriptError
