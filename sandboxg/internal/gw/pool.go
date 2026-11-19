@@ -9,13 +9,13 @@ import (
 	"flame/tools/xregistry"
 )
 
-// Pool 后端池：持有实例列表，按负载快照 + 健康状态选后端。
+// Pool is the backend pool: it holds the instance list and picks a backend by load snapshot + health.
 type Pool struct {
 	mu       sync.RWMutex
 	backends []*Backend
 }
 
-// NewPool 从配置构造后端池。
+// NewPool builds a pool from configuration.
 func NewPool(cfgs []BackendConfig) *Pool {
 	p := &Pool{}
 	for _, c := range cfgs {
@@ -26,8 +26,9 @@ func NewPool(cfgs []BackendConfig) *Pool {
 	return p
 }
 
-// Reconcile 按目标实例列表对账：新增进池、消失移出，返回被移出的后端供清粘性。
-// 锁内只做集合运算，不碰后端内部状态（score 等由 refresh 异步维护）。
+// Reconcile brings the pool in line with the target instance list: new ones join, vanished ones leave, and the removed
+// backends are returned so the caller can drop their sticky bindings.
+// Under the lock it only does set arithmetic and never touches backend internals (score etc. are maintained by refresh).
 func (p *Pool) Reconcile(instances []xregistry.Instance, token string) (removed []*Backend) {
 	want := make(map[string]struct{}, len(instances))
 	for _, in := range instances {
@@ -41,12 +42,17 @@ func (p *Pool) Reconcile(instances []xregistry.Instance, token string) (removed 
 	for _, b := range p.backends {
 		have[b.URL] = b
 	}
-	for url := range want {
-		if _, ok := have[url]; !ok {
-			b := &Backend{URL: url, Token: token}
-			b.healthy.Store(true)
-			p.backends = append(p.backends, b)
+	// Append in the registry's order instead of ranging over the map: firstHealthy / the leastLoaded tie-break promise a
+	// deterministic order, and map iteration would reshuffle the pool on every reconcile.
+	for _, in := range instances {
+		url := fmt.Sprintf("http://%s:%d", in.Address, in.Port)
+		if _, ok := have[url]; ok {
+			continue
 		}
+		b := &Backend{URL: url, Token: token}
+		b.healthy.Store(true)
+		have[url] = b // also guards against the same instance showing up twice in one list
+		p.backends = append(p.backends, b)
 	}
 	kept := p.backends[:0]
 	for _, b := range p.backends {
@@ -60,7 +66,7 @@ func (p *Pool) Reconcile(instances []xregistry.Instance, token string) (removed 
 	return removed
 }
 
-// all 返回所有后端引用（拷贝）。供不关心健康状态的巡检使用（如 TTL 校验）。
+// all returns every backend reference (a copy), for sweeps that do not care about health (e.g. the TTL check).
 func (p *Pool) all() []*Backend {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -69,7 +75,7 @@ func (p *Pool) all() []*Backend {
 	return bs
 }
 
-// leastLoaded 从健康后端里选分数最小者（相等取第一个）。全部不健康返回 nil。
+// leastLoaded picks the healthy backend with the smallest score (the first one on a tie). Returns nil when none is healthy.
 func (p *Pool) leastLoaded() *Backend {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -85,7 +91,7 @@ func (p *Pool) leastLoaded() *Backend {
 	return best
 }
 
-// byURL 按 URL 找健康后端（粘性路由命中时用）。找不到或已摘除返回 nil。
+// byURL finds a healthy backend by URL (used when sticky routing hits). Returns nil when it is missing or already evicted.
 func (p *Pool) byURL(url string) *Backend {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -97,8 +103,9 @@ func (p *Pool) byURL(url string) *Backend {
 	return nil
 }
 
-// firstHealthy 返回第一个健康后端（确定性顺序，供 capabilities 等元数据透传，
-// 避免 leastLoaded 随负载跳变导致快照来源不稳定）。全部不健康返回 nil。
+// firstHealthy returns the first healthy backend in a deterministic order (used to pass through metadata such as
+// capabilities, so the snapshot source does not jump around with leastLoaded as the load changes). Returns nil when none is
+// healthy.
 func (p *Pool) firstHealthy() *Backend {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -110,7 +117,7 @@ func (p *Pool) firstHealthy() *Backend {
 	return nil
 }
 
-// snapshots 返回所有后端负载快照（只读拷贝，供 gateway /metrics）。
+// snapshots returns the load snapshot of every backend (a read-only copy, for the gateway's /metrics).
 func (p *Pool) snapshots() []backendSnapshot {
 	p.mu.RLock()
 	bs := make([]*Backend, len(p.backends))
@@ -123,7 +130,7 @@ func (p *Pool) snapshots() []backendSnapshot {
 	return out
 }
 
-// refreshAll 拉取所有后端的 /metrics 快照。先拷贝引用再逐个刷新，避免持锁做 IO。
+// refreshAll pulls the /metrics snapshot of every backend. It copies the references first so no IO happens under the lock.
 func (p *Pool) refreshAll(ctx context.Context) {
 	p.mu.RLock()
 	bs := make([]*Backend, len(p.backends))
@@ -134,10 +141,10 @@ func (p *Pool) refreshAll(ctx context.Context) {
 	}
 }
 
-// checkHealth 探所有后端 /healthz，更新健康状态；发现新摘除时回调 onUnhealthy。
+// checkHealth pings every backend's /healthz and updates its health; a newly evicted backend is reported through onUnhealthy.
 //
-// CompareAndSwap(true→false) 保证同一次「跨阈值」只回调一次（虽然 HealthLoop
-// 是单 goroutine，CAS 让语义更稳，避免未来并发健康检查时重复删绑定）。
+// CompareAndSwap(true->false) guarantees the callback fires once per "crossing the threshold" (HealthLoop is a single
+// goroutine today, but the CAS keeps the semantics stable if health checks ever run concurrently).
 func (p *Pool) checkHealth(ctx context.Context, failThreshold int, onUnhealthy func(*Backend)) {
 	p.mu.RLock()
 	bs := make([]*Backend, len(p.backends))
@@ -148,8 +155,8 @@ func (p *Pool) checkHealth(ctx context.Context, failThreshold int, onUnhealthy f
 		if b.ping(ctx) {
 			if !b.healthy.Load() {
 				xlog.Info("sandboxg: backend %s recovered", b.URL)
-				// 恢复多半意味着它刚重启过：配置（idle / janitor）可能变了，
-				// 让下一轮巡检重新拉 capabilities，而不是继续用旧缓存。
+				// A recovery usually means it was just restarted: the configuration (idle / janitor) may have changed, so
+				// let the next sweep re-pull capabilities instead of keeping the stale cache.
 				b.invalidateCaps()
 			}
 			b.healthy.Store(true)
