@@ -62,8 +62,8 @@ browser ── desktop ──> nexus ──┬──> PostgreSQL    business dat
 
 ## Design highlights
 
-A few decisions that run through the whole repository and shape both speed and boundaries. The full write-up (Chinese) lives
-in [`nexus/docs/design-highlights.md`](nexus/docs/design-highlights.md).
+A few decisions that run through the whole repository and shape both speed and boundaries. The full write-up lives in
+[`nexus/docs/design-highlights.md`](nexus/docs/design-highlights.md).
 
 - **Endpoints are called in-process** within the owning tenant: an `rpc` node invoking a flow or an agent pays no network hop,
   and stdio MCP sessions reuse one child process per connection, rebuilt only when the configuration fingerprint changes.
