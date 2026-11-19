@@ -13,13 +13,14 @@ import (
 	"flame/nexus/shared/repository/toolgrants"
 )
 
-// ===== 测试替身 =====
+// ===== Test doubles =====
 //
-// 一律「嵌入接口 + 只覆写 Resolve 会调到的方法」：未覆写的方法被调用即 panic，
-// 这样将来 Resolve 新增仓库依赖时测试会立刻炸出来，而不是静默拿到零值。
+// Always "embed the interface + override only what Resolve calls": an unoverridden method panics when called, so a future repository
+// dependency added to Resolve blows up here immediately instead of silently returning a zero value.
 
-// stubGrants 假授权仓库（agent 授权 + skill 工具依赖）。
-// 「不限制工具」开关已归 agent 自身，不再从这里读 —— 由用例直接传给 NewResolver。
+// stubGrants is a fake grant repository (agent grants + skill tool dependencies).
+// The "tools are unrestricted" switch now lives on the agent itself and is no longer read from here - cases pass it to NewResolver
+// directly.
 type stubGrants struct {
 	toolgrants.Repository
 	agentGrants []models.AgentToolGrant
@@ -34,21 +35,22 @@ func (s *stubGrants) ListSkillGrants(_ string, skillID string) ([]models.SkillTo
 	return s.skillGrants[skillID], nil
 }
 
-// stubMCPRepo 空 MCP 连接仓库：AllTools 只在连接非空时才会调 ListTools，这里返回空即可。
+// stubMCPRepo is an empty MCP connection repository: AllTools only calls ListTools when there is a connection, so empty is enough.
 type stubMCPRepo struct{ mcpconnections.Repository }
 
 func (s *stubMCPRepo) List(*auth.AuthInfo, *mcpconnections.ListMcpConnectionsRequest) ([]models.McpConnection, int, error) {
 	return nil, 0, nil
 }
 
-// stubRPCRepo 空 RPC 连接仓库。
+// stubRPCRepo is an empty RPC connection repository.
 type stubRPCRepo struct{ rpcconnections.Repository }
 
 func (s *stubRPCRepo) List(*auth.AuthInfo, *rpcconnections.ListRpcConnectionsRequest) ([]models.RpcConnection, int, error) {
 	return nil, 0, nil
 }
 
-// newResolveCatalog 构造只含内置工具、不碰数据库的目录（同包可直填私有字段）。
+// newResolveCatalog builds a catalog with built-in tools only that never touches the database (in-package tests may fill private fields
+// directly).
 func newResolveCatalog(g toolgrants.Repository) *Catalog {
 	return &Catalog{
 		schema:       "t0",
@@ -56,25 +58,25 @@ func newResolveCatalog(g toolgrants.Repository) *Catalog {
 		grants:       g,
 		mcp:          &stubMCPRepo{},
 		rpc:          &stubRPCRepo{},
-		eps:          &fakeEndpointRepo{}, // 复用 catalog_test.go 的假端点仓库
+		eps:          &fakeEndpointRepo{}, // reuses the fake endpoint repository from catalog_test.go
 	}
 }
 
-// Resolve 的授权口径（本次变更的核心，锁死在这里）：
+// The grant criterion of Resolve (the core of the change, pinned here):
 //
-//	required —— 唯一能独立生效的授权：恒注入，deny 也动不了它；
-//	allow    —— 只是「本轮已激活（use_skill）技能声明的工具依赖」的过滤器，**不能单独生效**；
-//	deny     —— 减法，对 required 无效；
-//	不限制工具 —— 关掉 allow 这道收窄，让 skill 声明的依赖全给；
-//	skill 无依赖 —— allow 一律不注入（不再回落「授权即生效」），只留 required。
+//	required - the only grant that can take effect on its own: always injected, and deny cannot touch it;
+//	allow    - only a filter over "tool dependencies declared by skills activated in this run"; it **never takes effect on its own**;
+//	deny     - subtraction, with no power over required;
+//	unrestricted - turns off the allow narrowing, so every declared dependency is granted;
+//	a skill with no dependencies - allow is never injected (no fallback to "a grant takes effect"), only required remains.
 //
-// 这条规则决定的是权限边界，改语义必须改这里 —— 否则 `case` 顺序被谁调回去都没人发现。
+// This rule decides the permission boundary, so a semantic change must change this test - otherwise a `case` reordering goes unnoticed.
 func TestResolveGrantSemantics(t *testing.T) {
 	const (
 		requiredRef = "builtin:read_file"   // required
-		allowRef    = "builtin:exec"        // allow，且被 skill 声明
-		idleAllow   = "builtin:write_file"  // allow，但没被任何 skill 声明
-		denyRef     = "builtin:delete_file" // deny，且被 skill 声明
+		allowRef    = "builtin:exec"        // allow, and declared by a skill
+		idleAllow   = "builtin:write_file"  // allow, but declared by no skill
+		denyRef     = "builtin:delete_file" // deny, and declared by a skill
 		skillID     = "sk1"
 	)
 
@@ -90,12 +92,12 @@ func TestResolveGrantSemantics(t *testing.T) {
 		grants       []models.AgentToolGrant
 		skillDeps    []models.SkillToolGrant
 		unrestricted bool
-		want         []string // 最终生效的工具名（required 在前，其余按技能声明顺序）
+		want         []string // the effective tool names (required first, the rest in skill declaration order)
 		wantDegraded bool
-		wantWarn     string // warnings 里必须出现的子串（空 = 不校验）
+		wantWarn     string // substring the warnings must contain (empty = not checked; the copy itself is user-facing)
 	}{
 		{
-			name: "skill 无依赖：allow 一律不注入，只留 required",
+			name: "skill has no dependencies: allow is never injected, only required remains",
 			grants: []models.AgentToolGrant{
 				grant(models.GrantKindRequired, requiredRef),
 				grant(models.GrantKindAllow, allowRef),
@@ -106,7 +108,7 @@ func TestResolveGrantSemantics(t *testing.T) {
 			wantWarn:     "allow 授权本轮全部未生效",
 		},
 		{
-			name: "skill 无依赖 + 不限制工具：仍然只留 required（开关也不看 allow）",
+			name: "skill has no dependencies + unrestricted: still required only (the switch does not look at allow either)",
 			grants: []models.AgentToolGrant{
 				grant(models.GrantKindRequired, requiredRef),
 				grant(models.GrantKindAllow, allowRef),
@@ -117,19 +119,19 @@ func TestResolveGrantSemantics(t *testing.T) {
 			wantWarn:     "allow 授权本轮全部未生效",
 		},
 		{
-			name: "有依赖：required ∪ (候选 ∩ allow) —— idleAllow 没被声明，不生效",
+			name: "with dependencies: required ∪ (candidates ∩ allow) - idleAllow was not declared, so it stays out",
 			grants: []models.AgentToolGrant{
 				grant(models.GrantKindRequired, requiredRef),
 				grant(models.GrantKindAllow, allowRef),
 				grant(models.GrantKindAllow, idleAllow),
 			},
 			skillDeps: []models.SkillToolGrant{dep(allowRef)},
-			// builtin:exec 组含 exec 与 run_skill_script（两者同走 /v1/exec，
-			// 见 tools/skillrun.go 的分类说明）；shell / script 各自成组。
+			// The builtin:exec group holds exec and run_skill_script (both go through /v1/exec, see the category notes in
+			// tools/skillrun.go); shell / script each form their own group.
 			want: []string{"read_file", "exec", "run_skill_script"},
 		},
 		{
-			name: "有依赖但不限制工具：候选全给，不经 allow 收窄",
+			name: "with dependencies but unrestricted: every candidate is granted, without allow narrowing",
 			grants: []models.AgentToolGrant{
 				grant(models.GrantKindRequired, requiredRef),
 			},
@@ -138,19 +140,19 @@ func TestResolveGrantSemantics(t *testing.T) {
 			want:         []string{"read_file", "exec", "run_skill_script"},
 		},
 		{
-			name: "deny 能减掉候选，但动不了 required",
+			name: "deny subtracts candidates but cannot touch required",
 			grants: []models.AgentToolGrant{
 				grant(models.GrantKindRequired, requiredRef),
 				grant(models.GrantKindAllow, allowRef),
 				grant(models.GrantKindAllow, denyRef),
-				grant(models.GrantKindDeny, denyRef),     // 命中候选 → 减掉
-				grant(models.GrantKindDeny, requiredRef), // 命中 required → 无效
+				grant(models.GrantKindDeny, denyRef),     // hits a candidate -> subtracted
+				grant(models.GrantKindDeny, requiredRef), // hits required -> no effect
 			},
 			skillDeps: []models.SkillToolGrant{dep(allowRef), dep(denyRef)},
 			want:      []string{"read_file", "exec", "run_skill_script"},
 		},
 		{
-			name:   "三者皆空：什么都没有",
+			name:   "all three empty: nothing at all",
 			grants: nil,
 			want:   []string{},
 		},
@@ -162,7 +164,8 @@ func TestResolveGrantSemantics(t *testing.T) {
 				agentGrants: tc.grants,
 				skillGrants: map[string][]models.SkillToolGrant{skillID: tc.skillDeps},
 			}
-			// 只有真的声明了依赖才把这个 skill 放进「本轮已激活」清单（对齐 LoadedSkills 口径）
+			// Only a skill that really declares dependencies goes into the "activated in this run" list (the same criterion as
+			// LoadedSkills)
 			visible := []VisibleSkill{}
 			if len(tc.skillDeps) > 0 {
 				visible = append(visible, VisibleSkill{ID: skillID, Name: skillID})
@@ -178,7 +181,7 @@ func TestResolveGrantSemantics(t *testing.T) {
 				got = []string{}
 			}
 			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("生效工具 = %v, want %v", got, tc.want)
+				t.Errorf("effective tools = %v, want %v", got, tc.want)
 			}
 			if res.Degraded != tc.wantDegraded {
 				t.Errorf("Degraded = %v, want %v", res.Degraded, tc.wantDegraded)
@@ -186,15 +189,16 @@ func TestResolveGrantSemantics(t *testing.T) {
 			if tc.wantWarn != "" {
 				joined := strings.Join(res.Warnings, "\n")
 				if !strings.Contains(joined, tc.wantWarn) {
-					t.Errorf("warnings = %q, 期望包含 %q", joined, tc.wantWarn)
+					t.Errorf("warnings = %q, want them to contain %q", joined, tc.wantWarn)
 				}
 			}
 		})
 	}
 }
 
-// 反证：allow 与「候选」必须来自「本轮已激活的 skill」。
-// 没被 use_skill 激活的技能即使声明了工具依赖（哪怕是绑定给它的），也不该把工具带出来 —— 紧口径，防扩权。
+// The counter-proof: allow and the "candidates" must both come from **skills activated in this run**.
+// A skill that use_skill never activated must not bring its tools in even when it declares them (bound to that agent or not) - the
+// criterion is deliberately tight, to prevent privilege expansion.
 func TestResolveIgnoresUnboundSkillDeps(t *testing.T) {
 	const (
 		requiredRef = "builtin:read_file"
@@ -206,7 +210,7 @@ func TestResolveIgnoresUnboundSkillDeps(t *testing.T) {
 			{GrantKind: models.GrantKindRequired, ItemType: models.GrantItemTool, Ref: requiredRef},
 			{GrantKind: models.GrantKindAllow, ItemType: models.GrantItemTool, Ref: allowRef},
 		},
-		// skill 声明了 exec，但下面不把它列为「本轮已激活」
+		// The skill declares exec, but it is not listed as "activated in this run" below
 		skillGrants: map[string][]models.SkillToolGrant{
 			skillID: {{SkillID: skillID, ItemType: models.GrantItemTool, Ref: allowRef}},
 		},
@@ -217,17 +221,18 @@ func TestResolveIgnoresUnboundSkillDeps(t *testing.T) {
 		t.Fatalf("Resolve = %v, want nil", err)
 	}
 	if want := []string{"read_file"}; !reflect.DeepEqual(res.FinalNames, want) {
-		t.Errorf("生效工具 = %v, want %v（未激活的 skill 不应带出工具）", res.FinalNames, want)
+		t.Errorf("effective tools = %v, want %v (an inactive skill must not bring tools in)", res.FinalNames, want)
 	}
 }
 
-// 依赖快照优先于实时表：正式运行激活技能时带的是**当前版本**的声明，
-// 草稿里增删依赖不能漏进线上（只冻展示不冻生效，等于冻结没冻到底）。
+// The dependency snapshot wins over the live table: activating a skill in a production run carries the **current version's** declaration,
+// and dependencies added or removed in the draft must not leak into production (freezing the display but not what takes effect is not a
+// freeze at all).
 func TestResolvePrefersFrozenDeps(t *testing.T) {
 	const (
 		requiredRef = "builtin:read_file"
-		frozenRef   = "builtin:exec"       // 快照与实时表都有
-		draftOnly   = "builtin:write_file" // 只在实时表里（草稿新加的依赖）
+		frozenRef   = "builtin:exec"       // in both the snapshot and the live table
+		draftOnly   = "builtin:write_file" // live table only (a dependency newly added in the draft)
 		skillID     = "sk1"
 	)
 	agentGrants := []models.AgentToolGrant{
@@ -249,22 +254,22 @@ func TestResolvePrefersFrozenDeps(t *testing.T) {
 		cause string
 	}{
 		{
-			name:  "有快照：只认快照，草稿新增的依赖不生效",
+			name:  "has a snapshot: only the snapshot counts, a dependency added in the draft stays out",
 			deps:  []string{frozenRef},
-			want:  []string{"read_file", "exec", "run_skill_script"}, // builtin:exec 组含这两个
-			cause: "草稿里给技能加了一条依赖，线上不该被点亮",
+			want:  []string{"read_file", "exec", "run_skill_script"}, // the builtin:exec group holds these two
+			cause: "a dependency added to the skill in the draft must not light up in production",
 		},
 		{
-			name:  "空快照：这一版确实没有依赖，不回落实时表",
+			name:  "empty snapshot: this version really has no dependencies, no fallback to the live table",
 			deps:  []string{},
 			want:  []string{"read_file"},
-			cause: "空切片是权威值，回落查库就等于让草稿说了算",
+			cause: "an empty slice is authoritative; falling back to the database would let the draft decide",
 		},
 		{
-			name:  "nil 快照：无版本信息，回落实时表（老口径）",
+			name:  "nil snapshot: no version information, fall back to the live table (the legacy criterion)",
 			deps:  nil,
 			want:  []string{"read_file", "exec", "run_skill_script", "write_file"},
-			cause: "管理端预览 / 未绑定版本的场景仍要能看到实时声明",
+			cause: "the admin preview / an unversioned scenario still has to see the live declaration",
 		},
 	}
 
@@ -277,19 +282,19 @@ func TestResolvePrefersFrozenDeps(t *testing.T) {
 				t.Fatalf("Resolve = %v, want nil", err)
 			}
 			if !reflect.DeepEqual(res.FinalNames, tc.want) {
-				t.Errorf("生效工具 = %v, want %v（%s）", res.FinalNames, tc.want, tc.cause)
+				t.Errorf("effective tools = %v, want %v (%s)", res.FinalNames, tc.want, tc.cause)
 			}
 		})
 	}
 }
 
-// 截断优先级：required 恒保留，其余按技能声明顺序。
-// 旧实现按名字字母序截断，多激活一个技能就可能把 required 或先声明的依赖静默切掉。
+// Truncation priority: required is always kept, the rest follow skill declaration order.
+// The old implementation truncated by name, so activating one more skill could silently cut required or an earlier-declared dependency.
 func TestResolveTruncationPrefersRequired(t *testing.T) {
 	const skillID = "sk1"
 	requiredRef := "builtin:list_agents"
-	firstDep := "builtin:write_file" // 声明在前
-	secondDep := "builtin:exec"      // 字母序更靠前，但声明在后 —— 应当先被丢弃
+	firstDep := "builtin:write_file" // declared first
+	secondDep := "builtin:exec"      // earlier alphabetically, but declared later - so it should be dropped first
 
 	g := &stubGrants{
 		agentGrants: []models.AgentToolGrant{
@@ -311,21 +316,21 @@ func TestResolveTruncationPrefersRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve = %v, want nil", err)
 	}
-	// required 必须在，且先声明的 write_file 优先于字母序更靠前的 exec
+	// required must be there, and the earlier-declared write_file beats the alphabetically earlier exec
 	want := []string{"list_agents", "write_file"}
 	if !reflect.DeepEqual(res.FinalNames, want) {
-		t.Errorf("截断后工具 = %v, want %v", res.FinalNames, want)
+		t.Errorf("tools after truncation = %v, want %v", res.FinalNames, want)
 	}
 	if !strings.Contains(strings.Join(res.Warnings, "\n"), "截断") {
-		t.Errorf("截断应有告警, got %v", res.Warnings)
+		t.Errorf("truncation should warn, got %v", res.Warnings)
 	}
 }
 
-// 自定义工具的授权必须真的落进最终工具集。
+// A custom tool grant must really end up in the final tool set.
 //
-// 曾经的 bug：AllTools() 漏了 script 这一类 —— ToolsOfRef 能展开，最后一步却按
-// 「引用的工具已不存在：custom:xxx」丢掉。表现为「授权保存成功、agent 永远看不见」，
-// 而告警文本指向 ref（让人以为 ref 写错），实际是目录缺了一整类工具。
+// The old bug: AllTools() missed the script family - ToolsOfRef expanded fine, but the last step dropped it as "the referenced tool no
+// longer exists: custom:xxx". It showed up as "the grant saved fine and the agent never sees it", with the warning text pointing at the ref
+// (so the ref looked wrong) when the catalog was actually missing a whole tool family.
 func TestResolveInjectsCustomTool(t *testing.T) {
 	const short = "interest-final-amount"
 	g := &stubGrants{agentGrants: []models.AgentToolGrant{{
@@ -341,11 +346,11 @@ func TestResolveInjectsCustomTool(t *testing.T) {
 	}
 	want := []string{tools.CustomToolPrefix + short}
 	if !reflect.DeepEqual(res.FinalNames, want) {
-		t.Fatalf("生效工具 = %v, want %v（自定义工具的 required 授权应恒注入）", res.FinalNames, want)
+		t.Fatalf("effective tools = %v, want %v (a required grant on a custom tool is always injected)", res.FinalNames, want)
 	}
 	for _, w := range res.Warnings {
 		if strings.Contains(w, "已不存在") {
-			t.Errorf("不该报「已不存在」（说明 AllTools 又漏了自定义工具）: %s", w)
+			t.Errorf("it must not report \"已不存在\" (that means AllTools is missing custom tools again): %s", w)
 		}
 	}
 }

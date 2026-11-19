@@ -15,7 +15,7 @@ import (
 	"flame/tools/xsql"
 )
 
-// preset:default 必须与 models.DefaultAgentTools 完全一致 —— 单一真源，防漂移。
+// preset:default must match models.DefaultAgentTools exactly - one source of truth, guarded against drift.
 func TestDefaultPresetMatchesModels(t *testing.T) {
 	want := models.DefaultAgentToolGrants()
 
@@ -26,43 +26,44 @@ func TestDefaultPresetMatchesModels(t *testing.T) {
 		}
 	}
 	if got == nil {
-		t.Fatal("preset:default 不存在")
+		t.Fatal("preset:default does not exist")
 	}
 	if len(got) != len(want) {
-		t.Fatalf("preset:default 成员数 %d != DefaultAgentTools %d", len(got), len(want))
+		t.Fatalf("preset:default has %d members, DefaultAgentTools has %d", len(got), len(want))
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("第 %d 项 %+v != %+v", i, got[i], want[i])
+			t.Errorf("entry %d: %+v != %+v", i, got[i], want[i])
 		}
 	}
 }
 
-// 共享层的 ref 前缀常量必须与服务层的 scope 常量一致（分层不许反向依赖，靠测试守住）。
+// The shared layer's ref-prefix constant must match the service layer's scope constant (layering forbids a reverse dependency, so a test
+// guards it).
 func TestBuiltinPrefixConstantMatches(t *testing.T) {
 	if models.GrantRefBuiltinPrefix != ScopeBuiltin+":" {
-		t.Fatalf("GrantRefBuiltinPrefix=%q 与 ScopeBuiltin=%q 不一致",
+		t.Fatalf("GrantRefBuiltinPrefix=%q does not match ScopeBuiltin=%q",
 			models.GrantRefBuiltinPrefix, ScopeBuiltin)
 	}
 }
 
-// builtin:other 已删除：不再是类别组，引用它也展开不出工具。
+// builtin:other is gone: it is no longer a category group, and referencing it expands to nothing.
 func TestBuiltinOtherRemoved(t *testing.T) {
 	if BuiltinCategories()["other"] {
-		t.Fatal("builtin:other 不应再是内置类别")
+		t.Fatal("builtin:other should no longer be a built-in category")
 	}
 	list, err := NewCatalog("t0", nil, true).ToolsOfRef("builtin:other")
 	if err != nil {
 		t.Fatalf("ToolsOfRef = %v, want nil", err)
 	}
 	if len(list) != 0 {
-		t.Fatalf("ToolsOfRef(builtin:other) = %d 个工具, want 0", len(list))
+		t.Fatalf("ToolsOfRef(builtin:other) = %d tools, want 0", len(list))
 	}
 }
 
-// builtin:super 是拆组前的聚合分类，现在没有任何工具归属它，只作为**兼容展开入口**存在：
-// 必须等价于五个管理组的并集。断掉的话，存量授权行（builtin:super）会静默解析成空 ——
-// 超级智能体丢掉全部管理能力，且没有任何报错。
+// builtin:super is the aggregate category from before the split; no tool belongs to it now, and it survives only as a **compatibility
+// expansion entry**: it has to equal the union of the five management groups. Break it and existing grant rows (builtin:super) silently
+// resolve to nothing - the super agent loses all management capability with no error at all.
 func TestBuiltinSuperExpandsToAdminGroups(t *testing.T) {
 	cat := NewCatalog("t0", nil, true)
 
@@ -78,14 +79,14 @@ func TestBuiltinSuperExpandsToAdminGroups(t *testing.T) {
 			t.Fatalf("ToolsOfRef(%s: %s) = %v", ScopeBuiltin, category, err)
 		}
 		if len(list) == 0 {
-			t.Errorf("管理组 %q 下没有工具", category)
+			t.Errorf("management group %q contains no tools", category)
 		}
 		for _, ti := range list {
 			want[ti.Ref] = true
 		}
 	}
 	if len(want) == 0 {
-		t.Fatal("五个管理组的并集为空")
+		t.Fatal("the union of the five management groups is empty")
 	}
 
 	got := map[string]bool{}
@@ -94,28 +95,28 @@ func TestBuiltinSuperExpandsToAdminGroups(t *testing.T) {
 	}
 	for ref := range want {
 		if !got[ref] {
-			t.Errorf("builtin:super 展开缺少 %q", ref)
+			t.Errorf("builtin:super expansion is missing %q", ref)
 		}
 	}
 	for ref := range got {
 		if !want[ref] {
-			t.Errorf("builtin:super 展开多出 %q", ref)
+			t.Errorf("builtin:super expansion has an extra %q", ref)
 		}
 	}
 }
 
-// builtin:super 不能出现在 Groups() 里：它没有成员、且与五个管理组重复，
-// 列进 builtinGroupCategories 会让面板多一张同名空卡。
+// builtin:super must not appear in Groups(): it has no members of its own and duplicates the five management groups, so listing it in
+// builtinGroupCategories would add an empty card under the same name.
 func TestSuperIsCompatibleCategoryNotGroup(t *testing.T) {
 	if !BuiltinCategories()[tools.CategorySuper] {
-		t.Error("builtin:super 必须是可解析的内置类别（否则存量授权行解析失败）")
+		t.Error("builtin:super must remain a parseable built-in category (otherwise existing grant rows fail to resolve)")
 	}
 	for _, category := range builtinGroupCategories {
 		if category == tools.CategorySuper {
-			t.Error("builtin:super 不应出现在 builtinGroupCategories（会多出一张重复卡片）")
+			t.Error("builtin:super must not appear in builtinGroupCategories (it would add a duplicate card)")
 		}
 	}
-	// 每个出现在目录里的组都必须真的有成员，否则就是一张永远空着的卡片。
+	// Every group that appears in the catalog must really have members, or it is a card that stays empty forever.
 	cat := NewCatalog("t0", nil, true)
 	for _, category := range builtinGroupCategories {
 		list, err := cat.ToolsOfRef(ScopeBuiltin + ":" + category)
@@ -123,24 +124,24 @@ func TestSuperIsCompatibleCategoryNotGroup(t *testing.T) {
 			t.Fatalf("ToolsOfRef(builtin:%s) = %v", category, err)
 		}
 		if len(list) == 0 {
-			t.Errorf("目录里的组 builtin:%s 没有成员", category)
+			t.Errorf("the catalog's group builtin:%s has no members", category)
 		}
 	}
 }
 
-// stubCategorylessTool 未标注分类的内置工具（测试用）。
+// stubCategorylessTool is a built-in tool with no category annotation (test only).
 type stubCategorylessTool struct{}
 
 func (s *stubCategorylessTool) Meta() tools.ToolMeta {
-	return tools.ToolMeta{Name: "stub_categoryless", Description: "测试用：未标注分类"}
+	return tools.ToolMeta{Name: "stub_categoryless", Description: "test only: no category annotation"}
 }
 
 func (s *stubCategorylessTool) Execute(_ context.Context, _ *tools.Context, _ map[string]any) (any, error) {
 	return nil, nil
 }
 
-// 未标注分类的工具不进任何类别组：Source 留空（不再回落为 builtin:other），
-// 因而不会被任何 builtin:<category> 组命中（builtinByCategory 按 Source 比对）。
+// An uncategorised tool joins no category group: Source stays empty (it no longer falls back to builtin:other), so no builtin:<category>
+// group matches it (builtinByCategory compares by Source).
 func TestUncategorizedToolHasNoGroup(t *testing.T) {
 	tools.Register(&stubCategorylessTool{})
 
@@ -155,28 +156,28 @@ func TestUncategorizedToolHasNoGroup(t *testing.T) {
 		}
 		for category := range BuiltinCategories() {
 			if it.Source == ScopeBuiltin+":"+category {
-				t.Errorf("未分类工具被归入类别 %q", category)
+				t.Errorf("an uncategorised tool was filed under category %q", category)
 			}
 		}
 	}
 	if !found {
-		t.Fatal("stub_categoryless 未出现在 BuiltinTools 中")
+		t.Fatal("stub_categoryless does not appear in BuiltinTools")
 	}
 }
 
-// 预设组名不得重复（Groups() 里 preset:<name> 是唯一键）。
+// Preset group names must be unique (preset:<name> is the unique key in Groups()).
 func TestPresetNamesUnique(t *testing.T) {
 	seen := map[string]bool{}
 	for _, pg := range PresetGroups {
 		if seen[pg.Name] {
-			t.Errorf("预设组名重复: %q", pg.Name)
+			t.Errorf("duplicate preset group name: %q", pg.Name)
 		}
 		seen[pg.Name] = true
 	}
 }
 
-// fakeEndpointRepo 假端点仓库：只实现 List，其余方法返回零值。
-// List 记录收到的查询请求，并「如实」按协议 / 目标类型过滤（真实实现在 SQL 层过滤）。
+// fakeEndpointRepo is a fake endpoint repository: only List is implemented, the rest return zero values.
+// List records the request it received and filters "faithfully" by protocol / target type (the real implementation filters in SQL).
 type fakeEndpointRepo struct {
 	gotReq *svcendpoints.ListSvcEndpointsRequest
 	list   []models.SvcEndpoint
@@ -228,43 +229,44 @@ func (f *fakeEndpointRepo) filter(req *svcendpoints.ListSvcEndpointsRequest) []m
 	return out
 }
 
-// newTestCatalog 构造注入了假端点仓库的目录（同包可直填私有字段）。
+// newTestCatalog builds a catalog with the fake endpoint repository injected (the test is in-package, so private fields can be filled
+// directly).
 func newTestCatalog(eps svcendpoints.SvcEndpointRepository) *Catalog {
 	return &Catalog{schema: "t0", isSupervisor: true, eps: eps}
 }
 
-// 有内置工具归属的分类必须都在 builtinGroupCategories 里 —— 漏一个，该组在授权
-// 面板上整个消失，连组内工具也一起不见（前端只渲染 groups），而且不会报任何错。
+// Every category that has built-in tools must be in builtinGroupCategories - miss one and the whole group disappears from the grant panel,
+// taking its tools with it (the frontend renders groups only), and nothing errors.
 //
-// 历史教训：shell / script 从 exec 拆出来时，BuiltinCategories 与 builtinCategoryLabel
-// 都跟着更新了，只有这份显式清单漏了，导致 builtin:shell 在 UI 里根本选不到。
+// The historical lesson: when shell / script were split out of exec, BuiltinCategories and builtinCategoryLabel were both updated, and only
+// this explicit list was missed, which made builtin:shell impossible to select in the UI.
 func TestBuiltinGroupCategoriesCoverTools(t *testing.T) {
 	listed := map[string]bool{}
 	for _, cat := range builtinGroupCategories {
 		listed[cat] = true
 		if !BuiltinCategories()[cat] {
-			t.Errorf("builtinGroupCategories 含 %q，但它不是合法内置类别（BuiltinCategories 里没有）", cat)
+			t.Errorf("builtinGroupCategories contains %q, which is not a valid built-in category (missing from BuiltinCategories)", cat)
 		}
 	}
 
 	for _, ti := range BuiltinTools() {
 		cat := builtinCategory(ti)
 		if cat == "" {
-			continue // 未标注分类：本就不进任何类别组
+			continue // uncategorised: it joins no category group anyway
 		}
 		if !listed[cat] {
-			t.Errorf("分类 %q 有内置工具（如 %s），但不在 builtinGroupCategories 里 —— "+
-				"该组在授权面板上会整个消失", cat, ti.Name)
+			t.Errorf("category %q has built-in tools (such as %s) but is not in builtinGroupCategories - "+
+				"the group will disappear from the grant panel", cat, ti.Name)
 		}
 	}
 }
 
-// local:rpc 只收「工作流端点」：agent 端点既不进组，也不接受单个 ref 引用。
-// 理由：agent 端点内部直调会绕过 call_agent 的闸门（agent_relations / IsRunnable /
-// main 可被调用），且端点名恒等于实体名，agent 与 flow 同名会撞 ref 与工具名。
+// local:rpc only takes "workflow endpoints": agent endpoints neither join the group nor accept a single ref.
+// The reason: a direct call inside an agent endpoint bypasses call_agent's gates (agent_relations / IsRunnable / main being callable), and
+// an endpoint name always equals the entity name, so an agent and a flow with the same name would collide in both ref and tool name.
 //
-// 过滤发生在请求参数（SQL 层），故断言 1 是核心：「传了 target_type=flow」。
-// 断言 2/3 用如实照做的假仓库，覆盖「组展开 / 单个 ref」两条路径的结果。
+// The filter happens in the request arguments (SQL layer), so assertion 1 is the core one: "target_type=flow was passed".
+// Assertions 2/3 use a faithful fake repository to cover the results of both paths (group expansion / single ref).
 func TestLocalRPCToolsOnlyFlowEndpoints(t *testing.T) {
 	repo := &fakeEndpointRepo{list: []models.SvcEndpoint{
 		{ID: "e1", Name: "daily-report", Protocol: LocalProtocolRPC, TargetType: LocalTargetFlow},
@@ -277,37 +279,37 @@ func TestLocalRPCToolsOnlyFlowEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToolsOfRef(local:rpc) = %v, want nil", err)
 	}
-	// 1) 查询条件：协议 rpc + 目标 flow
+	// 1) Query conditions: protocol rpc + target flow
 	if repo.gotReq == nil {
-		t.Fatal("端点仓库未被查询")
+		t.Fatal("the endpoint repository was never queried")
 	}
 	if repo.gotReq.Protocol != LocalProtocolRPC || repo.gotReq.TargetType != LocalTargetFlow {
 		t.Fatalf("List req = {protocol:%q target_type:%q}, want {%q %q}",
 			repo.gotReq.Protocol, repo.gotReq.TargetType, LocalProtocolRPC, LocalTargetFlow)
 	}
-	// 2) 组展开只剩工作流端点
+	// 2) Group expansion leaves only the workflow endpoint
 	wantRef := ScopeLocal + ":" + LocalProtocolRPC + ":daily-report"
 	if len(list) != 1 || list[0].Ref != wantRef {
-		t.Fatalf("ToolsOfRef(local:rpc) = %+v, want 仅 %s", list, wantRef)
+		t.Fatalf("ToolsOfRef(local:rpc) = %+v, want only %s", list, wantRef)
 	}
 	if list[0].Name != "local__daily-report" {
-		t.Errorf("工具名 = %q, want %q", list[0].Name, "local__daily-report")
+		t.Errorf("tool name = %q, want %q", list[0].Name, "local__daily-report")
 	}
 
-	// 3) 单个 agent 端点 ref 展开为空
+	// 3) A single agent endpoint ref expands to nothing
 	got, err := c.ToolsOfRef("local:rpc:poet")
 	if err != nil {
 		t.Fatalf("ToolsOfRef(local:rpc:poet) = %v, want nil", err)
 	}
 	if len(got) != 0 {
-		t.Fatalf("agent 端点不应成为工具，got %+v", got)
+		t.Fatalf("an agent endpoint must not become a tool, got %+v", got)
 	}
 }
 
-// 本地端点的工具参数必须取自工作流的 arguments（ep.InputSchema）。
+// A local endpoint's tool arguments must come from the workflow's arguments (ep.InputSchema).
 //
-// 缺了它模型看到的是「无参数工具」：要么不敢调，要么瞎编参数撞 required 校验
-// （mcp / rpc 分支踩过同一个坑，见 catalog.go 里 toolSchema 的说明）。
+// Without it the model sees a "tool with no arguments": either it dares not call it, or it invents arguments and trips the required check
+// (the mcp / rpc branches hit the same pitfall, see the notes on toolSchema in catalog.go).
 func TestLocalRPCToolCarriesInputSchema(t *testing.T) {
 	repo := &fakeEndpointRepo{list: []models.SvcEndpoint{
 		{
@@ -329,17 +331,17 @@ func TestLocalRPCToolCarriesInputSchema(t *testing.T) {
 		t.Fatalf("ToolsOfRef = %v", err)
 	}
 	if len(list) != 1 {
-		t.Fatalf("工具数 = %d, want 1", len(list))
+		t.Fatalf("tool count = %d, want 1", len(list))
 	}
 	if list[0].Parameters == nil {
-		t.Fatal("本地端点工具缺 Parameters —— 模型会看到无参数工具")
+		t.Fatal("the local endpoint tool is missing Parameters - the model would see a tool with no arguments")
 	}
 	if list[0].Parameters["type"] != "object" {
 		t.Errorf("Parameters.type = %v, want object", list[0].Parameters["type"])
 	}
 }
 
-// refSet 把工具清单收成名字集合。
+// refSet reduces a tool list to a set of names.
 func refSet(list []ToolInfo) map[string]bool {
 	out := make(map[string]bool, len(list))
 	for _, t := range list {
@@ -348,14 +350,15 @@ func refSet(list []ToolInfo) map[string]bool {
 	return out
 }
 
-// 分类即权限：三组技能工具必须各就各位，且互不重叠。
-//   - builtin:skill      看 / 用（list_skills / read_skill / use_skill），普通 agent 可用，超级智能体常驻
-//   - builtin:skill-own  自建私有（*_own_skill），普通 agent 可用但默认不授
-//   - builtin:skill-admin 建共享 / 替别的 agent 建私有，仅超级智能体
+// The category is the permission: the three skill-tool groups must each sit in their own place, with no overlap.
+//   - builtin:skill       view / use (list_skills / read_skill / use_skill), available to ordinary agents, resident for the super agent
+//   - builtin:skill-own   build your own private ones (*_own_skill), available to ordinary agents but not granted by default
+//   - builtin:skill-admin create shared ones / create private ones for other agents, super agent only
 //
-// 分类是三层收口的唯一判据（目录不产出 / 授不了权 / 执行层硬闸），改一处会同时影响三层。
+// The category is the only criterion of the three-layer closure (catalog does not produce it / it cannot be granted / the execution layer
+// hard-gates it), so changing it moves all three layers at once.
 func TestSkillToolGroups(t *testing.T) {
-	c := newTestCatalog(nil) // isSupervisor=true；内置组展开不碰仓库
+	c := newTestCatalog(nil) // isSupervisor=true; expanding built-in groups does not touch any repository
 
 	expand := func(ref string) map[string]bool {
 		list, err := c.ToolsOfRef(ref)
@@ -368,49 +371,50 @@ func TestSkillToolGroups(t *testing.T) {
 	ownNames := expand("builtin:skill-own")
 	adminNames := expand("builtin:skill-admin")
 
-	// 只看技能：绝不能被 own / admin 混进来（否则「给某 agent 看技能」会顺带给出写权限）。
+	// Viewing skills only: own / admin must never leak in (otherwise "let an agent view skills" also hands out write permission).
 	for _, n := range []string{"list_skills", "read_skill", "use_skill"} {
 		if !skillNames[n] {
-			t.Errorf("builtin:skill 缺少 %q", n)
+			t.Errorf("builtin:skill is missing %q", n)
 		}
 		if ownNames[n] || adminNames[n] {
-			t.Errorf("%q 只应属于 builtin:skill", n)
+			t.Errorf("%q should belong to builtin:skill only", n)
 		}
 	}
 
 	own := []string{"create_own_skill", "update_own_skill", "delete_own_skill"}
 	for _, n := range own {
 		if !ownNames[n] {
-			t.Errorf("builtin:skill-own 缺少 %q（agent 将无法自建私有 skill）", n)
+			t.Errorf("builtin:skill-own is missing %q (the agent could not build its own private skills)", n)
 		}
-		// 混进 skill 会让「只看技能」变成「能写自己的提示词面」；
-		// 混进 skill-admin 会让普通 agent 永远拿不到自建能力。
+		// Leaking into skill would turn "view skills" into "rewrite your own prompt surface";
+		// leaking into skill-admin would deny ordinary agents the ability to build their own.
 		if skillNames[n] || adminNames[n] {
-			t.Errorf("%q 只应属于 builtin:skill-own", n)
+			t.Errorf("%q should belong to builtin:skill-own only", n)
 		}
 	}
 
-	// 共享三件套 + 指定归属三件套：都在 skill-admin（仅超级智能体），且不得漏到普通组。
+	// The three shared tools + the three explicit-owner tools: all in skill-admin (super agent only), and they must not leak into the
+	// ordinary groups.
 	for _, n := range []string{
 		"create_shared_skill", "update_shared_skill", "delete_shared_skill",
 		"create_agent_skill", "update_agent_skill", "delete_agent_skill",
 	} {
 		if !adminNames[n] {
-			t.Errorf("builtin:skill-admin 缺少 %q", n)
+			t.Errorf("builtin:skill-admin is missing %q", n)
 		}
 		if skillNames[n] || ownNames[n] {
-			t.Errorf("%q 只应属于 builtin:skill-admin（否则非超级智能体就能建共享 skill / 写别人的提示词）", n)
+			t.Errorf("%q should belong to builtin:skill-admin only (otherwise a non-super agent could build shared skills / write someone else's prompt)", n)
 		}
 	}
-	// 旧的「单工具 + scope 参数」形态必须彻底消失（否则授权 ref 与工具名两套并存）
+	// The old "single tool + scope argument" shape must be gone completely (otherwise grant refs and tool names live in two sets)
 	for _, n := range []string{"create_skill", "update_skill", "delete_skill"} {
 		if skillNames[n] || ownNames[n] || adminNames[n] {
-			t.Errorf("旧工具名 %q 仍在组里，应已改名为 *_own_skill / *_shared_skill", n)
+			t.Errorf("the old tool name %q is still in a group; it should have been renamed to *_own_skill / *_shared_skill", n)
 		}
 	}
 }
 
-// stubScriptRepo 只提供目录读取所需的 ListEnabled（其余方法用不到）。
+// stubScriptRepo provides only ListEnabled (which the catalog read needs); the other methods are unused.
 type stubScriptRepo struct{ list []models.CustomTool }
 
 func (s stubScriptRepo) List(string) ([]models.CustomTool, error)        { return s.list, nil }
@@ -420,7 +424,7 @@ func (s stubScriptRepo) Create(string, *models.CustomTool) error         { retur
 func (s stubScriptRepo) Update(string, *models.CustomTool) error         { return nil }
 func (s stubScriptRepo) Delete(string, string) error                     { return nil }
 
-// 下面三个空仓库只为让 Groups() 走完整流程（连接 / 端点 / 自定义组都返回空）。
+// The three empty repositories below only exist so Groups() runs end to end (connections / endpoints / custom groups all come back empty).
 type emptyMcpRepo struct{ mcpconnections.Repository }
 
 func (emptyMcpRepo) List(*auth.AuthInfo, *mcpconnections.ListMcpConnectionsRequest) ([]models.McpConnection, int, error) {
@@ -437,18 +441,19 @@ type emptyGrantsRepo struct{ toolgrants.Repository }
 
 func (emptyGrantsRepo) ListGroups(string) ([]models.ToolGroup, error) { return nil, nil }
 
-// 自定义工具组卡片的 ref 必须与它成员项的 ref 完全相同（custom:<短名>）。
+// A custom tool group card's ref must be exactly the ref of its member items (custom:<short name>).
 //
-// 曾经的 bug：组的 ref 用 ScopeCustom+":"+t.Name 现拼，而 ToolInfo.Name 是**模型侧**
-// 工具名（自定义工具带 custom__ 前缀），于是组卡片给出 custom:custom__xxx。前端点组卡片
-// 把它写进授权草稿，保存时后端 ToolsOfRef 展开为空 → 报
-// 「ref not found or has no tools: custom:custom__xxx」，用户完全看不出错在哪一层。
+// The old bug: the group ref was assembled as ScopeCustom+":"+t.Name, while ToolInfo.Name is the **model-side** tool name (custom tools
+// carry the custom__ prefix), so the group card offered custom:custom__xxx. Clicking it wrote that into the grant draft, and on save the
+// backend's ToolsOfRef expanded it to nothing -> "ref not found or has no tools: custom:custom__xxx", leaving the user no way to see which
+// layer was wrong.
 //
-// 现在更进一步：自定义工具不再一工具一卡（那会让组名变成工具名），而是合成一张
-// Synthetic 类别卡；卡片不可授权，授权落点仍是成员的 custom:<短名>。
+// Now it goes further: custom tools are no longer one card per tool (which would make the group name a tool name) but are merged into one
+// Synthetic category card; the card is not grantable and the grant target stays the member's custom:<short name>.
 func TestGroupsScriptIsSyntheticCategory(t *testing.T) {
 	const short = "interest-final-amount"
-	// 直构目录：Groups() 会走连接 / 端点 / 自定义组，全部给空仓库，避免碰真库。
+	// Build the catalog directly: Groups() walks connections / endpoints / custom groups, all of which get empty repositories so no real
+	// database is touched.
 	c := &Catalog{
 		schema: "t0", isSupervisor: true,
 		grants: emptyGrantsRepo{}, mcp: emptyMcpRepo{}, rpc: emptyRpcRepo{},
@@ -470,42 +475,42 @@ func TestGroupsScriptIsSyntheticCategory(t *testing.T) {
 		}
 	}
 	if g == nil {
-		t.Fatal("自定义工具类别卡缺失（目录里没有它，前端就无从授权）")
+		t.Fatal("the custom-tool category card is missing (without it the frontend has nothing to grant against)")
 	}
 
-	// 1) 卡片是容器：名字按类别（不是工具名），且标了 Synthetic。
+	// 1) The card is a container: named after the category (not a tool name), and marked Synthetic.
 	if !g.Synthetic {
-		t.Error("自定义工具卡片必须是 Synthetic（容器不可整组授权）")
+		t.Error("the custom-tool card must be Synthetic (a container cannot be granted as a whole)")
 	}
 	if g.Name == "利息终值计算" {
-		t.Errorf("卡片名不该是工具名：%q", g.Name)
+		t.Errorf("the card name must not be a tool name: %q", g.Name)
 	}
-	// 2) 容器 ref 不能是有效授权 ref（否则整组授权语义会悄悄出现）。
+	// 2) The container ref must not be a valid grant ref (otherwise whole-group grant semantics would appear unnoticed).
 	if err := ValidateRef(g.Ref, true); err == nil {
-		t.Errorf("容器 ref %q 不该通过 ValidateRef", g.Ref)
+		t.Errorf("the container ref %q must not pass ValidateRef", g.Ref)
 	}
-	// 3) 成员就是那个工具，ref 为 custom:<短名>，模型侧名字才带 custom__。
+	// 3) The member is that tool, with ref custom:<short name>; only the model-side name carries custom__.
 	if len(g.Items) != 1 {
-		t.Fatalf("成员数 = %d, want 1", len(g.Items))
+		t.Fatalf("member count = %d, want 1", len(g.Items))
 	}
 	item := g.Items[0]
 	if want := ScopeCustom + ":" + short; item.Ref != want {
-		t.Fatalf("成员 ref = %q, want %q（不能带 custom__ 前缀）", item.Ref, want)
+		t.Fatalf("member ref = %q, want %q (the custom__ prefix must not appear)", item.Ref, want)
 	}
 	if item.Name != tools.CustomToolPrefix+short {
-		t.Errorf("模型侧工具名 = %q, want %q", item.Name, tools.CustomToolPrefix+short)
+		t.Errorf("model-side tool name = %q, want %q", item.Name, tools.CustomToolPrefix+short)
 	}
-	// 4) 授权落点仍是成员 ref：拿它展开必须取到工具（保存授权的存在性校验就是这么做的）。
+	// 4) The grant target is still the member ref: expanding it must yield the tool (that is exactly what the existence check on save does).
 	list, err := c.ToolsOfRef(item.Ref)
 	if err != nil {
 		t.Fatalf("ToolsOfRef(%s) = %v", item.Ref, err)
 	}
 	if len(list) != 1 || list[0].Ref != item.Ref {
-		t.Fatalf("成员 ref 展开结果不对：%+v", list)
+		t.Fatalf("expanding the member ref gave the wrong result: %+v", list)
 	}
 }
 
-// 本地端点常量必须与 svcendpoints 的字面量对齐（该仓校验 target_type ∈ {agent, flow}）。
+// The local endpoint constants must line up with svcendpoints' literals (that repository validates target_type ∈ {agent, flow}).
 func TestLocalEndpointConstants(t *testing.T) {
 	if LocalProtocolRPC != "rpc" {
 		t.Errorf("LocalProtocolRPC = %q, want %q", LocalProtocolRPC, "rpc")

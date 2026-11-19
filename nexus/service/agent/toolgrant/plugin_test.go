@@ -11,7 +11,7 @@ import (
 	"flame/nexus/shared/pluginpolicy"
 )
 
-// ===== 假实现：不依赖 DB、不起 python =====
+// ===== Fakes: no database, no python process =====
 
 type fakePluginSource struct{ tools []plugin.Manifest }
 
@@ -28,8 +28,8 @@ func (f fakePluginSource) Get(name string) (plugin.Manifest, bool) {
 	return plugin.Manifest{}, false
 }
 
-// fakePluginsRepo 按 (kind, name) 存：与真实唯一键同口径，
-// 顺带让「同名不同 kind 不互相覆盖」这条性质在单测里成立。
+// fakePluginsRepo keys rows by (kind, name): the same criterion as the real unique key, which also makes "same name, different kind,
+// neither overwrites the other" hold in unit tests.
 type fakePluginsRepo struct{ rows map[string]*models.Plugin }
 
 func pluginRowKey(kind, name string) string { return kind + "/" + name }
@@ -99,7 +99,7 @@ func newPluginCatalog(active bool) *Catalog {
 	c.plugins = fakePluginsRepo{rows: map[string]*models.Plugin{
 		pluginRowKey("tools", "web_search"): {Kind: "tools", Name: "web_search", Impl: "searxng", IsActive: active},
 	}}
-	// 平台策略替身：直接给「已开通 + 不限」，否则缺省拒绝会让列目录用例全挂
+	// Platform-policy stand-in: allow everything, otherwise default-deny makes every catalog case fail
 	c.policies = func(string) (map[string]pluginpolicy.Policy, error) {
 		return map[string]pluginpolicy.Policy{"web_search": {Allowed: true}}, nil
 	}
@@ -112,17 +112,17 @@ func TestPluginRefParsing(t *testing.T) {
 		t.Fatalf("ParseRef = %v", err)
 	}
 	if p.Scope != ScopePlugin || p.Subject != "web_search" || p.Member != "" {
-		t.Fatalf("解析结果不对：%+v", p)
+		t.Fatalf("unexpected parse result: %+v", p)
 	}
 	if p.IsGroup(BuiltinCategories()) {
-		t.Error("插件工具只有单工具 ref，不该被当成组")
+		t.Error("a plugin tool only has a single-tool ref and must not be treated as a group")
 	}
 	if got := ToolNameOfRef("plugin:web_search"); got != "web_search" {
-		t.Errorf("ToolNameOfRef = %q，期望 web_search（不加前缀）", got)
+		t.Errorf("ToolNameOfRef = %q, want web_search (no prefix)", got)
 	}
-	// 实现不进授权面：第三段一律拒绝
+	// The implementation stays out of the grant surface: a third segment is always refused
 	if _, err := ParseRef("plugin:web_search:search"); err == nil {
-		t.Error("plugin ref 不该接受第三段")
+		t.Error("a plugin ref must not accept a third segment")
 	}
 }
 
@@ -135,23 +135,23 @@ func TestCatalogPluginToolEnabled(t *testing.T) {
 		t.Fatalf("ToolsOfRef = %v", err)
 	}
 	if len(list) != 1 {
-		t.Fatalf("工具数 = %d，期望 1", len(list))
+		t.Fatalf("tool count = %d, want 1", len(list))
 	}
 	info := list[0]
 	if info.Name != "web_search" || info.Ref != "plugin:web_search" {
-		t.Errorf("名字/ref 不对：%+v", info)
+		t.Errorf("unexpected name/ref: %+v", info)
 	}
 	if !info.Available {
-		t.Error("已启用却标记为不可用")
+		t.Error("it is enabled but marked unavailable")
 	}
 	if info.SupervisorOnly {
-		t.Error("插件工具不该是 超级智能体专属")
+		t.Error("a plugin tool must not be super-agent only")
 	}
 	if info.Parameters == nil {
-		t.Fatal("缺 parameters：外部工具没有 tools.List() 兜底，schema 必须自带")
+		t.Fatal("parameters missing: an external tool has no tools.List() fallback, so the schema must come with it")
 	}
 	if _, ok := info.Parameters["properties"]; !ok {
-		t.Errorf("parameters 不是合法 schema：%+v", info.Parameters)
+		t.Errorf("parameters is not a valid schema: %+v", info.Parameters)
 	}
 	if info.Source != "plugin:web_search" {
 		t.Errorf("Source = %q", info.Source)
@@ -167,10 +167,10 @@ func TestCatalogPluginToolDisabled(t *testing.T) {
 		t.Fatalf("ToolsOfRef = %v", err)
 	}
 	if len(list) != 1 {
-		t.Fatalf("停用的插件也该出现在目录里（可用=false），实际 %d 条", len(list))
+		t.Fatalf("a disabled plugin should still appear in the catalog (available=false), got %d entries", len(list))
 	}
 	if list[0].Available {
-		t.Error("未启用却标记为可用")
+		t.Error("it is not enabled but marked available")
 	}
 }
 
@@ -180,10 +180,10 @@ func TestCatalogPluginToolUnknown(t *testing.T) {
 
 	list, err := c.ToolsOfRef("plugin:no_such_tool")
 	if err != nil {
-		t.Fatalf("未知插件不该报错，实际 %v", err)
+		t.Fatalf("an unknown plugin must not error, got %v", err)
 	}
 	if len(list) != 0 {
-		t.Fatalf("未知插件展开了 %d 个工具，期望 0", len(list))
+		t.Fatalf("an unknown plugin expanded to %d tools, want 0", len(list))
 	}
 }
 
@@ -192,6 +192,6 @@ func TestCatalogWithoutPluginSource(t *testing.T) {
 	c := NewCatalog("t0", nil, true)
 	list, err := c.ToolsOfRef("plugin:web_search")
 	if err != nil || len(list) != 0 {
-		t.Fatalf("没有注册表时应当安静返回空，实际 %v / %d", err, len(list))
+		t.Fatalf("with no registry it should return empty quietly, got %v / %d", err, len(list))
 	}
 }

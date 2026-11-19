@@ -2,17 +2,17 @@ package models
 
 import "testing"
 
-// 身份判据（is_supervisor 属性）与保护名单（predefined 资产）正交，
-// 但两者在「main 能不能降级」这一格上叠加：main 是预置入口，属性必须恒定。
+// The identity criterion (the is_supervisor attribute) and the protection list (preinstalled assets) are orthogonal, but they do combine on
+// "may main be demoted": main is the preinstalled entry, so its attribute must stay constant.
 func TestCanDemoteSupervisor(t *testing.T) {
 	cases := []struct {
 		name string
 		want bool
 	}{
-		{"main", false}, // 预置 supervisor：不可降级（否则留一个占着入口却没有权限的死角）
-		{"poet", true},  // 普通 supervisor：可降级，只受「最后一个」约束
-		{"", true},      // 空名不属名单，交给上层校验
-		{"Main", true},  // 名单大小写敏感，与 IsProtectedAgent 保持一致
+		{"main", false}, // preinstalled supervisor: not demotable (otherwise a dead corner holding the entrance with no privilege)
+		{"poet", true},  // an ordinary supervisor: demotable, subject only to the "last one" constraint
+		{"", true},      // an empty name is not on the list; validation is the layer above
+		{"Main", true},  // the list is case sensitive, consistent with IsProtectedAgent
 	}
 	for _, tc := range cases {
 		if got := CanDemoteSupervisor(tc.name); got != tc.want {
@@ -21,37 +21,36 @@ func TestCanDemoteSupervisor(t *testing.T) {
 	}
 }
 
-// 保护名单与身份判据必须各管各的：给名单加名字不会让它变成 supervisor，
-// 给 agent 打开 is_supervisor 也不会让它不可删。
+// The protection list and the identity criterion must each mind its own business: adding a name to the list does not make it a supervisor, and
+// switching is_supervisor on does not make an agent undeletable.
 func TestProtectedIsNotSupervisor(t *testing.T) {
 	if !IsProtectedAgent("main") {
-		t.Fatal("main 应在保护名单里（不可删除 / 不可改名）")
+		t.Fatal("main should be on the protection list (no delete / no rename)")
 	}
 	if IsProtectedAgent("poet") {
-		t.Fatal("普通 agent 不该进保护名单")
+		t.Fatal("an ordinary agent must not be on the protection list")
 	}
-	// supervisor 判据只看实体字段
+	// The supervisor criterion looks at the entity field only
 	if IsSupervisor(&Agent{Name: "poet", IsSupervisor: true}) != true {
-		t.Error("带属性的 agent 应判定为 supervisor")
+		t.Error("an agent carrying the attribute should be judged a supervisor")
 	}
 	if IsSupervisor(&Agent{Name: "main"}) {
-		t.Error("没有属性的实体不是 supervisor —— 判据不按名字回退")
+		t.Error("an entity without the attribute is not a supervisor - the criterion never falls back to the name")
 	}
 	if IsSupervisor(nil) {
-		t.Error("nil 应安全返回 false")
+		t.Error("nil should safely return false")
 	}
 }
 
-// supervisor 起步技能必须都是「不许删 / 不许改名」的基石技能：
-// 授予时自动绑定的那几份说明书，如果本身可被删掉，新 supervisor 的自举路径就断在
-// 「谁都能删掉它赖以自举的技能」上。
+// The supervisor seed skills must all be cornerstones that may not be deleted or renamed: if the manuals bound automatically on grant could
+// themselves be deleted, a new supervisor's bootstrap path would break at "anyone can delete the skill it bootstraps from".
 func TestSupervisorSeedSkillsAreProtected(t *testing.T) {
 	if len(SupervisorSeedSkills) == 0 {
-		t.Fatal("SupervisorSeedSkills 为空")
+		t.Fatal("SupervisorSeedSkills is empty")
 	}
 	for _, name := range SupervisorSeedSkills {
 		if !IsProtectedSkill(name) {
-			t.Errorf("%q 是 supervisor 起步技能，却不在受保护名单里（可被删除 / 改名）", name)
+			t.Errorf("%q is a supervisor seed skill but not on the protection list (it could be deleted / renamed)", name)
 		}
 	}
 }

@@ -7,8 +7,8 @@ import (
 	"flame/nexus/shared/capability"
 )
 
-// 能力闸必须落在叶子清单上（builtinTools）：超级智能体的合并、Resolve 的可用性过滤、
-// 目录接口都从这里取工具。漏在这一层，就会出现「组显示未开通、生效工具说可用」。
+// The capability gate must sit on the leaf list (builtinTools): the super agent's merge, Resolve's availability filter and the catalog
+// interface all take tools from it. Miss this layer and you get "the group says not enabled while the effective tool says available".
 func TestBuiltinToolsCapabilityGate(t *testing.T) {
 	c := &Catalog{caps: map[string]bool{capability.Browser: true}}
 	var blocked, allowed int
@@ -17,57 +17,58 @@ func TestBuiltinToolsCapabilityGate(t *testing.T) {
 		case capability.Browser:
 			allowed++
 			if !ti.Available {
-				t.Errorf("%s 的能力已开通，却标为不可用", ti.Ref)
+				t.Errorf("%s has its capability granted but is marked unavailable", ti.Ref)
 			}
 			if ti.UnavailableKind != "" || ti.UnavailableReason != "" {
-				t.Errorf("%s 可用时不该带归因：kind=%q reason=%q", ti.Ref, ti.UnavailableKind, ti.UnavailableReason)
+				t.Errorf("%s is available and should carry no attribution: kind=%q reason=%q", ti.Ref, ti.UnavailableKind, ti.UnavailableReason)
 			}
 		case capability.Exec:
 			blocked++
 			if ti.Available {
-				t.Errorf("%s 的能力未开通，却仍是可用", ti.Ref)
+				t.Errorf("%s lacks its capability but is still available", ti.Ref)
 			}
 			if ti.UnavailableKind != UnavailableCapability {
-				t.Errorf("%s 的归因 = %q, want %q", ti.Ref, ti.UnavailableKind, UnavailableCapability)
+				t.Errorf("%s attribution = %q, want %q", ti.Ref, ti.UnavailableKind, UnavailableCapability)
 			}
 			if ti.UnavailableReason == "" {
-				t.Errorf("%s 缺少不可用原因", ti.Ref)
+				t.Errorf("%s is missing the unavailable reason", ti.Ref)
 			}
 		}
 	}
 	if blocked == 0 || allowed == 0 {
-		t.Fatalf("测试前提不成立：注册表里没有 exec/browser 工具（exec=%d browser=%d）", blocked, allowed)
+		t.Fatalf("the test premise does not hold: the registry has no exec/browser tools (exec=%d browser=%d)", blocked, allowed)
 	}
 }
 
-// nil 视图 = 不拦（仅无租户语义的调用方；运行时恒为非 nil）。
+// A nil view = no gate (only for callers with no tenant semantics; at runtime it is always non-nil).
 func TestBuiltinToolsWithoutCapabilityView(t *testing.T) {
 	c := &Catalog{}
 	for _, ti := range c.builtinTools() {
 		if !ti.Available {
-			t.Errorf("%s 不该被拦（未注入能力视图）", ti.Ref)
+			t.Errorf("%s should not be gated (no capability view injected)", ti.Ref)
 		}
 	}
 }
 
-// 每个内置工具的分类都必须在 BuiltinCategories 里，否则 Groups() 不产出该组、
-// 工具在授权目录里直接消失（shell / script 拆档时最容易漏这一步）。
+// Every built-in tool's category must be in BuiltinCategories, otherwise Groups() does not produce that group and the tool simply
+// disappears from the grant catalog (the easiest step to miss when splitting shell / script into tiers).
 func TestBuiltinCategoriesCoverAllTools(t *testing.T) {
 	cats := BuiltinCategories()
 	for _, tl := range tools.List() {
 		m := tl.Meta()
 		if !cats[m.Category] {
-			t.Errorf("工具 %s 的分类 %q 不在 BuiltinCategories 里，授权目录里会看不见它", m.Name, m.Category)
+			t.Errorf("tool %s has category %q which is not in BuiltinCategories, so the grant catalog will not show it", m.Name, m.Category)
 		}
 	}
 }
 
-// 视角过滤与能力闸同时生效：非超级智能体看不到 super 类，能力仍照标。
+// The viewpoint filter and the capability gate apply together: a non-super agent does not see the super category, and capabilities are
+// still marked.
 func TestBuiltinToolsSupervisorOnlyFilter(t *testing.T) {
 	c := &Catalog{caps: map[string]bool{}}
 	for _, ti := range c.builtinTools() {
 		if ti.SupervisorOnly {
-			t.Errorf("非超级智能体视角不该出现 %s", ti.Ref)
+			t.Errorf("a non-super-agent viewpoint must not contain %s", ti.Ref)
 		}
 	}
 
@@ -79,6 +80,6 @@ func TestBuiltinToolsSupervisorOnlyFilter(t *testing.T) {
 		}
 	}
 	if !superSeen {
-		t.Fatal("supervisor 视角应能看到 super 类工具")
+		t.Fatal("a supervisor viewpoint should see the super-category tools")
 	}
 }

@@ -7,14 +7,14 @@ import (
 	"flame/nexus/shared/capability"
 )
 
-// 平台能力视图的语义（Catalog.capabilityBlocked）：
+// Semantics of the platform capability view (Catalog.capabilityBlocked):
 //
-//	nil 视图       → 不拦（仅无租户语义的调用方；运行时恒为「非 nil」）
-//	键 = true      → 放行
-//	缺键 / false   → 拦住，且原因里带上能力名（用户据此去平台开通）
+//	nil view          -> nothing blocked (callers without tenant semantics only; at runtime it is always non-nil)
+//	key = true        -> allowed
+//	missing / false   -> blocked, and the reason carries the capability key (so the user knows to ask the platform)
 //
-// 只测这一段纯逻辑：Groups() 会碰连接/插件仓储，属于另一层的事；
-// 而「组可用性由能力决定」最终都收敛到这一个判据上。
+// Only this pure logic is tested here: Groups() touches the connection / plugin repositories and belongs to another layer, while "the
+// group's availability follows the capability" ultimately converges on this single check.
 func TestCapabilityBlocked(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -23,11 +23,11 @@ func TestCapabilityBlocked(t *testing.T) {
 		blocked  bool
 		wantWord string
 	}{
-		{"未注入视图", nil, capability.Exec, false, ""},
-		{"已开通", map[string]bool{capability.Exec: true}, capability.Exec, false, ""},
-		{"显式关闭", map[string]bool{capability.Exec: false}, capability.Exec, true, "sandbox.exec"},
-		{"缺键即未开通", map[string]bool{capability.Browser: true}, capability.Exec, true, "sandbox.exec"},
-		{"无能力归属的工具不受约束", map[string]bool{}, "", false, ""},
+		{"no view injected", nil, capability.Exec, false, ""},
+		{"granted", map[string]bool{capability.Exec: true}, capability.Exec, false, ""},
+		{"explicitly off", map[string]bool{capability.Exec: false}, capability.Exec, true, "sandbox.exec"},
+		{"missing key means not granted", map[string]bool{capability.Browser: true}, capability.Exec, true, "sandbox.exec"},
+		{"a tool with no capability is unconstrained", map[string]bool{}, "", false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -38,12 +38,12 @@ func TestCapabilityBlocked(t *testing.T) {
 			}
 			if tc.blocked {
 				if !strings.Contains(why.reason, tc.wantWord) {
-					t.Errorf("原因里应带能力名 %q，got %q", tc.wantWord, why.reason)
+					t.Errorf("the reason should carry the capability key %q, got %q", tc.wantWord, why.reason)
 				}
-				if !strings.Contains(why.reason, "平台") {
-					t.Errorf("原因要说明是平台未开通，got %q", why.reason)
+				if !strings.Contains(why.reason, "platform") {
+					t.Errorf("the reason should say the platform has not granted it, got %q", why.reason)
 				}
-				// 前端靠 code + params 本地化：缺了这两个字段就只剩中文原文
+				// The frontend localises from code + params: without them only the raw text is left
 				if why.code != UnavailableCodeCapability {
 					t.Errorf("code = %q, want %q", why.code, UnavailableCodeCapability)
 				}
@@ -51,20 +51,20 @@ func TestCapabilityBlocked(t *testing.T) {
 					t.Errorf("params[key] = %q, want %q", why.params["key"], tc.key)
 				}
 			} else if !why.empty() {
-				t.Errorf("放行时不该有原因，got %+v", why)
+				t.Errorf("an allowed capability should have no reason, got %+v", why)
 			}
 		})
 	}
 }
 
-// WithCapabilities 是链式注入，必须返回同一个 Catalog（调用方写成链式构造）。
+// WithCapabilities is a chainable injection and must return the same Catalog (callers build it as a chain).
 func TestWithCapabilitiesChain(t *testing.T) {
 	c := &Catalog{}
 	got := c.WithCapabilities(map[string]bool{capability.Exec: true})
 	if got != c {
-		t.Fatal("WithCapabilities 应返回自身")
+		t.Fatal("WithCapabilities should return the receiver")
 	}
 	if !got.caps[capability.Exec] {
-		t.Error("视图没被注入")
+		t.Error("the view was not injected")
 	}
 }

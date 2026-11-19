@@ -9,40 +9,40 @@ import (
 	"flame/tools/xsql"
 )
 
-// ToolFileName 工具目录里的契约文件名。
+// ToolFileName is the contract file name inside a tool directory.
 //
-// 为什么契约要落成文件（而不是只存在 custom_tools 表里）：
-//   - 契约（description / parameters / output）与实现代码是**同一件事的两面**：
-//     改 schema 不改代码、或反过来，都会让模型拿到与实际行为不符的工具；
-//     放同一个目录才能在一个 commit 里改完、一起 review、一起回滚。
-//   - 插件的做法就是「目录是实体、清单不落库」（service/plugin/registry.go 的注释），
-//     工具向它对齐后，盘上的目录与平台认知不会再各说一套。
-//   - 表里剩下的应该是**租户对它的策略**（status / configs / 运行态），
-//     而不是「这个工具是什么」。
+// Why the contract is a file (rather than living only in the custom_tools table):
+//   - the contract (description / parameters / output) and the implementation code are **two sides of one thing**: changing the schema
+//     without the code, or the other way round, hands the model a tool that does not match its behaviour; keeping them in one directory
+//     means they change in one commit, get reviewed together and roll back together.
+//   - that is exactly what plugins do ("the directory is the entity, the manifest is not stored in the database" - see the notes in
+//     service/plugin/registry.go), and aligning the tools with it stops the on-disk directory and the platform's understanding from telling
+//     two different stories.
+//   - what remains in the table should be **the tenant's policy towards it** (status / configs / runtime state), not "what this tool is".
 //
-// 与插件的一个关键差别：插件的契约由**执行 tool.py** 得出（插件是平台方写的，可信）；
-// 自定义工具是租户写的代码，绝不能为了读契约去执行它 —— 所以这里是声明式 JSON，
-// 由 Go 直接解析。
+// One key difference from plugins: a plugin's contract is obtained by **executing tool.py** (plugins are written by the platform and are
+// trusted); a custom tool is tenant-written code and must never be executed just to read its contract - hence declarative JSON here, parsed
+// directly by Go.
 const ToolFileName = "TOOL.json"
 
-// toolFileSchemaVersion 当前契约文件版本。将来加字段时靠它做兼容判断。
+// toolFileSchemaVersion is the current contract file version. It is there to make compatibility decisions when fields are added later.
 const toolFileSchemaVersion = 1
 
-// ToolFile 工具目录里的契约（TOOL.json）。
+// ToolFile is the contract inside a tool directory (TOOL.json).
 //
-// 字段与 CustomTool 的「契约部分」一一对应；status / configs / 时间戳**不在**其中：
-// 那些是租户策略与运行态，属于表，不属于工具本身。
+// The fields correspond one to one with CustomTool's "contract part"; status / configs / timestamps are **not** among them: those are tenant
+// policy and runtime state, and belong to the table rather than to the tool itself.
 type ToolFile struct {
 	SchemaVersion int `json:"schema_version,omitempty"`
-	// Name 必须与目录名一致；留空视为一致（写盘时总会写上）。
+	// Name must match the directory name; empty counts as matching (it is always written when saving).
 	Name        string `json:"name,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 	Description string `json:"description"`
 	Version     string `json:"version,omitempty"`
 
-	// Parameters 入参 JSON Schema（发给模型）。
+	// Parameters is the input JSON Schema (sent to the model).
 	Parameters map[string]any `json:"parameters"`
-	// Output 出参 JSON Schema（不发模型，仅校验与展示）。
+	// Output is the output JSON Schema (not sent to the model; verification and display only).
 	Output map[string]any `json:"output,omitempty"`
 
 	Lang  string `json:"lang"`
@@ -54,16 +54,17 @@ type ToolFile struct {
 
 	ConfigFields []ScriptConfigField `json:"config_fields,omitempty"`
 
-	// Implementations 预留位：语义等价的多个实现（插件那套 impl + fallback）。
+	// Implementations is a reserved slot: several semantically equivalent implementations (the plugin impl + fallback scheme).
 	//
-	// 现在**不消费**：自定义工具是租户自己的一条业务逻辑，多实现的两个典型价值
-	// （多租户用不同后端、换供应商）已由「每租户一个目录」和配置项覆盖。
-	// 留成可选数组是为了将来真要加时不用改契约格式、不用搬目录 ——
-	// 缺省即单实现（顶层 lang / entry）。
+	// It is **not consumed** today: a custom tool is one piece of business logic written by the tenant, and the two typical reasons for
+	// multiple implementations (different backends per tenant, swapping vendors) are already covered by "one directory per tenant" and by
+	// configuration entries.
+	// It is left as an optional array so that adding it later needs neither a contract format change nor a directory move - the default is a
+	// single implementation (the top-level lang / entry).
 	Implementations []ToolFileImpl `json:"implementations,omitempty"`
 }
 
-// ToolFileImpl 一个实现的声明（当前仅占位，见 ToolFile.Implementations 注释）。
+// ToolFileImpl is the declaration of one implementation (currently a placeholder only, see the notes on ToolFile.Implementations).
 type ToolFileImpl struct {
 	Name         string              `json:"name"`
 	DisplayName  string              `json:"display_name,omitempty"`
@@ -72,10 +73,10 @@ type ToolFileImpl struct {
 	ConfigFields []ScriptConfigField `json:"config_fields,omitempty"`
 }
 
-// ToolFileOf 由表行生成契约文件（迁移与写盘用）。
+// ToolFileOf builds the contract file from a table row (used by migrations and when writing to disk).
 //
-// 与 repository.Create 的缺省值保持同一口径：文件与行在任何时刻都不该因为
-// 「谁先补的默认值」而不同。
+// It keeps the same criterion as repository.Create's defaults: the file and the row must never differ just because of "who filled in the
+// default first".
 func ToolFileOf(t *CustomTool) *ToolFile {
 	return &ToolFile{
 		SchemaVersion:  toolFileSchemaVersion,
@@ -93,7 +94,7 @@ func ToolFileOf(t *CustomTool) *ToolFile {
 	}
 }
 
-// Normalize 补默认值（解析之后调用）：容忍手写的 TOOL.json 省略这些字段。
+// Normalize fills in defaults (call it after parsing): it tolerates a hand-written TOOL.json omitting these fields.
 func (f *ToolFile) Normalize() {
 	f.SchemaVersion = toolFileSchemaVersion
 	f.Lang = normalizeToolLang(f.Lang)
@@ -103,10 +104,10 @@ func (f *ToolFile) Normalize() {
 	f.Parameters = paramSchemaOrEmpty(f.Parameters)
 }
 
-// paramSchemaOrEmpty 空 schema 落成「合法的空对象 schema」。
+// paramSchemaOrEmpty turns an empty schema into a "valid empty object schema".
 //
-// 而不是留 null：TOOL.json 是给人看、给 git diff 的，`"parameters": null` 会让人
-// 以为是漏写；写出 {"type":"object","properties":{}} 才是「这个工具没有参数」的明说。
+// Rather than leaving null: TOOL.json is for people to read and for git diffs, and `"parameters": null` reads as an omission, whereas writing
+// {"type":"object","properties":{}} states outright that "this tool takes no arguments".
 func paramSchemaOrEmpty(schema map[string]any) map[string]any {
 	if len(schema) == 0 {
 		return map[string]any{"type": "object", "properties": map[string]any{}}
@@ -114,10 +115,10 @@ func paramSchemaOrEmpty(schema map[string]any) map[string]any {
 	return schema
 }
 
-// Apply 把契约覆盖到表行。
+// Apply writes the contract onto a table row.
 //
-// 只覆盖**契约字段**：status / configs / created_* / updated_at 一概不动 ——
-// 那是策略与运行态，文件没有资格决定它们。
+// It overwrites **contract fields only**: status / configs / created_* / updated_at are untouched - those are policy and runtime state, and a
+// file has no business deciding them.
 func (f *ToolFile) Apply(t *CustomTool) {
 	if name := strings.TrimSpace(f.Name); name != "" {
 		t.Name = name
@@ -135,21 +136,20 @@ func (f *ToolFile) Apply(t *CustomTool) {
 	t.TimeoutMS = normalizeToolTimeout(f.TimeoutMS)
 	t.MaxOutputBytes = normalizeToolMaxOutput(f.MaxOutputBytes)
 	t.Egress = f.Egress
-	// 文件里没写 config_fields 时保持表里的值。契约文件是「按需覆盖」：
-	// 手写 / 老版本写出的 TOOL.json 常常没有这个键，若在这里置成 nil，
-	// 落库时会写成 SQL NULL 并撞 NOT NULL 约束（保存直接失败）。
+	// When the file has no config_fields, keep the row's value. The contract file overwrites on demand: a hand-written / old-version TOOL.json
+	// often lacks this key, and setting it to nil here would store SQL NULL and trip the NOT NULL constraint (the save fails outright).
 	if f.ConfigFields != nil {
 		t.ConfigFields = xsql.JSONB{Data: f.ConfigFields}
 	}
 }
 
-// Validate 校验契约本身的完整性（名字与目录一致、entry 不越界、语言受支持）。
+// Validate checks the contract's own integrity (the name matches the directory, the entry stays inside it, the language is supported).
 //
-// dirName 是工具目录名：契约里的 name 与它不一致时**不能静默接受** ——
-// 那会让「目录叫 a、授权叫 b」，排查时谁都对不上。
+// dirName is the tool directory name: when the name in the contract differs, it must **not be accepted silently** - that would mean "the
+// directory is called a and the grant is called b", and nobody can match them up when investigating.
 func (f *ToolFile) Validate(dirName string) error {
 	if n := strings.TrimSpace(f.Name); n != "" && n != dirName {
-		return fmt.Errorf("TOOL.json 的 name %q 与目录名 %q 不一致", n, dirName)
+		return fmt.Errorf("the name %q in TOOL.json does not match the directory name %q", n, dirName)
 	}
 	if err := ValidateToolEntry(f.Entry); err != nil {
 		return err
@@ -157,12 +157,12 @@ func (f *ToolFile) Validate(dirName string) error {
 	switch normalizeToolLang(f.Lang) {
 	case "python", "js", "lua", "sh":
 	default:
-		return fmt.Errorf("不支持的语言 %q（python / js / lua / sh）", f.Lang)
+		return fmt.Errorf("unsupported language %q (python / js / lua / sh)", f.Lang)
 	}
 	return nil
 }
 
-// MarshalToolFile 稳定的文件内容：两空格缩进、末尾换行（diff 友好）。
+// MarshalToolFile produces stable file content: two-space indent and a trailing newline (diff friendly).
 func MarshalToolFile(f *ToolFile) ([]byte, error) {
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
@@ -171,7 +171,7 @@ func MarshalToolFile(f *ToolFile) ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
-// ParseToolFile 解析契约文件；解析后做归一化（调用方仍需 Validate 才可用）。
+// ParseToolFile parses a contract file; it normalises after parsing (the caller still has to Validate before using it).
 func ParseToolFile(data []byte) (*ToolFile, error) {
 	var f ToolFile
 	if err := json.Unmarshal(data, &f); err != nil {
@@ -181,26 +181,26 @@ func ParseToolFile(data []byte) (*ToolFile, error) {
 	return &f, nil
 }
 
-// ValidateToolEntry 入口文件必须是工具目录内的相对路径（以 / 分隔、不含 ..）。
+// ValidateToolEntry requires the entry file to be a relative path inside the tool directory (slash separated, no ..).
 //
-// 与沙箱挂载同一条判据的「声明侧」：文件里的 entry 越界，就等于声明了一个
-// 挂载之外的路径，必须在读契约时就拒掉（而不是等执行时才发现）。
+// It is the "declaration side" of the same criterion as the sandbox mount: an entry that escapes means a path outside the mount is declared,
+// and it must be refused while reading the contract (not discovered at execution time).
 func ValidateToolEntry(entry string) error {
 	e := strings.TrimSpace(entry)
 	if e == "" {
-		return fmt.Errorf("entry 不能为空")
+		return fmt.Errorf("entry must not be empty")
 	}
 	if strings.ContainsRune(e, '\\') || path.IsAbs(e) {
-		return fmt.Errorf("entry %q 必须是相对工具目录、以 / 分隔的路径", e)
+		return fmt.Errorf("entry %q must be a slash-separated path relative to the tool directory", e)
 	}
 	clean := path.Clean(e)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-		return fmt.Errorf("entry %q 不能跳出工具目录", e)
+		return fmt.Errorf("entry %q must not escape the tool directory", e)
 	}
 	return nil
 }
 
-// normalizeToolLang 与 service/agent 的 defaultScriptLang 同口径（那里是创建时的归一化）。
+// normalizeToolLang uses the same criterion as service/agent's defaultScriptLang (which normalises at creation time).
 func normalizeToolLang(lang string) string {
 	switch strings.ToLower(strings.TrimSpace(lang)) {
 	case "js", "node":

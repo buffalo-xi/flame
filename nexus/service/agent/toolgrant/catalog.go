@@ -25,117 +25,123 @@ import (
 	"flame/tools/xsql"
 )
 
-// listLimit 列举连接/端点时使用的上限（远大于实际数量，避免分页默认值截断）。
+// listLimit is the cap used when listing connections / endpoints (far above the real count, so the default paging value never
+// truncates it).
 const listLimit = 1000
 
-// 不可用归因（ToolInfo.UnavailableKind / GroupInfo.UnavailableKind 的取值）。
+// Unavailable attribution (the values of ToolInfo.UnavailableKind / GroupInfo.UnavailableKind).
 //
-// 为什么不合成一句「不可用」：这几类对应**不同的修复入口** ——
-// 能力与插件停用归平台管理员，插件启用 / 连接 / 端点归租户自己。
-// 混成一句，用户会去改错的那一层（在租户侧反复启用，而平台压根没开通）。
+// Why not collapse them into one "unavailable": these classes point at **different fix entry points** -
+// capability and plugin suspension belong to the platform administrator, while plugin enablement / connections / endpoints
+// belong to the tenant.
+// Collapsing them makes the user fix the wrong layer (enabling on the tenant side over and over while the platform never
+// granted it at all).
 const (
-	UnavailableCapability     = "capability"      // 平台未开通这类能力（exec / browser …）
-	UnavailablePluginPolicy   = "plugin_policy"   // 平台已对本租户停用这个插件
-	UnavailablePluginInactive = "plugin_inactive" // 平台没停用，租户自己没启用
-	UnavailableConnection     = "connection"      // MCP / RPC 连接未启用
-	UnavailableEndpoint       = "endpoint"        // 本地 rpc 端点未对外开放
+	UnavailableCapability     = "capability"      // the platform has not granted this kind of capability (exec / browser ...)
+	UnavailablePluginPolicy   = "plugin_policy"   // the platform has disabled this plugin for this tenant
+	UnavailablePluginInactive = "plugin_inactive" // the platform did not disable it; the tenant has not enabled it
+	UnavailableConnection     = "connection"      // the MCP / RPC connection is not enabled
+	UnavailableEndpoint       = "endpoint"        // the local rpc endpoint is not exposed
 )
 
-// 不可用原因的**编码**（ToolInfo.UnavailableCode / GroupInfo.UnavailableCode）。
+// The **codes** for unavailable reasons (ToolInfo.UnavailableCode / GroupInfo.UnavailableCode).
 //
-// 比 UnavailableKind 更细：kind 是「归到哪一层」（能力 / 插件 / 连接），code 是
-// 「具体哪句话」，前端据此查语言包。两者都要，因为 kind 还兼着面板徽标的语义。
+// Finer than UnavailableKind: kind says "which layer it belongs to" (capability / plugin / connection), code says "which exact
+// sentence", and the frontend looks it up in the locale bundle. Both are needed, because kind also carries the panel badge
+// semantics.
 //
-// 取值是接口约定（前端 toolUnavailable.<code> 直接按它找文案），改动即界面变空白 ——
-// 与 kind 一样属于「改了 UI 静默失效」的那类，改动前先搜前端。
+// The values are an API contract (the frontend resolves copy via toolUnavailable.<code>); changing one blank the UI - like kind,
+// this is the "change it and the UI silently breaks" category, so search the frontend first.
 const (
-	UnavailableCodeCapability     = "capability"           // 参数：key
-	UnavailableCodePluginBlocked  = "plugin_blocked"       // 参数：plugin（平台全局停用）
-	UnavailableCodePluginDisabled = "plugin_disabled"      // 参数：plugin（平台对本租户停用）
-	UnavailableCodePluginInactive = "plugin_inactive"      // 参数：plugin（租户没启用）
-	UnavailableCodePolicyReadFail = "policy_read_failed"   // 无参数
-	UnavailableCodeMcpConnection  = "mcp_conn_disabled"    // 参数：connection
-	UnavailableCodeRpcConnection  = "rpc_conn_disabled"    // 参数：connection
-	UnavailableCodeEndpoint       = "endpoint_not_exposed" // 参数：endpoint
+	UnavailableCodeCapability     = "capability"           // param: key
+	UnavailableCodePluginBlocked  = "plugin_blocked"       // param: plugin (disabled globally by the platform)
+	UnavailableCodePluginDisabled = "plugin_disabled"      // param: plugin (disabled for this tenant by the platform)
+	UnavailableCodePluginInactive = "plugin_inactive"      // param: plugin (not enabled by the tenant)
+	UnavailableCodePolicyReadFail = "policy_read_failed"   // no params
+	UnavailableCodeMcpConnection  = "mcp_conn_disabled"    // param: connection
+	UnavailableCodeRpcConnection  = "rpc_conn_disabled"    // param: connection
+	UnavailableCodeEndpoint       = "endpoint_not_exposed" // param: endpoint
 )
 
-// unavail 一条「不可用原因」：编码 + 参数给前端本地化，reason 是中文兜底。
+// unavail is one "unavailable reason": a code plus params for frontend localisation, and a short reason for diagnostics.
 //
-// 两者都留：后端不知道界面语言（见 nexus/docs/i18n.md 的口径：只回编码与参数），
-// 但日志、旧客户端、以及前端还没翻的编码仍然需要一句能直接读的话。
-// 前端优先用 code + params 本地化，取不到再显示 reason。
+// Both are kept: the backend does not know the UI language (see nexus/docs/i18n.md: return codes and params only), but logs,
+// older clients and codes the frontend has not translated yet still need one readable sentence.
+// The frontend localises from code + params first and falls back to reason.
 type unavail struct {
 	code   string
 	params map[string]string
 	reason string
 }
 
-// unavailFail 「读取失败」这条原因（参数为空）：全是平台侧故障，没有可点的修复入口。
+// unavailFail is the "read failed" reason (no params): all platform-side failures with no clickable fix entry point.
 func unavailFail(reason string) unavail {
 	return unavail{code: UnavailableCodePolicyReadFail, reason: reason}
 }
 
-// empty 没有任何原因（工具可用）。带 map 字段的结构体不能直接用 == 比较，故给个判据。
+// empty means no reason at all (the tool is available). A struct with map fields cannot be compared with ==, hence this check.
 func (u unavail) empty() bool { return u.code == "" && u.reason == "" }
 
-// ToolInfo 单个工具（展开后的叶子节点）。
+// ToolInfo is a single tool (a leaf node after expansion).
 type ToolInfo struct {
 	Ref            string `json:"ref"`  // builtin:read_file / mcp:fs:read_file / plugin:web_search
-	Name           string `json:"name"` // LLM 工具名：read_file / mcp__fs__read_file / web_search
+	Name           string `json:"name"` // LLM tool name: read_file / mcp__fs__read_file / web_search
 	Label          string `json:"label"`
 	Description    string `json:"description"`
-	Available      bool   `json:"available"`       // 所属连接/端点是否可用（连接未启用 / 端点未对外开放 / 插件未启用 / 平台未开通能力 → false）
-	Source         string `json:"source"`          // 来源组：builtin:file / mcp:fs / local:rpc / plugin:web_search / group:xxx
-	SupervisorOnly bool   `json:"supervisor_only"` // 仅 supervisor 可绑定 / 执行
-	// UnavailableReason 不可用的原因（给人看的，直接展示）。
-	// 三种原因必须能分开：平台没开通能力 / 连接或端点没启用 / 工具本身不可用 ——
-	// 混成一句「不可用」，用户会去改错的那一层。
+	Available      bool   `json:"available"`       // whether the owning connection / endpoint is usable (connection off / endpoint retracted / plugin inactive / capability not granted -> false)
+	Source         string `json:"source"`          // source group: builtin:file / mcp:fs / local:rpc / plugin:web_search / group:xxx
+	SupervisorOnly bool   `json:"supervisor_only"` // bindable / runnable by the supervisor only
+	// UnavailableReason is why it is unavailable (human readable, shown directly).
+	// The three reasons must stay separable: capability not granted / connection or endpoint not enabled / the tool itself is
+	// unusable - collapsing them into one "unavailable" makes the user fix the wrong layer.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
-	// UnavailableKind 归因（取值见 Unavailable* 常量）：前端据此出不同徽标文案，
-	// 不必解析中文原因。空 = 可用。
+	// UnavailableKind is the attribution (values in the Unavailable* constants): the frontend renders a different badge from it
+	// without parsing the reason text. Empty = available.
 	UnavailableKind string `json:"unavailable_kind,omitempty"`
-	// UnavailableCode 具体原因编码（取值见 UnavailableCode* 常量）：前端按它查语言包，
-	// 这样「插件被全局停用 / 被本租户停用」这类细分也能翻，而不是只认 kind。
-	// 空 = 可用，或后端版本较旧 —— 此时前端回落到 UnavailableReason。
+	// UnavailableCode is the exact reason code (values in the UnavailableCode* constants): the frontend looks it up in the
+	// locale bundle, so fine-grained cases such as "plugin disabled globally / disabled for this tenant" are translatable too,
+	// not just the kind.
+	// Empty = available, or an older backend - the frontend then falls back to UnavailableReason.
 	UnavailableCode string `json:"unavailable_code,omitempty"`
-	// UnavailableParams UnavailableCode 的插值参数（如 {"plugin": "web_search"}）。
+	// UnavailableParams are the interpolation params of UnavailableCode (e.g. {"plugin": "web_search"}).
 	UnavailableParams map[string]string `json:"unavailable_params,omitempty"`
-	// Parameters 入参 schema（JSON Schema object）。
+	// Parameters is the input schema (JSON Schema object).
 	//
-	// 内置工具可以不带（agent 侧从 tools.List() 现取 Meta().Parameters），
-	// 但外部工具（mcp / plugin）没有那个兜底 —— 插件工具必须自带 schema，
-	// 否则声明给模型时入参是空的。
+	// Built-in tools may omit it (the agent side takes Meta().Parameters from tools.List() on the fly),
+	// but external tools (mcp / plugin) have no such fallback - a plugin tool must carry its schema,
+	// otherwise the model is declared an empty input.
 	Parameters map[string]any `json:"parameters,omitempty"`
 }
 
-// GroupInfo 可引用组。
+// GroupInfo is a referenceable group.
 type GroupInfo struct {
 	Ref         string     `json:"ref"`  // builtin:file / mcp:fs / rpc:erp / local:rpc / group:xxx / preset:xxx
-	Name        string     `json:"name"` // 展示名
+	Name        string     `json:"name"` // display name
 	Kind        string     `json:"kind"` // builtin | mcp | rpc | local | custom | preset
 	Description string     `json:"description"`
 	Available   bool       `json:"available"`
 	Items       []ToolInfo `json:"items"`
-	SourceID    string     `json:"source_id"`    // 连接 id（mcp / rpc 组）：前端「刷新工具清单」等动作需要
-	RefreshedAt string     `json:"refreshed_at"` // 工具清单最后刷新/更新时间（RFC3339；连接与端点类组才有）
-	// UnavailableReason 组不可用的原因（同 ToolInfo.UnavailableReason）。
+	SourceID    string     `json:"source_id"`    // connection id (mcp / rpc groups): needed by frontend actions such as "refresh the tool list"
+	RefreshedAt string     `json:"refreshed_at"` // when the tool list was last refreshed / updated (RFC3339; connection and endpoint groups only)
+	// UnavailableReason is why the group is unavailable (same as ToolInfo.UnavailableReason).
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
-	// UnavailableKind 组不可用的归因（同 ToolInfo.UnavailableKind）。
+	// UnavailableKind is the attribution for an unavailable group (same as ToolInfo.UnavailableKind).
 	UnavailableKind string `json:"unavailable_kind,omitempty"`
-	// UnavailableCode 组不可用的原因编码（同 ToolInfo.UnavailableCode）。
+	// UnavailableCode is the reason code for an unavailable group (same as ToolInfo.UnavailableCode).
 	UnavailableCode string `json:"unavailable_code,omitempty"`
-	// UnavailableParams 组不可用的原因参数（同 ToolInfo.UnavailableParams）。
+	// UnavailableParams are the reason params for an unavailable group (same as ToolInfo.UnavailableParams).
 	UnavailableParams map[string]string `json:"unavailable_params,omitempty"`
-	// Synthetic true = 类别容器，**不是可授权对象**（插件 / 自定义工具两类）。
+	// Synthetic true = a category container, **not a grantable object** (the plugin and custom-tool categories).
 	//
-	// 它们成员是租户侧实体，数量随租户变化：一个工具一张卡会让组名退化成工具名
-	// （"利息终值计算"组），既难认又把 item_type 误导成 group。这里一张卡装全部成员，
-	// 授权落点仍是成员自己的工具 ref（容器 ref 形如 "custom:*"，ValidateRef 会拒）。
+	// Their members are tenant-side entities whose count varies per tenant: one card per tool would degrade the group name into a
+	// tool name (the "compound interest" group), which is hard to recognise and also misleads item_type into group. Here one card
+	// holds every member, and the grant still targets each member's own tool ref (a container ref looks like "custom:*" and
+	// ValidateRef rejects it).
 	Synthetic bool `json:"synthetic,omitempty"`
 }
 
-// markUnavailable 把一条原因完整写到叶子上（Available 一并置 false，避免出现
-// 「原因写了、可用仍是 true」这种前端会当成可用的状态）。
+// markUnavailable writes a complete reason onto a leaf (Available is set false as well, so the frontend never sees the
+// contradictory state "reason present, still available").
 func (t *ToolInfo) markUnavailable(kind string, u unavail) {
 	t.Available = false
 	t.UnavailableKind = kind
@@ -144,7 +150,8 @@ func (t *ToolInfo) markUnavailable(kind string, u unavail) {
 	t.UnavailableReason = u.reason
 }
 
-// markUnavailable 同 ToolInfo：组级原因由叶子抄上来，字段必须同步，否则卡片置灰但不给原因。
+// markUnavailable is the ToolInfo counterpart for groups: the group-level reason is copied up from the leaf, and the fields must
+// stay in sync, otherwise the card is greyed out with no reason.
 func (g *GroupInfo) markUnavailable(kind string, u unavail) {
 	g.Available = false
 	g.UnavailableKind = kind
@@ -153,60 +160,67 @@ func (g *GroupInfo) markUnavailable(kind string, u unavail) {
 	g.UnavailableReason = u.reason
 }
 
-// PresetGroup 预设组定义（代码内置，不可编辑）。
+// PresetGroup is a preset group definition (built into the code, not editable).
 type PresetGroup struct {
-	Name        string                 `json:"name"`
+	Name string `json:"name"`
+	// Label / Description are language-neutral on purpose: they are the preset **identifier** and a short English summary.
+	// The UI resolves the user-visible copy from its locale bundle by Name (see the agent tool-grant panel), so the backend
+	// never ships display text.
 	Label       string                 `json:"label"`
 	Description string                 `json:"description"`
 	Items       []models.ToolGroupItem `json:"items"`
 }
 
-// PresetGroups 内置预设组：跨类的常用组合，便于一键授权。
+// PresetGroups are the built-in preset groups: cross-category common combinations for one-click grants.
 //
-// 当前只保留 preset:default（新建 agent 的缺省集，见 models.DefaultAgentTools）——
-// 其余按类拆分的小预设（原 readonly / file-write / exec / collaborate）已移除：
-// 它们可由天然组（builtin:file / builtin:exec / builtin:agent / builtin:skill）+
-// 单个工具多选覆盖，留着反而与缺省集重复。
+// Only preset:default is kept (the default set of a new agent, see models.DefaultAgentTools) -
+// the other per-category presets (the former readonly / file-write / exec / collaborate) were removed:
+// the natural groups (builtin:file / builtin:exec / builtin:agent / builtin:skill) plus multi-selecting
+// individual tools already cover them, and keeping them duplicated the default set.
 //
-// 管理类工具（分类 agent-admin / skill-admin / tool-grant / custom-tool）**不**在这里单列预设 ——
-// 它们由各自的天然组承载，且只对超级智能体可见（见 Catalog.builtinTools）。
+// Management tools (categories agent-admin / skill-admin / tool-grant / custom-tool) are **not** listed as a preset here - they
+// are carried by their natural groups and are visible to the super agent only (see Catalog.builtinTools).
 //
-// 注意：移除预设会让存量里引用它们的授权行解析为空（ToolsOfRef 返回空列表 + warning，
-// 不报错但工具会消失）。升级时请执行 sql/agent_preset_cleanup.sql 展开旧引用。
+// Note: removing a preset makes existing grant rows that reference it resolve to empty (ToolsOfRef returns an empty list plus a
+// warning - no error, but the tools disappear). Run sql/agent_preset_cleanup.sql to expand old references when upgrading.
 var PresetGroups = []PresetGroup{
 	{
-		Name: "default", Label: "标配工具",
-		Description: "新建 agent 默认带上的工具：读写自己的工作区、查看 agent 与 skill、协作调用（不含命令执行）",
+		Name: "default", Label: "default",
+		Description: "Tools a new agent gets by default: read and write its own workspace, look up agents and skills, delegate (no command execution)",
 		Items:       models.DefaultAgentToolGrants(),
 	},
 }
 
-// Catalog 可引用目录：内置工具、天然组、预设组、自定义组、连接与本地端点、磁盘插件。
+// Catalog is the referenceable catalog: built-in tools, natural groups, preset groups, custom groups, connections and local
+// endpoints, disk plugins.
 type Catalog struct {
 	schema       string
-	isSupervisor bool // 视角身份：非 supervisor 时目录隐藏「仅 supervisor 可用」的管理类工具（分类落在 supervisorOnlyCategories）
+	isSupervisor bool // viewing identity: in a non-supervisor view the catalog hides "supervisor only" management tools (categories in supervisorOnlyCategories)
 	grants       toolgrants.Repository
 	mcp          mcpconnections.Repository
 	rpc          rpcconnections.Repository
 	eps          svcendpoints.SvcEndpointRepository
 	plugins      pluginsrepo.Repository
 	scripts      customtools.Repository
-	policies     policyMapFunc // 平台策略来源（默认直连库；单测注入假实现）
-	// caps 平台给本租户开通的能力（见 shared/capabilitypolicy.ResolveAll）。
-	// nil = 不限制（仅无租户语义的调用方）；非 nil 时缺键视为未开通（缺省拒绝）。
+	policies     policyMapFunc // platform policy source (straight to the database by default; tests inject a fake)
+	// caps are the capabilities the platform has granted this tenant (see shared/capabilitypolicy.ResolveAll).
+	// nil = unrestricted (callers without tenant semantics only); when non-nil a missing key counts as not granted (deny by
+	// default).
 	caps map[string]bool
-	// mode 自定义工具的定义来源：正式运行取当前版本（与脚本目录同源），草稿模式取草稿。
-	// 缺省（零值）即草稿 —— 管理端授权目录必须看到「正在编辑什么」。
+	// mode is the definition source for custom tools: a production run uses the current version (same source as the script
+	// directory), draft mode uses the draft.
+	// The default (zero value) is draft - the admin grant panel must see "what is being edited".
 	mode tools.DefinitionMode
 }
 
-// policyMapFunc 一次取某租户全部生效策略（见 shared/pluginpolicy.List）。
+// policyMapFunc fetches every effective policy of one tenant at once (see shared/pluginpolicy.List).
 type policyMapFunc func(schema string) (map[string]pluginpolicy.Policy, error)
 
-// NewCatalog 创建目录（schema 为租户 schema；isSupervisor 为视角 agent 是否带超权属性）。
+// NewCatalog creates a catalog (schema is the tenant schema; isSupervisor says whether the viewing agent holds the elevated
+// attribute).
 //
-// 非 supervisor 视角下，管理类工具（分类落在 tools.SupervisorOnlyCategories）不会出现在
-// 任何组里 —— 天然组不产出，自定义组 / 预设组展开时也会被剔除（空组直接消失）。
+// In a non-supervisor view, management tools (categories in tools.SupervisorOnlyCategories) appear in no group at all - natural
+// groups do not emit them, and custom / preset group expansion filters them out as well (an empty group disappears entirely).
 func NewCatalog(schema string, grants toolgrants.Repository, isSupervisor bool) *Catalog {
 	return &Catalog{
 		schema:       schema,
@@ -216,58 +230,60 @@ func NewCatalog(schema string, grants toolgrants.Repository, isSupervisor bool) 
 		rpc:          rpcconnections.NewRepository(),
 		eps:          svcendpoints.NewRepository(),
 		plugins:      pluginsrepo.NewRepository(),
-		// 自定义工具的「有哪些」以 tools/ 目录为准（customtoolstore 合并契约与策略），
-		// 与执行层同源：目录里在的工具，授权目录里就能看见并授权。
+		// Which custom tools exist comes from the tools/ directory (customtoolstore merges the contract and the policy),
+		// the same source as the execution layer: a tool present there is visible and grantable in the grant catalog.
 		scripts:  customtoolstore.New(config.AgentRootDir(), schema),
 		policies: pluginpolicy.List,
 	}
 }
 
-// WithDefinitionMode 让目录按运行模式取自定义工具的定义。
+// WithDefinitionMode makes the catalog read custom tool definitions per run mode.
 //
-// 正式运行（MCP / RPC / 端点 / flow）必须看到「这一版发布了什么」：只有当前版本里的工具
-// 才算存在，参数 schema 也取版本里的 TOOL.json —— 否则草稿改参数 / 新建工具会立刻影响线上。
-// 管理端授权目录不要调用它（那里要看草稿）。
+// A production run (MCP / RPC / endpoint / flow) must see "what this version released": only tools in the current version exist,
+// and the parameter schema comes from that version's TOOL.json - otherwise editing a draft's parameters or creating a tool would
+// change production immediately.
+// The admin grant catalog must not call it (it needs to see the draft).
 func (c *Catalog) WithDefinitionMode(mode tools.DefinitionMode) *Catalog {
 	c.mode = mode
 	return c
 }
 
-// WithCapabilities 注入平台能力视图（见 shared/capabilitypolicy.ResolveAll）。
+// WithCapabilities injects the platform capability view (see shared/capabilitypolicy.ResolveAll).
 //
-// nil = 不限制；一旦传入，表里没有的能力一律视为未开通（缺省拒绝）。
-// 只影响目录的可用性标记（置灰 + 原因），真正的拦截在执行层：
-// 能力可能在两次调用之间被收回，已绑定工具的 agent 仍持有旧工具清单。
+// nil = unrestricted; once passed, any capability absent from the map counts as not granted (deny by default).
+// It only affects the catalog's availability marks (greyed out plus a reason); the real interception happens in the execution
+// layer: a capability can be revoked between two calls while an agent that already bound the tools still holds its old tool list.
 func (c *Catalog) WithCapabilities(allowed map[string]bool) *Catalog {
 	c.caps = allowed
 	return c
 }
 
-// capabilityBlocked 某能力是否被平台拦下（nil 视图 = 不拦）。
+// capabilityBlocked reports whether the platform blocked a capability (a nil view = nothing is blocked).
 func (c *Catalog) capabilityBlocked(key string) (bool, unavail) {
 	if c.caps == nil || key == "" || c.caps[key] {
 		return false, unavail{}
 	}
-	// 键名与中文名都写：前者给前端查语言包（键是接口口径），后者给日志与兜底。
+	// Only the key goes in: it is the API contract the frontend localises from (capability.Label is UI copy and must not be mixed
+	// into a diagnostic string).
 	return true, unavail{
 		code:   UnavailableCodeCapability,
 		params: map[string]string{"key": key},
-		reason: "平台未给本租户开通能力 " + key + "（" + capability.Label(key) + "），需平台管理员在租户能力中开通",
+		reason: "the platform has not granted capability " + key + " to this tenant; a platform administrator must enable it",
 	}
 }
 
-// policyMap 取本租户的生效策略表；第二个返回值 = 读取失败。
+// policyMap fetches this tenant's effective policy table; the second return value means "read failed".
 //
-// 读失败不能按缺省处理：缺省是「开放」，而「读不出」不等于「没人停用过」。
-// 调用方拿到 failed=true 时应把插件展示为**不可用**（保守方向），
-// 真正的拦截仍在 Runner.Invoke（那里读失败直接报错）。
+// A read failure must not be treated as the default: the default is "open", while "cannot read" does not mean "nobody disabled it".
+// When the caller gets failed=true it should show plugins as **unavailable** (the conservative direction);
+// the real interception still happens in Runner.Invoke (a read failure there is a hard error).
 func (c *Catalog) policyMap() (map[string]pluginpolicy.Policy, bool) {
 	if c.policies == nil {
 		return map[string]pluginpolicy.Policy{}, false
 	}
 	all, err := c.policies(c.schema)
 	if err != nil {
-		xlog.Error("读取插件策略失败 schema=%s（按「已停用」展示）: %v", c.schema, err)
+		xlog.Error("failed to read plugin policy schema=%s (shown as disabled): %v", c.schema, err)
 		return map[string]pluginpolicy.Policy{}, true
 	}
 	return all, false
@@ -275,11 +291,12 @@ func (c *Catalog) policyMap() (map[string]pluginpolicy.Policy, bool) {
 
 func (c *Catalog) auth() *auth.AuthInfo { return &auth.AuthInfo{Schema: c.schema} }
 
-// BuiltinCategories 内置类别集合（对应 builtin:<category> 组）。
+// BuiltinCategories is the set of built-in categories (the builtin:<category> groups).
 //
-// tools.CategorySuper 在列但**没有工具归属**：它是拆组前的聚合分类，只作为存量授权行
-// （builtin:super）的解析入口存在，展开成五个管理组的并集（见 builtinByCategory）。
-// 它不进 builtinGroupCategories，所以面板上不会多出一张与四组重复的卡片。
+// tools.CategorySuper is listed but **owns no tools**: it is the aggregated category from before the split, kept only as a
+// resolution entry for existing grant rows (builtin:super), expanding into the union of the five management groups (see
+// builtinByCategory).
+// It is not part of builtinGroupCategories, so the panel gains no extra card duplicating the four groups.
 func BuiltinCategories() map[string]bool {
 	return map[string]bool{
 		tools.CategoryFile:       true,
@@ -299,18 +316,18 @@ func BuiltinCategories() map[string]bool {
 	}
 }
 
-// BuiltinTools 全部内置工具（含分类）。
+// BuiltinTools is every built-in tool (with its category).
 //
-// 本函数**不做身份过滤** —— 它是「缺省全开」（超级智能体）与执行层判定的基线；
-// 按视角过滤请用 (*Catalog).VisibleBuiltinTools。
+// This function does **no identity filtering** - it is the baseline for "open by default" (the super agent) and for execution-layer
+// decisions; for a view-filtered list use (*Catalog).VisibleBuiltinTools.
 func BuiltinTools() []ToolInfo {
 	list := tools.List()
 	out := make([]ToolInfo, 0, len(list))
 	for _, t := range list {
 		m := t.Meta()
 		category := m.Category
-		// 未标注分类：不进任何类别组（Groups 不产出、builtinByCategory 也不会命中），
-		// Source 留空以免被误当成某个组名。
+		// No category: it joins no category group (Groups does not emit it and builtinByCategory never matches it), and Source is
+		// left empty so it is not mistaken for a group name.
 		source := ""
 		if category != "" {
 			source = ScopeBuiltin + ":" + category
@@ -330,15 +347,15 @@ func BuiltinTools() []ToolInfo {
 	return out
 }
 
-// VisibleBuiltinTools 按视角过滤后的内置工具（供管理端目录接口使用）。
+// VisibleBuiltinTools is the view-filtered list of built-in tools (used by the admin catalog endpoint).
 func (c *Catalog) VisibleBuiltinTools() []ToolInfo { return c.builtinTools() }
 
-// builtinTools 按视角过滤后的内置工具清单：非超级智能体剔除仅超级智能体可用的工具，
-// 并按平台能力标可用性。
+// builtinTools is the view-filtered built-in tool list: a non-super agent has the supervisor-only tools removed, and availability
+// is marked from platform capabilities.
 //
-// 能力闸必须落在叶子上，而不是只在 Groups 里给组置灰：
-// AllTools / ToolsOfRef / VisibleBuiltinTools 都从这里取工具，漏一个就会出现
-// 「组显示未开通、工具却说可用」；Resolve 的可用性过滤也正好依赖叶子上的 Available。
+// The capability gate must sit on the leaf, not just grey out groups in Groups:
+// AllTools / ToolsOfRef / VisibleBuiltinTools all take their tools from here, and missing one produces the contradiction "the group
+// says not granted, the tool says available"; Resolve's availability filtering also depends on the leaf's Available.
 func (c *Catalog) builtinTools() []ToolInfo {
 	list := BuiltinTools()
 	out := make([]ToolInfo, 0, len(list))
@@ -354,16 +371,17 @@ func (c *Catalog) builtinTools() []ToolInfo {
 	return out
 }
 
-// builtinCategory 内置工具的分类（来自 Source = "builtin:<category>"；未分类返回空串）。
+// builtinCategory is a built-in tool's category (from Source = "builtin:<category>"; empty when uncategorised).
 func builtinCategory(t ToolInfo) string {
 	return strings.TrimPrefix(t.Source, ScopeBuiltin+":")
 }
 
-// builtinByCategory 某内置类别下的工具（按视角过滤）。
+// builtinByCategory is the tools of one built-in category (view-filtered).
 //
-// builtin:super 特判为「五个管理组的并集」：它是拆组前的聚合分类，现在没有工具归属它，
-// 但存量授权行里可能还有 builtin:super —— 不展开的话那些 agent 会静默丢掉全部管理能力。
-// 这段是过渡代码，等存量清干净后连同 tools.CategorySuper 一起删。
+// builtin:super is special-cased as "the union of the five management groups": it is the aggregated category from before the split
+// and no tool belongs to it now, but existing grant rows may still say builtin:super - without the expansion those agents would
+// silently lose every management capability.
+// This is transitional code; remove it together with tools.CategorySuper once existing data is clean.
 func (c *Catalog) builtinByCategory(category string) []ToolInfo {
 	if category == tools.CategorySuper {
 		out := make([]ToolInfo, 0)
@@ -381,7 +399,7 @@ func (c *Catalog) builtinByCategory(category string) []ToolInfo {
 	return out
 }
 
-// ===== 连接与端点 =====
+// ===== Connections and endpoints =====
 
 func (c *Catalog) mcpConns() ([]models.McpConnection, error) {
 	list, _, err := c.mcp.List(c.auth(), &mcpconnections.ListMcpConnectionsRequest{Page: 1, Limit: listLimit})
@@ -393,14 +411,14 @@ func (c *Catalog) rpcConns() ([]models.RpcConnection, error) {
 	return list, err
 }
 
-// localRPCConns 本租户 protocol=rpc 且目标是工作流的端点。
+// localRPCConns are this tenant's endpoints with protocol=rpc that target a flow.
 //
-// 只收 target_type=flow（见 LocalTargetFlow 的两条理由：agent 端点会绕过 call_agent
-// 的闸门，且与 flow 同名时 ref / 工具名都会撞车）。
-// 一处收窄，三条路径同时生效：ToolsOfRef(local:rpc[:name])、AllTools、Groups。
+// Only target_type=flow is taken (see the two reasons on LocalTargetFlow: an agent endpoint would bypass the call_agent gate, and a
+// same-named flow would collide on both the ref and the tool name).
+// Narrowing it in one place takes effect on three paths at once: ToolsOfRef(local:rpc[:name]), AllTools and Groups.
 //
-// 走 ListAll 而不是 List：这里要把整份端点点目录装进内存，List 的分页上限
-// 会让第 1001 个端点起凭空消失（见 svcendpoints.ListAll 的注释）。
+// It uses ListAll rather than List: the whole endpoint catalog is loaded into memory here, and List's paging cap would make the
+// 1001st endpoint and beyond vanish (see the comment on svcendpoints.ListAll).
 func (c *Catalog) localRPCConns() ([]models.SvcEndpoint, error) {
 	return c.eps.ListAll(c.auth(), &svcendpoints.ListSvcEndpointsRequest{
 		Protocol:   LocalProtocolRPC,
@@ -408,22 +426,22 @@ func (c *Catalog) localRPCConns() ([]models.SvcEndpoint, error) {
 	})
 }
 
-// ===== 磁盘插件 =====
+// ===== Disk plugins =====
 
-// pluginTool 把一个已发现的磁盘插件转成工具叶子。
+// pluginTool turns one discovered disk plugin into a tool leaf.
 //
-// Available 的口径 = manifest 存在 且 本租户已启用（{schema}.plugins.is_active）
-// 且 平台没有停用（platform.tenant_plugins 只有显式 is_allowed=false 才算停用）。
-// 没配置过的插件**也**会出现在目录里（available=false）：管理员得先看得见，
-// 才知道有这个工具可以启用。
+// Available means: the manifest exists, the tenant has enabled it ({schema}.plugins.is_active), and the platform has not disabled it
+// (platform.tenant_plugins counts as disabled only with an explicit is_allowed=false).
+// A plugin that was never configured **still** appears in the catalog (available=false): an administrator has to see it before
+// knowing there is a tool to enable.
 //
-// 返回 ok=false 表示注册表里没这个工具（未发现 / 被重名规则丢弃）。
+// ok=false means the tool is not in the registry (not discovered / dropped by the duplicate-name rule).
 func (c *Catalog) pluginTool(name string) (ToolInfo, bool, error) {
 	return c.pluginToolWith(name, nil)
 }
 
-// pluginToolWith 同 pluginTool，但可传入一次全取的策略表（批量路径用，避免 N 条查询）。
-// pol == nil 表示自己按单个插件解析。
+// pluginToolWith is pluginTool with a pre-fetched policy table (for batch paths, avoiding N queries).
+// pol == nil means it resolves policy per plugin itself.
 func (c *Catalog) pluginToolWith(name string, pol map[string]pluginpolicy.Policy) (ToolInfo, bool, error) {
 	reg := plugin.DefaultSource()
 	if reg == nil {
@@ -450,8 +468,8 @@ func (c *Catalog) pluginToolWith(name string, pol map[string]pluginpolicy.Policy
 		pol, failed = c.policyMap()
 	}
 	if failed {
-		// 读不到策略：按「已停用」展示。缺省虽是开放，但「读不出」不等于「没人停过」，
-		// 此时若显示可用，用户会看到工具亮着却调不通。
+		// The policy could not be read, so show it as disabled. The default is open, but "cannot read" does not mean "nobody disabled
+		// it", and showing it as available would leave the user looking at a lit-up tool that cannot be called.
 		ti := ToolInfo{
 			Ref:         ScopePlugin + ":" + m.Name,
 			Name:        m.Name,
@@ -461,7 +479,7 @@ func (c *Catalog) pluginToolWith(name string, pol map[string]pluginpolicy.Policy
 			Parameters:  m.Parameters,
 		}
 		ti.markUnavailable(UnavailablePluginPolicy,
-			unavailFail("平台插件策略读取失败，暂按停用展示，请稍后重试"))
+			unavailFail("failed to read the platform plugin policy; shown as disabled for now, retry later"))
 		return ti, true, nil
 	}
 	avail, kind, why := pluginUnavailable(m.Name, policyOf(pol, m.Name), active)
@@ -481,11 +499,12 @@ func (c *Catalog) pluginToolWith(name string, pol map[string]pluginpolicy.Policy
 	return ti, true, nil
 }
 
-// pluginUnavailable 插件工具的可用性与归因（纯逻辑，便于单测）。
+// pluginUnavailable is a plugin tool's availability and attribution (pure logic, easy to unit test).
 //
-// 两层闸分开报，且平台在前：平台停用时，租户启用也不会生效 ——
-// 先报「未启用」会让租户去点启用，点完仍然不可用，白绕一圈。
-// 「本租户被停用」与「全局停用」也要分开：前者只影响这一家，后者要等平台解闸。
+// The two gates are reported separately, with the platform first: when the platform disabled it, a tenant enabling it has no effect -
+// reporting "not enabled" first would send the tenant to click enable and still find it unusable, a wasted round trip.
+// "Disabled for this tenant" and "disabled globally" must also stay apart: the first affects this tenant only, the second waits for
+// the platform to lift the gate.
 func pluginUnavailable(name string, pol pluginpolicy.Policy, active bool) (avail bool, kind string, u unavail) {
 	plugin := map[string]string{"plugin": name}
 	switch {
@@ -493,25 +512,25 @@ func pluginUnavailable(name string, pol pluginpolicy.Policy, active bool) (avail
 		return false, UnavailablePluginPolicy, unavail{
 			code:   UnavailableCodePluginBlocked,
 			params: plugin,
-			reason: "插件 " + name + " 已被平台全局停用，需平台管理员在「插件与能力」中解除",
+			reason: "plugin " + name + " was disabled globally by the platform; a platform administrator must lift it under Plugins & Capabilities",
 		}
 	case !pol.Allowed:
 		return false, UnavailablePluginPolicy, unavail{
 			code:   UnavailableCodePluginDisabled,
 			params: plugin,
-			reason: "插件 " + name + " 已被平台对本租户停用，需平台管理员在「插件与能力」中恢复",
+			reason: "plugin " + name + " was disabled for this tenant by the platform; a platform administrator must restore it under Plugins & Capabilities",
 		}
 	case !active:
 		return false, UnavailablePluginInactive, unavail{
 			code:   UnavailableCodePluginInactive,
 			params: plugin,
-			reason: "租户未启用插件 " + name + "，请在「工具与端点 → 插件」中启用并选择实现",
+			reason: "the tenant has not enabled plugin " + name + "; enable it and pick an implementation under Tools & Endpoints -> Plugins",
 		}
 	}
 	return true, "", unavail{}
 }
 
-// policyOf 从「一次全取」的结果里取策略；表里没有 = 开放（与 pluginpolicy.Default 一致）。
+// policyOf picks a policy out of the "fetched in one go" result; missing from the map = open (consistent with pluginpolicy.Default).
 func policyOf(all map[string]pluginpolicy.Policy, name string) pluginpolicy.Policy {
 	if p, ok := all[name]; ok {
 		return p
@@ -519,7 +538,7 @@ func policyOf(all map[string]pluginpolicy.Policy, name string) pluginpolicy.Poli
 	return pluginpolicy.Default()
 }
 
-// pluginTools 全部已发现的插件工具（按名排序，注册表本身已排序）。
+// pluginTools is every discovered plugin tool (sorted by name; the registry is already sorted).
 func (c *Catalog) pluginTools() ([]ToolInfo, error) {
 	reg := plugin.DefaultSource()
 	if reg == nil {
@@ -528,7 +547,8 @@ func (c *Catalog) pluginTools() ([]ToolInfo, error) {
 	snap := reg.Snapshot()
 	pols, failed := c.policyMap()
 	if failed {
-		// 一次全取失败时逐个插件补「已停用」，避免空表 + 缺省开放 = 全部显示可用
+		// When the batch fetch fails, mark every plugin as disabled - an empty table plus the open default would show everything as
+		// available
 		pols = make(map[string]pluginpolicy.Policy, len(snap.Tools))
 		for _, m := range snap.Tools {
 			pols[m.Name] = pluginpolicy.Policy{Allowed: false}
@@ -547,7 +567,7 @@ func (c *Catalog) pluginTools() ([]ToolInfo, error) {
 	return out, nil
 }
 
-// mcpRefreshedAt / rpcRefreshedAt 该连接工具清单的最后刷新时间（无工具时为空串）。
+// mcpRefreshedAt / rpcRefreshedAt is when that connection's tool list was last refreshed (empty when there are no tools).
 func (c *Catalog) mcpRefreshedAt(connID string) string {
 	list, err := c.mcp.ListTools(c.auth(), connID)
 	if err != nil {
@@ -572,7 +592,7 @@ func (c *Catalog) rpcRefreshedAt(connID string) string {
 	return maxTime(times)
 }
 
-// maxTime 返回最新时间（RFC3339）；空列表 / 零值返回空串。
+// maxTime returns the newest time (RFC3339); an empty list / zero value returns an empty string.
 func maxTime(times []xsql.Time) string {
 	var max time.Time
 	for _, t := range times {
@@ -586,18 +606,17 @@ func maxTime(times []xsql.Time) string {
 	return max.Format(time.RFC3339)
 }
 
-// toolSchema 把连接工具的 input_schema 转成可递给模型的参数对象。
+// toolSchema turns a connection tool's input_schema into the parameter object handed to the model.
 //
-// 必须在这里透传：内置工具的参数不给也没事（agent 侧现取 Meta().Parameters），
-// 但 mcp / rpc 工具没有那个兜底 —— 缺了它模型看到的是一个「无参数」的工具，
-// 要么不敢调，要么瞎编参数撞 required 校验。
+// It must be passed through here: not giving built-in tools their parameters is fine (the agent side takes Meta().Parameters on the
+// fly), but mcp / rpc tools have no such fallback - without it the model sees a tool with "no parameters" and either dares not call
+// it or invents arguments that trip the required check.
 //
-// 两种载体都要认：管理端经 gin 绑定写库的是 map[string]any，
-// rpc/client 的发现逻辑写的是 json.RawMessage（见 conn.go 的 tools/list 解析）。
-// xsql.JSONB.Unmarshal 对两者都按 JSON 处理。
+// Both carriers must be recognised: the admin side writes map[string]any through gin binding, while the rpc/client discovery logic
+// writes json.RawMessage (see the tools/list parsing in conn.go). xsql.JSONB.Unmarshal treats both as JSON.
 //
-// 顶层不是 object 的 schema 直接回退（上游会拒，或让模型以为工具不吃参数）：
-// 与 rpc/server listTools 的 isObjectSchema 判据同向。
+// A schema whose top level is not an object falls back to nil (upstream would reject it, or the model would think the tool takes no
+// parameters): the same direction as the isObjectSchema check in rpc/server listTools.
 func toolSchema(j xsql.JSONB) map[string]any {
 	if j.IsNil() {
 		return nil
@@ -609,23 +628,26 @@ func toolSchema(j xsql.JSONB) map[string]any {
 	if t, _ := m["type"].(string); t != "" && t != "object" {
 		return nil
 	}
-	// 缺 type 时补上：模型侧要求的形状是 object，缺了部分上游会拒整次请求。
+	// Fill in a missing type: the model side requires an object shape, and some upstreams reject the whole request without it.
 	if _, ok := m["type"]; !ok {
 		m["type"] = "object"
 	}
 	return m
 }
 
-// customTools 本租户可用的自定义工具（status=1）。
+// customTools are this tenant's usable custom tools (status=1).
 //
-// 读失败**降级为空**并记日志：目录是展示/绑定面，读失败不该让整棵工具树消失；
-// 真正的拦截在执行层（ExecuteTool → executeCustomTool），那里读失败直接报错。
+// A read failure **degrades to empty** with a log line: the catalog is the display / binding surface, and a read failure should not
+// make the whole tool tree disappear; the real interception is in the execution layer (ExecuteTool -> executeCustomTool), where a
+// read failure is a hard error.
 func (c *Catalog) customTools() []ToolInfo {
 	if c.scripts == nil || c.schema == "" {
 		return nil
 	}
-	// 正式运行走「版本视图」：没有当前版本的工具不算存在，参数 schema 取版本里的契约。
-	// 与执行层（ToolDir / CustomTools.Get）同源，否则会出现「模型按草稿参数调用、脚本是版本里的」。
+	// A production run uses the "version view": a tool absent from the current version does not exist, and the parameter schema comes
+	// from the contract inside the version.
+	// The same source as the execution layer (ToolDir / CustomTools.Get); otherwise the model would call with the draft's parameters
+	// while the script is the released one.
 	var (
 		list     []models.CustomTool
 		err      error
@@ -639,13 +661,13 @@ func (c *Catalog) customTools() []ToolInfo {
 		list, err = c.scripts.ListEnabled(c.schema)
 	}
 	if err != nil {
-		xlog.Error("读取自定义工具失败 schema=%s（按无工具处理）: %v", c.schema, err)
+		xlog.Error("failed to read custom tools schema=%s (treated as none): %v", c.schema, err)
 		return nil
 	}
-	// 能力闸提到叶子上：自定义工具走 /v1/exec（一次性进程），归 sandbox.exec 档，
-	// 平台没开通就置灰 —— 判据必须与执行层（tools/executeCustomTool）同向，
-	// 否则会出现「目录说可用、调用时被拒」。
-	// 组级原因由 Groups 从叶子抄过去，判据只留这一处。
+	// The capability gate moves onto the leaf: a custom tool runs through /v1/exec (a one-shot process) and belongs to the
+	// sandbox.exec tier, so it is greyed out when the platform has not granted it - the check must agree with the execution layer
+	// (tools/executeCustomTool), otherwise the catalog says available while the call is rejected.
+	// The group-level reason is copied from the leaf by Groups, so the check lives in this one place.
 	blocked, why := c.capabilityBlocked(capability.Exec)
 
 	out := make([]ToolInfo, 0, len(list))
@@ -668,11 +690,12 @@ func (c *Catalog) customTools() []ToolInfo {
 	return out
 }
 
-// ===== ref 展开 =====
+// ===== ref expansion =====
 
-// ToolsOfRef 把 ref 展开为工具清单（组 → 成员；单个工具 → 自身）。
-// 引用不存在（连接/端点/组/工具已删除）时返回空列表，不报错。
-// 非超级智能体视角下，分类为 super 的内置工具不会出现在结果里（含单个 ref 与组展开）。
+// ToolsOfRef expands a ref into a tool list (a group -> its members; a single tool -> itself).
+// A missing reference (connection / endpoint / group / tool deleted) returns an empty list, not an error.
+// In a non-super-agent view, built-in tools in the super category do not appear in the result (neither a single ref nor a group
+// expansion).
 func (c *Catalog) ToolsOfRef(ref string) ([]ToolInfo, error) {
 	p, err := ParseRef(ref)
 	if err != nil {
@@ -725,8 +748,8 @@ func (c *Catalog) ToolsOfRef(ref string) ([]ToolInfo, error) {
 				Description: ep.Description,
 				Available:   bool(ep.Exposed),
 				Source:      ScopeLocal + ":" + LocalProtocolRPC,
-				// 工作流入参就是工具入参：缺了它模型看到的是「无参数工具」，
-				// 要么不敢调，要么瞎编参数（与 mcp / rpc 分支同口径）。
+				// A flow's input parameters are the tool's parameters: without them the model sees a "parameterless tool" and either
+				// dares not call it or invents arguments (same convention as the mcp / rpc branches).
 				Parameters: toolSchema(ep.InputSchema),
 			}
 			if !ti.Available {
@@ -754,7 +777,7 @@ func (c *Catalog) ToolsOfRef(ref string) ([]ToolInfo, error) {
 	return nil, nil
 }
 
-// expandItems 展开组成员 / 预设组成员（成员只能是天然组或单个工具，不会嵌套自定义组）。
+// expandItems expands group / preset members (a member can only be a natural group or a single tool; custom groups never nest).
 func (c *Catalog) expandItems(items []models.ToolGroupItem, source string) ([]ToolInfo, error) {
 	out := make([]ToolInfo, 0)
 	seen := map[string]bool{}
@@ -768,14 +791,14 @@ func (c *Catalog) expandItems(items []models.ToolGroupItem, source string) ([]To
 				continue
 			}
 			seen[t.Ref] = true
-			t.Source = source // 记录来源组，便于 UI 展示"该工具来自哪个组"
+			t.Source = source // record the source group so the UI can show which group the tool came from
 			out = append(out, t)
 		}
 	}
 	return out, nil
 }
 
-// toolsOfConnection 展开 mcp:<conn>[:tool] / rpc:<conn>[:tool]。
+// toolsOfConnection expands mcp:<conn>[:tool] / rpc:<conn>[:tool].
 func (c *Catalog) toolsOfConnection(p *ParsedRef) []ToolInfo {
 	out := make([]ToolInfo, 0)
 	if p.Scope == ScopeMCP {
@@ -849,18 +872,18 @@ func (c *Catalog) toolsOfConnection(p *ParsedRef) []ToolInfo {
 	return out
 }
 
-// AllTools 全部可用工具（内置 + 插件 + 自定义工具 + 外部连接 + 本地 rpc 端点），按 ref 索引。
+// AllTools is every available tool (built-in + plugin + custom + external connection + local rpc endpoint), indexed by ref.
 //
-// 这里是 Resolver 生成最终工具集的唯一来源：**任何一类工具漏进来，即使授权解析成功，
-// 也会在最后一步被丢掉并报「引用的工具已不存在」**（自定义工具就踩过：ToolsOfRef 能展开，
-// 但 AllTools 缺这一类，于是授权看似保存成功、agent 永远看不见）。
+// This is the only source the Resolver uses to build the final tool set: **if one class of tool is missing here, the grant still
+// resolves but is dropped in the last step and reported as "the referenced tool no longer exists"** (custom tools hit exactly this:
+// ToolsOfRef could expand them, but AllTools lacked the class, so the grant looked saved while the agent never saw the tool).
 func (c *Catalog) AllTools() (map[string]ToolInfo, error) {
 	out := map[string]ToolInfo{}
 	for _, t := range c.builtinTools() {
 		out[t.Ref] = t
 	}
 
-	// 内置类组不单独入表（组不是工具），这里只放叶子工具
+	// Built-in category groups are not indexed here (a group is not a tool); only leaf tools go in
 
 	plugins, err := c.pluginTools()
 	if err != nil {
@@ -870,8 +893,9 @@ func (c *Catalog) AllTools() (map[string]ToolInfo, error) {
 		out[t.Ref] = t
 	}
 
-	// 自定义工具：归属判据与执行层（executeCustomTool）同向 —— 一律按叶子入表，
-	// 平台未开通 exec 时由 customTools() 标成不可用（Resolver 会按「平台未开通」告警并剔除）。
+	// Custom tools: the attribution rule agrees with the execution layer (executeCustomTool) - always indexed as leaves, and when
+	// the platform has not granted exec, customTools() marks them unavailable (the Resolver warns "not granted by the platform" and
+	// drops them).
 	for _, t := range c.customTools() {
 		out[t.Ref] = t
 	}
@@ -941,18 +965,18 @@ func (c *Catalog) AllTools() (map[string]ToolInfo, error) {
 	return out, nil
 }
 
-// builtinGroupCategories Groups() 产出的内置类别（顺序即展示顺序）。
+// builtinGroupCategories are the built-in categories Groups() emits (the order is the display order).
 //
-// 必须是**显式清单**：漏掉一个类别，该组就在授权面板上整个消失
-// （前端只渲染 groups，工具是作为组内成员出现的），而且不会有任何报错。
-// builtinByCategory 按 Source 比对，不遍历 BuiltinCategories 的键，所以清单即真源；
-// TestBuiltinGroupCategoriesCoverTools 守住「有工具的类别不能漏」。
+// It must be an **explicit list**: one missing category makes that group vanish entirely from the grant panel (the frontend renders
+// groups only, and tools appear as their members) with no error at all.
+// builtinByCategory compares on Source rather than iterating BuiltinCategories' keys, so this list is the source of truth;
+// TestBuiltinGroupCategoriesCoverTools guards "a category that owns tools must not be missing".
 //
-// CategoryScript 不在此列：它没有任何内置工具归属（run_skill_script 已归 exec），
-// 列了也会因空成员被跳过。将来该分类有了工具，上面那条测试会先失败提醒补进来。
+// CategoryScript is not listed: no built-in tool belongs to it (run_skill_script now belongs to exec), and listing it would be
+// skipped as empty anyway. When that category gains tools, the test above fails first and reminds you to add it.
 //
-// CategorySuper 也不在此列：它没有工具归属，只是 builtin:super 的兼容展开入口
-// （见 builtinByCategory）。列进来会多出一张与五个管理组重复的卡片。
+// CategorySuper is not listed either: it owns no tools and is only the compatibility expansion entry for builtin:super (see
+// builtinByCategory). Listing it would add a card duplicating the five management groups.
 var builtinGroupCategories = []string{
 	tools.CategoryFile, tools.CategoryExec, tools.CategoryShell, tools.CategoryBrowser,
 	tools.CategoryAgent, tools.CategorySkill, tools.CategorySkillOwn,
@@ -960,24 +984,24 @@ var builtinGroupCategories = []string{
 	tools.CategoryFlowAdmin,
 }
 
-// Groups 可引用组目录（内置类 / 连接 / 本地端点 / 预设组 / 自定义组）。
+// Groups is the referenceable group catalog (built-in categories / connections / local endpoints / presets / custom groups).
 //
-// 按视角产出：非超级智能体视角下，内置类中的 builtin:super（含其成员）整组不出现，
-// 成员被过滤光的预设组 / 自定义组也一并消失。
+// It is view-dependent: in a non-super-agent view the built-in builtin:super group (and its members) does not appear at all, and a
+// preset / custom group whose members were all filtered out disappears with it.
 func (c *Catalog) Groups() ([]GroupInfo, error) {
 	out := make([]GroupInfo, 0)
 
-	// 内置类
+	// Built-in categories
 	for _, category := range builtinGroupCategories {
 		items := c.builtinByCategory(category)
 		if len(items) == 0 {
 			continue
 		}
-		// 平台能力闸：exec / shell / browser 三类按租户能力开关决定可用性。
-		// 叶子已经由 builtinTools 标好（判据只有一处，避免组与工具漂移），
-		// 这里只把结论提到组上，供前端卡片直接读。
+		// Platform capability gate: exec / shell / browser availability follows the tenant's capability switches.
+		// The leaves were already marked by builtinTools (the check lives in one place so groups and tools cannot drift); here the
+		// conclusion is only lifted onto the group for the frontend card to read directly.
 		g := GroupInfo{
-			Ref: ScopeBuiltin + ":" + category, Name: "内置-" + category, Kind: ScopeBuiltin,
+			Ref: ScopeBuiltin + ":" + category, Name: "Built-in · " + category, Kind: ScopeBuiltin,
 			Description: builtinCategoryLabel(category), Available: true, Items: items,
 		}
 		if blocked, why := c.capabilityBlocked(tools.CapabilityOf(category)); blocked {
@@ -986,7 +1010,7 @@ func (c *Catalog) Groups() ([]GroupInfo, error) {
 		out = append(out, g)
 	}
 
-	// 预设组
+	// Preset groups
 	for _, pg := range PresetGroups {
 		items, err := c.expandItems(pg.Items, ScopePreset+":"+pg.Name)
 		if err != nil {
@@ -1001,24 +1025,25 @@ func (c *Catalog) Groups() ([]GroupInfo, error) {
 		})
 	}
 
-	// 磁盘插件：同类合成一张「类别卡」，容器本身不可授权（Synthetic）。
-	// 一个工具一张卡会把组名退化成工具名（"搜索"组），既难认也让 item_type 被记成 group。
+	// Disk plugins: same-kind tools merge into one "category card", and the container itself is not grantable (Synthetic).
+	// One card per tool would degrade the group name into a tool name (the "search" group), which is hard to recognise and also gets
+	// item_type recorded as group.
 	pluginItems, err := c.pluginTools()
 	if err != nil {
 		return nil, err
 	}
-	if g, ok := categoryGroup(ScopePlugin, "插件",
-		"磁盘上的 Python 工具插件（一工具多实现，按租户启用配置）", pluginItems); ok {
+	if g, ok := categoryGroup(ScopePlugin, "Plugins",
+		"Python tool plugins on disk (one tool, several implementations; enabled and configured per tenant)", pluginItems); ok {
 		out = append(out, g)
 	}
 
-	// 自定义工具：同上（租户自己的代码，数量随租户变化，尤其不适合一个工具一张卡）。
-	if g, ok := categoryGroup(ScopeCustom, "自定义工具",
-		"本租户自建的代码工具（授权 ref = custom:<名>，模型侧工具名 custom__<名>）", c.customTools()); ok {
+	// Custom tools: same as above (the tenant's own code, count varying per tenant, and one card per tool is particularly unsuited).
+	if g, ok := categoryGroup(ScopeCustom, "Custom tools",
+		"Code tools built by this tenant (grant ref = custom:<name>, model-side tool name custom__<name>)", c.customTools()); ok {
 		out = append(out, g)
 	}
 
-	// 外部 MCP 连接
+	// External MCP connections
 	mcpConns, err := c.mcpConns()
 	if err != nil {
 		return nil, err
@@ -1039,7 +1064,7 @@ func (c *Catalog) Groups() ([]GroupInfo, error) {
 		out = append(out, g)
 	}
 
-	// 外部 RPC 连接
+	// External RPC connections
 	rpcConns, err := c.rpcConns()
 	if err != nil {
 		return nil, err
@@ -1060,7 +1085,7 @@ func (c *Catalog) Groups() ([]GroupInfo, error) {
 		out = append(out, g)
 	}
 
-	// 本地 rpc 端点
+	// Local rpc endpoints
 	eps, err := c.localRPCConns()
 	if err != nil {
 		return nil, err
@@ -1075,13 +1100,13 @@ func (c *Catalog) Groups() ([]GroupInfo, error) {
 			times = append(times, ep.UpdatedAt)
 		}
 		out = append(out, GroupInfo{
-			Ref: ScopeLocal + ":" + LocalProtocolRPC, Name: "本地 RPC 端点", Kind: ScopeLocal,
-			Description: "本租户工作流的 rpc 协议端点（agent 之间的调用请走 call_agent）",
+			Ref: ScopeLocal + ":" + LocalProtocolRPC, Name: "Local RPC endpoints", Kind: ScopeLocal,
+			Description: "rpc-protocol endpoints of this tenant's flows (use call_agent for agent-to-agent calls)",
 			Available:   true, Items: items, RefreshedAt: maxTime(times),
 		})
 	}
 
-	// 工具组（租户自定义）
+	// Tool groups (tenant-defined)
 	groups, err := c.grants.ListGroups(c.schema)
 	if err != nil {
 		return nil, err
@@ -1102,15 +1127,16 @@ func (c *Catalog) Groups() ([]GroupInfo, error) {
 	return out, nil
 }
 
-// categoryGroup 把同一 scope 的若干工具合成一张类别卡。
+// categoryGroup merges several tools of the same scope into one category card.
 //
-// 为什么需要它：授权面板只渲染组卡片，工具必须作为「组内成员」出现；而插件 / 自定义工具
-// 的成员是**租户侧实体**（数量随租户变化），一工具一卡会让组名退化成工具名
-// （"利息终值计算"组），既难认，又把 item_type 误导成 group —— 看着像授权了一个组，
-// 实际只是那一个工具。
+// Why it exists: the grant panel renders group cards only, and tools must appear as "group members"; the members of plugins and custom
+// tools are **tenant-side entities** (count varying per tenant), so one card per tool would degrade the group name into a tool name
+// (the "compound interest" group), which is hard to recognise and also misleads item_type into group - it looks like a group was
+// granted when only that one tool was.
 //
-// 这张卡是**容器**：Synthetic=true，前端不给整组勾选，勾选落点是成员自己的工具 ref。
-// ref 用 "<scope>:*" 只当前端 key / 展示用 —— ParseRef 会拒 "*"，不可能是有效授权 ref。
+// This card is a **container**: Synthetic=true, the frontend offers no select-all for the group, and selection targets each member's
+// own tool ref.
+// The ref "<scope>:*" is only a frontend key / display aid - ParseRef rejects "*", so it can never be a valid grant ref.
 func categoryGroup(scope, name, desc string, items []ToolInfo) (GroupInfo, bool) {
 	if len(items) == 0 {
 		return GroupInfo{}, false
@@ -1119,12 +1145,12 @@ func categoryGroup(scope, name, desc string, items []ToolInfo) (GroupInfo, bool)
 		Ref: scope + ":*", Name: name, Kind: scope, Description: desc,
 		Available: true, Items: items, Synthetic: true,
 	}
-	// 组级可用性从叶子抄（判据只留叶子一处）：任一成员不可用 → 卡片也标不可用，
-	// 原因取第一条，与内置类组的做法一致。
+	// Group-level availability is copied from the leaves (the check stays in one place): any unavailable member marks the card
+	// unavailable too, with the first member's reason, matching how built-in category groups behave.
 	for _, t := range items {
 		if !t.Available {
-			// 编码与参数一起抄：只抄 kind/reason 会让前端拿到 reason 却翻不了，
-			// 卡片上于是出现「中文原因」而其它地方已是本地化文案。
+			// Copy the code and params together: copying only kind/reason would leave the frontend holding a reason it cannot
+			// translate, so the card would show untranslated text while everything else is localised.
 			g.markUnavailable(t.UnavailableKind, unavail{
 				code:   t.UnavailableCode,
 				params: t.UnavailableParams,
@@ -1136,38 +1162,40 @@ func categoryGroup(scope, name, desc string, items []ToolInfo) (GroupInfo, bool)
 	return g, true
 }
 
+// builtinCategoryLabel is the fallback summary of a built-in category, used when the frontend has no translation for the group ref
+// (the panel localises from <ref>.desc first and falls back to this string).
 func builtinCategoryLabel(category string) string {
 	switch category {
 	case tools.CategoryFile:
-		return "文件类：读写与浏览工作区文件"
+		return "Files: read, write and browse workspace files"
 	case tools.CategoryExec:
-		return "一次性执行：每条命令 / 脚本新起进程、起完即退（无状态；含技能脚本 run_skill_script）"
+		return "One-shot execution: every command / script starts a new process and exits (stateless; includes the skill script run_skill_script)"
 	case tools.CategoryShell:
-		return "常驻会话：复用长驻进程，cwd / 环境变量 / 后台任务跨调用保留"
-	case tools.CategoryScript:
-		return "技能脚本：只跑注入给你的技能目录内的脚本（/skill 只读挂载）"
+		return "Resident session: reuses a long-lived process, keeping cwd / environment variables / background jobs across calls"
 	case tools.CategoryBrowser:
-		return "浏览器类：在沙箱内操作网页（可出网、能读页面内容，高风险）"
+		return "Browser: operate web pages inside the sandbox (network access, can read page content, high risk)"
+	case tools.CategoryScript:
+		return "Skill scripts: only runs scripts inside the skill directories injected into your workspace (/skill is mounted read-only)"
 	case tools.CategoryAgent:
-		return "智能体类：查看 / 调用其它 agent"
+		return "Agents: look up and call other agents"
 	case tools.CategorySkill:
-		return "技能类：列出 / 查看注入给你的 skill（正文用 read_skill 或 use_skill 按需读；use_skill 会激活其工具依赖）"
+		return "Skills: list and inspect the skills injected into your workspace (read the body on demand with read_skill or use_skill; use_skill activates its tool dependencies)"
 	case tools.CategorySkillOwn:
-		return "私有技能：创建 / 修改 / 删除**自己的** skill（写的是自己的能力面，默认不授）"
+		return "Private skills: create / modify / delete **your own** skills (this writes your own capability surface and is not granted by default)"
 	case tools.CategoryAgentAdmin:
-		return "智能体管理（仅超级智能体）：创建 / 修改 / 删除 agent，以及给它绑定技能"
+		return "Agent administration (super agent only): create / modify / delete agents and bind skills to them"
 	case tools.CategorySkillAdmin:
-		return "技能管理（仅超级智能体）：创建 / 修改 / 删除**共享（租户级）** skill，以及为他 agent 创建 / 改 / 删**私有** skill"
+		return "Skill administration (super agent only): create / modify / delete **shared (tenant-level)** skills, and create / modify / delete **private** skills for other agents"
 	case tools.CategoryToolGrant:
-		return "授权管理（仅超级智能体）：授予 / 收回 agent 的工具，以及 agent 之间的调用关系"
+		return "Grant administration (super agent only): grant / revoke an agent's tools and the call relationships between agents"
 	case tools.CategoryCustomTool:
-		return "自定义工具管理（仅超级智能体）：创建 / 修改 / 删除 / 列出本租户的自定义工具"
+		return "Custom tool administration (super agent only): create / modify / delete / list this tenant's custom tools"
 	case tools.CategoryFlowAdmin:
-		return "工作流管理（仅超级智能体）：创建 / 列出 / 读取 / 删除 / 试运行工作流、查运行记录，并可把流程对外开放成 mcp / rpc 端点"
+		return "Flow administration (super agent only): create / list / read / delete / test-run flows, inspect run records, and expose a flow as an mcp / rpc endpoint"
 	case tools.CategorySuper:
-		return "超级智能体专属（过渡聚合组，等价于五个管理组的并集）"
+		return "Super agent only (transitional aggregate group, equivalent to the union of the five management groups)"
 	default:
-		return "未分类的内置工具"
+		return "Uncategorised built-in tools"
 	}
 }
 
@@ -1178,13 +1206,14 @@ func displayName(display, fallback string) string {
 	return fallback
 }
 
-// 外部工具的不可用归因：三者的修复入口都在租户自己手里（连接 / 端点各自的管理页），
-// 所以原因里直接写「该去哪开」。这类工具最常见的困惑就是看不出连接是停用的。
+// Unavailable attribution for external tools: all three are fixed by the tenant itself (each connection / endpoint has its own
+// management page), so the reason says where to enable it. The most common confusion with these tools is not realising the
+// connection is disabled.
 func mcpConnIssue(name string) (kind string, u unavail) {
 	return UnavailableConnection, unavail{
 		code:   UnavailableCodeMcpConnection,
 		params: map[string]string{"connection": name},
-		reason: "MCP 连接 " + name + " 未启用，请在「设置 → MCP 连接」中启用",
+		reason: "MCP connection " + name + " is not enabled; enable it under Settings -> MCP connections",
 	}
 }
 
@@ -1192,7 +1221,7 @@ func rpcConnIssue(name string) (kind string, u unavail) {
 	return UnavailableConnection, unavail{
 		code:   UnavailableCodeRpcConnection,
 		params: map[string]string{"connection": name},
-		reason: "RPC 连接 " + name + " 未启用，请在「设置 → RPC 连接」中启用",
+		reason: "RPC connection " + name + " is not enabled; enable it under Settings -> RPC connections",
 	}
 }
 
@@ -1200,6 +1229,6 @@ func endpointIssue(name string) (kind string, u unavail) {
 	return UnavailableEndpoint, unavail{
 		code:   UnavailableCodeEndpoint,
 		params: map[string]string{"endpoint": name},
-		reason: "端点 " + name + " 未对外开放，请在「端点」页把它的「对外」打开",
+		reason: "endpoint " + name + " is not exposed; turn on its \"exposed\" switch on the Endpoints page",
 	}
 }

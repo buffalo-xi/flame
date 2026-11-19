@@ -6,31 +6,31 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// item_type 只能由 ref 推导：写入口不接受调用方传入。
-// 推错的后果是「矛盾行」——item_type 与 ref 指向不同形态，前端勾选态与授权行对不上，
-// 且不会报错（见 ItemTypeOfRef 的注释）。
+// item_type can only be derived from the ref: write entry points do not accept it from the caller.
+// Deriving it wrongly produces a "contradictory row" - item_type and ref pointing at different shapes, so the frontend's checkbox
+// state no longer matches the grant row, and nothing errors (see the notes on ItemTypeOfRef).
 func TestItemTypeOfRef(t *testing.T) {
 	cases := []struct {
 		ref  string
 		want string
 	}{
-		// 组形态
+		// Group shape
 		{"group:fs-basic", models.GrantItemGroup},
 		{"preset:default", models.GrantItemGroup},
-		{"builtin:file", models.GrantItemGroup}, // 类别
-		{"mcp:fs", models.GrantItemGroup},       // 整条连接
+		{"builtin:file", models.GrantItemGroup}, // a category
+		{"mcp:fs", models.GrantItemGroup},       // a whole connection
 		{"rpc:erp", models.GrantItemGroup},
 		{"local:rpc", models.GrantItemGroup},
 
-		// 单工具形态
+		// Single-tool shape
 		{"builtin:read_file", models.GrantItemTool},
 		{"mcp:fs:read_file", models.GrantItemTool},
 		{"rpc:erp:query", models.GrantItemTool},
 		{"local:rpc:flow-a", models.GrantItemTool},
-		{"custom:web_search", models.GrantItemTool}, // 一工具一 ref
+		{"custom:web_search", models.GrantItemTool}, // one ref per tool
 		{"plugin:web_search", models.GrantItemTool},
 
-		// 非法 ref：保守按 tool（写路径此前已用 ValidateRef 拦下，这里只求不 panic）
+		// An illegal ref: conservatively tool (the write path already stops it with ValidateRef; here it only has to not panic)
 		{"", models.GrantItemTool},
 	}
 	for _, c := range cases {

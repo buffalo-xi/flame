@@ -1,16 +1,18 @@
-// Package customtoolstore 自定义工具的合并视图：**磁盘目录是实体，表是策略**。
+// Package customtoolstore is the merged view of custom tools: **the on-disk directory is the entity, the table is the policy**.
 //
-// 分工（这是「目录即实体」的落点）：
-//   - 有哪些工具      → tools/ 下的目录 + 合法的 TOOL.json（toolfile.Scan）
-//   - 工具是什么      → TOOL.json（描述 / 参数 / 语言 / 入口 / 配置声明）
-//   - 租户策略与运行态 → custom_tools 表（status / configs / 时间戳）
+// The split (this is where "the directory is the entity" lands):
+//   - which tools exist   -> directories under tools/ with a valid TOOL.json (toolfile.Scan)
+//   - what a tool is      -> TOOL.json (description / parameters / language / entry / configuration declaration)
+//   - tenant policy and runtime state -> the custom_tools table (status / configs / timestamps)
 //
-// 之前三者都在表里，于是「盘上有目录、平台看不见」只能靠人记得再建一行。
-// 现在反过来：目录在就算存在，缺表行 = 正常态、无配置。
+// All three used to live in the table, so "a directory exists on disk but the platform cannot see it" could only be fixed by remembering to
+// insert a row. Now it is the other way round: a directory means it exists, and a missing row means normal state with no configuration.
 //
-// 兼容期两条降级（都记 issue，不静默）：
-//   - 目录在、TOOL.json 缺或坏、且表有行 → 先用表定义（打开管理页会自动补写文件）
-//   - 表有行、目录已不在 → 不复活（补写契约会造出一个没有代码的假工具），只报 issue
+// Two transitional degradations (both recorded as an issue, never silent):
+//   - the directory exists, TOOL.json is missing or broken, and the table has a row -> use the table definition first (opening the admin
+//     page rewrites the file automatically)
+//   - the table has a row but the directory is gone -> do not resurrect it (writing a contract back would fabricate a fake tool with no
+//     code), just report an issue
 package customtoolstore
 
 import (
@@ -28,29 +30,29 @@ import (
 	"flame/nexus/shared/toolfile"
 )
 
-// Store 某租户的工具视图。嵌入 Repository：Create / Update / Delete 直接透传，
-// 只覆盖「读」的三个方法（List / ListEnabled / Get），写路径仍由调用方显式决定写文件。
+// Store is one tenant's tool view. It embeds Repository: Create / Update / Delete pass straight through, and only the three "read" methods
+// (List / ListEnabled / Get) are overridden - the write path still belongs explicitly to the caller, which decides when to write the file.
 type Store struct {
 	customtools.Repository
 	rootDir string
 	schema  string
 }
 
-// New 构造视图。rootDir 是存储根（config.Cfg.Agent.RootDir）。
+// New builds the view. rootDir is the storage root (config.Cfg.Agent.RootDir).
 func New(rootDir, schema string) *Store {
 	return &Store{Repository: customtools.NewRepository(), rootDir: rootDir, schema: schema}
 }
 
-// List 全部工具（含锁定 / 废弃），按 name 升序。
+// List returns every tool (locked / deprecated included), sorted by name ascending.
 //
-// schema 入参只为匹配 customtools.Repository 的方法签名，实际用构造时的 schema：
-// 视图是租户维度的，允许调用方传别的 schema 只会读出一份对不上的数据。
+// The schema argument only exists to match customtools.Repository's method signature; the schema from construction is used: the view is
+// tenant-scoped, and letting a caller pass another schema would only read a mismatched data set.
 func (s *Store) List(string) ([]models.CustomTool, error) {
 	tools, _, err := s.ListWithIssues()
 	return tools, err
 }
 
-// ListEnabled 只列 status=1（执行 / 授权目录用）。
+// ListEnabled lists status=1 only (for execution and the grant catalog).
 func (s *Store) ListEnabled(string) ([]models.CustomTool, error) {
 	tools, _, err := s.ListWithIssues()
 	if err != nil {
@@ -65,7 +67,7 @@ func (s *Store) ListEnabled(string) ([]models.CustomTool, error) {
 	return out, nil
 }
 
-// ListWithIssues 工具列表 + 逐条目录问题（管理端展示用）。
+// ListWithIssues returns the tool list plus the per-directory issues (for the admin UI).
 func (s *Store) ListWithIssues() ([]models.CustomTool, []toolfile.ScanIssue, error) {
 	rows, err := s.Repository.List(s.schema)
 	if err != nil {
@@ -85,8 +87,9 @@ func (s *Store) ListWithIssues() ([]models.CustomTool, []toolfile.ScanIssue, err
 		out = append(out, merge(e.File, byName[e.Name], e.Name))
 	}
 
-	// 目录在、契约缺或坏：表里有行就用表定义（兼容期），并把 issue 的措辞换成
-	// 「暂用数据库定义」，否则用户看到「缺 TOOL.json」会以为工具不可用。
+	// The directory exists but the contract is missing or broken: if the table has a row, use the table definition (transition period) and
+	// reword the issue as "using the database definition for now" - otherwise the user reads "TOOL.json missing" and concludes the tool is
+	// unusable.
 	issueIdx := make(map[string]int, len(issues))
 	for i := range issues {
 		issueIdx[issues[i].Path] = i
@@ -99,13 +102,13 @@ func (s *Store) ListWithIssues() ([]models.CustomTool, []toolfile.ScanIssue, err
 			t := *row
 			out = append(out, t)
 			if i, ok := issueIdx[name]; ok {
-				issues[i].Error = "TOOL.json 缺失或内容有误，暂用数据库定义（打开「自定义工具」页会自动补写）"
+				issues[i].Error = "TOOL.json is missing or invalid; using the database definition for now (opening the custom tools page rewrites it automatically)"
 			}
 			continue
 		}
 		issues = append(issues, toolfile.ScanIssue{
 			Path:  name,
-			Error: "记录存在但工具目录已删除（可删除该记录）",
+			Error: "the row exists but the tool directory has been deleted (the row can be removed)",
 		})
 	}
 
@@ -114,10 +117,11 @@ func (s *Store) ListWithIssues() ([]models.CustomTool, []toolfile.ScanIssue, err
 	return out, issues, nil
 }
 
-// Get 按短名取。
+// Get fetches by short name.
 //
-// 存在性以目录为准；目录在但契约缺/坏时，有表行就退回表（兼容期），两者都没有
-// 才返回 sql.ErrNoRows —— 与仓储同一套错误语义，调用方不用区分来源。
+// Existence follows the directory; when the directory exists but the contract is missing / broken, it falls back to the table if there is a
+// row (transition period), and only when neither is available does it return sql.ErrNoRows - the same error semantics as the repository, so
+// the caller need not tell the sources apart.
 func (s *Store) Get(_, name string) (*models.CustomTool, error) {
 	f, ferr := toolfile.Read(s.rootDir, s.schema, name)
 	row, rerr := s.Repository.Get(s.schema, name)
@@ -131,7 +135,7 @@ func (s *Store) Get(_, name string) (*models.CustomTool, error) {
 			return &t, nil
 		}
 	}
-	// 契约不可用：有行先用行，否则不存在（或语法错误要暴露出去）。
+	// The contract is unusable: use the row if there is one, otherwise it does not exist (or the syntax error has to surface).
 	if row != nil {
 		t := *row
 		return &t, nil
@@ -142,31 +146,32 @@ func (s *Store) Get(_, name string) (*models.CustomTool, error) {
 	return nil, sql.ErrNoRows
 }
 
-// ===== 正式运行视图：定义取当前版本，策略取表 =====
+// ===== Production view: the definition comes from the current version, the policy from the table =====
 //
-// 草稿视图（List / Get）回答「正在编辑什么」；正式运行必须回答「这一版发布的是什么」。
-// 两者混用的后果不是显示问题：脚本取版本目录、契约取草稿，会让「发布后改描述/入口/超时」
-// 立刻影响线上（entry 改名甚至直接跑不起来）。
+// The draft view (List / Get) answers "what is being edited"; a production run must answer "what was released in this version".
+// Mixing the two is not a display problem: reading the script from the version directory while taking the contract from the draft would let
+// "changing the description / entry / timeout after release" take effect in production immediately (renaming the entry can even make it fail
+// to start).
 
-// releasedRow 有当前版本（is_current）的工具。
+// releasedRow is a tool that has a current version (is_current).
 type releasedRow struct {
 	ID      string
 	Name    string
 	Version int
 }
 
-// versionDir 某工具第 n 版目录的宿主绝对路径：
-// {root}/tenants/{schema}/versions/tools/<name>/v<n>。
+// versionDir returns the host absolute path of a tool's version n directory:
+// {root}/tenants/{schema}/versions/tools/<name>/v<n>.
 func (s *Store) versionDir(name string, version int) string {
 	key := paths.VersionKey(s.schema, paths.VersionTools, name, version)
 	return filepath.Join(s.rootDir, filepath.FromSlash(key))
 }
 
-// releasedRows 读「有当前版本」的工具（可按 name 收窄）。
-// 版本行的存在性以 tool_versions 为准：没有版本的草稿工具不应出现在正式运行里。
+// releasedRows reads the tools that have a current version (optionally narrowed by name).
+// A version row's existence follows tool_versions: a draft tool with no version must not appear in production runs.
 func (s *Store) releasedRows(name string) ([]releasedRow, error) {
 	if db.DB == nil {
-		return nil, fmt.Errorf("数据库未初始化：无法读取自定义工具版本")
+		return nil, fmt.Errorf("database not initialised: cannot read custom tool versions")
 	}
 	q := `SELECT v.tool_id::text, t.name, v.version
 		FROM ` + s.schema + `.tool_versions v
@@ -196,28 +201,31 @@ func (s *Store) releasedRows(name string) ([]releasedRow, error) {
 	return out, rows.Err()
 }
 
-// readReleasedContract 读版本目录里的契约并校验。
-// 缺失 / 非法都返回错误：调用方决定是整条跳过（清单）还是报错（单取）。
+// readReleasedContract reads and validates the contract in a version directory.
+// A missing / illegal one both return an error: the caller decides whether to skip the entry (a list) or fail (a single fetch).
 func (s *Store) readReleasedContract(r releasedRow) (*models.ToolFile, error) {
 	dir := s.versionDir(r.Name, r.Version)
 	f, err := toolfile.ReadAt(dir)
 	if err != nil {
-		return nil, fmt.Errorf("读取工具 %q 的 v%d 契约失败: %w", r.Name, r.Version, err)
+		return nil, fmt.Errorf("failed to read the v%d contract of tool %q: %w", r.Version, r.Name, err)
 	}
 	if f == nil {
-		return nil, fmt.Errorf("工具 %q 的 v%d 缺少契约文件 %s（版本目录：%s）", r.Name, r.Version, models.ToolFileName, dir)
+		return nil, fmt.Errorf("tool %q v%d is missing the contract file %s (version directory: %s)", r.Name, r.Version, models.ToolFileName, dir)
 	}
 	if verr := f.Validate(r.Name); verr != nil {
-		return nil, fmt.Errorf("工具 %q 的 v%d 契约无效: %w", r.Name, r.Version, verr)
+		return nil, fmt.Errorf("the v%d contract of tool %q is invalid: %w", r.Version, r.Name, verr)
 	}
 	return f, nil
 }
 
-// Released 正式运行视图（单个）：
-//   - 定义（描述 / 参数 / 语言 / 入口 / 超时 / 出网 / 配置声明）取**当前版本目录**的 TOOL.json；
-//   - 策略（id / status / configs）仍取表 —— 授权与配置不冻结，锁废 / revoke 必须立即生效。
+// Released is the production view (single tool):
+//   - the definition (description / parameters / language / entry / timeout / egress / configuration declaration) comes from the **current
+//     version directory's** TOOL.json;
+//   - the policy (id / status / configs) still comes from the table - grants and configuration are not frozen, and a lock / revoke must take
+//     effect immediately.
 //
-// 没有当前版本时返回 sql.ErrNoRows：正式运行不认从未发布的草稿（与 agent / skill 同口径）。
+// With no current version it returns sql.ErrNoRows: a production run does not recognise a draft that was never released (the same criterion
+// as agent / skill).
 func (s *Store) Released(name string) (*models.CustomTool, error) {
 	rows, err := s.releasedRows(name)
 	if err != nil {
@@ -238,10 +246,11 @@ func (s *Store) Released(name string) (*models.CustomTool, error) {
 	return &t, nil
 }
 
-// ListReleased 正式运行的清单：只列「有当前版本」且状态正常的工具。
+// ListReleased is the production list: only tools that have a current version and a normal status.
 //
-// 契约缺失 / 非法的条目**不进清单**：宁可不出现，也不退回草稿定义 —— 那等于发布冻结失效。
-// 单取（Released）仍会给出具体原因，便于排查「为什么这个工具没出现在线上」。
+// Entries whose contract is missing / invalid **do not enter the list**: better to be absent than to fall back to the draft definition, which
+// would make the release freeze meaningless.
+// A single fetch (Released) still gives the concrete reason, which helps investigate "why is this tool not in production".
 func (s *Store) ListReleased() ([]models.CustomTool, error) {
 	rows, err := s.releasedRows("")
 	if err != nil {
@@ -274,7 +283,8 @@ func (s *Store) ListReleased() ([]models.CustomTool, error) {
 	return out, nil
 }
 
-// Status 只取编辑态（文件闸用；锁定态也要能判，所以不能复用「只给正常态」的筛选）。
+// Status returns the editing state only (for the file gate; the locked state has to be judged too, so the "normal only" filter cannot be
+// reused).
 func (s *Store) Status(name string) (int, bool, error) {
 	t, err := s.Get("", name)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -286,10 +296,10 @@ func (s *Store) Status(name string) (int, bool, error) {
 	return t.Status, true, nil
 }
 
-// Upsert 写策略行：有行就更新，没行就插入。
+// Upsert writes the policy row: update when one exists, insert when none does.
 //
-// 「目录即实体」之后必然出现「盘上有工具、表里没行」（手工放进去的工程目录、
-// 从版本库拉下来的工具包），更新状态/配置时不能因为缺行就失败。
+// Once "the directory is the entity" holds, "a tool on disk with no row in the table" necessarily appears (a project directory placed by hand,
+// a tool package pulled from a repository), and updating its status / configuration must not fail just because the row is missing.
 func (s *Store) Upsert(t *models.CustomTool) error {
 	err := s.Repository.Update(s.schema, t)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -298,7 +308,7 @@ func (s *Store) Upsert(t *models.CustomTool) error {
 	return err
 }
 
-// merge 把契约叠到策略行上：行提供 id / status / configs / 时间戳，文件提供其余。
+// merge lays the contract over the policy row: the row supplies id / status / configs / timestamps, the file everything else.
 func merge(f *models.ToolFile, row *models.CustomTool, name string) models.CustomTool {
 	t := models.CustomTool{Name: name, Status: models.StatusNormal}
 	if row != nil {

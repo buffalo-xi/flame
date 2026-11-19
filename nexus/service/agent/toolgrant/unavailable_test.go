@@ -7,10 +7,10 @@ import (
 	"flame/nexus/shared/pluginpolicy"
 )
 
-// 插件不可用的归因（pluginUnavailable）。
+// Attribution for an unavailable plugin (pluginUnavailable).
 //
-// 关键约定：平台层优先。平台没开通插件时，租户启用也不会生效 ——
-// 先报「租户未启用」会让用户去点启用，点完仍然不可用，白绕一圈。
+// Key rule: the platform layer wins. When the platform has not granted a plugin, the tenant enabling it has no effect - reporting
+// "not enabled by the tenant" first would send the user to click enable and still find it unusable, a wasted round trip.
 func TestPluginUnavailable(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -20,13 +20,14 @@ func TestPluginUnavailable(t *testing.T) {
 		kind   string
 		words  []string
 	}{
-		{"平台未停用且租户已启用", pluginpolicy.Policy{Allowed: true}, true, true, "", nil},
-		{"平台已对本租户停用", pluginpolicy.Policy{}, true, false, UnavailablePluginPolicy, []string{"平台", "插件与能力"}},
-		{"租户未启用", pluginpolicy.Policy{Allowed: true}, false, false, UnavailablePluginInactive, []string{"工具与端点", "插件"}},
-		// 两层都不满足时报平台层：先解决上层，否则用户启用完还是不生效
-		{"两层都不满足优先报平台", pluginpolicy.Policy{}, false, false, UnavailablePluginPolicy, []string{"平台"}},
-		// 被全局停用时不许说成「本租户停用」：影响面是全租户，下一步是找平台解闸
-		{"被平台全局停用", pluginpolicy.Policy{Blocked: true}, true, false, UnavailablePluginPolicy, []string{"全局停用"}},
+		{"not disabled and enabled by the tenant", pluginpolicy.Policy{Allowed: true}, true, true, "", nil},
+		{"disabled for this tenant", pluginpolicy.Policy{}, true, false, UnavailablePluginPolicy, []string{"platform", "Plugins & Capabilities"}},
+		{"not enabled by the tenant", pluginpolicy.Policy{Allowed: true}, false, false, UnavailablePluginInactive, []string{"Tools & Endpoints", "plugin"}},
+		// When both layers fail, report the platform: fix the upper layer first, otherwise enabling still has no effect
+		{"both layers fail, platform reported first", pluginpolicy.Policy{}, false, false, UnavailablePluginPolicy, []string{"platform"}},
+		// A global block must not be described as "disabled for this tenant": it affects every tenant, and the next step is to ask
+		// the platform to lift the gate
+		{"blocked globally by the platform", pluginpolicy.Policy{Blocked: true}, true, false, UnavailablePluginPolicy, []string{"globally"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,22 +40,23 @@ func TestPluginUnavailable(t *testing.T) {
 			}
 			if tc.avail {
 				if !why.empty() {
-					t.Errorf("可用时不该有原因，got %+v", why)
+					t.Errorf("an available tool should have no reason, got %+v", why)
 				}
 				return
 			}
-			// 原因必须指名道姓：插件名 + 该去哪修（否则用户只能猜）
+			// The reason must name names: the plugin name plus where to fix it (otherwise the user can only guess)
 			if !strings.Contains(why.reason, "web_search") {
-				t.Errorf("原因里应带插件名，got %q", why.reason)
+				t.Errorf("the reason should carry the plugin name, got %q", why.reason)
 			}
 			for _, w := range tc.words {
 				if !strings.Contains(why.reason, w) {
-					t.Errorf("原因里应含 %q，got %q", w, why.reason)
+					t.Errorf("the reason should contain %q, got %q", w, why.reason)
 				}
 			}
-			// 编码要能落到前端语言包，且参数带上插件名（否则英文界面拼不出句子）
+			// The code must exist so the frontend can reach its locale bundle, with the plugin name in the params (otherwise an English
+			// UI cannot build the sentence)
 			if why.code == "" {
-				t.Error("不可用原因缺 code：前端只能显示中文原文")
+				t.Error("an unavailable reason is missing its code: the frontend can only show the raw text")
 			}
 			if why.params["plugin"] != "web_search" {
 				t.Errorf("params[plugin] = %q, want web_search", why.params["plugin"])
@@ -63,7 +65,7 @@ func TestPluginUnavailable(t *testing.T) {
 	}
 }
 
-// 外部工具（连接 / 端点）不可用也要有归因：都是租户自己能修的那一层。
+// External tools (connections / endpoints) need attribution too: that layer is what the tenant can fix itself.
 func TestExternalIssueKinds(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -73,9 +75,9 @@ func TestExternalIssueKinds(t *testing.T) {
 		issue func(string) (string, unavail)
 		words []string
 	}{
-		{"mcp", UnavailableConnection, UnavailableCodeMcpConnection, "connection", mcpConnIssue, []string{"MCP 连接", "设置"}},
-		{"rpc", UnavailableConnection, UnavailableCodeRpcConnection, "connection", rpcConnIssue, []string{"RPC 连接", "设置"}},
-		{"endpoint", UnavailableEndpoint, UnavailableCodeEndpoint, "endpoint", endpointIssue, []string{"端点", "对外开放"}},
+		{"mcp", UnavailableConnection, UnavailableCodeMcpConnection, "connection", mcpConnIssue, []string{"MCP connection", "Settings"}},
+		{"rpc", UnavailableConnection, UnavailableCodeRpcConnection, "connection", rpcConnIssue, []string{"RPC connection", "Settings"}},
+		{"endpoint", UnavailableEndpoint, UnavailableCodeEndpoint, "endpoint", endpointIssue, []string{"endpoint", "exposed"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,7 +86,7 @@ func TestExternalIssueKinds(t *testing.T) {
 				t.Fatalf("kind = %q, want %q", kind, tc.kind)
 			}
 			if !strings.Contains(why.reason, "crm") {
-				t.Errorf("原因里应带名字，got %q", why.reason)
+				t.Errorf("the reason should carry the name, got %q", why.reason)
 			}
 			if why.code != tc.code {
 				t.Errorf("code = %q, want %q", why.code, tc.code)
@@ -94,14 +96,15 @@ func TestExternalIssueKinds(t *testing.T) {
 			}
 			for _, w := range tc.words {
 				if !strings.Contains(why.reason, w) {
-					t.Errorf("原因里应含 %q，got %q", w, why.reason)
+					t.Errorf("the reason should contain %q, got %q", w, why.reason)
 				}
 			}
 		})
 	}
 }
 
-// 归因取值是产品约定（前端按它出徽标文案），改动即 UI 静默失效 —— 钉住。
+// The attribution values are a product contract (the frontend renders badges from them); changing one silently breaks the UI -
+// pin them down.
 func TestUnavailableKindValues(t *testing.T) {
 	want := map[string]string{
 		"capability":      UnavailableCapability,
@@ -112,13 +115,13 @@ func TestUnavailableKindValues(t *testing.T) {
 	}
 	for k, v := range want {
 		if k != v {
-			t.Errorf("归因取值变了：%q != %q（前端 mapping 需要同步）", k, v)
+			t.Errorf("an attribution value changed: %q != %q (the frontend mapping must be updated)", k, v)
 		}
 	}
 }
 
-// 原因编码取值同样是产品约定（前端按 toolUnavailable.<code> 查语言包）：
-// 改了这里而没改语言包，界面上那段原因会整个消失 —— 钉住。
+// The reason codes are a product contract too (the frontend looks them up via toolUnavailable.<code>):
+// changing one here without the locale bundle makes that reason vanish from the UI - pin them down.
 func TestUnavailableCodeValues(t *testing.T) {
 	want := map[string]string{
 		"capability":           UnavailableCodeCapability,
@@ -132,7 +135,7 @@ func TestUnavailableCodeValues(t *testing.T) {
 	}
 	for k, v := range want {
 		if k != v {
-			t.Errorf("原因编码变了：%q != %q（语言包 toolUnavailable 需要同步）", k, v)
+			t.Errorf("a reason code changed: %q != %q (the toolUnavailable locale bundle must be updated)", k, v)
 		}
 	}
 }

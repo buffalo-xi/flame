@@ -1,23 +1,23 @@
-// Package toolgrant 实现工具授权体系的解析与展开：
-//   - ref 语法解析与校验（ValidateRef / ParseRef）
-//   - 可引用目录（Catalog：天然组、预设组、工具组、单个工具）
-//   - 最终工具集解析（Resolver.Resolve：required ∪ 按需注入的候选 − deny）
+// Package toolgrant implements the parsing and expansion side of the tool grant system:
+//   - ref syntax parsing and validation (ValidateRef / ParseRef)
+//   - the referenceable catalog (Catalog: natural groups, preset groups, tool groups, single tools)
+//   - final tool-set resolution (Resolver.Resolve: required ∪ on-demand candidates − deny)
 //
-// ref 语法（统一 type:subject[:member]，用 SplitN(ref, ":", 3) 解析，
-// 第三段原样保留，容忍工具名里含 ':'）：
+// ref syntax (uniform type:subject[:member], parsed with SplitN(ref, ":", 3), and the third segment kept
+// verbatim so tool names containing ':' survive):
 //
-//	builtin:file | builtin:exec | builtin:shell | builtin:browser | builtin:agent | builtin:skill | builtin:super   （内置类组）
-//	builtin:<toolName>                                                            （单个内置工具）
-//	mcp:<connName>[:<toolName>]                                                   （外部 MCP 连接）
-//	rpc:<connName>[:<toolName>]                                                   （外部 RPC 连接）
-//	local:rpc[:<endpointName>]                                                    （本地端点，仅 rpc 协议 + 仅工作流端点）
-//	plugin:<toolName>                                                             （磁盘 Python 插件，一工具一 ref）
-//	custom:<toolName>                                                             （租户自定义自定义工具，一工具一 ref）
-//	group:<groupName>                                                             （工具组，租户自定义）
-//	preset:<presetName>                                                           （预设组，代码内置）
+//	builtin:file | builtin:exec | builtin:shell | builtin:browser | builtin:agent | builtin:skill | builtin:super   (built-in category groups)
+//	builtin:<toolName>                                                            (a single built-in tool)
+//	mcp:<connName>[:<toolName>]                                                   (external MCP connection)
+//	rpc:<connName>[:<toolName>]                                                   (external RPC connection)
+//	local:rpc[:<endpointName>]                                                    (local endpoint, rpc protocol only, workflow endpoints only)
+//	plugin:<toolName>                                                             (on-disk Python plugin, one ref per tool)
+//	custom:<toolName>                                                             (tenant custom tool, one ref per tool)
+//	group:<groupName>                                                             (tool group, tenant defined)
+//	preset:<presetName>                                                           (preset group, built into the code)
 //
-// 历史别名：custom:<groupName> 是 group:<groupName> 的旧写法，只在 ParseRef 里识别
-// （读兼容），任何写路径都不再产出它。详见 LegacyScopeCustom 的注释。
+// Legacy alias: custom:<groupName> is the old spelling of group:<groupName>, recognised in ParseRef only
+// (read compatibility); no write path produces it any more. See the notes on LegacyScopeCustom.
 package toolgrant
 
 import (
@@ -29,48 +29,49 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// ref 前缀（scope）。
+// ref prefixes (scopes).
 const (
-	ScopeBuiltin = "builtin" // 内置工具
-	ScopeMCP     = "mcp"     // 外部 MCP 连接
-	ScopeRPC     = "rpc"     // 外部 RPC 连接
-	ScopeLocal   = "local"   // 本地端点（仅 rpc 协议）
-	ScopePlugin  = "plugin"  // 磁盘 Python 插件（一个工具一个 ref，不接受第三段）
-	ScopeCustom  = "custom"  // 租户自定义自定义工具（一个工具一个 ref，不接受第三段）
-	ScopeGroup   = "group"   // 工具组（租户自定义，组名即 ref 的 subject）
-	ScopePreset  = "preset"  // 预设组（代码内置）
+	ScopeBuiltin = "builtin" // built-in tools
+	ScopeMCP     = "mcp"     // external MCP connection
+	ScopeRPC     = "rpc"     // external RPC connection
+	ScopeLocal   = "local"   // local endpoint (rpc protocol only)
+	ScopePlugin  = "plugin"  // on-disk Python plugin (one ref per tool, no third segment accepted)
+	ScopeCustom  = "custom"  // tenant custom tool (one ref per tool, no third segment accepted)
+	ScopeGroup   = "group"   // tool group (tenant defined; the group name is the ref subject)
+	ScopePreset  = "preset"  // preset group (built into the code)
 )
 
-// LocalProtocolRPC 本地端点当前唯一开放的协议（其余协议只用于对外暴露，不进授权体系）。
+// LocalProtocolRPC is the only protocol local endpoints currently open (the others exist for external exposure and stay out of the
+// grant system).
 const LocalProtocolRPC = "rpc"
 
-// LocalTargetFlow 本地端点中唯一进授权体系的目标类型（工作流）。
+// LocalTargetFlow is the only target type in the grant system for local endpoints (workflows).
 //
-// agent 端点不进工具目录，两条理由：
-//  1. agent 之间的调用已有受控通道 call_agent —— agent_relations（无行即拒绝）+
-//     IsRunnable + 「main 不可被其它 agent 调用」；而端点内部直调（flow 的 rpc 节点
-//     target_type=endpoint）这些闸门一概不经，做成工具等于开后门；
-//  2. 端点名恒等于实体名（svcendpoints.Create 强制），agent 与 flow 同名时
-//     local:rpc:<name> 的 ref 与 local__<name> 的工具名都会撞车（map 静默覆盖）。
+// Agent endpoints stay out of the tool catalog, for two reasons:
+//  1. calls between agents already have a controlled channel, call_agent - agent_relations (no row means refusal) +
+//     IsRunnable + "main cannot be called by other agents"; whereas a direct call from inside an endpoint (a flow's rpc node with
+//     target_type=endpoint) goes through none of those gates, so exposing it as a tool would be a back door;
+//  2. an endpoint name always equals the entity name (svcendpoints.Create enforces it), so an agent and a flow with the same name
+//     collide both in the local:rpc:<name> ref and in the local__<name> tool name (a silent map overwrite).
 //
-// 与 svcendpoints 的字面量 "flow" 对齐（该仓校验 target_type ∈ {agent, flow}），有测试守住。
+// Aligned with svcendpoints' literal "flow" (that repository validates target_type ∈ {agent, flow}); a test guards it.
 const LocalTargetFlow = "flow"
 
-// MaxRefLength ref 最大长度（与 DB 列 varchar(160) 对齐）。
+// MaxRefLength is the maximum ref length (aligned with the DB column varchar(160)).
 const MaxRefLength = 160
 
-// namePattern 连接名 / 端点名 / 组名 / 工具名的允许字符（宽松：字母数字与 _ - .）。
+// namePattern is the allowed character set for connection / endpoint / group / tool names (loose: letters, digits and _ - .).
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 
-// ParsedRef 解析后的引用。
+// ParsedRef is a parsed reference.
 type ParsedRef struct {
 	Scope   string // builtin | mcp | rpc | local | plugin | script | group | preset
-	Subject string // builtin: 类别名或工具名；mcp/rpc: 连接名；local: 协议名；group/preset: 组名
-	Member  string // mcp/rpc: 工具名；local: 端点名；其余为空
+	Subject string // builtin: category or tool name; mcp/rpc: connection name; local: protocol name; group/preset: group name
+	Member  string // mcp/rpc: tool name; local: endpoint name; empty otherwise
 }
 
-// ParseRef 解析 ref；语法非法返回错误。
-// 注意：这里只做格式解析，不校验"该连接/工具是否存在"（由 Catalog 负责）。
+// ParseRef parses a ref; an illegal syntax returns an error.
+// Note that this is format parsing only: it does not check "does that connection / tool exist" (that is Catalog's job).
 func ParseRef(ref string) (*ParsedRef, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -102,12 +103,12 @@ func ParseRef(ref string) (*ParsedRef, error) {
 	if p.Member != "" && !namePattern.MatchString(p.Member) {
 		return nil, fmt.Errorf("invalid member in ref %q", ref)
 	}
-	// 本地端点只开放 rpc 协议
+	// Local endpoints open the rpc protocol only
 	if p.Scope == ScopeLocal && p.Subject != LocalProtocolRPC {
 		return nil, fmt.Errorf("local endpoint protocol %q is not allowed (only %q)", p.Subject, LocalProtocolRPC)
 	}
-	// 这些 scope 不支持第三段。plugin 也是：一个工具一个 ref，实现由租户配置决定，
-	// 不进授权面（给 agent 授权「用 web_search」而不是「用 tavily」）。
+	// These scopes do not accept a third segment. plugin is one of them: it is one ref per tool, the implementation is decided by
+	// the tenant configuration, and the grant surface stays at "may use web_search" rather than "may use tavily".
 	if (p.Scope == ScopeBuiltin || p.Scope == ScopePlugin || p.Scope == ScopeCustom ||
 		p.Scope == ScopeGroup || p.Scope == ScopePreset) && p.Member != "" {
 		return nil, fmt.Errorf("ref %q does not accept a third segment", ref)
@@ -115,8 +116,8 @@ func ParseRef(ref string) (*ParsedRef, error) {
 	return p, nil
 }
 
-// ValidateRef 校验 ref 是否可作为授权项 / 组成员使用。
-// allowGroup=false 时拒绝 group:（组成员不允许引用工具组，避免嵌套）。
+// ValidateRef validates whether a ref may be used as a grant item / group member.
+// With allowGroup=false, group: is refused (group members may not reference tool groups, to avoid nesting).
 func ValidateRef(ref string, allowGroup bool) error {
 	p, err := ParseRef(ref)
 	if err != nil {
@@ -128,9 +129,9 @@ func ValidateRef(ref string, allowGroup bool) error {
 	return nil
 }
 
-// IsGroup 判断该 ref 是否为「组」形态：
-// builtin 类别、mcp/rpc 连接（无 member）、local:rpc（无 member）、group:、preset:。
-// builtin 需要额外传入内置类别集合来区分「类别」与「工具」。
+// IsGroup reports whether the ref has "group" shape:
+// builtin categories, mcp/rpc connections (no member), local:rpc (no member), group:, preset:.
+// builtin additionally needs the set of built-in categories to tell a "category" from a "tool".
 func (p *ParsedRef) IsGroup(builtinCategories map[string]bool) bool {
 	switch p.Scope {
 	case ScopeGroup, ScopePreset:
@@ -140,7 +141,7 @@ func (p *ParsedRef) IsGroup(builtinCategories map[string]bool) bool {
 	case ScopeLocal:
 		return p.Member == ""
 	case ScopePlugin:
-		// 插件工具只有单工具 ref：组与工具合一，授权时一律按 tool 写
+		// A plugin tool only has a single-tool ref: group and tool coincide, so grants always write it as a tool
 		return false
 	case ScopeBuiltin:
 		return p.Member == "" && builtinCategories[p.Subject]
@@ -148,14 +149,15 @@ func (p *ParsedRef) IsGroup(builtinCategories map[string]bool) bool {
 	return false
 }
 
-// ItemTypeOfRef 由 ref 形态推导 item_type（组 → models.GrantItemGroup，单工具 → models.GrantItemTool）。
+// ItemTypeOfRef derives item_type from the ref shape (group -> models.GrantItemGroup, single tool -> models.GrantItemTool).
 //
-// 所有写入口（元工具、管理端 agent 授权 / skill 依赖 / 组成员的维护）都必须用它推导，
-// **不接受调用方传入**。原因：调用方同时给 ref 与 item_type 时两者很容易矛盾
-// （item_type=tool + ref=group:x，或 item_type=group + ref=builtin:read_file），
-// 矛盾行不会报错，只会静默污染前端的勾选态 —— 读的人还以为数据坏了。
+// Every write entry point (meta tools, admin-side agent grants / skill dependencies / group member maintenance) must derive it this
+// way and **must not accept it from the caller**. The reason: when a caller supplies both ref and item_type the two easily
+// contradict (item_type=tool + ref=group:x, or item_type=group + ref=builtin:read_file), and a contradictory row raises no error,
+// it only silently corrupts the frontend's checkbox state - a reader then believes the data is broken.
 //
-// 大模型侧的元工具本来就不暴露 item_type 参数，这里再收口一次，保证两条入口同源。
+// The model-side meta tools do not expose item_type in the first place; deriving it here closes the loop so both entry points share
+// one source.
 func ItemTypeOfRef(ref string) string {
 	p, err := ParseRef(ref)
 	if err != nil {
@@ -167,7 +169,7 @@ func ItemTypeOfRef(ref string) string {
 	return models.GrantItemTool
 }
 
-// ToolNameOfRef 返回该 ref 在 LLM 工具列表中的名字（运行时绑定用）：
+// ToolNameOfRef returns the ref's name in the LLM tool list (used for runtime binding):
 //
 //	builtin:read_file        -> read_file
 //	mcp:fs:read_file         -> mcp__fs__read_file
@@ -175,7 +177,7 @@ func ItemTypeOfRef(ref string) string {
 //	local:rpc:weather        -> local__weather
 //	plugin:web_search        -> web_search
 //
-// 组形态的 ref 没有单一工具名，返回空串。
+// A group-shaped ref has no single tool name, so an empty string is returned.
 func ToolNameOfRef(ref string) string {
 	p, err := ParseRef(ref)
 	if err != nil {
@@ -195,10 +197,10 @@ func ToolNameOfRef(ref string) string {
 		}
 		return "local__" + p.Member
 	case ScopePlugin:
-		// 插件工具名就是它自己（不加前缀）：模型看到的必须是干净的 web_search
+		// A plugin tool's name is its own (no prefix): the model must see a clean web_search
 		return p.Subject
 	case ScopeCustom:
-		// 自定义工具加前缀：它的名字来自租户，必须和内建/插件/插件实现名隔开
+		// Custom tools are prefixed: their name comes from the tenant, and it has to stay separate from built-in / plugin names
 		return tools.CustomToolPrefix + p.Subject
 	}
 	return ""

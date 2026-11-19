@@ -7,16 +7,16 @@ import (
 	"flame/tools/xsql"
 )
 
-// 外部工具的入参 schema 必须原样递给模型：内置工具有 Meta() 兜底，
-// mcp / rpc 工具没有 —— 缺了它模型看到的是「无参数工具」。
+// An external tool's argument schema must reach the model verbatim: built-in tools have Meta() as a fallback, mcp / rpc tools have none
+// - without it the model sees a "tool with no arguments".
 func TestToolSchema(t *testing.T) {
-	t.Run("nil 返回 nil", func(t *testing.T) {
+	t.Run("nil returns nil", func(t *testing.T) {
 		if got := toolSchema(xsql.JSONB{}); got != nil {
 			t.Fatalf("got %+v, want nil", got)
 		}
 	})
 
-	t.Run("管理端写入的 map 形态", func(t *testing.T) {
+	t.Run("the map shape written by the admin side", func(t *testing.T) {
 		j := xsql.JSONB{Data: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"path": map[string]any{"type": "string"}},
@@ -28,25 +28,25 @@ func TestToolSchema(t *testing.T) {
 		}
 		props, _ := got["properties"].(map[string]any)
 		if _, ok := props["path"]; !ok {
-			t.Fatalf("properties 丢了：%+v", got)
+			t.Fatalf("properties were lost: %+v", got)
 		}
 	})
 
-	t.Run("发现逻辑写入的 RawMessage 形态", func(t *testing.T) {
-		// rpc/client 的 tools/list 解析写的是 json.RawMessage（见 conn.go）。
+	t.Run("the RawMessage shape written by the discovery path", func(t *testing.T) {
+		// rpc/client's tools/list parsing stores json.RawMessage (see conn.go).
 		j := xsql.JSONB{Data: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)}
 		got := toolSchema(j)
 		if got == nil {
-			t.Fatal("RawMessage 形态没解析出来")
+			t.Fatal("the RawMessage shape was not parsed")
 		}
 		props, _ := got["properties"].(map[string]any)
 		if _, ok := props["id"]; !ok {
-			t.Fatalf("properties 丢了：%+v", got)
+			t.Fatalf("properties were lost: %+v", got)
 		}
 	})
 
-	t.Run("缺 type 时补 object", func(t *testing.T) {
-		// 模型侧要求的形状是 object，缺了部分上游会拒整次请求。
+	t.Run("object is filled in when type is missing", func(t *testing.T) {
+		// The shape the model side requires is object, and some upstreams reject the whole request without it.
 		j := xsql.JSONB{Data: json.RawMessage(`{"properties":{"q":{"type":"string"}}}`)}
 		got := toolSchema(j)
 		if got == nil || got["type"] != "object" {
@@ -54,15 +54,15 @@ func TestToolSchema(t *testing.T) {
 		}
 	})
 
-	t.Run("非 object 的 schema 回退", func(t *testing.T) {
-		// 与 rpc/server listTools 的 isObjectSchema 同向：不是 object 就不递给模型。
+	t.Run("a non-object schema falls back", func(t *testing.T) {
+		// The same direction as rpc/server listTools' isObjectSchema: something that is not an object is not handed to the model.
 		j := xsql.JSONB{Data: json.RawMessage(`{"type":"string"}`)}
 		if got := toolSchema(j); got != nil {
 			t.Fatalf("got %+v, want nil", got)
 		}
 	})
 
-	t.Run("坏 JSON 回退", func(t *testing.T) {
+	t.Run("broken JSON falls back", func(t *testing.T) {
 		j := xsql.JSONB{Data: json.RawMessage(`{not json`)}
 		if got := toolSchema(j); got != nil {
 			t.Fatalf("got %+v, want nil", got)

@@ -6,78 +6,79 @@ import (
 	"flame/tools/xsql"
 )
 
-// CustomTool 租户自定义的自定义工具（表 {schema}.custom_tools）。
+// CustomTool is a tenant's custom tool (the table {schema}.custom_tools).
 //
-// 与内置工具的边界：内置工具在代码里注册、对所有租户一致；本表是**运行期数据**，
-// 一个租户一份，由租户管理员维护、由工具授权决定谁能用。
+// The boundary with built-in tools: built-in tools are registered in code and identical for every tenant; this table is **runtime data**, one
+// set per tenant, maintained by the tenant administrator and made usable through tool grants.
 //
-// 与 plugins 的边界：插件是磁盘上发现的实现（一份代码 + 每租户一份配置），
-// 自定义工具是租户自己的代码（代码只属于这一个租户）。
+// The boundary with plugins: a plugin is an implementation discovered on disk (one piece of code + one configuration per tenant), whereas a
+// custom tool is the tenant's own code (the code belongs to that one tenant).
 //
-// 生效 = status==1 && 被 agent_tool_grants 授权 && 平台开通 sandbox.exec。
-// 三者缺一，目录置灰、执行层直接拒 —— 判据在 toolgrant 与 tools 两层各自握一半。
+// In effect = status==1 && granted by agent_tool_grants && the platform has sandbox.exec on.
+// Miss any of the three and the catalog entry is greyed out and the execution layer refuses outright - the criterion is held half by
+// toolgrant and half by tools.
 //
-// 为什么是 sandbox.exec 而不是 sandbox.code：自定义工具走 sb.Start → /v1/exec
-// （一次性进程、无池），与 exec 工具、技能脚本同一条通道。sandbox.code 是
-// /v1/code 通道（工作流 code 节点）的闸 —— 判据是通道，不是「跑的是脚本文件」。
+// Why sandbox.exec rather than sandbox.code: a custom tool goes sb.Start -> /v1/exec (a one-shot process, no pool), the same channel as the
+// exec tool and skill scripts. sandbox.code is the gate of the /v1/code channel (workflow code nodes) - the criterion is the channel, not
+// "is a script file being run".
 type CustomTool struct {
 	ID   string `json:"id"`
-	Name string `json:"name"` // 短名；对外工具名 custom__<name>，授权 ref custom:<name>
-	// DisplayName 面板展示名（空则用 name）。
-	// 只服务 UI：管理端卡片标题、工具授权目录的组标题。
-	// **不进模型上下文**（模型的工具名恒为 custom__<name>、描述恒为 Description），
-	// 也不进 ref / 文件路径 —— 与 agent / skill 不设 display_name 的分工一致。
+	Name string `json:"name"` // short name; the external tool name is custom__<name>, the grant ref is custom:<name>
+	// DisplayName is the panel display name (falls back to name when empty).
+	// It serves the UI only: the admin card title, the group heading in the tool grant catalog.
+	// It **never enters the model context** (the model's tool name is always custom__<name> and its description always Description), nor the
+	// ref / file path - consistent with agent / skill having no display_name.
 	DisplayName string `json:"display_name"`
-	Description string `json:"description"` // 模型可见：决定它何时被调用，必须写清用途边界
+	Description string `json:"description"` // model-visible: decides when it gets called, so the purpose boundary must be spelled out
 
-	// Parameters 入参 JSON Schema（发给模型）。
+	// Parameters is the input JSON Schema (sent to the model).
 	Parameters xsql.JSONB `json:"parameters"`
-	// Output 出参 JSON Schema（**不发给模型** —— OpenAI function calling 没有该字段）。
-	// 用途只有两个：运行时校验脚本输出、管理端展示"这个工具返回什么"。
+	// Output is the output JSON Schema (**not sent to the model** - OpenAI function calling has no such field).
+	// It has exactly two uses: validating the script output at run time, and showing "what does this tool return" on the admin side.
 	Output xsql.JSONB `json:"output"`
 
-	// Lang 语言名（python / js / lua / sh），与 sandbox.Spec.Lang 同口径：
-	// 解释器入口由 sandboxd 按当前 mode 解析，nexus 不持有"镜像里叫什么"这份认知。
+	// Lang is the language name (python / js / lua / sh), the same criterion as sandbox.Spec.Lang: the interpreter entry is resolved by
+	// sandboxd for the current mode, and nexus does not hold the knowledge of "what it is called inside the image".
 	Lang string `json:"lang"`
-	// Entry 入口文件（相对 tools/<name>/），默认 main.py。
+	// Entry is the entry file (relative to tools/<name>/), main.py by default.
 	Entry string `json:"entry"`
 
-	TimeoutMS      int  `json:"timeout_ms"`       // 单次执行超时（仍受 Context.Timeout 上限约束）
-	MaxOutputBytes int  `json:"max_output_bytes"` // stdout 上限；**超限即失败**（截断会得到坏 JSON）
-	Egress         bool `json:"egress"`           // 是否允许出网（还需平台开通 net.egress）
+	TimeoutMS      int  `json:"timeout_ms"`       // single-run timeout (still bounded by Context.Timeout)
+	MaxOutputBytes int  `json:"max_output_bytes"` // stdout cap; **exceeding it fails** (truncation yields broken JSON)
+	Egress         bool `json:"egress"`           // whether egress is allowed (the platform must also enable net.egress)
 
-	// ConfigFields 配置项声明，管理端据此渲染表单并决定哪几项打码。
+	// ConfigFields declares the configuration entries, from which the admin side renders the form and decides which ones to mask.
 	ConfigFields xsql.JSONB `json:"config_fields"`
-	// Configs 配置值（明文，与 plugins.configs 同口径：打码只发生在回显）。
+	// Configs holds the configuration values (plaintext, the same criterion as plugins.configs: masking happens on read-back only).
 	Configs xsql.JSONB `json:"configs"`
 
-	Status    int       `json:"status"` // 1 正常 / 2 锁定 / 3 废弃（models.StatusXxx）
+	Status    int       `json:"status"` // 1 normal / 2 locked / 3 deprecated (models.StatusXxx)
 	CreatedBy string    `json:"created_by"`
 	CreatedAt xsql.Time `json:"created_at"`
 	UpdatedAt xsql.Time `json:"updated_at"`
 }
 
-// ScriptConfigField 一项配置声明（与 plugin.ConfigField 同构，便于前端复用同一套表单）。
+// ScriptConfigField is one configuration declaration (isomorphic to plugin.ConfigField, so the frontend can reuse one form).
 type ScriptConfigField struct {
 	Key      string `json:"key"`
 	Label    string `json:"label"`
 	Type     string `json:"type"` // string / int / bool
 	Help     string `json:"help"`
-	Secret   bool   `json:"secret"`   // true：回显打码，写回时打码串 = 不改
-	Required bool   `json:"required"` // true：执行时缺它直接报 code=config
+	Secret   bool   `json:"secret"`   // true: masked on read-back, and writing the masked string back means "unchanged"
+	Required bool   `json:"required"` // true: a missing value fails at run time with code=config
 	Default  any    `json:"default,omitempty"`
 }
 
-// ParamSchema 入参 schema；解析失败返回空对象（不可解析的 schema 等于没有 schema）。
+// ParamSchema is the input schema; an unparsable one returns an empty object (an unparsable schema is as good as none).
 func (t *CustomTool) ParamSchema() map[string]any { return scriptJSONMap(t.Parameters) }
 
-// OutputSchema 出参 schema；nil = 不校验。
+// OutputSchema is the output schema; nil = no validation.
 func (t *CustomTool) OutputSchema() map[string]any { return scriptJSONMap(t.Output) }
 
-// ConfigMap 配置值。
+// ConfigMap returns the configuration values.
 func (t *CustomTool) ConfigMap() map[string]any { return scriptJSONMap(t.Configs) }
 
-// ConfigFieldList 配置声明；解析失败按空表处理。
+// ConfigFieldList returns the configuration declarations; an unparsable value counts as an empty list.
 func (t *CustomTool) ConfigFieldList() []ScriptConfigField {
 	raw := jsonbRaw(t.ConfigFields)
 	if raw == nil {
@@ -90,8 +91,8 @@ func (t *CustomTool) ConfigFieldList() []ScriptConfigField {
 	return out
 }
 
-// Label 人类可读的短标题：展示名缺省回落为 name。
-// 与 Description 分开：描述是给模型看的完整句子，不适合当列表标题。
+// Label is the human-readable short title: the display name, falling back to name.
+// It is separate from Description: a description is a full sentence for the model and does not make a good list title.
 func (t *CustomTool) Label() string {
 	if t.DisplayName != "" {
 		return t.DisplayName
@@ -99,7 +100,7 @@ func (t *CustomTool) Label() string {
 	return t.Name
 }
 
-// scriptJSONMap 把 JSONB 解成 map；空 / 非法一律返回 nil，让调用方按"没有 schema"处理。
+// scriptJSONMap decodes JSONB into a map; empty / invalid always returns nil, letting the caller treat it as "no schema".
 func scriptJSONMap(v xsql.JSONB) map[string]any {
 	raw := jsonbRaw(v)
 	if raw == nil {
