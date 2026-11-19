@@ -40,8 +40,12 @@ business code:
 
 Constraints:
 
-- when `error` is absent the frontend falls back to `msg` (the transition period must keep working);
-- `msg` **keeps returning Chinese**, for logs, curl and old frontends — do not delete it;
+- when `error` is absent the frontend falls back to `msg` — a **transitional** path only, see the ordering note below;
+- `msg` is **English diagnostic text** (logs, `curl`, old frontends); it is not user-facing copy. Anything a user reads is
+  rendered from the `error` code plus the locale bundle, so `msg` must never be the only channel for a user-visible error;
+- **ordering constraint**: switching `msg` to English is only safe **after** `error` coverage reaches 100% (flow executors,
+  `SendErrorResponse`'s 409/403/404, and the 24 frontend domains). Flipping it earlier shows English sentences to Chinese
+  users;
 - `params` carries displayable scalars only (names, counts, limits) — never internal addresses, SQL or stack traces.
 
 ## Naming rules

@@ -147,3 +147,13 @@ distribution, it would collide), `vars` as a table name (it does not align with 
 - if an existing identifier conflicts with the table, the table wins; change it together with a migration script;
 - state values (`'listed'` and friends) are part of DB CHECK constraints; changing one requires updating
   `nexus/platform/sql/shared_assets.sql`, the migration scripts and both the frontend and the backend.
+
+## 7. Comment and diagnostic wording
+
+Comments, internal error strings, `msg` diagnostics and log lines are **English** (2026-11 decision). User-facing copy is
+**not** written here at all: it comes from the `error` code plus the frontend locale bundles, so the same backend sentence
+never decides what a Chinese or an English user reads.
+
+Inside comments, keep the action verbs above intact: `list` / `delist`, `expose` / `retract`,
+`release` / `deploy` / `rollback` / `apply`, `revoke`. Never translate them into `publish` / `hide`, and never translate a code
+sample, a SQL fragment, a path or an identifier that appears inside a comment — those are references, not prose.

@@ -44,8 +44,11 @@ tenant's language:
 - the **model-visible copy** of built-in tools must be English too: `ToolMeta.Description`, the tool `Label`, and the
   `description` / `enum` text of argument schemas (`nexus/service/agent/tools/**`). They are all English today — keep it that
   way and never add Chinese;
-- **not covered**: tenant-built agents / skills (follow the user's language — Chinese for Chinese users) and Go source
-  comments / internal error strings (keep the repository's existing Chinese convention).
+- **also covered**: Go source comments (including `_test.go`), internal error strings, `msg` diagnostics and log lines are
+  **English** (2026-11 decision). Diagnostic text addresses operators and `curl`; it is never what a user reads — user-facing
+  copy comes from the `error` code plus the frontend locale bundles, see `nexus/docs/error-codes.md`;
+- **not covered**: tenant-built agents / skills (follow the user's language — Chinese for Chinese users), runtime data under
+  `nexus/data/tenants/**`, and business fixtures inside tests (e.g. `"张三"`) — those are data, not prose.
 
 This rule constrains only **the body text written into files**; it does not affect reply language — replies still follow the
 user, see `responseLanguageRule` in `nexus/service/agent/agent_impl.go`.
