@@ -9,9 +9,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ListBuiltinTools 列出可配置的内置工具（name/description），
-// 供智能体设置页的「工具配置」渲染开关列表。
-// 与运行时一致：config.tools 中显式 false 的工具被关闭，未配置的默认启用。
+// ListBuiltinTools lists the configurable built-in tools (name / description),
+// used by the tool configuration panel of the agent settings page to render the switches.
+// Same rule as the run time: a tool explicitly set to false in config.tools is off, an unset one is on.
 func ListBuiltinTools(c *gin.Context) {
 	list := tools.List()
 	items := make([]gin.H, 0, len(list))
@@ -19,7 +19,7 @@ func ListBuiltinTools(c *gin.Context) {
 		meta := t.Meta()
 		category := meta.Category
 		if category == "" {
-			// 未标注分类：仅作面板分组展示用（"other" 已不是可授权的类别组，见 toolgrant.BuiltinCategories）
+			// No category: for panel grouping only ("other" is no longer an authorisable group, see toolgrant.BuiltinCategories).
 			category = "other"
 		}
 		items = append(items, gin.H{
@@ -28,7 +28,7 @@ func ListBuiltinTools(c *gin.Context) {
 			"description": meta.Description,
 		})
 	}
-	// tools.List() 来自 map，顺序不固定：按 分类 → 名字 排序，前端可直接分组渲染
+	// tools.List() comes from a map, so the order is undefined: sort by category then name so the front end can group directly.
 	sort.Slice(items, func(i, j int) bool {
 		ci, cj := items[i]["category"].(string), items[j]["category"].(string)
 		if ci != cj {

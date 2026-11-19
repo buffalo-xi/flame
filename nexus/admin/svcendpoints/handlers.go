@@ -12,10 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 全局Repository实例
+// Package-level repository instance.
 var repo = repository.NewRepository()
 
-// GetSvcEndpoint 根据ID获取服务端点
+// GetSvcEndpoint returns an endpoint by id.
 func GetSvcEndpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -38,7 +38,7 @@ func GetSvcEndpoint(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", svcEndpoint, "")
 }
 
-// CreateSvcEndpoint 创建服务端点
+// CreateSvcEndpoint creates an endpoint.
 func CreateSvcEndpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -78,7 +78,7 @@ func CreateSvcEndpoint(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", svcEndpoint, "")
 }
 
-// UpdateSvcEndpoint 更新服务端点
+// UpdateSvcEndpoint updates an endpoint.
 func UpdateSvcEndpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -92,14 +92,14 @@ func UpdateSvcEndpoint(c *gin.Context) {
 		Name        string     `json:"name"`
 		Description string     `json:"description"`
 		InputSchema xsql.JSONB `json:"input_schema"`
-		Exposed     *bool      `json:"exposed"` // 指针区分未传；用于对外开放 / 收回切换
+		Exposed     *bool      `json:"exposed"` // pointer so "not sent" is distinguishable; drives the expose / retract switch
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
-	// 仅切换对外状态（不影响 name / description / input_schema）
+	// Flips the exposure only (name / description / input_schema untouched).
 	if req.Exposed != nil {
 		if err := repo.UpdateExposed(authInfo.(*auth.AuthInfo), id, *req.Exposed); err != nil {
 			if err == sql.ErrNoRows {
@@ -132,7 +132,7 @@ func UpdateSvcEndpoint(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// DeleteSvcEndpointsByTarget 删除指定目标的所有协议端点
+// DeleteSvcEndpointsByTarget deletes every protocol endpoint of a target.
 func DeleteSvcEndpointsByTarget(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -158,7 +158,7 @@ func DeleteSvcEndpointsByTarget(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// RetractSvcEndpoints 收回指定目标所有协议端点的对外（保留记录，仅置 exposed=false）
+// RetractSvcEndpoints retracts every protocol endpoint of a target (records stay, exposed=false).
 func RetractSvcEndpoints(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -183,7 +183,7 @@ func RetractSvcEndpoints(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// DeleteSvcEndpoint 删除服务端点
+// DeleteSvcEndpoint deletes an endpoint.
 func DeleteSvcEndpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -202,7 +202,7 @@ func DeleteSvcEndpoint(c *gin.Context) {
 	xhttp.OkJSON(c, "Service endpoint deleted successfully", id, "")
 }
 
-// ListSvcEndpoints 获取服务端点列表
+// ListSvcEndpoints lists endpoints.
 func ListSvcEndpoints(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -210,7 +210,7 @@ func ListSvcEndpoints(c *gin.Context) {
 		return
 	}
 
-	// 解析请求参数
+	// Decode the request parameters.
 	var req repository.ListSvcEndpointsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
@@ -223,7 +223,7 @@ func ListSvcEndpoints(c *gin.Context) {
 		return
 	}
 
-	// 构建响应
+	// Build the response.
 	response := gin.H{
 		"items": svcEndpoints,
 		"total": total,

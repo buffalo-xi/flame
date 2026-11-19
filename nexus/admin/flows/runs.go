@@ -15,10 +15,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// runRepo 运行记录仓储（独立于工作流实例 repo）
+// runRepo is the run-record repository (separate from the flow instance repo).
 var runRepo = flowruns.NewRepository()
 
-// runDetail 运行记录的展示结构：[]byte 字段转 json.RawMessage，避免 JSON 序列化成 base64。
+// runDetail is the display struct for a run: []byte fields become json.RawMessage so JSON does not serialise them as base64.
 type runDetail struct {
 	ID                   string          `json:"id"`
 	FlowID               string          `json:"flow_id"`
@@ -40,7 +40,7 @@ type runDetail struct {
 	ProgressSize         int             `json:"progress_size"`
 }
 
-// nodeDetail 节点记录的展示结构：变量/日志转友好类型，与调试 node_snapshot 帧对齐。
+// nodeDetail is the display struct for a node record: variables and logs become friendly types, matching the debug node_snapshot frame.
 type nodeDetail struct {
 	ID                  string          `json:"id"`
 	RunID               string          `json:"run_id"`
@@ -68,7 +68,7 @@ type nodeDetail struct {
 	StartTime           *xsql.Time      `json:"start_time"`
 	EndTime             *xsql.Time      `json:"end_time"`
 	DurationMs          int64           `json:"duration_ms"`
-	Extra               json.RawMessage `json:"extra"` // 节点类型特有的运行结果
+	Extra               json.RawMessage `json:"extra"` // result specific to the node type
 }
 
 func toRunDetail(r *models.FlowRunRecord) *runDetail {
@@ -136,7 +136,7 @@ func toNodeDetail(n *models.FlowNodeRecord) *nodeDetail {
 	}
 }
 
-// ListRuns 列出工作流的历史运行记录
+// ListRuns lists the historical runs of a workflow.
 // GET /admin/flows/:id/runs?limit=20&offset=0&run_type=debug
 func ListRuns(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
@@ -156,13 +156,13 @@ func ListRuns(c *gin.Context) {
 		limit = 100
 	}
 
-	// run_type 可选过滤：debug/task/call；空为不过滤
+	// run_type filter (optional): debug / task / call; empty means no filter.
 	runType := c.Query("run_type")
 
-	// status 可选过滤：success/failed/cancelled；空为不过滤
+	// status filter (optional): success / failed / cancelled; empty means no filter.
 	status := c.Query("status")
 
-	// 时间范围过滤（RFC3339）；空为不过滤
+	// time range filter (RFC3339); empty means no filter.
 	var startFrom, startTo *time.Time
 	if v := c.Query("start_from"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
@@ -194,7 +194,7 @@ func ListRuns(c *gin.Context) {
 	}, "")
 }
 
-// GetRunDetail 获取一次运行的详情（run + 所有节点记录）
+// GetRunDetail returns one run together with all of its node records.
 // GET /admin/flows/:id/runs/:runId
 func GetRunDetail(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
@@ -226,7 +226,7 @@ func GetRunDetail(c *gin.Context) {
 	}, "")
 }
 
-// DeleteRun 删除一条历史运行记录（连带其节点记录）
+// DeleteRun deletes one historical run together with its node records.
 // DELETE /admin/flows/:id/runs/:runId
 func DeleteRun(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
@@ -253,7 +253,7 @@ func DeleteRun(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": deleted}, "")
 }
 
-// DeleteRuns 清空某个工作流的全部历史运行记录（调试与正式一起）
+// DeleteRuns clears every historical run of a workflow (debug and production alike).
 // DELETE /admin/flows/:id/runs
 func DeleteRuns(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")

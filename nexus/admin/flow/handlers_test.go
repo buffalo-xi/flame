@@ -11,18 +11,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 下拉顺序是接口的一部分：前端拿 scriptLanguages[0] 当新建节点的缺省语言，
-// 所以 lua 必须始终打头（它是 µs 级高频语言），沙箱新加的语言也不能被吞掉。
+// The dropdown order is part of the API: the front end takes scriptLanguages[0] as the default for a new node,
+// so lua must always come first (it is the high-frequency microsecond language), and languages the sandbox adds must not be swallowed.
 func TestOrderLangs(t *testing.T) {
 	cases := []struct {
 		name string
 		in   []string
 		want []string
 	}{
-		{"沙箱的字典序 → lua 打头", []string{"js", "lua", "python"}, []string{"lua", "python", "js"}},
-		{"只有 python（lua 不在时不该硬塞）", []string{"python"}, []string{"python"}},
-		{"未知语言按字典序追加在尾部", []string{"ruby", "js", "lua", "go"}, []string{"lua", "js", "go", "ruby"}},
-		{"空列表", []string{}, []string{}},
+		{"sandbox order -> lua first", []string{"js", "lua", "python"}, []string{"lua", "python", "js"}},
+		{"python only (do not force lua in)", []string{"python"}, []string{"python"}},
+		{"unknown languages appended in order", []string{"ruby", "js", "lua", "go"}, []string{"lua", "js", "go", "ruby"}},
+		{"empty list", []string{}, []string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -33,8 +33,8 @@ func TestOrderLangs(t *testing.T) {
 	}
 }
 
-// 语言选择完全由沙箱决定：有快照时返回（按展示顺序重排），没有时返回空列表
-// （前端保底成 ["lua"]），不再有本地兜底名单。
+// Language choice belongs to the sandbox: with a snapshot it returns the list (re-ordered for display),
+// without one it returns an empty list (the front end falls back to ["lua"]); there is no local list any more.
 func TestGetCodeLanguages(t *testing.T) {
 	old := sandboxinfo.Get()
 	t.Cleanup(func() { sandboxinfo.Set(old) })
@@ -55,10 +55,10 @@ func TestGetCodeLanguages(t *testing.T) {
 		t.Fatalf("unmarshal ok resp: %v", err)
 	}
 	if !reflect.DeepEqual(okResp.Data, []string{"lua", "python", "js"}) {
-		t.Errorf("沙箱上报应重排为 lua 打头, got %v", okResp.Data)
+		t.Errorf("the sandbox list should be re-ordered with lua first, got %v", okResp.Data)
 	}
 
-	// 拿不到沙箱快照：返回空列表，而非本地兜底。
+	// No sandbox snapshot: return an empty list instead of a local fallback.
 	sandboxinfo.Set(sandboxinfo.Info{Err: "dial tcp 127.0.0.1:27081: connect: connection refused"})
 	w2 := httptest.NewRecorder()
 	c2, _ := gin.CreateTestContext(w2)
@@ -71,6 +71,6 @@ func TestGetCodeLanguages(t *testing.T) {
 		t.Fatalf("unmarshal empty resp: %v", err)
 	}
 	if len(emptyResp.Data) != 0 {
-		t.Errorf("拿不到沙箱时应返回空列表, got %v", emptyResp.Data)
+		t.Errorf("should return an empty list without the sandbox, got %v", emptyResp.Data)
 	}
 }

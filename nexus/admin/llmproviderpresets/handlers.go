@@ -7,10 +7,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 全局Repository实例
+// Package-level repository instance.
 var repo = repository.NewRepository()
 
-// ListLLMProviderPresets 获取所有LLM服务商预设列表
+// ListLLMProviderPresets returns every provider preset.
 func ListLLMProviderPresets(c *gin.Context) {
 	presets, err := repo.ListAll()
 	if err != nil {

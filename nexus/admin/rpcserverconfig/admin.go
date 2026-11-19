@@ -11,13 +11,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// RegisterRoutes 注册 /rpcserverconfig 管理接口（外层已带 /rpcserverconfig 前缀）
+// RegisterRoutes wires the /rpcserverconfig admin endpoints (the outer router adds the prefix).
 func RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("", getServerConfig)
 	router.PUT("", putServerConfig)
 }
 
-// validAuthType 校验，仅 apikey / oauth
+// validAuthType accepts apikey / oauth only.
 func validAuthType(t string) bool {
 	return t == "apikey" || t == "oauth"
 }
@@ -52,12 +52,12 @@ func getServerConfig(c *gin.Context) {
 
 	xhttp.OkJSON(c, "Success", gin.H{
 		"auth_type":   cfg.AuthType,
-		"auth_config": cfg.AuthConfig, // xsql.JSONB -> gin 自动序列化为对象
+		"auth_config": cfg.AuthConfig, // xsql.JSONB, gin serialises it as an object
 		"is_active":   cfg.IsActive,
 	}, "")
 }
 
-// putRequest 与前端表单对齐：由前端负责按 apikey/oauth 组装 auth_config 对象
+// putRequest matches the frontend form: the client assembles auth_config for apikey / oauth.
 type putRequest struct {
 	AuthType   string                 `json:"auth_type" binding:"required"`
 	IsActive   bool                   `json:"is_active"`

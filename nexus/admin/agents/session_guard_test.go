@@ -7,7 +7,7 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// 「读历史消息 / 删会话」的可见性口径：按 user 收口，与 ListSessions 对齐。
+// Visibility for "read history / delete session" is scoped by user, matching ListSessions.
 func TestSessionVisibleTo(t *testing.T) {
 	ai := &auth.AuthInfo{ID: "user-a"}
 
@@ -17,14 +17,14 @@ func TestSessionVisibleTo(t *testing.T) {
 		ai    *auth.AuthInfo
 		allow bool
 	}{
-		{"nil 会话", nil, ai, false},
-		{"nil 身份", &models.Session{UserID: "user-a"}, nil, false},
-		{"自己的会话", &models.Session{UserID: "user-a"}, ai, true},
-		{"别人的会话", &models.Session{UserID: "user-b"}, ai, false},
-		// 无归属用户的租户级会话没有「别人」可言，放行
-		{"租户级会话", &models.Session{UserID: ""}, ai, true},
-		// 身份为空（理论上进不来，防御性判否 —— 否则空 user 会匹配空会话
-		{"身份为空", &models.Session{UserID: "user-a"}, &auth.AuthInfo{}, false},
+		{"nil session", nil, ai, false},
+		{"nil identity", &models.Session{UserID: "user-a"}, nil, false},
+		{"own session", &models.Session{UserID: "user-a"}, ai, true},
+		{"someone else's session", &models.Session{UserID: "user-b"}, ai, false},
+		// A tenant-wide session has no owner, so there is no "someone else" - allow.
+		{"tenant-wide session", &models.Session{UserID: ""}, ai, true},
+		// Empty identity (cannot happen in theory, denied defensively - an empty user would otherwise match an empty session
+		{"empty identity", &models.Session{UserID: "user-a"}, &auth.AuthInfo{}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

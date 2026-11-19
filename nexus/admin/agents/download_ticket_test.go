@@ -7,9 +7,9 @@ import (
 	"flame/nexus/shared/config"
 )
 
-// 票据只该被「原样 + 未过期」地使用：改路径、改会话、过期都必须验不过。
+// A ticket must only be honoured unchanged and unexpired: a different path, a different session or an old ticket must all fail.
 func TestDownloadTicket(t *testing.T) {
-	// 票据密钥取自全局配置：测试里造一个最小实例
+	// The signing key comes from the global config: build a minimal one here.
 	config.Cfg = &config.Config{JWT: config.JWTConfig{SecretKey: "test-secret-key-for-download-ticket-0123456789"}}
 
 	tk := DownloadTicket{
@@ -21,38 +21,38 @@ func TestDownloadTicket(t *testing.T) {
 	}
 	sig := ticketSignature(tk)
 	if !ticketValid(tk, sig) {
-		t.Fatal("合法票据被拒")
+		t.Fatal("a valid ticket was rejected")
 	}
 
 	tampered := tk
 	tampered.Path = "uploads/b.md"
 	if ticketValid(tampered, sig) {
-		t.Error("改了 path 仍然验签通过")
+		t.Error("a changed path still verified")
 	}
 
 	otherSession := tk
 	otherSession.SessionID = "s2"
 	if ticketValid(otherSession, sig) {
-		t.Error("换了会话仍然验签通过")
+		t.Error("a different session still verified")
 	}
 
 	expired := tk
 	expired.Exp = time.Now().Add(-time.Second).Unix()
 	if ticketValid(expired, ticketSignature(expired)) {
-		t.Error("过期票据仍然通过")
+		t.Error("an expired ticket still passed")
 	}
 
 	if ticketValid(tk, "") {
-		t.Error("空签名仍然通过")
+		t.Error("an empty signature still passed")
 	}
 
-	// 签名字符串必须随字段变化（防止 payload 拼接顺序写错导致碰撞）
+	// The signed string must change with the fields (so a wrong concatenation order cannot collide).
 	if ticketSignature(tk) == ticketSignature(tampered) {
-		t.Error("payload 未包含 path")
+		t.Error("the payload does not include path")
 	}
 }
 
-// accelPath：逐段转义，不能把 "/" 编码掉；中文名要 percent-encode。
+// accelPath escapes segment by segment, never encodes the "/", and percent-encodes a non-ASCII name.
 func TestAccelPath(t *testing.T) {
 	got := accelPath("/__files", "/tenants/t0/users/u1/sessions/s1/uploads/报表 2026.md")
 	want := "/__files/tenants/t0/users/u1/sessions/s1/uploads/%E6%8A%A5%E8%A1%A8%202026.md"
@@ -61,6 +61,6 @@ func TestAccelPath(t *testing.T) {
 	}
 
 	if got := accelPath("/__files/", "a/b.txt"); got != "/__files/a/b.txt" {
-		t.Errorf("前缀尾部斜杠未归一: %q", got)
+		t.Errorf("the trailing slash on the prefix was not normalised: %q", got)
 	}
 }
