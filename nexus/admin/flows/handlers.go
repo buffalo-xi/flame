@@ -24,10 +24,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 全局Repository实例
+// Package-level repository instance.
 var repo = repository.NewRepository()
 
-// rawOf 取 JSONB 的原始字节（xsql.JSONB.Data 可能是 []byte / RawMessage / string）。
+// rawOf returns the raw bytes of a JSONB value (xsql.JSONB.Data may be []byte / RawMessage / string).
 func rawOf(j xsql.JSONB) []byte {
 	switch v := j.Data.(type) {
 	case nil:
@@ -44,9 +44,9 @@ func rawOf(j xsql.JSONB) []byte {
 	}
 }
 
-// maskedEnvVars 出参用：type=secret 的值不回落明文，只留 has_value。
+// maskedEnvVars is for responses: a type=secret value never falls back to plaintext, only has_value remains.
 //
-// 掩不住就报错，绝不退回明文 —— 退回等于这个功能不存在。
+// If it cannot be masked, fail: never fall back to plaintext, which would mean the feature does not exist.
 func maskedEnvVars(j xsql.JSONB) (xsql.JSONB, error) {
 	masked, err := secureval.MaskEnvVars(rawOf(j))
 	if err != nil {
@@ -58,35 +58,35 @@ func maskedEnvVars(j xsql.JSONB) (xsql.JSONB, error) {
 	return xsql.JSONB{Data: json.RawMessage(masked)}, nil
 }
 
-// validateFlowNameUnique 校验工作流名可用：字符集与 agent/skill 一致（字母数字横线，≤64），
-// 且与智能体共享命名空间，不得重名。
+// validateFlowNameUnique checks the flow name: same character set as agent / skill (letters, digits, hyphens, max 64),
+// and it shares the namespace with agents, so the two must not clash.
 //
-// 字符集不是抄来的规矩：工作流名会变成端点名（svc_endpoints.Create 强制相等），
-// 也就是 MCP 的 tool.name、agent 侧的工具名 local__<name> 与授权 ref local:rpc:<name>。
-// 后两者只认 ASCII，中文名会建得出、对外开放不了、授权不上 —— 中文用途写描述。
+// The character set is not arbitrary: the flow name becomes the endpoint name (svc_endpoints.Create enforces equality),
+// that is the MCP tool.name, the agent-side tool name local__<name> and the grant ref local:rpc:<name>.
+// The last two are ASCII-only, so a non-ASCII name can be created but never exposed or granted - put non-ASCII text in the description.
 func validateFlowNameUnique(info *auth.AuthInfo, name string) error {
 	name = strings.TrimSpace(name)
 	if !tools.ValidName(name) {
-		return fmt.Errorf("工作流名 %q 不合法：只能用字母、数字与横线（不能以横线开头，≤64）；"+
-			"这个名字会作为对外工具名 local__<name>，中文说明请写进「描述」", name)
+		return fmt.Errorf("invalid flow name %q: letters, digits and hyphens only (not starting with a hyphen, max 64); "+
+			"the name becomes the external tool name local__<name>, so put a translated note in the description", name)
 	}
 	exist, err := agentsrepo.NewRepository().ExistsName(info, name, "")
 	if err != nil {
 		return err
 	}
 	if exist {
-		return fmt.Errorf("工作流名 %q 已被同租户的 agent 占用：工作流与 agent 共享命名空间"+
-			"（端点名恒等于实体名，撞名会导致端点创建失败），请换一个名字", name)
+		return fmt.Errorf("flow name %q is already taken by an agent in this tenant: flows and agents share one namespace "+
+			"(the endpoint name always equals the entity name, so a clash makes endpoint creation fail); pick another name", name)
 	}
 	return nil
 }
 
-// SetFlowStatus 切换工作流状态（1=正常 | 3=废弃，见 models.StatusXxx；不设「锁定」，线上由版本管理）。
+// SetFlowStatus switches the flow state (1=active | 3=deprecated, see models.StatusXxx; there is no locked state, production is managed by releases).
 //
-// 切「废弃」时会自动收回该 flow 全部端点的对外（exposed=false，记录保留）：
-// 废弃态不该再对外服务。切「正常」不动端点（端点对外与定义状态无关）。
+// Switching to deprecated retracts every endpoint of the flow (exposed=false, the records stay):
+// a deprecated flow must not serve outside. Switching back to active leaves the endpoints alone (exposure is independent of the definition state).
 func SetFlowStatus(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
@@ -106,7 +106,7 @@ func SetFlowStatus(c *gin.Context) {
 	switch body.Status {
 	case models.StatusNormal, models.StatusDeprecated:
 	default:
-		xhttp.ErrCode(c, "flow.invalid_status", nil, "status must be 1(正常) / 3(废弃)；工作流不设「锁定」，线上由版本管理", "")
+		xhttp.ErrCode(c, "flow.invalid_status", nil, "status must be 1 (active) or 3 (deprecated); flows have no locked state, production is managed by releases", "")
 		return
 	}
 
@@ -115,53 +115,53 @@ func SetFlowStatus(c *gin.Context) {
 			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 只有切「废弃」才收回端点对外：废弃态不该再对外服务。
-	// 切回「正常」不收回 —— 端点对外与定义生命周期是两件事，恢复编辑不该把线上服务打掉。
-	// 状态已改，收回失败不回滚，只记日志（下次切换或手工收回可恢复）。
+	// Only switching to deprecated retracts the endpoints: a deprecated flow must not serve outside.
+	// Switching to active does not retract: exposure and the definition lifecycle are separate, and restoring edits must not take production down.
+	// The state is already changed, so a failed retract is logged instead of rolled back (the next switch or a manual retract recovers).
 	if body.Status == models.StatusDeprecated {
 		if uerr := svcendpoints.NewRepository().RetractByTarget(ai, "flow", id); uerr != nil {
-			xlog.Error("下架 flow 端点失败 id=%s: %v", id, uerr)
+			xlog.Error("failed to retract the flow endpoints id=%s: %v", id, uerr)
 		}
 	}
 
 	xhttp.OkJSON(c, "Success", gin.H{"id": id, "status": body.Status}, "")
 }
 
-// ListFlows 获取工作流实例列表
+// ListFlows lists flow instances.
 func ListFlows(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
-	// 解析请求参数
+	// Decode the request parameters.
 	var req repository.ListFlowsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 
-	// 查询数据
+	// Query the data.
 	models, total, err := repo.ListFlows(authInfo.(*auth.AuthInfo), &req)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 当前版本号：一次批量查（列表卡片要显示 vN），读失败不影响列表本身。
-	// 只填 CurrentVersion；Dirty 要逐条比对定义，留给详情接口（fillVersionState）。
+	// Current version numbers in one batch query (the cards show vN); a read failure does not affect the list itself.
+	// Only CurrentVersion is filled here; Dirty needs a per-row definition comparison, so the detail handler owns it (fillVersionState).
 	curVers, _ := versioning.CurrentVersions(authInfo.(*auth.AuthInfo).Schema, "flow_versions")
 	for i := range models {
 		models[i].CurrentVersion = curVers[models[i].ID]
 	}
 
-	// 构建响应
+	// Build the response.
 	response := gin.H{
 		"items": models,
 		"total": total,
@@ -172,21 +172,26 @@ func ListFlows(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", response, "")
 }
 
-// validateDiagramLabels 节点 label 必须全图唯一。
+// validateDiagramLabels rejects a diagram whose node labels are not unique.
 //
-// label 是 config.inputs.*.source_ref / call.target / wait.fork_node_id 的可写形式
-// （工具与执行期都会按 label 换成节点 id），重名会让这些引用指向错误节点，
-// 所以在保存口上直接拦住 —— 画布再怎么改也存不进去。
-func validateDiagramLabels(diagram json.RawMessage) error {
+// label is the writable form of config.inputs.*.source_ref / call.target / wait.fork_node_id
+// (tools and the executor both turn a label into a node id), so a duplicate makes those
+// references point at the wrong node. The check sits at the save point, so no amount of
+// canvas editing can get past it.
+//
+// An empty code means the diagram is fine; otherwise the caller turns the triple into an
+// error response (code + params for the locale bundle, msg as the operator diagnostic).
+func validateDiagramLabels(diagram json.RawMessage) (string, gin.H, string) {
 	raw := bytes.TrimSpace(diagram)
 	if len(raw) == 0 {
-		return nil
+		return "", nil, ""
 	}
-	// 画布提交的是 JSON 字符串（前端先 JSON.stringify 了一次），工具写库的是对象，两种都要认
+	// The canvas submits a JSON string (the front end stringifies once) and tools write an
+	// object; both shapes have to be recognised.
 	if raw[0] == '"' {
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
-			return nil
+			return "", nil, ""
 		}
 		raw = []byte(s)
 	}
@@ -201,7 +206,7 @@ func validateDiagramLabels(diagram json.RawMessage) error {
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil // 形状问题不归这里管（空图 / 非对象由执行期兜底）
+		return "", nil, "" // shape problems are not ours (an empty or non-object diagram is handled at run time)
 	}
 
 	seen := make(map[string]string, len(doc.Nodes))
@@ -212,21 +217,21 @@ func validateDiagramLabels(diagram json.RawMessage) error {
 			continue
 		}
 		if first, ok := seen[label]; ok {
-			dups = append(dups, fmt.Sprintf("「%s」（节点 %s 与 %s）", label, first, n.ID))
+			dups = append(dups, fmt.Sprintf("%s (nodes %s and %s)", label, first, n.ID))
 			continue
 		}
 		seen[label] = n.ID
 	}
 	if len(dups) == 0 {
-		return nil
+		return "", nil, ""
 	}
-	return fmt.Errorf("节点名称不能重复：%s。名称可以用于 source_ref / call.target 引用，重名会指错节点，请改名后再保存",
-		strings.Join(dups, "、"))
+	names := strings.Join(dups, "; ")
+	return "flow.duplicate_label", gin.H{"names": names}, "duplicate node labels: " + names
 }
 
-// GetFlow 获取单个工作流实例
+// GetFlow returns one flow instance.
 func GetFlow(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
@@ -241,17 +246,17 @@ func GetFlow(c *gin.Context) {
 			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 出参脱敏：env_vars 里 type=secret 的值不回明文。
-	// 遮住的只是「顺手能看见」（截图 / devtools / 录屏），不是「能写流程的人」——
-	// 前者造成的无意识泄漏远多于后者。
+	// Mask the response: a type=secret value in env_vars never goes out in plaintext.
+	// This only hides what is seen in passing (screenshots / devtools / a screen recording), not from someone
+	// who can edit the flow - accidental leaks are far more common than deliberate ones.
 	if s != nil {
 		masked, merr := maskedEnvVars(s.EnvVars)
 		if merr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "环境变量脱敏失败: "+merr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to mask the environment variables: "+merr.Error(), "")
 			return
 		}
 		s.EnvVars = masked
@@ -259,28 +264,28 @@ func GetFlow(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", s, "")
 }
 
-// CreateFlow 创建工作流实例
+// CreateFlow creates a flow instance.
 func CreateFlow(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
-	// 配额检查：租户内工作流数量上限
+	// Quota check: the per-tenant flow cap.
 	schema := authInfo.(*auth.AuthInfo).Schema
 	cnt, err := quota.CountFlows(schema)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := models.CheckQuota("flow", cnt, quota.Resolve(schema).MaxFlows); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 定义请求结构
+	// Define the request payload.
 	var req struct {
 		Name              string          `json:"name"`
 		Diagram           json.RawMessage `json:"diagram"`
@@ -302,19 +307,19 @@ func CreateFlow(c *gin.Context) {
 		return
 	}
 
-	// 应用工作流配置默认值并校验上限
+	// Apply the flow config defaults and check them against the limits.
 	if err := validateFlowLimits(authInfo.(*auth.AuthInfo), &req.Timeout, &req.MaxRecursionDepth, &req.MaxNodeCount, &req.MaxExecCount, &req.MaxRunRecords, &req.MaxSessionRecords); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 校验工作流描述
+	// Check the flow description.
 	if err := validateDescription(req.Description); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "flow.description_required", nil, err.Error(), "")
 		return
 	}
 
-	// 转换为Instance结构
+	// Convert to the Instance struct.
 	Instance := models.Flow{
 		Name:              req.Name,
 		Diagram:           xsql.JSONB{Data: req.Diagram},
@@ -332,35 +337,35 @@ func CreateFlow(c *gin.Context) {
 		Breakpoints:       req.Breakpoints,
 	}
 
-	// 名称校验：合法（字母数字横线）+ 不得与智能体重名（写库之前）
+	// Name check: valid (letters, digits, hyphens) and no clash with an agent, before anything is written.
 	req.Name = strings.TrimSpace(req.Name)
 	if err := validateFlowNameUnique(authInfo.(*auth.AuthInfo), req.Name); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 节点 label 唯一性：重名会让 source_ref / call.target / fork_node_id 指错节点
-	if err := validateDiagramLabels(req.Diagram); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+	// Node labels must be unique: a duplicate makes source_ref / call.target / fork_node_id point at the wrong node.
+	if code, params, msg := validateDiagramLabels(req.Diagram); code != "" {
+		xhttp.ErrCode(c, code, params, msg, "")
 		return
 	}
 
-	// 插入数据
+	// Insert the row.
 	id, err := repo.CreateFlow(authInfo.(*auth.AuthInfo), &Instance)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 出参脱敏：secret 的值不回给前端（写库用的是上面的明文，这里只改响应体）
+	// Mask the response: a secret never goes to the front end (the plaintext above is what was stored; only the body changes).
 	maskedEnv, merr := maskedEnvVars(Instance.EnvVars)
 	if merr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "环境变量脱敏失败: "+merr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to mask the environment variables: "+merr.Error(), "")
 		return
 	}
 	Instance.EnvVars = maskedEnv
 
-	// 返回创建的工作流实例
+	// Return the created flow instance.
 	data := gin.H{
 		"id":                  id,
 		"created_by":          authInfo.(*auth.AuthInfo).ID,
@@ -384,9 +389,9 @@ func CreateFlow(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", data, "")
 }
 
-// UpdateFlow 更新工作流实例
+// UpdateFlow updates a flow instance.
 func UpdateFlow(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
@@ -395,7 +400,7 @@ func UpdateFlow(c *gin.Context) {
 
 	id := c.Param("id")
 
-	// 定义请求结构
+	// Define the request payload.
 	var req struct {
 		Name              string          `json:"name"`
 		Diagram           json.RawMessage `json:"diagram"`
@@ -417,19 +422,19 @@ func UpdateFlow(c *gin.Context) {
 		return
 	}
 
-	// 应用工作流配置默认值并校验上限
+	// Apply the flow config defaults and check them against the limits.
 	if err := validateFlowLimits(authInfo.(*auth.AuthInfo), &req.Timeout, &req.MaxRecursionDepth, &req.MaxNodeCount, &req.MaxExecCount, &req.MaxRunRecords, &req.MaxSessionRecords); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 校验工作流描述
+	// Check the flow description.
 	if err := validateDescription(req.Description); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "flow.description_required", nil, err.Error(), "")
 		return
 	}
 
-	// 转换为Instance结构
+	// Convert to the Instance struct.
 	Instance := models.Flow{
 		Name:              req.Name,
 		Diagram:           xsql.JSONB{Data: req.Diagram},
@@ -447,7 +452,7 @@ func UpdateFlow(c *gin.Context) {
 		Breakpoints:       req.Breakpoints,
 	}
 
-	// 名称处理：未传则沿用旧名；有变化则先校验（合法 + 不与智能体重名），再写库
+	// Name handling: keep the old one when absent; when it changes, validate (shape + no agent clash) before writing.
 	req.Name = strings.TrimSpace(req.Name)
 	old, oldErr := repo.GetFlow(authInfo.(*auth.AuthInfo), id)
 	if oldErr == nil && old != nil {
@@ -455,54 +460,54 @@ func UpdateFlow(c *gin.Context) {
 			req.Name = old.Name
 		} else if old.Name != req.Name {
 			if err := validateFlowNameUnique(authInfo.(*auth.AuthInfo), req.Name); err != nil {
-				xhttp.ErrJSON(c, err.Error(), nil, "")
+				xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 				return
 			}
 		}
 	} else if req.Name != "" {
-		// 读不到旧行（并发删除等）也要校验：名字最终会写进 flows.name 与端点名，
-		// 不能因为一次读失败就绕过字符集与重名检查。
+		// Validate even when the old row cannot be read (concurrent delete and so on): the name ends up in
+		// flows.name and in the endpoint name, so one failed read must not bypass the character-set and clash checks.
 		if err := validateFlowNameUnique(authInfo.(*auth.AuthInfo), req.Name); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 	}
-	// 上面可能把空名补成了旧名，也可能来自未 trim 的入参：一律以解析后的 req.Name 落库，
-	// 否则会出现「库里名字带空格、端点名却按 trim 后的值迁移」的错位。
+	// The name above may have been filled from the old row or come from an untrimmed input, so store the
+	// resolved req.Name: otherwise the stored name keeps its spaces while the endpoint name is migrated trimmed.
 	Instance.Name = req.Name
 
-	// 节点 label 唯一性：重名会让 source_ref / call.target / fork_node_id 指错节点
-	if err := validateDiagramLabels(req.Diagram); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+	// Node labels must be unique: a duplicate makes source_ref / call.target / fork_node_id point at the wrong node.
+	if code, params, msg := validateDiagramLabels(req.Diagram); code != "" {
+		xhttp.ErrCode(c, code, params, msg, "")
 		return
 	}
 
-	// secret 留空 = 不改原值：出参不回明文，前端提交的必然是空。
-	// 必须在这里把旧值补回去 —— 否则用户只改了描述、保存一次，密钥就被清空了。
+	// An empty secret means "keep the old value": the plaintext never goes out, so the front end submits an empty one.
+	// The old value has to be restored here, or one save that only changed the description would wipe the key.
 	if len(req.EnvVars) > 0 && oldErr == nil && old != nil {
 		merged, merr := secureval.MergeEnvVarSecrets(rawOf(old.EnvVars), req.EnvVars)
 		if merr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "合并环境变量失败: "+merr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "failed to merge the environment variables: "+merr.Error(), "")
 			return
 		}
 		Instance.EnvVars = xsql.JSONB{Data: json.RawMessage(merged)}
 	}
 
-	// 更新数据
+	// Update the row.
 	err := repo.UpdateFlow(authInfo.(*auth.AuthInfo), id, &Instance)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 出参脱敏：secret 的值不回给前端（写库用的是上面合并后的明文）
+	// Mask the response: a secret never goes to the front end (the merged plaintext above is what was stored).
 	maskedEnv, merr := maskedEnvVars(Instance.EnvVars)
 	if merr != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "环境变量脱敏失败: "+merr.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to mask the environment variables: "+merr.Error(), "")
 		return
 	}
 	Instance.EnvVars = maskedEnv
@@ -530,9 +535,9 @@ func UpdateFlow(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", data, "")
 }
 
-// DeleteFlow 删除工作流实例
+// DeleteFlow deletes a flow instance.
 func DeleteFlow(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
@@ -541,40 +546,40 @@ func DeleteFlow(c *gin.Context) {
 
 	id := c.Param("id")
 
-	// 先删除该工作流关联的所有协议端点（target_type=flow）
+	// Delete every protocol endpoint attached to this flow first (target_type=flow).
 	if err := svcendpoints.NewRepository().DeleteByTarget(authInfo.(*auth.AuthInfo), "flow", id); err != nil {
-		xhttp.ErrJSON(c, "failed to delete endpoints: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to delete endpoints: "+err.Error(), "")
 		return
 	}
 
-	// 删除数据
+	// Delete the row.
 	err := repo.DeleteFlow(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	xhttp.OkJSON(c, "flow instance deleted successfully", id, "")
 }
 
-// validateDescription 校验工作流描述：为空或仅含空白字符时拒绝保存
+// validateDescription rejects an empty description (whitespace only counts as empty).
 func validateDescription(description string) error {
 	if strings.TrimSpace(description) == "" {
-		return fmt.Errorf("工作流描述(description)不能为空")
+		return fmt.Errorf("the flow description must not be empty")
 	}
 	return nil
 }
 
-// validateFlowLimits 应用默认值并校验不超过系统上限
-// -1 表示不限制；0 表示使用系统默认值
+// validateFlowLimits applies the defaults and checks them against the system limits.
+// -1 means unlimited; 0 means "use the system default".
 func validateFlowLimits(authInfo *auth.AuthInfo, timeout, maxRecursionDepth, maxNodeCount, maxExecCount, maxRunRecords, maxSessionRecords *int) error {
 	limits := flowconfig.Resolve(authInfo.Schema)
 
-	// timeout: 超过 max 拒绝（-1 表示不限制）
+	// timeout: reject anything above max (-1 means unlimited).
 	if *timeout > 0 && limits.MaxTimeout > 0 && *timeout > limits.MaxTimeout {
 		return fmt.Errorf("timeout exceeds system limit: %d > %d", *timeout, limits.MaxTimeout)
 	}
@@ -594,12 +599,12 @@ func validateFlowLimits(authInfo *auth.AuthInfo, timeout, maxRecursionDepth, max
 		return fmt.Errorf("max_exec_count exceeds system limit: %d > %d", *maxExecCount, limits.MaxExecCount)
 	}
 
-	// max_run_records：0 保持未设置（运行时由系统级兜底）；超过系统上限拒绝（-1 表示不限制）
+	// max_run_records: 0 stays unset (the system level takes over at run time); reject above the system limit (-1 means unlimited).
 	if *maxRunRecords > 0 && limits.MaxRunRecords > 0 && *maxRunRecords > limits.MaxRunRecords {
 		return fmt.Errorf("max_run_records exceeds system limit: %d > %d", *maxRunRecords, limits.MaxRunRecords)
 	}
 
-	// max_session_records：-1/0 表示不做会话记忆（允许）；一旦设置必须 >=1；超过系统上限拒绝
+	// max_session_records: -1 / 0 disables session memory (allowed); once set it must be >= 1; reject above the system limit.
 	if *maxSessionRecords == 0 {
 		return fmt.Errorf("max_session_records must be >= 1 when set, or -1 to disable")
 	}
@@ -610,7 +615,7 @@ func validateFlowLimits(authInfo *auth.AuthInfo, timeout, maxRecursionDepth, max
 	return nil
 }
 
-// GetBreakpoints 获取工作流断点 node_id 列表
+// GetBreakpoints returns the node_ids that carry a breakpoint.
 func GetBreakpoints(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -620,13 +625,13 @@ func GetBreakpoints(c *gin.Context) {
 	id := c.Param("id")
 	list, err := repo.ListBreakpoints(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"breakpoints": list}, "")
 }
 
-// SetBreakpoint 单条增删断点（运行中即时落库，防刷新丢失）
+// SetBreakpoint adds or removes one breakpoint (persisted immediately during a run so a refresh does not lose it).
 func SetBreakpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -643,11 +648,11 @@ func SetBreakpoint(c *gin.Context) {
 		return
 	}
 	if req.NodeID == "" {
-		xhttp.ErrJSON(c, "node_id is required", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "node_id is required", "")
 		return
 	}
 	if err := repo.SetBreakpoint(authInfo.(*auth.AuthInfo), id, req.NodeID, req.On); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", nil, "")

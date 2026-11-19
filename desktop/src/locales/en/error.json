@@ -183,7 +183,9 @@
       "not_found": "Workflow not found",
       "invalid_status": "Status must be 1 (active) or 3 (deprecated); workflows have no locked state, the live version is managed by releases",
       "not_released": "Workflow {name} has no released version yet. Release it in the editor before calling it.",
-      "deprecated": "Workflow {name} is deprecated and cannot be called."
+      "deprecated": "Workflow {name} is deprecated and cannot be called.",
+      "duplicate_label": "Node names must be unique: {names}. A name is used by source_ref / call.target references, so a duplicate points at the wrong node; rename before saving.",
+      "description_required": "The workflow description must not be empty."
     },
     "common": {
       "internal": "Internal error, please try again later",

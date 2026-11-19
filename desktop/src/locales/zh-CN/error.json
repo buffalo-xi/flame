@@ -183,7 +183,9 @@
       "not_found": "工作流不存在",
       "invalid_status": "状态只能是 1（正常）或 3（废弃）；工作流不设「锁定」，线上由版本管理",
       "not_released": "工作流「{name}」尚未发布正式版本，请先在编辑页发布后再调用",
-      "deprecated": "工作流「{name}」已废弃，不可调用"
+      "deprecated": "工作流「{name}」已废弃，不可调用",
+      "duplicate_label": "节点名称不能重复：{names}。名称可用于 source_ref / call.target 引用，重名会指错节点，请改名后再保存",
+      "description_required": "工作流描述不能为空"
     },
     "common": {
       "internal": "服务内部错误，请稍后重试",
