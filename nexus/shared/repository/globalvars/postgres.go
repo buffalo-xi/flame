@@ -9,14 +9,14 @@ import (
 	"flame/nexus/shared/secureval"
 )
 
-// PostgresRepository PostgreSQL 实现的全局变量存储
+// PostgresRepository is the PostgreSQL implementation of global variable storage.
 type PostgresRepository struct{}
 
-// 列清单放一处：新增列时改这里，List/Get 两处自动跟上。
-// updated_by 可 NULL，用 xsql.UUID 接（NULL → 空串）。
+// The column list lives in one place: add a column here and both List and Get follow.
+// updated_by may be NULL and is read into xsql.UUID (NULL -> empty string).
 const columns = `name, value, kind, description, updated_by, updated_at`
 
-// List 列出一个租户的全部变量（按 name 升序，界面直接按此顺序展示）。
+// List returns every variable of one tenant (ascending by name, the order the UI displays).
 func (r *PostgresRepository) List(schema string) ([]GlobalVar, error) {
 	rows, err := db.DB.Query(`SELECT ` + columns + ` FROM ` + schema + `.global_vars ORDER BY name ASC`)
 	if err != nil {
@@ -38,7 +38,7 @@ func (r *PostgresRepository) List(schema string) ([]GlobalVar, error) {
 	return list, rows.Err()
 }
 
-// Get 取一条；不存在返回 (nil, nil)。
+// Get returns one variable; a missing one returns (nil, nil).
 func (r *PostgresRepository) Get(schema, name string) (*GlobalVar, error) {
 	if name == "" {
 		return nil, nil
@@ -58,13 +58,15 @@ func (r *PostgresRepository) Get(schema, name string) (*GlobalVar, error) {
 	return &v, nil
 }
 
-// Upsert 按 name 写入或覆盖。
+// Upsert writes or overwrites by name.
 //
-// created_by 刻意只在 INSERT 时落：覆盖值是「改配置」，不是「换创建人」。
-// updated_at 每次覆盖都刷新 —— 运行期缓存靠它判断是否要重新拉（见 shared/globalvars）。
+// created_by deliberately lands only on INSERT: overwriting a value is "changing the configuration", not
+// "changing the creator".
+// updated_at is refreshed on every overwrite — the runtime cache uses it to decide whether to refetch (see
+// shared/globalvars).
 func (r *PostgresRepository) Upsert(schema string, v *GlobalVar) error {
 	if v == nil || v.Name == "" {
-		return fmt.Errorf("全局变量缺少 name")
+		return fmt.Errorf("the global variable has no name")
 	}
 	value, err := sealValue(v)
 	if err != nil {
@@ -83,7 +85,7 @@ func (r *PostgresRepository) Upsert(schema string, v *GlobalVar) error {
 	return err
 }
 
-// Delete 删除一条，返回是否命中。
+// Delete removes one variable and reports whether it hit anything.
 func (r *PostgresRepository) Delete(schema, name string) (bool, error) {
 	res, err := db.DB.Exec(`DELETE FROM `+schema+`.global_vars WHERE name = $1`, name)
 	if err != nil {
@@ -96,31 +98,32 @@ func (r *PostgresRepository) Delete(schema, name string) (bool, error) {
 	return n > 0, nil
 }
 
-// sealValue 返回该写进 value 列的内容：secret 加密，其余原样。
+// sealValue returns what should go into the value column: secret is encrypted, everything else as is.
 //
-// 不改入参 v.Value —— 调用方（handler）拿到解密后的明文，出参还要用它，
-// 顺手改成密文会让「保存成功」的响应里回显一串 enc:v1:...。
+// It does not touch the caller's v.Value — the handler holds the decrypted plaintext and still needs it for the
+// response, and rewriting it in place would echo a string of enc:v1:... in the "saved" reply.
 func sealValue(v *GlobalVar) (string, error) {
 	if v.Kind != KindSecret || v.Value == "" {
 		return v.Value, nil
 	}
 	sealed, err := secureval.Encrypt(v.Value)
 	if err != nil {
-		return "", fmt.Errorf("加密变量 %s 的值失败: %w", v.Name, err)
+		return "", fmt.Errorf("failed to encrypt the value of variable %s: %w", v.Name, err)
 	}
 	return sealed, nil
 }
 
-// openValue 读出后把 value 列还原成明文（原地改）。
+// openValue restores the value column to plaintext after reading (in place).
 //
-// 非 secret、空值、以及加密功能上线前写入的明文，都由 secureval.Decrypt 原样返回。
+// Anything that is not secret, an empty value, and plaintext written before encryption shipped are all returned
+// as is by secureval.Decrypt.
 func openValue(v *GlobalVar) error {
 	if v.Kind != KindSecret || v.Value == "" {
 		return nil
 	}
 	plain, err := secureval.Decrypt(v.Value)
 	if err != nil {
-		return fmt.Errorf("解密变量 %s 失败（密钥是否被换过？）: %w", v.Name, err)
+		return fmt.Errorf("failed to decrypt variable %s (was the key rotated?): %w", v.Name, err)
 	}
 	v.Value = plain
 	return nil

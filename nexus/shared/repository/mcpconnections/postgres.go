@@ -13,18 +13,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// PostgresRepository 基于 PostgreSQL 的 MCP 连接仓储实现
+// PostgresRepository is the PostgreSQL implementation of MCP connection storage.
 type PostgresRepository struct{}
 
-// NewRepository 构造仓储
+// NewRepository builds the repository.
 func NewRepository() Repository {
 	return &PostgresRepository{}
 }
 
-// compile-time 断言实现接口
+// compile-time interface assertion
 var _ Repository = (*PostgresRepository)(nil)
 
-// Create 创建连接，返回新记录 ID
+// Create creates a connection and returns the new record id.
 func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, conn *models.McpConnection) (string, error) {
 	id := conn.ID
 	if id == "" {
@@ -44,9 +44,10 @@ func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, conn *models.McpCon
 	return returnedID, nil
 }
 
-// Update 更新连接（按 ID 更新除 ID、is_active 外的字段；已启用的连接不允许修改）
+// Update updates a connection by id (every field except id and is_active; an enabled connection cannot be
+// modified).
 func (r *PostgresRepository) Update(authInfo *auth.AuthInfo, id string, conn *models.McpConnection) error {
-	// 先查数据库当前记录的 is_active 状态，已启用的连接不允许修改
+	// Read the stored is_active first: an enabled connection cannot be modified
 	var isActive bool
 	checkQuery := fmt.Sprintf(`SELECT is_active FROM %s.mcp_connections WHERE id=$1`, authInfo.Schema)
 	if err := db.DB.QueryRow(checkQuery, id).Scan(&isActive); err != nil {
@@ -56,7 +57,7 @@ func (r *PostgresRepository) Update(authInfo *auth.AuthInfo, id string, conn *mo
 		return wrapPgErr(err)
 	}
 	if isActive {
-		return fmt.Errorf("不允许修改已启用的 MCP 连接")
+		return fmt.Errorf("an enabled MCP connection cannot be modified")
 	}
 
 	query := fmt.Sprintf(`UPDATE %s.mcp_connections SET
@@ -79,14 +80,14 @@ func (r *PostgresRepository) Update(authInfo *auth.AuthInfo, id string, conn *mo
 	return wrapPgErr(err)
 }
 
-// UpdateIsActive 更新启用状态
+// UpdateIsActive updates the enabled state.
 func (r *PostgresRepository) UpdateIsActive(authInfo *auth.AuthInfo, id string, isActive bool) error {
 	query := fmt.Sprintf(`UPDATE %s.mcp_connections SET is_active=$2, updated_at=CURRENT_TIMESTAMP WHERE id=$1`, authInfo.Schema)
 	_, err := db.DB.Exec(query, id, isActive)
 	return wrapPgErr(err)
 }
 
-// Delete 删除连接（工具表级联删除）
+// Delete removes a connection (its tools cascade).
 func (r *PostgresRepository) Delete(authInfo *auth.AuthInfo, id string) error {
 	query := fmt.Sprintf(`DELETE FROM %s.mcp_connections WHERE id=$1`, authInfo.Schema)
 	res, err := db.DB.Exec(query, id)
@@ -100,7 +101,7 @@ func (r *PostgresRepository) Delete(authInfo *auth.AuthInfo, id string) error {
 	return nil
 }
 
-// GetByID 按 ID 获取连接
+// GetByID fetches a connection by id.
 func (r *PostgresRepository) GetByID(authInfo *auth.AuthInfo, id string) (*models.McpConnection, error) {
 	query := fmt.Sprintf(`SELECT id,name,display_name,description,url,command,args,work_dir,env,transport,auth,is_active,created_at,updated_at
 		FROM %s.mcp_connections WHERE id=$1`, authInfo.Schema)
@@ -115,7 +116,7 @@ func (r *PostgresRepository) GetByID(authInfo *auth.AuthInfo, id string) (*model
 	return conn, nil
 }
 
-// List 列出连接（分页 + 过滤）
+// List lists connections (paged and filtered).
 func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListMcpConnectionsRequest) ([]models.McpConnection, int, error) {
 	conditions := []string{}
 	args := []any{}
@@ -142,14 +143,14 @@ func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListMcpConnectio
 		whereClause = " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// 计数
+	// Count
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.mcp_connections", authInfo.Schema) + whereClause
 	var total int
 	if err := db.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	// 分页
+	// Page
 	page := req.Page
 	limit := req.Limit
 	if page <= 0 {
@@ -180,7 +181,7 @@ func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListMcpConnectio
 	return out, total, rows.Err()
 }
 
-// ListTools 列出某连接下已持久化的工具
+// ListTools lists the persisted tools of one connection.
 func (r *PostgresRepository) ListTools(authInfo *auth.AuthInfo, connectionID string) ([]models.McpConnectionTool, error) {
 	query := fmt.Sprintf(`SELECT id,connection_id,name,description,input_schema,updated_at
 		FROM %s.mcp_connection_tools WHERE connection_id=$1 ORDER BY name`, authInfo.Schema)
@@ -200,7 +201,7 @@ func (r *PostgresRepository) ListTools(authInfo *auth.AuthInfo, connectionID str
 	return out, rows.Err()
 }
 
-// ReplaceTools 全量替换某连接下的工具：先删除旧工具，再批量插入新工具
+// ReplaceTools replaces a connection's tools wholesale: delete the old ones, then insert the new ones in bulk.
 func (r *PostgresRepository) ReplaceTools(authInfo *auth.AuthInfo, connectionID string, tools []*models.McpConnectionTool) error {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -234,7 +235,7 @@ func (r *PostgresRepository) ReplaceTools(authInfo *auth.AuthInfo, connectionID 
 	return tx.Commit()
 }
 
-// scanConnection 从行扫描连接
+// scanConnection scans a connection out of a row.
 func scanConnection(scanner interface{ Scan(...any) error }) (*models.McpConnection, error) {
 	var c models.McpConnection
 	var description, url, command, transport, workDir sql.NullString
@@ -262,7 +263,7 @@ func nullString(s string) any {
 	return s
 }
 
-// wrapPgErr 包装数据库错误为业务错误
+// wrapPgErr wraps a database error as a business error.
 func wrapPgErr(err error) error {
 	if err == nil {
 		return nil
