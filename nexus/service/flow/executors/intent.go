@@ -13,16 +13,17 @@ import (
 
 var _ Executor = (*IntentExecutor)(nil)
 
-// IntentExecutor 意图节点：用大模型对输入做意图分类，命中后执行对应分支链。
-// 与分支节点（branch）的区别：branch 用脚本条件判断，intent 用一次 LLM 分类。
-// 语义为单选（天然排他）：命中一个分支执行一个分支，未命中走默认分支。
+// IntentExecutor is the intent node: it classifies the input with an LLM and runs the matching branch
+// chain. It differs from the branch node in that branch decides with a script condition while intent uses
+// one LLM classification. The semantics are single-choice (naturally exclusive): one branch runs when it
+// matches, otherwise the default branch runs.
 type IntentExecutor struct{}
 
-// intentBranchConfig 单个意图分支的配置
+// intentBranchConfig is the config of one intent branch
 type intentBranchConfig struct {
-	id          string // 唯一标识，对应边 source_handle 中的 childId
-	label       string // 显示名称
-	description string // 意图描述（用于拼进 prompt 供模型理解）
+	id          string // unique id, matching childId in an edge's source_handle
+	label       string // display name
+	description string // intent description (folded into the prompt so the model understands it)
 }
 
 func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
@@ -30,7 +31,7 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 
 	nr.BranchResult = &flow.BranchResult{}
 
-	// ── 1. 解析配置 ──
+	// ── 1. Parse the config ──
 	config := node.Data.Config
 	if config == nil {
 		return failf(nr, flow.ErrCodeConfig, "intent node is missing its configuration")
@@ -46,18 +47,18 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 		return failf(nr, flow.ErrCodeConfig, "failed to parse the intent branch config")
 	}
 
-	// 初始化输出变量（固定 intent / index，可被 config.outputs 覆盖类型）
+	// Initialise the output variables (the fixed intent / index, whose types config.outputs may override)
 	outputs := mergeIntentOutputs(config)
 	nr.InitOutputVars(outputs)
 	nr.InitOutputBindings(outputs)
 
-	// ── 2. 获取输入变量 ──
+	// ── 2. Read the input variables ──
 	inputArgs, buildErr := resolveInputVars(node, ctx, processID, nr)
 	if buildErr != nil {
 		return failf(nr, flow.ErrCodeConfig, buildErr.Error())
 	}
 
-	// ── 3. 构建 LLM 请求 ──
+	// ── 3. Build the LLM request ──
 	llmCfg, _ := config["llm"].(map[string]interface{})
 	if llmCfg == nil {
 		llmCfg = map[string]interface{}{}
@@ -79,7 +80,7 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 		return failf(nr, flow.ErrCodeConnection, "the LLM gateway is not initialised")
 	}
 
-	// ── 4. 调用大模型分类 ──
+	// ── 4. Ask the LLM to classify ──
 	nr.AddLogf("classifying the intent with the LLM, %d branch(es)", len(branches))
 	resp, genErr := gateway.Current.Generate(ctx.StdCtx, *modelInput, messages, nil)
 	if genErr != nil {
@@ -87,7 +88,7 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 	}
 	nr.AddLogf("LLM returned: %s", strings.TrimSpace(resp.Content))
 
-	// ── 5. 解析命中分支并执行 ──
+	// ── 5. Parse the matched branch and run it ──
 	idx := parseIntentIndex(resp.Content, len(branches))
 	branchExec := &BranchExecutor{}
 
@@ -105,7 +106,7 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 			return result
 		}
 	} else {
-		// 未命中：走默认分支
+		// No match: take the default branch
 		nr.AddLogf("the LLM matched no intent (index=%d), taking the default branch", idx)
 
 		if werr := nr.SetOutputVarWithFire("intent", ""); werr != nil {
@@ -130,7 +131,8 @@ func (e *IntentExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 	return nil
 }
 
-// mergeIntentOutputs 合并 config.outputs 与固定输出变量 intent / index，保证后端始终可写。
+// mergeIntentOutputs merges config.outputs with the fixed intent / index output variables, guaranteeing the
+// backend can always write them.
 func mergeIntentOutputs(config map[string]interface{}) map[string]interface{} {
 	outputs := make(map[string]interface{})
 	if o, ok := config["outputs"].(map[string]interface{}); ok {
@@ -147,7 +149,7 @@ func mergeIntentOutputs(config map[string]interface{}) map[string]interface{} {
 	return outputs
 }
 
-// parseIntentBranches 解析 children 配置为意图分支切片（只解析含 id 的普通分支）
+// parseIntentBranches parses the children config into intent branches (plain branches that carry an id)
 func parseIntentBranches(children []interface{}) []intentBranchConfig {
 	branches := make([]intentBranchConfig, 0, len(children))
 	for _, child := range children {
@@ -169,21 +171,23 @@ func parseIntentBranches(children []interface{}) []intentBranchConfig {
 	return branches
 }
 
-// buildIntentMessages 构造意图分类 messages：
-// system = 用户 system_prompt + 自动拼接的意图清单 + 输出格式指令；user = 输入变量 JSON。
+// buildIntentMessages builds the intent classification messages: system = the user's system_prompt plus the
+// generated intent list plus the output-format instruction; user = the input variables as JSON.
 //
-// 全局变量经节点输入进入（{{ .input.xxx }}），模板上下文里没有 .global_vars。
+// Global variables arrive through the node inputs ({{ .input.xxx }}), so the template context has no
+// .global_vars.
 func buildIntentMessages(nr *flow.NodeResult, nodeCfg map[string]interface{},
 	llmCfg map[string]interface{}, branches []intentBranchConfig,
 	inputVars map[string]interface{}) ([]gateway.Message, error) {
 
 	systemPrompt, _ := llmCfg["system_prompt"].(string)
 
-	// 渲染前先看「提示词有没有引用密钥类型的全局变量」—— 渲染后就是拼好的字符串，
-	// 分不出哪一段来自 secret。这里只告警（记节点日志），不阻断。
+	// Before rendering, check "does the prompt reference a global variable of secret kind" — after
+	// rendering it is one assembled string and the secret part cannot be told apart. This only warns (into
+	// the node log), it does not block.
 	WarnSecretPromptRefs(nr, nodeCfg, systemPrompt)
 
-	// 渲染 system_prompt 模板（支持 {{.input.xxx}}）
+	// Render the system_prompt template (supporting {{.input.xxx}})
 	renderedPrompt := ""
 	if strings.TrimSpace(systemPrompt) != "" {
 		tmplCtx := map[string]interface{}{"input": inputVars}
@@ -212,7 +216,7 @@ func buildIntentMessages(nr *flow.NodeResult, nodeCfg map[string]interface{},
 
 	// userContent, err := json.Marshal(inputVars)
 	// if err != nil {
-	// 	return nil, fmt.Errorf("输入变量序列化失败: %w", err)
+	// 	return nil, fmt.Errorf("failed to serialise the input variables: %w", err)
 	// }
 
 	return []gateway.Message{
@@ -221,8 +225,8 @@ func buildIntentMessages(nr *flow.NodeResult, nodeCfg map[string]interface{},
 	}, nil
 }
 
-// parseIntentIndex 解析 LLM 返回的分支序号，容错处理 markdown 代码块 / 纯数字 / JSON 对象。
-// 返回 -1 表示未命中（走默认分支）。
+// parseIntentIndex parses the branch index returned by the LLM, tolerating a markdown code fence, a bare
+// number, or a JSON object. -1 means no match (take the default branch).
 func parseIntentIndex(content string, n int) int {
 	s := strings.TrimSpace(content)
 	s = stripCodeFence(s)
@@ -236,7 +240,7 @@ func parseIntentIndex(content string, n int) int {
 	if i, err := strconv.Atoi(s); err == nil {
 		return i
 	}
-	// 兜底：从文本中提取第一个 { ... } 片段
+	// Fallback: pull the first { ... } fragment out of the text
 	if start := strings.Index(s, "{"); start >= 0 {
 		if end := strings.LastIndex(s, "}"); end > start {
 			if err := json.Unmarshal([]byte(s[start:end+1]), &obj); err == nil && obj.Index != nil {
@@ -247,7 +251,7 @@ func parseIntentIndex(content string, n int) int {
 	return -1
 }
 
-// stripCodeFence 去掉 ```json ... ``` 之类的 markdown 代码块包裹
+// stripCodeFence removes a markdown code fence such as ```json ... ```
 func stripCodeFence(s string) string {
 	if !strings.HasPrefix(s, "```") {
 		return s
@@ -269,8 +273,9 @@ func (e *IntentExecutor) Capabilities() NodeCapabilities {
 			flow.ErrCodeVar,
 			flow.ErrCodeOther,
 		},
-		// on_error 只对意图节点自身错误生效（主要是 LLM 调用失败 connection/timeout）；
-		// 子链错误已按容器语义 Success 透传，不触发本节点 on_error（见 branch.go executeBranch）
+		// on_error only applies to the intent node's own errors (mainly a failed LLM call:
+		// connection/timeout); child-chain errors propagate as Success under the container rule and do not
+		// trigger this node's on_error (see executeBranch in branch.go)
 		Actions: []flow.ErrorAction{flow.ErrorActionRetry},
 		HasPost: false,
 	}

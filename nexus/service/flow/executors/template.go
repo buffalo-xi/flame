@@ -12,10 +12,10 @@ import (
 	"text/template"
 )
 
-// tmplCache 模板缓存，避免重复 Parse
+// tmplCache is the template cache, so a template is not parsed again
 var tmplCache sync.Map
 
-// tmplFuncs 模板自定义函数集
+// tmplFuncs is the set of custom template functions
 var tmplFuncs = template.FuncMap{
 	"json": func(v any) string {
 		b, _ := json.Marshal(v)
@@ -50,22 +50,26 @@ var tmplFuncs = template.FuncMap{
 }
 
 const (
-	// maxTemplateOutputBytes 单次模板渲染的输出上限。
-	// text/template 的 Execute 是增量写出的，Write 返回 error 会立即中止渲染 ——
-	// 因此这道闸能真正防住「渲染出超大字符串撑爆内存」（加超时做不到，因为同进程
-	// 的 Go 模板渲染本身不可中断）。
+	// maxTemplateOutputBytes is the output ceiling for one template render.
+	// text/template's Execute writes incrementally and a Write returning an error aborts the render
+	// immediately, so this gate really does stop "one render produces a huge string and blows up
+	// memory" (a timeout cannot, because Go template rendering in this process cannot be interrupted).
 	maxTemplateOutputBytes = 1 << 20 // 1 MiB
-	// maxTemplateDataNodes 模板可见数据（map/slice 元素 + 标量）总节点数上限。
-	// {{range}} 迭代次数上界 ≈ 元素个数，压住输入规模即压住渲染规模的源头。
+	// maxTemplateDataNodes is the ceiling on the total number of data nodes visible to a template (map /
+	// slice elements plus scalars).
+	// The {{range}} iteration ceiling is about the element count, so capping the input size caps the
+	// source of the render size.
 	maxTemplateDataNodes = 50000
-	// maxTemplateDataDepth 数据嵌套深度上限，防止遍历/渲染被超深结构放大。
+	// maxTemplateDataDepth is the nesting-depth ceiling, so traversal / rendering cannot be amplified by
+	// an extremely deep structure.
 	maxTemplateDataDepth = 32
 )
 
-// errTemplateOutputTooLarge 输出超限哨兵错误。
+// errTemplateOutputTooLarge is the sentinel error for an over-limit output.
 var errTemplateOutputTooLarge = errors.New("template output exceeds size limit")
 
-// limitedWriter 是带上限的 io.Writer：累计写入超过 limit 后返回错误。
+// limitedWriter is an io.Writer with a ceiling: once the accumulated writes exceed limit it returns an
+// error.
 type limitedWriter struct {
 	buf      bytes.Buffer
 	limit    int
@@ -82,10 +86,11 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 
 func (w *limitedWriter) String() string { return w.buf.String() }
 
-// checkTemplateData 限制模板可见数据的节点数与嵌套深度。
+// checkTemplateData caps the node count and nesting depth of the data visible to a template.
 //
-// 只做规模封顶，不提供时间维度的硬超时 —— 同进程 Go 模板渲染不可中断，
-// 畸形模板的墙钟时间只能靠进程级隔离约束。
+// It only bounds the size and offers no hard time limit: Go template rendering in this process cannot be
+// interrupted, so the wall-clock time of a malformed template can only be constrained by process-level
+// isolation.
 func checkTemplateData(data any) error {
 	n := 0
 	var walk func(v any, depth int) error
@@ -116,11 +121,12 @@ func checkTemplateData(data any) error {
 	return walk(data, 0)
 }
 
-// RenderTemplate 渲染模板字符串并直接返回字符串（不做 JSON 解码），使用缓存避免重复 Parse。
+// RenderTemplate renders a template string and returns the string directly (no JSON decode), using the
+// cache so it is not parsed again.
 //
-// 带两道规模护栏（Code / Result / Progress / binding transform 共用本函数）：
-//   - 输入：checkTemplateData 限制可见数据的节点数与嵌套深度；
-//   - 输出：limitedWriter 超过 maxTemplateOutputBytes 即中止渲染。
+// Two size guards apply (Code / Result / Progress / binding transform all share this function):
+//   - input: checkTemplateData caps the node count and nesting depth of the visible data;
+//   - output: limitedWriter aborts the render once it passes maxTemplateOutputBytes.
 func RenderTemplate(tmplStr string, data map[string]any) (string, error) {
 	if err := checkTemplateData(data); err != nil {
 		return "", err
@@ -139,7 +145,7 @@ func RenderTemplate(tmplStr string, data map[string]any) (string, error) {
 	return w.String(), nil
 }
 
-// getOrParseTemplate 从缓存获取或解析模板
+// getOrParseTemplate takes a template from the cache or parses it
 func getOrParseTemplate(tmplStr string) (*template.Template, error) {
 	if cached, ok := tmplCache.Load(tmplStr); ok {
 		return cached.(*template.Template), nil
@@ -152,16 +158,16 @@ func getOrParseTemplate(tmplStr string) (*template.Template, error) {
 	return t, nil
 }
 
-// BuildScriptTemplateContext 构建 template 脚本的三段上下文：
+// BuildScriptTemplateContext builds the three-part context of a template script:
 //
-//	.input  — 节点输入（全局变量也在这里：它是 inputs 的一种来源）
-//	.local  — 局部变量（SnapshotVars 浅拷贝快照）
-//	.output — 输出变量（SnapshotVars 浅拷贝快照）
+//	.input  — node inputs (global variables are here too: they are one source of inputs)
+//	.local  — local variables (a shallow snapshot from SnapshotVars)
+//	.output — output variables (a shallow snapshot from SnapshotVars)
 //
-// 全局变量不再单独注入一段（曾经是 .global_vars）：它和 argument / env / flow /
-// node / builtin 一样是节点输入的来源，取值在 GetVariables 里完成。少一段上下文
-// 就少一条「模板里能偷偷拿到全局值」的暗通道 —— 节点配置与输入变量表现在描述
-// 的是同一件事。
+// Global variables no longer get a section of their own (it used to be .global_vars): like argument / env
+// / flow / node / builtin, they are one source of node inputs and are resolved in GetVariables. One
+// section less is one less hidden channel through which a template can quietly reach a global value —
+// the node config and the input variable table now describe the same thing.
 func BuildScriptTemplateContext(nr *flow.NodeResult, inputs map[string]any) map[string]any {
 	localCopy, outputCopy := nr.SnapshotVars()
 	return map[string]any{
@@ -171,14 +177,17 @@ func BuildScriptTemplateContext(nr *flow.NodeResult, inputs map[string]any) map[
 	}
 }
 
-// WarnSecretPromptRefs 对「提示词里引用了密钥类型的全局变量」记一条告警（不阻断）。
+// WarnSecretPromptRefs logs a warning when a prompt references a global variable of secret kind (it does
+// not block).
 //
-// 判定看的是**来源**而不是文本：全局变量现在经节点输入（{{ .input.xxx }}）进入，
-// 提示词里已经找不到变量名。所以先按 config.inputs 里 source_type == "global" 的项
-// 反查哪些 key 来自 kind == secret 的变量，再看提示词有没有引用这些 key。
+// The decision looks at the **source**, not the text: global variables now arrive through node inputs
+// ({{ .input.xxx }}) and the prompt no longer contains the variable name. So it first maps back from the
+// config.inputs entries with source_type == "global" which keys come from a variable of kind == secret,
+// then checks whether the prompt references those keys.
 //
-// 为什么只在提示词上提示：节点配置里用密钥是合法用法（http 的 Authorization 头），
-// 真正多一层泄漏面的是提示词 —— 渲染结果会进模型上下文、session_records 与 SSE。
+// Why only prompts are flagged: using a secret in a node config is legitimate (the http Authorization
+// header), while the prompt is the extra leak surface — the rendered text reaches the model context,
+// session_records and SSE.
 func WarnSecretPromptRefs(nr *flow.NodeResult, cfg map[string]any, texts ...string) {
 	if nr == nil || nr.Ctx == nil || nr.Ctx.Schema == "" {
 		return
@@ -188,8 +197,9 @@ func WarnSecretPromptRefs(nr *flow.NodeResult, cfg map[string]any, texts ...stri
 		return
 	}
 
-	// 先收「来自全局变量」的输入名，读不到密钥清单就什么都不提示：
-	// 这是 advisory 的告警，不该因为查库失败把节点带崩。
+	// First collect the input names that come from a global variable; when the secret list cannot be read
+	// nothing is reported at all: this is an advisory warning and must not break a node because a query
+	// failed.
 	fromGlobal := make(map[string]string, len(inputs))
 	for name, raw := range inputs {
 		item, ok := raw.(map[string]any)
@@ -227,11 +237,12 @@ func WarnSecretPromptRefs(nr *flow.NodeResult, cfg map[string]any, texts ...stri
 	}
 }
 
-// refersToInput 判断一段模板文本里是否引用了 {{ .input.<name> }}。
+// refersToInput reports whether a template text references {{ .input.<name> }}.
 //
-// 不用整段正则：模板里可能带管道（{{ .input.token | upper }}）或属性访问
-// （{{ .input.token.len }}），只在名字后面要求「不是标识符字符」即可覆盖。
-// 误报的代价只是一条告警，漏报才是问题，所以判定偏宽。
+// It does not use one big regex: a template may carry a pipeline ({{ .input.token | upper }}) or an
+// attribute access ({{ .input.token.len }}), so requiring only "not an identifier character" after the
+// name covers them all. A false positive costs one warning while a false negative is the real problem, so
+// the test leans wide.
 func refersToInput(text, name string) bool {
 	needle := ".input." + name
 	for i := 0; ; {
@@ -253,13 +264,13 @@ func refersToInput(text, name string) bool {
 	}
 }
 
-// ExecuteTemplateScript 执行 template 脚本，data 由调用方构建（三段上下文）
+// ExecuteTemplateScript runs a template script, with data built by the caller (the three-part context)
 func ExecuteTemplateScript(script string, data map[string]any) (any, error) {
 	rendered, err := RenderTemplate(script, data)
 	if err != nil {
 		return nil, fmt.Errorf("template render: %w", err)
 	}
-	// UseNumber 保持数字为 json.Number，与 lua 一致
+	// UseNumber keeps numbers as json.Number, consistent with lua
 	dec := json.NewDecoder(strings.NewReader(rendered))
 	dec.UseNumber()
 	var result any

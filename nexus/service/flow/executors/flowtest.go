@@ -17,18 +17,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// init 把「按 id 试运行一个流程」交给 agent 包，供 run_flow 工具使用。
-// 与 localendpoint.go 的注册点同理：打破 executors → agent 的单向依赖。
+// init hands "trial-run a flow by id" to the agent package, for the run_flow tool.
+// The reasoning is the same as the registration point in localendpoint.go: it breaks the one-way
+// executors -> agent dependency.
 func init() { agent.SetFlowTestRunner(runFlowForTest) }
 
-// runFlowForTest 供 run_flow 工具试运行一个工作流。
+// runFlowForTest serves the run_flow tool's trial run of a workflow.
 //
-// 与 runFlowEndpoint 的差别只有两点：不要求端点存在（试跑的对象通常还没对外开放），
-// 以及返回节点级成败而不只是一段文本。状态口径仍与运行时一致（废弃不可运行，
-// 由调用方 flowsManager.RunTest 拦截）。
+// It differs from runFlowEndpoint in only two ways: it does not require the endpoint to exist (the object
+// of a trial run usually is not exposed yet), and it returns per-node outcomes instead of just a piece of
+// text. The status rules still match a real run (a deprecated flow cannot run; flowsManager.RunTest
+// intercepts that).
 //
-// 只回节点成败与失败节点日志，**不回节点输出变量**：HTTP body / LLM 正文动辄几十 KB，
-// 进模型上下文既费 token 又几乎读不完；需要看数据走运行记录。
+// It returns only the node outcomes and the logs of failing nodes, **not the node output variables**: an
+// HTTP body or an LLM answer is tens of KB, which costs tokens in the model context and is barely readable;
+// data belongs in the run records.
 func runFlowForTest(
 	ctx context.Context,
 	authInfo *auth.AuthInfo,
@@ -46,17 +49,20 @@ func runFlowForTest(
 		return nil, fmt.Errorf("flow not found: %s", flowID)
 	}
 
-	// 入参复制后注入两个保留键（NewFlow 会剥离，不污染业务参数）：
-	//   _call_depth 深度 +1，流程里的 agent 节点再调回 agent 时靠它收敛（与 runEndpoint 同口径）
-	//   session_id  与调用方同一会话场地，产物落在同一个 users/{uid}/sessions/{sid}/
+	// The arguments are copied and two reserved keys injected (NewFlow strips them, so business arguments
+	// are not polluted):
+	//   _call_depth  depth +1, which is how an agent node inside the flow that calls back into an agent
+	//                converges (the same rule as runEndpoint)
+	//   session_id   the same session as the caller, so artefacts land in the same users/{uid}/sessions/{sid}/
 	input := make(map[string]any, len(args)+2)
 	for k, v := range args {
 		input[k] = v
 	}
 	input["_call_depth"] = callDepth + 1
-	// 链经 ctx 传来（run_flow 工具里 callchain.With）：试跑的 flow 也是「即将执行的实体」，
-	// 先把自己追加进链再下传 —— 否则它内部的 rpc / agent 节点绕回自己时，
-	// 入站第一层看不到 F，要白跑一整轮才被拦住。
+	// The chain arrives through ctx (callchain.With in the run_flow tool): the flow being tried out is
+	// itself an "entity about to execute", so it appends itself to the chain before passing it on —
+	// otherwise, when an rpc / agent node inside it loops back to itself, the first inbound layer does not
+	// see F and only a whole wasted round stops it.
 	input[callchain.ArgumentKey] = callchain.Append(
 		callchain.From(ctx),
 		callchain.Key(callchain.KindFlow, instance.ID),
@@ -71,12 +77,14 @@ func runFlowForTest(
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialise the flow run: %w", err)
 	}
-	// 试跑属于调试：本次运行读的是当前工作副本。它调起的子流程默认也跟草稿 ——
-	// 否则「改 A、改 B、一起看效果」就得先把 B 发布一遍（发布=上线，见 releaseFlowVersionTx 的注释）。
-	// 调用方可以改成 false，让子流程按正式版本跑，用来验证线上那套链路。
+	// A trial run is debugging: this run reads the current working copy. The sub-flows it starts follow
+	// drafts by default too — otherwise "change A, change B, look at both" would need B released first
+	// (release means going live, see the comment on releaseFlowVersionTx). The caller may pass false to run
+	// the sub-flows on their released versions, to verify the production chain.
 	execCtx.DebugScope = flow.NewDebugScope(followDrafts)
 
-	// Start 同步跑完并落运行记录（run_type 落在 task / call，与其他直调一致）
+	// Start runs to completion synchronously and stores the run record (run_type lands in task / call, like
+	// any other direct call)
 	runErr := Start(execCtx)
 
 	res := &tools.FlowRunResult{
@@ -90,9 +98,10 @@ func runFlowForTest(
 	}
 	switch {
 	case ctx.Err() != nil:
-		// 工具调用超时（缺省 60s）或上游取消：流程被中断，节点列表停在中断点。
-		// 这一条要排在最前：被取消时 GetError 往往也被写成 context 错误，
-		// 报成 failed 会让人以为是流程自身逻辑坏了。
+		// The tool call timed out (60s by default) or the caller cancelled: the flow was interrupted and the
+		// node list stops at the interruption point. This case must come first: on cancellation GetError is
+		// often set to the context error as well, and reporting failed would suggest the flow's own logic is
+		// broken.
 		res.Status = "cancelled"
 		res.ErrMsg = ctx.Err().Error()
 	case execCtx.GetError() != "":
@@ -106,16 +115,17 @@ func runFlowForTest(
 	return res, nil
 }
 
-// collectNodeTraces 取执行过的节点，按开始时间升序（执行顺序）。
+// collectNodeTraces takes the executed nodes, sorted by start time (execution order).
 //
-// 成功节点也在列表里：失败时最有用的信息是「前几步跑过了、停在哪一步」。
-// 日志只给非成功节点 —— 成功节点的日志基本都是「执行成功」这类噪音。
+// Successful nodes are in the list too: on failure the most useful information is "the first steps ran, it
+// stopped here". Logs are only given for non-successful nodes — a successful node's logs are mostly noise
+// such as "executed successfully".
 func collectNodeTraces(execCtx *flow.ExecContext) []tools.FlowNodeTrace {
 	if execCtx == nil || execCtx.ExecutedNodeMap == nil {
-		// 空数组而不是 nil：JSON 里 null 会被模型读成「不知道跑了什么」
+		// An empty array rather than nil: null in JSON reads as "no idea what ran" to the model
 		return []tools.FlowNodeTrace{}
 	}
-	// Range 持锁回调，排序必须放到锁外
+	// Range calls back while holding the lock, so the sort must happen outside it
 	results := make([]*flow.NodeResult, 0, execCtx.ExecutedNodeMap.Len())
 	execCtx.ExecutedNodeMap.Range(func(_ string, nr *flow.NodeResult) bool {
 		if nr != nil {
@@ -136,11 +146,13 @@ func collectNodeTraces(execCtx *flow.ExecContext) []tools.FlowNodeTrace {
 			ErrCode:    nr.ErrCode,
 			ErrMsg:     nr.ErrMsg,
 			DurationMs: nr.DurationMs,
-			// post 脚本报错不影响节点主状态，但同样是失败原因，所以不看 status 都带上
+			// A failing post script does not change the node's main status, but it is a failure reason too,
+			// so it is always included regardless of status
 			PostError:  nr.PostError,
 			RetryCount: nr.RetryCount,
 		}
-		// 只有非成功节点才带日志与栈：成功节点的日志基本都是「执行成功」这类噪音
+		// Only non-successful nodes carry logs and a stack: a successful node's logs are mostly noise such
+		// as "executed successfully"
 		if nr.Status != flow.StatusSuccess {
 			if len(nr.RunLogs) > 0 {
 				tr.Logs = strings.Join(nr.RunLogs, "\n")
@@ -152,8 +164,8 @@ func collectNodeTraces(execCtx *flow.ExecContext) []tools.FlowNodeTrace {
 	return out
 }
 
-// firstFailureCode 取最早失败节点的错误码：流程级没有独立的错误码字段，
-// 而 on_error 的匹配、排查的起点都是这个码。
+// firstFailureCode returns the error code of the earliest failing node: a flow has no error code field of
+// its own, and that code is both what on_error matches and where troubleshooting starts.
 func firstFailureCode(nodes []tools.FlowNodeTrace) string {
 	for _, n := range nodes {
 		if n.Status == string(flow.StatusFailed) && n.ErrCode != "" {

@@ -16,15 +16,16 @@ import (
 
 var _ Executor = (*RpcExecutor)(nil)
 
-// RPC 节点固定输出变量
+// The RPC node's fixed output variables
 var rpcFixedOutputVars = map[string]string{
-	"result":   "string",        // 调用结果（flattenResult.Content）
-	"progress": "array[string]", // 进度通知数组（每条完整原始 JSON 字符串）
-	"error":    "string",        // 调用出错信息
+	"result":   "string",        // the call result (flattenResult.Content)
+	"progress": "array[string]", // the progress notifications (each one the full raw JSON string)
+	"error":    "string",        // the call error message
 }
 
-// rpcReservedOutputVars 脚本不可写的固定变量集合。
-// 这三个变量由执行器无条件写入（有没有 handler 都一样），脚本只能处理自定义变量。
+// rpcReservedOutputVars is the set of fixed variables a script may not write.
+// The executor writes these three unconditionally (handler or not), so a script only deals with custom
+// variables.
 var rpcReservedOutputVars = func() map[string]struct{} {
 	m := make(map[string]struct{}, len(rpcFixedOutputVars))
 	for k := range rpcFixedOutputVars {
@@ -35,8 +36,9 @@ var rpcReservedOutputVars = func() map[string]struct{} {
 
 type RpcExecutor struct{}
 
-// rpcProgressCollector 收集 progress 通知的原始 JSON 字符串。
-// onProgress 在 stdio 读取循环 / HTTP SSE 解析中与阻塞在调用上的主协程并发回调，故 append 需加锁。
+// rpcProgressCollector collects the raw JSON strings of the progress notifications.
+// onProgress is called concurrently from the stdio read loop / the HTTP SSE parser while the main goroutine is
+// blocked on the call, so append needs a lock.
 type rpcProgressCollector struct {
 	mu   sync.Mutex
 	list []string
@@ -61,55 +63,57 @@ func (e *RpcExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		return failf(nr, flow.ErrCodeConfig, "node data or config is nil")
 	}
 
-	// 1. 解析 rpc 配置
+	// 1. Parse the rpc config
 	rpcCfg, ok := node.Data.Config["rpc"].(map[string]interface{})
 	if !ok {
 		return failf(nr, flow.ErrCodeConfig, "rpc config not found")
 	}
 
-	// 2. 初始化输出变量
+	// 2. Initialise the output variables
 	if outputs, ok := node.Data.Config["outputs"].(map[string]interface{}); ok {
 		nr.InitOutputVars(outputs)
 		nr.InitOutputBindings(outputs)
 	}
 
-	// 3. 解析输入变量并构建模板上下文
+	// 3. Resolve the input variables and build the template context
 	inputArgs, buildErr := resolveInputVars(node, ctx, processID, nr)
 	if buildErr != nil {
 		return failf(nr, flow.ErrCodeConfig, buildErr.Error())
 	}
 	tmplCtx := BuildScriptTemplateContext(nr, inputArgs)
 
-	// 4. 解析 target_type（默认 connection 兼容旧配置）
+	// 4. Resolve target_type (an empty value means connection, for compatibility with old configs)
 	targetType, _ := rpcCfg["target_type"].(string)
 	if targetType == "" {
 		targetType = "connection"
 	}
 
-	// 5. 解析 handler 配置（校验非 template）
+	// 5. Parse the handler config (and reject template)
 	handlerScript, handlerLang, handlerTimeout, handlerErr := parseHandler(rpcCfg, ctx)
 	if handlerErr != nil {
 		return failf(nr, flow.ErrCodeConfig, handlerErr.Error())
 	}
 	hasHandler := strings.TrimSpace(handlerScript) != ""
 
-	// 6. 渲染 arguments 模板（复用 MCP 的通用 arguments 渲染逻辑）
+	// 6. Render the arguments template (reusing the generic arguments rendering from MCP)
 	arguments, argErr := renderMcpArguments(rpcCfg, tmplCtx)
 	if argErr != nil {
 		return failf(nr, flow.ErrCodeConfig, argErr.Error())
 	}
 
-	// 是否订阅进度：节点级开关，默认关闭。
-	// 关闭时两条路径都走同步语义 —— 进程内直调不消费事件通道、外部连接不带 progressToken，
-	// progress 输出变量恒为空数组。开启后才逐条接收（代价是每次调用都要过一遍全量事件）。
+	// Whether to subscribe to progress: a node-level switch, off by default.
+	// When off both paths take synchronous semantics — an in-process call does not consume the event channel
+	// and an external connection sends no progressToken, so the progress output variable stays an empty
+	// array. Only when on does it receive them one by one (at the cost of walking the whole event stream on
+	// every call).
 	wantProgress, _ := rpcCfg["progress"].(bool)
 
 	if targetType == "endpoint" {
 		return e.executeEndpoint(ctx, nr, inputArgs, rpcCfg, arguments, wantProgress, hasHandler, handlerLang, handlerScript, handlerTimeout)
 	}
 
-	// ===== 外部连接 =====
-	// 7. 解析 connection_id 与 tool_name
+	// ===== external connection =====
+	// 7. Resolve connection_id and tool_name
 	connectionID, _ := rpcCfg["connection_id"].(string)
 	if strings.TrimSpace(connectionID) == "" {
 		return failf(nr, flow.ErrCodeConfig, "rpc connection_id must not be empty")
@@ -119,7 +123,7 @@ func (e *RpcExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		return failf(nr, flow.ErrCodeConfig, "rpc tool_name must not be empty")
 	}
 
-	// 8. 查询连接
+	// 8. Look up the connection
 	authInfo := &auth.AuthInfo{Schema: ctx.Schema}
 	conn, connErr := rpcconnrepo.NewRepository().GetByID(authInfo, connectionID)
 	if connErr != nil {
@@ -129,7 +133,7 @@ func (e *RpcExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		return failf(nr, flow.ErrCodeConfig, "the RPC connection is not enabled")
 	}
 
-	// 9. 收集器 + onProgress 回调
+	// 9. Collector plus the onProgress callback
 	coll := &rpcProgressCollector{}
 	onProgress := func(p *client.ProgressNotificationParams) {
 		if p == nil {
@@ -149,18 +153,21 @@ func (e *RpcExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 			}
 			scriptInput := mergeInputs(nr, inputArgs, eventData)
 			if err := e.executeHandlerScript(ctx, nr, handlerLang, handlerScript, scriptInput, handlerTimeout); err != nil {
-				// 逐条 handler 执行错误：记录日志但不中断调用（progress 属基础设施输出）
+				// A per-notification handler failure: logged, but it does not abort the call (progress is
+				// infrastructure output)
 				nr.AddLogf("the progress handler failed: %s", err.ErrMsg)
 			}
 		}
 	}
 
-	// 10. 调用工具：订阅进度时带 token 并发接收 progress，否则同步一次拿结果
+	// 10. Call the tool: with progress subscription a token is sent and progress received concurrently;
+	// otherwise one synchronous call returns the result
 	var (
 		res     *client.ToolResult
 		callErr error
 	)
-	// 祖先链经 ctx 交给 client（出站只带不追加，追加发生在对端即将执行实体时）
+	// The ancestor chain is handed to the client through ctx (outbound only carries it, never appends; the
+	// append happens on the peer when it is about to execute the entity)
 	stdCtx := callchain.With(ctx.StdCtx, ctx.CallChain)
 	if wantProgress {
 		res, callErr = client.InvokeWithProgress(stdCtx, conn, toolName, arguments, onProgress)
@@ -168,7 +175,7 @@ func (e *RpcExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		res, callErr = client.Invoke(stdCtx, conn, toolName, arguments)
 	}
 
-	// 11. 调用返回后：写 progress 数组（定稿，覆盖语义）
+	// 11. After the call returns: write the progress array (final, overwrite semantics)
 	if snap := coll.snapshot(); snap != nil {
 		nr.SetOutputVarWithFire("progress", snap)
 	}
@@ -182,7 +189,7 @@ func (e *RpcExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		return failf(nr, code, callErr.Error())
 	}
 
-	// 12. 收尾
+	// 12. Finish
 	content := ""
 	isError := false
 	structured := interface{}(nil)
@@ -194,8 +201,8 @@ func (e *RpcExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 	return e.finishRpcResult(ctx, nr, inputArgs, hasHandler, handlerLang, handlerScript, handlerTimeout, content, isError, structured, coll.snapshot())
 }
 
-// executeEndpoint 本租户端点直调：查 svc_endpoints（protocol=rpc，不校验 exposed）→
-// 进程内执行 → 流式收集 progress → 收尾。
+// executeEndpoint calls an endpoint of this tenant directly: look up svc_endpoints (protocol=rpc, exposed is not
+// checked) -> run in process -> collect progress while streaming -> finish.
 func (e *RpcExecutor) executeEndpoint(
 	ctx *flow.ExecContext,
 	nr *flow.NodeResult,
@@ -242,12 +249,13 @@ func (e *RpcExecutor) executeEndpoint(
 	}
 
 	authInfo := &auth.AuthInfo{Schema: ctx.Schema, ID: ctx.UserID}
-	// ctx.CallDepth 是本 flow 的栈深度（顶层 0）：同一 flow 里的多个 rpc 节点读到同一个值，
-	// 平级调用不累加，只有真正嵌套（子 flow 继续调端点）才递增。
-	// ctx.DebugScope：调试会话里跟着走草稿；正式运行时为 nil
+	// ctx.CallDepth is this flow's stack depth (0 at the top level): several rpc nodes in the same flow read
+	// the same value, so sibling calls do not accumulate and only real nesting (a sub-flow calling another
+	// endpoint) increases it.
+	// ctx.DebugScope: follow drafts inside a debug session; nil for a real run
 	result, isError, runErr := runEndpoint(ctx.StdCtx, authInfo, ctx.SessionID, ctx.CallDepth, ctx.CallChain, endpointName, arguments, wantProgress, ctx.DebugScope, onProgress)
 
-	// 写 progress 数组定稿
+	// Write the final progress array
 	if snap := coll.snapshot(); snap != nil {
 		nr.SetOutputVarWithFire("progress", snap)
 	}
@@ -259,9 +267,10 @@ func (e *RpcExecutor) executeEndpoint(
 	return e.finishRpcResult(ctx, nr, inputArgs, hasHandler, handlerLang, handlerScript, handlerTimeout, result, isError, nil, coll.snapshot())
 }
 
-// finishRpcResult 收尾：固定输出变量一律由执行器写（与有没有 handler 无关），
-// handler 只作为可选的后处理，且只能写自定义输出变量。
-// isError=true 为远端业务错误（写 error 变量，节点仍 success）；节点异常已在调用方处理为 failed。
+// finishRpcResult finishes the node: the fixed output variables are always written by the executor (handler or
+// not), and the handler is only optional post-processing that may write custom output variables only.
+// isError=true is a remote business error (write the error variable, the node still succeeds); a node exception
+// was already handled as failed by the caller.
 func (e *RpcExecutor) finishRpcResult(
 	ctx *flow.ExecContext,
 	nr *flow.NodeResult,
@@ -274,15 +283,17 @@ func (e *RpcExecutor) finishRpcResult(
 	structured interface{},
 	progressSnapshot []string,
 ) error {
-	// 1. 固定变量固定由节点写。以前这一步在 hasHandler 分支里被跳过，
-	// 结果是"脚本忘记写 result 就永远空"，属于把义务推给配置。
+	// 1. The fixed variables are always written by the node. This step used to be skipped in the hasHandler
+	// branch, which meant "a script that forgets to write result leaves it empty forever" — pushing an
+	// obligation onto the config.
 	if isError {
 		nr.SetOutputVarWithFire("error", result)
 	} else {
 		nr.SetOutputVarWithFire("result", result)
 	}
 
-	// 2. 脚本可选的收尾后处理（写自定义变量），固定变量已在 rpcReservedOutputVars 中拦下。
+	// 2. Optional script post-processing (custom variables); the fixed ones are caught by
+	// rpcReservedOutputVars.
 	if hasHandler {
 		eventData := map[string]interface{}{
 			"done":     true,
@@ -304,8 +315,9 @@ func (e *RpcExecutor) finishRpcResult(
 	return nil
 }
 
-// rpcProgressToMap 将 RPC ProgressNotificationParams 转为结构化 map（供脚本 eventData）。
-// 完整透传 message 与 meta（含 category，取值见 agent/core 的 Category* 常量）。
+// rpcProgressToMap turns RPC ProgressNotificationParams into a structured map (for the script's eventData).
+// message and meta are passed through in full (meta carries category, see the Category* constants in
+// agent/core).
 func rpcProgressToMap(p *client.ProgressNotificationParams) map[string]interface{} {
 	m := map[string]interface{}{
 		"message": p.Message,
@@ -316,7 +328,7 @@ func rpcProgressToMap(p *client.ProgressNotificationParams) map[string]interface
 	return m
 }
 
-// executeHandlerScript 执行 handler 脚本并处理结果（与 HTTP/LLM/MCP 一致）。
+// executeHandlerScript runs the handler script and handles its result (same as HTTP/LLM/MCP).
 func (e *RpcExecutor) executeHandlerScript(
 	ctx *flow.ExecContext, nr *flow.NodeResult,
 	lang, script string, inputs map[string]interface{}, timeout int,
@@ -329,8 +341,9 @@ func (e *RpcExecutor) executeHandlerScript(
 		}
 	}
 
-	// 逐 chunk 调用：return 的 string 字段追加、非 string 覆盖（快照）；
-	// 固定变量（result/progress/error）不允许脚本写，由执行器自己写。
+	// A per-chunk call: a returned string field is appended and a non-string field overwritten (a snapshot);
+	// the fixed variables (result/progress/error) are off-limits to scripts and written by the executor
+	// itself.
 	if scriptResult != nil {
 		if err := applyHandlerAppend(nr, scriptResult, rpcReservedOutputVars); err != nil {
 			return &scriptExecError{

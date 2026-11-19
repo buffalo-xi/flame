@@ -25,15 +25,16 @@ type Diagram struct {
 	Edges []*flow.Edge `json:"edges"`
 }
 
-// legacyGlobalRefRe 工作流配置里的旧写法 {{ .global_vars.NAME }}。
+// legacyGlobalRefRe is the old form in workflow configs: {{ .global_vars.NAME }}.
 var legacyGlobalRefRe = regexp.MustCompile(`\{\{-?\s*\.global_vars\.([A-Za-z_][A-Za-z0-9_]*)`)
 
-// rejectLegacyGlobalRefs 拦下「节点配置里还在用 {{ .global_vars.X }}」的流程。
+// rejectLegacyGlobalRefs rejects a flow whose node configs still use {{ .global_vars.X }}.
 //
-// 全局变量已改成节点输入的一种来源（config.inputs 的 source_type: "global"），
-// 模板上下文不再注入 .global_vars。而 Go 模板遇到缺失键只会渲染成 <no value>、
-// 不会报错 —— 不在这里拦，旧写法就会以「请求带着 <no value> 发出去」的形式
-// 静默坏，比直接报错难查得多。报错里给出节点名与变量名，照着改即可。
+// Global variables became one source of node inputs (config.inputs with source_type: "global") and the
+// template context no longer injects .global_vars. A Go template renders a missing key as <no value>
+// without an error — without this check the old form would break silently ("the request goes out with
+// <no value> in it"), which is far harder to trace than an error. The message names the node and the
+// variable, so the fix is mechanical.
 func rejectLegacyGlobalRefs(nodes []*flow.Node) error {
 	for _, node := range nodes {
 		if node == nil || node.Data == nil || len(node.Data.Config) == 0 {
@@ -49,7 +50,7 @@ func rejectLegacyGlobalRefs(nodes []*flow.Node) error {
 	return nil
 }
 
-// legacyGlobalRefIn 在节点配置里找旧写法（递归 map / slice / string）。
+// legacyGlobalRefIn finds the old form inside a node config (recursing through map / slice / string).
 func legacyGlobalRefIn(v any) (string, bool) {
 	switch val := v.(type) {
 	case string:
@@ -77,19 +78,22 @@ func NewFlow(Instance *models.Flow, args map[string]interface{}, reqID, runID, s
 		args = make(map[string]interface{})
 	}
 
-	// 提取 session_id（校验并剥离，不进入业务参数）
+	// Extract session_id (validated and stripped, so it never becomes a business argument)
 	sessionID, args, err := extractSessionID(args)
 	if err != nil {
 		return nil, err
 	}
-	// 这里**不做**会话归属校验：agent 调 flow（local 工具 / rpc 节点）时会把调用方的
-	// 会话一并传下来，让子 flow 与父级落在同一个 users/{uid}/sessions/{sid}/ 场地 ——
-	// 那个会话的 owner 是父 agent，不是本 flow。归属校验只放在外部协议入口
-	// （MCP runFlowTool / RPC runFlow），那里拿到的 session 才是不可信的客户端输入。
+	// Session ownership is deliberately **not** checked here: when an agent calls a flow (a local tool / an
+	// rpc node) it passes the caller's session down so the sub-flow and its parent land in the same
+	// users/{uid}/sessions/{sid}/ area — and that session belongs to the parent agent, not to this flow.
+	// Ownership is only checked at the external protocol entry points (MCP runFlowTool / RPC runFlow), where
+	// the session really is untrusted client input.
 
-	// 调用深度：由上游（local 工具 / rpc 节点）注入，顶层为 0。剥离后不进业务参数。
+	// Call depth: injected by upstream (a local tool / an rpc node), 0 at the top level. Stripped, so it never
+	// becomes a business argument.
 	callDepth, args := extractCallDepth(args)
-	// 调用链：与 _call_depth 同一套保留键机制，只用于环路检测，同样不能漏进业务变量。
+	// Call chain: the same reserved-key mechanism as _call_depth, used only for cycle detection, and it must
+	// not leak into the business variables either.
 	callChain, args := extractCallChain(args)
 
 	defEnvVars := make(map[string]interface{})
@@ -124,7 +128,8 @@ func NewFlow(Instance *models.Flow, args map[string]interface{}, reqID, runID, s
 		edges = diagram.Edges
 	}
 
-	// 旧写法拦在运行之前：模板缺键只会渲染成 <no value>，不拦就是静默坏。
+	// The old form is rejected before the run: a template with a missing key only renders <no value>, so
+	// not rejecting it means breaking silently.
 	if err := rejectLegacyGlobalRefs(nodes); err != nil {
 		return nil, err
 	}
@@ -155,7 +160,8 @@ func NewFlow(Instance *models.Flow, args map[string]interface{}, reqID, runID, s
 		DefArguments: defArguments,
 	}
 
-	// 运行期限额快照：启动时解析一次（Redis 缓存未命中则回源 DB），运行中不再查询配置。
+	// A snapshot of the run limits: resolved once at start (falling back to the DB on a Redis miss), never
+	// queried during the run.
 	limits := flowconfig.Resolve(schema)
 
 	stdCtx, cancel := context.WithCancel(ctx)
@@ -192,13 +198,14 @@ func NewFlowExecContext(Instance *models.Flow, args map[string]interface{}, reqI
 }
 
 func Start(execCtx *flow.ExecContext) (err error) {
-	// 运行台账：开跑即登记、结束注销 —— 「租户里正在跑什么」才包含工作流。
-	// 注意调试运行的执行体在下面的 goroutine 里（Start 会立刻返回），
-	// 注销必须由它收尾，不能在 Start 里 defer。
+	// Run ledger: registered when it starts and unregistered when it ends — only then does "what is running in
+	// this tenant" include workflows.
+	// Note that in a debug run the body lives in the goroutine below (Start returns immediately), so the
+	// unregister has to be done there and cannot be deferred in Start.
 	unregister := registerActiveRun(execCtx)
 
-	// 调试模式下：执行体放到独立 goroutine，由 DebugControl 驱动挂起/恢复，
-	// Start 立即返回，执行结果/错误通过 WS 推回前端。
+	// In debug mode the body goes into a goroutine driven by DebugControl (suspend / resume) and Start returns
+	// at once, pushing the result / error back to the frontend over WS.
 	if execCtx.Debug != nil && execCtx.Debug.Enabled {
 		go func() {
 			defer unregister()
@@ -214,9 +221,10 @@ func Start(execCtx *flow.ExecContext) (err error) {
 		return nil
 	}
 	defer unregister()
-	// 流程结束后主动取消 ctx：fork 组因超时被放弃等待（ForkStateAbandoned）时，
-	// 后台分支仍在跑 LLM / 沙箱调用，而那一刻台账已注销、用户已经看到「结束」。
-	// 放在 runFlow 之后（defer 在本函数返回时执行），落库不依赖 StdCtx，不受影响。
+	// Cancel the ctx once the flow is over: when a fork group is abandoned on timeout (ForkStateAbandoned) the
+	// background branches are still running LLM / sandbox calls while the ledger has already been unregistered
+	// and the user has seen "finished". It comes after runFlow (the defer runs when this function returns) and
+	// persistence does not depend on StdCtx, so it is unaffected.
 	defer execCtx.Cancel()
 	err = runFlow(execCtx)
 	persistRun(execCtx, err)
@@ -228,9 +236,9 @@ func Start(execCtx *flow.ExecContext) (err error) {
 	return err
 }
 
-// registerActiveRun 让这次 flow 运行同时进「跨实例台账」和「本进程停止表」，
-// 返回幂等注销函数。调试运行、试跑、正式调用都在这里登记（run_type 区分），
-// 子流程也会各自登记一条。
+// registerActiveRun puts this flow run into both the cross-instance ledger and the process-local stop table
+// and returns an idempotent unregister function. Debug runs, trial runs and real calls all register here
+// (run_type tells them apart), and a sub-flow registers an entry of its own.
 func registerActiveRun(execCtx *flow.ExecContext) func() {
 	unregisterLocal := registerLocalRun(execCtx)
 	unregisterLedger := func() {}
@@ -253,7 +261,7 @@ func registerActiveRun(execCtx *flow.ExecContext) func() {
 	}
 }
 
-// ensureSession 工作流运行结束后，若有 session_id 则确保 sessions 表存在对应会话记录。
+// ensureSession makes sure the sessions table has a record for this session_id after a flow run.
 func ensureSession(execCtx *flow.ExecContext) {
 	if execCtx == nil || execCtx.SessionID == "" {
 		return
@@ -270,9 +278,9 @@ func ensureSession(execCtx *flow.ExecContext) {
 	}
 }
 
-// extractSessionID 从运行参数里提取并校验 session_id。
-// 规则：键不存在 → 不启用（返回空）；值非 string → 报错；trim 后为空 → 视为不存在；
-// trim 后非空但非合法 UUID → 报错；合法 UUID → 返回并剥离出业务参数。
+// extractSessionID extracts and validates session_id from the run arguments.
+// Rules: key absent -> disabled (empty); value not a string -> error; empty after trim -> treated as absent;
+// non-empty but not a valid UUID -> error; valid UUID -> returned and stripped from the business arguments.
 func extractSessionID(args map[string]interface{}) (string, map[string]interface{}, error) {
 	raw, ok := args["session_id"]
 	if !ok {
@@ -292,10 +300,11 @@ func extractSessionID(args map[string]interface{}) (string, map[string]interface
 	return sid, agentcore.StripSessionID(args), nil
 }
 
-// extractCallDepth 从运行参数里取出调用深度并剥离（不修改原 map）。
+// extractCallDepth takes the call depth out of the run arguments and strips it (the original map is not
+// modified).
 //
-// 值可能来自 JSON 反序列化（float64）或进程内直调（int），两种都认；
-// 非法值一律按 0 处理 —— 深度只用于限流，不能因为脏数据把正常调用拒掉。
+// The value may come from JSON decoding (float64) or an in-process call (int) and both are accepted; an invalid
+// value counts as 0 — the depth only limits recursion, and dirty data must not reject a normal call.
 func extractCallDepth(args map[string]interface{}) (int, map[string]interface{}) {
 	raw, ok := args["_call_depth"]
 	if !ok {
@@ -325,11 +334,12 @@ func extractCallDepth(args map[string]interface{}) (int, map[string]interface{})
 	return depth, clean
 }
 
-// extractCallChain 从运行参数里取出调用链并剥离（不修改原 map）。
+// extractCallChain takes the call chain out of the run arguments and strips it (the original map is not
+// modified).
 //
-// 与 _call_depth 同一处保留键、同一套理由：链只是控制信息，
-// 漏进 RunArguments 就会变成流程变量（{{_call_chain}}），也会随会话记忆落库。
-// 非法元素由 callchain.Normalize 丢弃 —— 不因脏数据拒掉正常调用。
+// Same reserved key and same reasoning as _call_depth: the chain is pure control information, and leaking it
+// into RunArguments would turn it into a flow variable ({{_call_chain}}) and store it with the session memory.
+// Invalid elements are dropped by callchain.Normalize — dirty data must not reject a normal call.
 func extractCallChain(args map[string]interface{}) ([]string, map[string]interface{}) {
 	raw, ok := args[callchain.ArgumentKey]
 	if !ok {
@@ -346,11 +356,13 @@ func extractCallChain(args map[string]interface{}) ([]string, map[string]interfa
 	return chain, clean
 }
 
-// persistSessionMemory 运行结束后自动记录会话记忆。
-// 仅当存在合法 session_id 且工作流允许记忆（ResolveMaxSessionRecords()>0）时写入。
+// persistSessionMemory records the session memory automatically once a run is over.
+// It writes only when a valid session_id exists and the workflow allows memory
+// (ResolveMaxSessionRecords()>0).
 //
-// runErr 写进 status/error：失败的一轮如果只留一行空 output，历史里看起来与
-// 「正常完成、没有输出」完全一样，无法区分是工作流报错还是真的没说话。
+// runErr goes into status/error: a failed round that leaves only an empty output line looks exactly like
+// "finished normally with no output" in the history, so there is no telling a workflow error from really
+// having said nothing.
 func persistSessionMemory(execCtx *flow.ExecContext, runErr error) {
 	if execCtx == nil || execCtx.SessionID == "" {
 		return
@@ -373,8 +385,8 @@ func persistSessionMemory(execCtx *flow.ExecContext, runErr error) {
 		runType = "preview"
 	}
 
-	// 与 agent 侧同口径：被主动取消 → stopped（「被停」与「失败」是两件事，
-	// 前者不是 bug，不该在历史里显示成红色错误），其它错误 → failed。
+	// Same rule as the agent side: cancelled on purpose -> stopped ("stopped" and "failed" are two different
+	// things, and the former is not a bug so it must not show up red in the history), any other error -> failed.
 	status, errMsg := models.SessionStatusOK, ""
 	if runErr != nil {
 		status, errMsg = models.SessionStatusFailed, runErr.Error()
@@ -399,7 +411,7 @@ func persistSessionMemory(execCtx *flow.ExecContext, runErr error) {
 	}
 }
 
-// runFlow 执行体：超时控制 + 主流程 + 并发节点等待。
+// runFlow is the body: timeout control, the main flow, waiting for concurrent nodes.
 func runFlow(execCtx *flow.ExecContext) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -408,7 +420,7 @@ func runFlow(execCtx *flow.ExecContext) (err error) {
 		}
 	}()
 
-	// 启用流程级别的超时控制
+	// Enable the flow-level timeout
 	flowTimeout := execCtx.GetFlowTimeout()
 	if flowTimeout > 0 {
 		var cancel context.CancelFunc
@@ -430,14 +442,14 @@ func runFlow(execCtx *flow.ExecContext) (err error) {
 	err = execute(startNode, execCtx, currentProcess, 0)
 	if err != nil {
 		if errors.Is(err, SignalReturn) || errors.Is(err, SignalExit) {
-			err = nil // return/exit 信号：正常流程终止
+			err = nil // return/exit signals: normal termination of the flow
 		} else if errors.Is(err, SignalBreak) {
-			// break 泄漏到顶层说明全程没有 loop 消费它，属于配置错误
+			// A break leaking to the top means no loop ever consumed it: a configuration error
 			msg := "a break node outside any loop is a config error"
 			execCtx.LogError(msg)
 			err = errors.New(msg)
 		} else if errors.Is(err, SignalContinue) {
-			// continue 泄漏到顶层说明全程没有 loop 消费它，属于配置错误
+			// A continue leaking to the top means no loop ever consumed it: a configuration error
 			msg := "a continue node outside any loop is a config error"
 			execCtx.LogError(msg)
 			err = errors.New(msg)
@@ -446,14 +458,16 @@ func runFlow(execCtx *flow.ExecContext) (err error) {
 		}
 	}
 
-	// 等待所有 mono 独立并发节点完成，防止孤儿 goroutine（无论成败）
+	// Wait for every mono standalone concurrent node to finish, so no orphan goroutine is left behind (success or
+	// failure)
 	execCtx.MonoWGWait()
 
 	return err
 }
 
 func execute(node *flow.Node, execCtx *flow.ExecContext, processID string, depth int) error {
-	// 维护调试调用栈：进入子 process 时压栈，退出时弹栈，depth 即当前嵌套层级
+	// Maintain the debug call stack: push on entering a child process, pop on leaving, and depth is the current
+	// nesting level
 	if execCtx.Debug != nil && execCtx.Debug.Enabled {
 		execCtx.Debug.PushStack(processID)
 		defer execCtx.Debug.PopStack()
@@ -469,18 +483,20 @@ func execute(node *flow.Node, execCtx *flow.ExecContext, processID string, depth
 		default:
 		}
 
-		// 调试挂起钩子：节点执行前判断是否暂停/单步/断点命中
+		// Debug suspend hook: decide before executing whether to pause / step / hit a breakpoint
 		if execCtx.Debug != nil && execCtx.Debug.Enabled {
 			execCtx.Debug.SuspendIfNeeded(currentNode, processID, depth)
-			// 全停屏障：若有其他节点已触发挂起，本节点也阻塞，实现 all-stop
+			// The all-stop barrier: if another node has already suspended, this node blocks too, which is what
+			// makes it an all-stop
 			execCtx.Debug.WaitIfGloballySuspended()
-			// stop 通过 cancel 唤醒；再次检查是否已取消
+			// stop wakes it through cancel; check again whether it has been cancelled
 			if execCtx.StdCtx.Err() != nil {
 				return execCtx.StdCtx.Err()
 			}
 		}
 
-		// 并发节点：派发到 goroutine + 子 process，主流程不执行、不沿出边继续
+		// A concurrent node: dispatched to a goroutine plus a child process; the main flow neither executes it nor
+		// follows its outgoing edge
 		if concurrency := getConcurrency(currentNode); concurrency != nil {
 			if err := dispatchConcurrent(currentNode, execCtx, processID, concurrency); err != nil {
 				execCtx.LogError(fmt.Sprintf("failed to dispatch the concurrent node: %s: %v", currentNode.ID, err))
@@ -498,24 +514,27 @@ func execute(node *flow.Node, execCtx *flow.ExecContext, processID string, depth
 			break
 		}
 
-		// 分支节点：所有出边都是分支边，已由 BranchExecutor 在子 process 中处理
-		// 意图节点同分支：出边均为分支出边，由 IntentExecutor 在子 process 中处理
+		// A branch node: every outgoing edge is a branch edge and was already handled by BranchExecutor in a child
+		// process.
+		// An intent node is the same: all its outgoing edges are branch edges, handled by IntentExecutor in a child
+		// process.
 		if currentNode.Type == string(flow.NodeTypeBranch) || currentNode.Type == string(flow.NodeTypeIntent) {
 			break
 		}
 
-		// 除分支 / 意图节点外，出边只能有一条：多条时只会走 OutEdges[0]，
-		// 其余的连线看着有效、实际永远不执行 —— 这是最难查的一类故障
-		// （流程看起来走完了，结果少一段，日志里一个字都没有）。
-		// 界面按 handle 基名去重（同一节点的 right / bottom 归成同一个基名），
-		// 正常连线造不出多条，所以这里主要拦导入的资产包与直接调 API 保存的 diagram。
+		// Apart from branch / intent nodes an outgoing edge must be unique: with several, only OutEdges[0] is
+		// followed and the rest look valid while never executing — the hardest class of fault to trace (the flow
+		// looks finished, a section is missing, and the log says nothing).
+		// The UI deduplicates by handle base name (right / bottom of one node collapse into the same base name),
+		// so normal drawing cannot produce several; this mainly catches imported asset packages and diagrams saved
+		// by calling the API directly.
 		if len(currentNode.OutEdges) > 1 {
 			return newExecError(flow.ErrCodeConfig, fmt.Sprintf(
 				"node %s(%s) has %d outgoing edges; this type allows only one - remove the extra edges",
 				currentNode.ID, currentNode.Type, len(currentNode.OutEdges)))
 		}
 
-		// 确定下一个节点
+		// Determine the next node
 		var nextNodeID string
 		nextNodeID = currentNode.OutEdges[0].Target
 
@@ -524,16 +543,17 @@ func execute(node *flow.Node, execCtx *flow.ExecContext, processID string, depth
 	return nil
 }
 
-// concurrencyConfig 节点的并发配置：
-//   - 缺省：串行节点
-//   - {mode: "mono"}：独立并发（不属于任何 fork 组）
-//   - {mode: "fork", fork_node_id: "<id>"}：加入指定 fork 组
+// concurrencyConfig is a node's concurrency config:
+//   - absent: a serial node
+//   - {mode: "mono"}: standalone concurrency (not part of any fork group)
+//   - {mode: "fork", fork_node_id: "<id>"}: join the given fork group
 type concurrencyConfig struct {
 	Mode       string
 	ForkNodeID string
 }
 
-// getConcurrency 解析节点的并发配置；缺省或非法配置返回 nil（按串行处理）。
+// getConcurrency parses a node's concurrency config; an absent or invalid config returns nil (treated as
+// serial).
 func getConcurrency(node *flow.Node) *concurrencyConfig {
 	if node == nil || node.Data == nil || node.Data.Config == nil {
 		return nil
@@ -554,15 +574,15 @@ func getConcurrency(node *flow.Node) *concurrencyConfig {
 	}
 }
 
-// dispatchConcurrent 派发一个并发节点到独立 goroutine + 子 process 执行。
-// 主流程只负责派发，不执行节点本身，也不沿出边继续该节点。
+// dispatchConcurrent dispatches a concurrent node to a separate goroutine plus child process.
+// The main flow only dispatches: it neither executes the node nor follows its outgoing edge.
 func dispatchConcurrent(node *flow.Node, ctx *flow.ExecContext, parentProcessID string, cc *concurrencyConfig) error {
 	if cc.Mode == "fork" && cc.ForkNodeID == "" {
 		return newExecError(flow.ErrCodeConfig,
 			fmt.Sprintf("concurrent node %s: fork_node_id is required when mode is fork", node.ID))
 	}
 
-	// 创建子 process
+	// Create the child process
 	childProcessID, err := ctx.ProcessManager.NewProcess(parentProcessID, nil)
 	if err != nil {
 		return newExecError(flow.ErrCodeInternal,
@@ -571,18 +591,19 @@ func dispatchConcurrent(node *flow.Node, ctx *flow.ExecContext, parentProcessID 
 
 	var forkNR *flow.NodeResult
 	if cc.Mode == "fork" {
-		// 查找 fork 节点的 NodeResult（在父 process 链上）
+		// Look up the fork node's NodeResult (on the parent process chain)
 		forkNR = ctx.FindNodeResultByProcessChain(cc.ForkNodeID, parentProcessID)
 		if forkNR == nil || forkNR.ForkResult == nil {
 			return newExecError(flow.ErrCodeConfig,
 				fmt.Sprintf("fork node result not found for concurrent node %s: %s", node.ID, cc.ForkNodeID))
 		}
-		// 加入 fork 组（阻塞获取信号量，实现 maxConcurrency 限流；ctx 取消则中断流程）
+		// Join the fork group (blocking on a semaphore is what enforces maxConcurrency; a cancelled ctx aborts the
+		// flow)
 		member := flow.ForkMember{ProcessID: childProcessID, NodeID: node.ID}
 		if err := forkNR.ForkResult.Add(1, ctx.StdCtx, member); err != nil {
-			// 子 process 已创建但没能加入并发组：回收掉，避免留下悬空记录
+			// The child process exists but could not join the group: reclaim it so no dangling record is left
 			ctx.ProcessManager.RemoveProcess(childProcessID)
-			// ctx 取消：不包装，直接返回，让上层走 StatusCancelled 路径
+			// A cancelled ctx: return it unwrapped so the caller takes the StatusCancelled path
 			if ctx.StdCtx.Err() != nil {
 				return ctx.StdCtx.Err()
 			}
@@ -593,7 +614,7 @@ func dispatchConcurrent(node *flow.Node, ctx *flow.ExecContext, parentProcessID 
 		ctx.MonoWGAdd(1)
 	}
 
-	// 派发 goroutine，只执行该节点本身，不沿出边继续
+	// Dispatch the goroutine; it executes only this node and does not follow outgoing edges
 	go func(n *flow.Node, c *flow.ExecContext, pid string, fnr *flow.NodeResult) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -606,8 +627,9 @@ func dispatchConcurrent(node *flow.Node, ctx *flow.ExecContext, parentProcessID 
 			}
 		}()
 
-		// 调试：并发节点执行前也要做断点/单步挂起 + 全停屏障（与串行节点一致）。
-		// 压入子 process 得到正确 depth，挂起/全停检查完成后弹栈。
+		// Debug: a concurrent node also does the breakpoint / step suspension plus the all-stop barrier before it
+		// runs (same as a serial node). Push the child process to get the correct depth, then pop it once the
+		// suspend / all-stop checks are done.
 		if c.Debug != nil && c.Debug.Enabled {
 			c.Debug.PushStack(pid)
 			c.Debug.SuspendIfNeeded(n, pid, c.Debug.CurrentDepth())
@@ -615,34 +637,34 @@ func dispatchConcurrent(node *flow.Node, ctx *flow.ExecContext, parentProcessID 
 			c.Debug.PopStack()
 		}
 
-		// 并发节点错误记录在自身 NodeResult，不传播到主流程
+		// A concurrent node records its error on its own NodeResult and does not propagate it to the main flow
 		_ = executeNode(n, c, pid)
-		//println("并发节点运行完成：" + n.Data.Label)
+		//println("concurrent node finished: " + n.Data.Label)
 	}(node, ctx, childProcessID, forkNR)
 
 	return nil
 }
 
-// shouldBypassOnError 判断错误是否应绕过 on_error 处理
-// （控制信号 / ctx 取消 / 内部错误 / 配置错误 / 非 Failed 状态）。
-// 返回 (true, err) 时调用方直接返回 err；返回 (false, nil) 时继续 on_error 流程。
-// 首次执行与重试执行共用此判断，保证两条路径语义一致。
+// shouldBypassOnError decides whether an error should bypass on_error handling
+// (control signals / ctx cancellation / internal errors / config errors / a non-Failed status).
+// With (true, err) the caller returns err straight away; with (false, nil) the on_error flow continues.
+// The first attempt and retries share this decision, so both paths behave the same.
 func shouldBypassOnError(err error, nr *flow.NodeResult, ctx *flow.ExecContext) (bool, error) {
-	// 控制信号：不走 on_error，原样返回
+	// Control signals: no on_error, returned as they are
 	if isControlSignal(err) {
 		return true, err
 	}
-	// ctx 取消：不走 on_error，直接返回
-	// 注意：nr 的状态应由 executor.Execute 内部设置，此处不再重复调用 nr.Finish()
+	// ctx cancelled: no on_error, returned straight away
+	// Note: nr's status should have been set inside executor.Execute, so nr.Finish() is not called again here
 	if ctx.StdCtx.Err() != nil {
 		return true, ctx.StdCtx.Err()
 	}
-	// 系统内部错误：不走 on_error，直接返回
+	// A system internal error: no on_error, returned straight away
 	var ee *ExecError
 	if errors.As(err, &ee) && ee.Code == flow.ErrCodeInternal {
 		return true, err
 	}
-	// 系统配置错误：不走 on_error，直接返回
+	// A system configuration error: no on_error, returned straight away
 	if errors.As(err, &ee) && ee.Code == flow.ErrCodeConfig {
 		return true, err
 	}
@@ -653,15 +675,15 @@ func shouldBypassOnError(err error, nr *flow.NodeResult, ctx *flow.ExecContext) 
 }
 
 func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error {
-	// start / entry / layout 都是结构节点，没有执行器：
-	// start 是流程根入口，entry 是容器内入口，layout 是纯占位（不执行，沿出边继续）。
+	// start / entry / layout are structural nodes with no executor: start is the flow's root entry, entry is a
+	// container's entry, layout is a pure placeholder (not executed, the outgoing edge is followed).
 	if node.Type == string(flow.NodeTypeStart) ||
 		node.Type == string(flow.NodeTypeEntry) ||
 		node.Type == string(flow.NodeTypeLayout) {
 		return nil
 	}
 
-	// 预防性检查：如果 ctx 已经取消/超时，创建 nr 并记录错误状态
+	// Preventive check: when ctx is already cancelled / timed out, create nr and record the error status
 	if err := ctx.StdCtx.Err(); err != nil {
 		nr := flow.NewNodeResult(node, processID, ctx)
 
@@ -669,7 +691,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 			return failf(nr, flow.ErrCodeInternal, "failed to record the node run: "+recordErr.Error())
 		}
 
-		// 根据取消类型设置正确的状态和错误码
+		// Set the right status and error code for the kind of cancellation
 		if err == context.Canceled {
 			nr.Finish(flow.StatusCancelled, flow.ErrCodeCancel, err.Error())
 		} else {
@@ -678,7 +700,7 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 		return err
 	}
 
-	// 首次执行
+	// The first attempt
 	nr := flow.NewNodeResult(node, processID, ctx)
 
 	if err := ctx.RecordNodeExecution(processID, node.ID, nr); err != nil {
@@ -687,9 +709,9 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 
 	executor, exists := GetExecutor(node.Type)
 	if !exists {
-		// 归 config 而不是 internal：走到这里几乎总是「流程图里还留着已下线的节点类型」
-		// （如 knowledge，前端只为渲染老图保留）。报 internal 会让人以为是服务坏了，
-		// 而这是用户能改的配置问题。
+		// Classified as config rather than internal: reaching this almost always means "the diagram still holds a
+		// retired node type" (such as knowledge, which the frontend keeps only to render old diagrams). Reporting
+		// internal suggests the service is broken, while this is a configuration problem the user can fix.
 		return failf(nr, flow.ErrCodeConfig,
 			fmt.Sprintf("node type %q has no executor: the type may have been retired (for example knowledge); replace the node and try again", node.Type))
 	}
@@ -698,32 +720,35 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 		return nil
 	}
 
-	// 兜底检查：如果 executor 没有正确设置 nr.Status，这里补充设置
+	// Safety check: a fallback in case the executor did not set nr.Status correctly
 	if nr.Status == flow.StatusRunning {
 		nr.Finish(flow.StatusFailed, flow.ErrCodeInternal,
 			fmt.Sprintf("the executor of node %s(%s) did not set the node status: %v", node.Label(), node.ID, currentErr))
 	}
 
-	// 控制信号 / ctx 取消 / 内部错误 / 配置错误 / 非 Failed 状态：不走 on_error，直接返回
+	// Control signals / ctx cancellation / internal errors / config errors / a non-Failed status: no on_error, returned
+	// straight away
 	if bypass, retErr := shouldBypassOnError(currentErr, nr, ctx); bypass {
 		return retErr
 	}
 
-	// 校验 errCode 合法性（脚本设的同样受约束）
-	// 空 ErrorCodes 表示不校验（容器节点透传子链错误码）；非空才校验
+	// Validate the errCode (a code set by a script is bound by the same rule)
+	// An empty ErrorCodes means no validation (a container node passes the child chain's code through); a non-empty
+	// one is validated
 	caps := executor.Capabilities()
 	if len(caps.ErrorCodes) > 0 && !containsString(caps.ErrorCodes, nr.ErrCode) {
 		nr.AddLogf("warning: errCode %s is not declared by node %s, downgraded to other", nr.ErrCode, node.Type)
-		// 把原始码写进文案：否则用户只看到 other，不知道节点本来报的是什么，
-		// 而他们按原始码配的 on_error 一定匹配不上。
+		// Put the original code into the message: otherwise the user only sees other, cannot tell what the node
+		// actually reported, and the on_error they configured on the original code can never match.
 		nr.ErrMsg = fmt.Sprintf("%s (original error code %s)", nr.ErrMsg, nr.ErrCode)
 		nr.ErrCode = flow.ErrCodeOther
 	}
 
 	cfg := parseOnErrorConfig(node)
-	// 节点未声明的动作一律按未配置处理，与 HasPost 同源：
-	// 前端面板按 Capabilities.Actions 渲染，后端若照单全收，手写 diagram 就能绕过面板限制
-	// （例如给 intent 配 skip、给 branch 配 retry），声明也就失去意义。
+	// An action the node does not declare is treated as unconfigured, from the same source as HasPost: the frontend
+	// panel renders from Capabilities.Actions, so if the backend accepted anything, a hand-written diagram would
+	// bypass the panel's limits (configuring skip on intent, retry on branch, say) and the declaration would mean
+	// nothing.
 	if cfg.Retry != nil && !containsAction(caps.Actions, flow.ErrorActionRetry) {
 		nr.AddLogf("warning: node %s does not declare a retry action, ignoring that config", node.Type)
 		cfg.Retry = nil
@@ -736,19 +761,19 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 		nr.AddLogf("warning: node %s does not declare a handler action, ignoring that config", node.Type)
 		cfg.Handler = nil
 	}
-	// 节点未声明 HasPost 时，忽略配置中的 post，保证前后端语义一致
+	// When the node does not declare HasPost, ignore the configured post so frontend and backend agree
 	if !caps.HasPost {
 		cfg.Post = nil
 	}
 	currentCode := nr.ErrCode
 	currentMsg := nr.ErrMsg
 	retryCount := 0
-	// activeNR 是「当前这次尝试」的记录：首次是 nr，重试之后换成 retryNR。
+	// activeNR is "the current attempt": nr for the first one, replaced by retryNR after a retry.
 	//
-	// 为什么必须区分：RecordNodeExecution 用 processID_nodeID 做 key，重试会覆盖上一次，
-	// 所以 ExecutedNodeMap（以及下游与界面读到的最终状态）指向的是**最后一次**。
-	// 若 skip / post 仍作用在首次的 nr 上，就会出现「节点显示 failed、流程却继续走了」
-	// 这种自相矛盾，post 设置的输出也会写进一条没人读的记录里。
+	// Why the distinction is necessary: RecordNodeExecution keys on processID_nodeID, so a retry overwrites the
+	// previous entry, which means ExecutedNodeMap (and the final status downstream and in the UI read from it)
+	// points at the **last** attempt. If skip / post still acted on the first nr, the node would show failed while
+	// the flow moved on — a contradiction — and the outputs post sets would be written into a record nobody reads.
 	activeNR := nr
 
 	for {
@@ -757,7 +782,8 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 			if retryCount < cfg.Retry.Max {
 				retryCount++
 				if cfg.Retry.DelayMs > 0 {
-					// 记在当前这次尝试上（首次或上一次重试），不要永远记在第一条记录里
+					// Log it on the current attempt (the first one or the previous retry), never forever on the first
+					// record
 					activeNR.AddLogf("retry #%d, running in %dms", retryCount, cfg.Retry.DelayMs)
 					select {
 					case <-time.After(time.Duration(cfg.Retry.DelayMs) * time.Millisecond):
@@ -776,23 +802,24 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 
 				retryErr := executor.Execute(node, ctx, processID, retryNR)
 				if retryErr == nil {
-					return nil // 重试成功
+					return nil // the retry succeeded
 				}
 
 				//nr.RetryCount = retryCount
 
-				// 重试失败也需 bypass 检查：控制信号 / 超时 / 内部错误等不走 on_error
+				// A failed retry also needs the bypass check: control signals / timeouts / internal errors do not go
+				// through on_error
 				if bypass, retErr := shouldBypassOnError(retryErr, retryNR, ctx); bypass {
 					return retErr
 				}
 
-				// 校验 errCode 合法性（与首次执行一致）
+				// Validate the errCode (same as the first attempt)
 				if len(caps.ErrorCodes) > 0 && !containsString(caps.ErrorCodes, retryNR.ErrCode) {
 					retryNR.AddLogf("warning: retry errCode %s is not declared by node %s, downgraded to other", retryNR.ErrCode, node.Type)
 					retryNR.ErrCode = flow.ErrCodeOther
 				}
 
-				// 更新错误信息，回到链顶重新匹配
+				// Update the error and go back to the top of the chain to match again
 				activeNR = retryNR
 				currentErr = retryErr
 				currentCode = retryNR.ErrCode
@@ -802,8 +829,8 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 		}
 
 		// 2. skip
-		// 注意下面三处都用 activeNR：命中的是「当前这次」的错误码，
-		// 要改的状态与输出也必须落在同一条记录上（见 activeNR 的说明）。
+		// Note that all three branches below use activeNR: the matched code is "this attempt's", so the status and
+		// outputs to change have to land on the same record (see the note on activeNR).
 		if cfg.Skip != nil && matchCodes(cfg.Skip.Codes, currentCode, currentMsg, cfg.Skip.Patterns) {
 			activeNR.ErrorAction = flow.ErrorActionSkip
 			activeNR.Skip()
@@ -826,18 +853,19 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 				return nil
 			}
 			applyPost(activeNR, cfg.Post)
-			// 用记录上的值而不是循环开头的 locals：handler 脚本可以在返回值里改
-			// error_code / error_message，那些改动落在 activeNR 上，用 locals 会丢掉。
+			// Use the values on the record rather than the locals from the top of the loop: the handler script may
+			// change error_code / error_message in its return value, those changes land on activeNR, and using the
+			// locals would lose them.
 			return newExecError(activeNR.ErrCode, activeNR.ErrMsg)
 		}
 
-		// 4. 都没命中 → fail
+		// 4. nothing matched -> fail
 		applyPost(activeNR, cfg.Post)
 		return newExecError(activeNR.ErrCode, activeNR.ErrMsg)
 	}
 }
 
-// ---- 错误处理配置解析 ----
+// ---- on_error config parsing ----
 
 type OnErrorConfig struct {
 	Retry   *RetryRule
@@ -954,7 +982,7 @@ func parseStringSlice(v interface{}) []string {
 	return result
 }
 
-// ---- 匹配逻辑 ----
+// ---- matching ----
 
 func matchCodes(codes []string, errCode string, errMsg string, patterns []string) bool {
 
@@ -998,7 +1026,7 @@ func containsString(slice []string, s string) bool {
 	return false
 }
 
-// containsAction 判断节点能力声明里是否包含某个 on_error 动作。
+// containsAction reports whether a node's capability declaration includes an on_error action.
 func containsAction(actions []flow.ErrorAction, a flow.ErrorAction) bool {
 	for _, item := range actions {
 		if item == a {
@@ -1008,7 +1036,7 @@ func containsAction(actions []flow.ErrorAction, a flow.ErrorAction) bool {
 	return false
 }
 
-// ---- Handler 脚本执行 ----
+// ---- handler script execution ----
 
 func runHandlerScript(ctx *flow.ExecContext, cfg *HandlerRule,
 	node *flow.Node, nr *flow.NodeResult) (string, error) {
@@ -1028,8 +1056,8 @@ func runHandlerScript(ctx *flow.ExecContext, cfg *HandlerRule,
 		return "", err
 	}
 
-	// return 解析：string 兼容旧写法（"skip"/"fail"）；
-	// map 可携带 action + error_code / error_message（替代原 wf_set_error）。
+	// Return parsing: a string keeps the old forms ("skip"/"fail"); a map may carry action plus error_code /
+	// error_message (replacing wf_set_error).
 	action := "fail"
 	switch v := result.(type) {
 	case string:
@@ -1050,7 +1078,7 @@ func runHandlerScript(ctx *flow.ExecContext, cfg *HandlerRule,
 	return action, nil
 }
 
-// ---- Post 处理 ----
+// ---- post handling ----
 
 func applyPost(nr *flow.NodeResult, post *PostConfig) {
 	if post == nil {
@@ -1087,9 +1115,10 @@ func GetNodeByID(f *flow.Flow, id string) *flow.Node {
 	return f.NodeMap[id]
 }
 
-// GetStartNode 按节点类型查找工作流开始节点。
-// id == "1" 只是前端/工具生成时的约定，优先命中以保持既有流程的行为；
-// 缺失时按 type 兜底，避免把「开始节点」的身份绑死在字面量 id 上。
+// GetStartNode finds the workflow's start node by node type.
+// The id "1" is only a convention of the frontend and the generators; it is preferred so existing flows keep
+// their behaviour, and the type is the fallback — the identity of "the start node" must not be pinned to a
+// literal id.
 func GetStartNode(f *flow.Flow) *flow.Node {
 	if f.NodeMap == nil {
 		return nil

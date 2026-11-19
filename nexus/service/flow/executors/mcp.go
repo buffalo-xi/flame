@@ -18,15 +18,16 @@ import (
 
 var _ Executor = (*McpExecutor)(nil)
 
-// MCP 节点固定输出变量
+// The MCP node's fixed output variables
 var mcpFixedOutputVars = map[string]string{
-	"result":   "string",        // 调用结果（flattenResult.Content）
-	"progress": "array[string]", // 进度通知数组（每条完整原始 JSON 字符串）
-	"error":    "string",        // 调用出错信息
+	"result":   "string",        // the call result (flattenResult.Content)
+	"progress": "array[string]", // the progress notifications (each one the full raw JSON string)
+	"error":    "string",        // the call error message
 }
 
-// mcpReservedOutputVars 脚本不可写的固定变量集合（与 rpcReservedOutputVars 同口径）。
-// 这三个变量由执行器无条件写入（有没有 handler 都一样），脚本只能处理自定义变量。
+// mcpReservedOutputVars is the set of fixed variables a script may not write (same rule as
+// rpcReservedOutputVars). The executor writes these three unconditionally (handler or not), so a script only
+// deals with custom variables.
 var mcpReservedOutputVars = func() map[string]struct{} {
 	m := make(map[string]struct{}, len(mcpFixedOutputVars))
 	for k := range mcpFixedOutputVars {
@@ -37,8 +38,8 @@ var mcpReservedOutputVars = func() map[string]struct{} {
 
 type McpExecutor struct{}
 
-// progressCollector 收集 progress 通知的原始 JSON 字符串。
-// onProgress 在 SDK 后台读协程中并发回调，故 append 需加锁。
+// progressCollector collects the raw JSON strings of the progress notifications.
+// onProgress is called concurrently from the SDK's background reader goroutine, so append needs a lock.
 type progressCollector struct {
 	mu   sync.Mutex
 	list []string
@@ -63,26 +64,26 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		return failf(nr, flow.ErrCodeConfig, "node data or config is nil")
 	}
 
-	// 1. 解析 mcp 配置
+	// 1. Parse the mcp config
 	mcpCfg, ok := node.Data.Config["mcp"].(map[string]interface{})
 	if !ok {
 		return failf(nr, flow.ErrCodeConfig, "mcp config not found")
 	}
 
-	// 2. 初始化输出变量
+	// 2. Initialise the output variables
 	if outputs, ok := node.Data.Config["outputs"].(map[string]interface{}); ok {
 		nr.InitOutputVars(outputs)
 		nr.InitOutputBindings(outputs)
 	}
 
-	// 3. 解析输入变量并构建模板上下文
+	// 3. Resolve the input variables and build the template context
 	inputArgs, buildErr := resolveInputVars(node, ctx, processID, nr)
 	if buildErr != nil {
 		return failf(nr, flow.ErrCodeConfig, buildErr.Error())
 	}
 	tmplCtx := BuildScriptTemplateContext(nr, inputArgs)
 
-	// 4. 解析 connection_id 与 tool_name
+	// 4. Resolve connection_id and tool_name
 	connectionID, _ := mcpCfg["connection_id"].(string)
 	if strings.TrimSpace(connectionID) == "" {
 		return failf(nr, flow.ErrCodeConfig, "mcp connection_id must not be empty")
@@ -92,25 +93,26 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		return failf(nr, flow.ErrCodeConfig, "mcp tool_name must not be empty")
 	}
 
-	// 5. 解析 handler 配置（校验非 template）
+	// 5. Parse the handler config (and reject template)
 	handlerScript, handlerLang, handlerTimeout, handlerErr := parseHandler(mcpCfg, ctx)
 	if handlerErr != nil {
 		return failf(nr, flow.ErrCodeConfig, handlerErr.Error())
 	}
 	hasHandler := strings.TrimSpace(handlerScript) != ""
 
-	// 6. 渲染 arguments 模板
+	// 6. Render the arguments template
 	arguments, argErr := renderMcpArguments(mcpCfg, tmplCtx)
 	if argErr != nil {
 		return failf(nr, flow.ErrCodeConfig, argErr.Error())
 	}
 
-	// 是否订阅进度：节点级开关，默认关闭。
-	// 关闭时走不带 progressToken 的同步调用 —— progress 输出变量恒为空数组，
-	// 也不会让服务端把 agent 的思考/文本全量推一遍（每次调用都过一遍网，代价不小）。
+	// Whether to subscribe to progress: a node-level switch, off by default.
+	// When off it takes the synchronous path without a progressToken — the progress output variable stays an
+	// empty array, and the server is not made to push all of the agent's thinking / text (which crosses the
+	// network on every call and is not cheap).
 	wantProgress, _ := mcpCfg["progress"].(bool)
 
-	// 7. 查询连接
+	// 7. Look up the connection
 	authInfo := &auth.AuthInfo{Schema: ctx.Schema}
 	conn, connErr := mcpconnrepo.NewRepository().GetByID(authInfo, connectionID)
 	if connErr != nil {
@@ -120,7 +122,7 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		return failf(nr, flow.ErrCodeConfig, "the MCP connection is not enabled")
 	}
 
-	// 8. 收集器 + onProgress 回调
+	// 8. Collector plus the onProgress callback
 	coll := &progressCollector{}
 	onProgress := func(p *mcp.ProgressNotificationParams) {
 		if p == nil {
@@ -140,19 +142,22 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 			}
 			scriptInput := mergeInputs(nr, inputArgs, eventData)
 			if err := e.executeHandlerScript(ctx, nr, handlerLang, handlerScript, scriptInput, handlerTimeout); err != nil {
-				// 逐条 handler 执行错误：记录日志但不中断调用（progress 属基础设施输出）
+				// A per-notification handler failure: logged, but it does not abort the call (progress is
+				// infrastructure output)
 				nr.AddLogf("the progress handler failed: %s", err.ErrMsg)
 			}
 		}
 	}
 
-	// 9. 调用工具：订阅进度时带 token 并发接收 progress，否则同步一次拿结果
+	// 9. Call the tool: with progress subscription a token is sent and progress is received concurrently;
+	// otherwise one synchronous call returns the result
 	var (
 		res     *client.ToolResult
 		callErr error
 	)
-	// 祖先链经 ctx 交给 client：MCP 节点也可能调回本系统的 /service/mcp/{schema}，
-	// 不带链的话对端看不到「自己已在祖先里」。
+	// The ancestor chain is handed to the client through ctx: an MCP node may also call back into this
+	// system's /service/mcp/{schema}, and without the chain the peer cannot see that it is already an
+	// ancestor.
 	stdCtx := callchain.With(ctx.StdCtx, ctx.CallChain)
 	if wantProgress {
 		res, callErr = client.InvokeWithProgress(stdCtx, conn, toolName, arguments, onProgress)
@@ -160,7 +165,7 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		res, callErr = client.InvokeSync(stdCtx, conn, toolName, arguments)
 	}
 
-	// 10. CallTool 返回后：写 progress 数组（定稿，覆盖语义）
+	// 10. After CallTool returns: write the progress array (final, overwrite semantics)
 	progressSnapshot := coll.snapshot()
 	if progressSnapshot != nil {
 		nr.SetOutputVarWithFire("progress", progressSnapshot)
@@ -175,7 +180,7 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		return failf(nr, code, callErr.Error())
 	}
 
-	// 11. 收尾（与 rpc.finishRpcResult 同口径：固定变量一律由执行器写）
+	// 11. Finish (same rule as rpc.finishRpcResult: the fixed variables are always written by the executor)
 	content := ""
 	isError := false
 	var structured interface{}
@@ -188,14 +193,16 @@ func (e *McpExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID 
 		content, isError, structured, progressSnapshot)
 }
 
-// finishMcpResult 收尾：固定输出变量一律由执行器写（与 rpc.finishRpcResult 同口径），
-// 有没有 handler 都一样；handler 只做可选后处理，且只能写自定义输出变量。
+// finishMcpResult finishes the node: the fixed output variables are always written by the executor (the same
+// rule as rpc.finishRpcResult), handler or not; the handler is optional post-processing and may only write
+// custom output variables.
 //
-// 这条策略是从 RPC 抄过来的，原因也一样：把 result/error 的写入义务推给 handler 配置，
-// 脚本一旦忘了写就是永久空值，而且「这个变量的值是远端返回的还是脚本编的」在界面上看不出来。
+// The policy was copied from RPC for the same reason: pushing the obligation to write result/error onto the
+// handler config means a script that forgets makes the variable permanently empty, and the UI cannot tell
+// "did a remote return this value or did a script invent it".
 //
-// isError=true 为工具自身的业务错误（写 error 变量，节点仍 success）；
-// 调用异常已在调用方处理为 failed。
+// isError=true is the tool's own business error (write the error variable, the node still succeeds); a call
+// exception was already handled as failed by the caller.
 func (e *McpExecutor) finishMcpResult(
 	ctx *flow.ExecContext,
 	nr *flow.NodeResult,
@@ -208,14 +215,15 @@ func (e *McpExecutor) finishMcpResult(
 	structured interface{},
 	progressSnapshot []string,
 ) error {
-	// 1. 固定变量固定由节点写
+	// 1. The fixed variables are always written by the node
 	if isError {
 		nr.SetOutputVarWithFire("error", result)
 	} else {
 		nr.SetOutputVarWithFire("result", result)
 	}
 
-	// 2. 脚本可选收尾后处理（写自定义变量）；固定变量已在 mcpReservedOutputVars 中拦下
+	// 2. Optional script post-processing (custom variables); the fixed ones are caught by
+	// mcpReservedOutputVars
 	if hasHandler {
 		eventData := map[string]interface{}{
 			"done":     true,
@@ -237,9 +245,9 @@ func (e *McpExecutor) finishMcpResult(
 	return nil
 }
 
-// progressToMap 将 ProgressNotificationParams 转为结构化 map（供脚本 eventData）。
-// meta 里带 category（thinking / text / tool_call / tool_result），
-// handler 可据此分流；与 rpcProgressToMap 保持同一口径。
+// progressToMap turns ProgressNotificationParams into a structured map (for the script's eventData).
+// meta carries category (thinking / text / tool_call / tool_result) so a handler can route on it; it matches
+// rpcProgressToMap.
 func progressToMap(p *mcp.ProgressNotificationParams) map[string]interface{} {
 	m := map[string]interface{}{
 		"progress": p.Progress,
@@ -257,20 +265,20 @@ func progressToMap(p *mcp.ProgressNotificationParams) map[string]interface{} {
 	return m
 }
 
-// renderMcpArguments 渲染 arguments 模板。arguments 配置为 JSON 对象字符串，
-// 字符串值支持 {{.input.xxx}} 模板；渲染后整体 JSON 解码为 map[string]any。
+// renderMcpArguments renders the arguments template. The arguments config is a JSON object string whose string
+// values support the {{.input.xxx}} template; the rendered JSON is decoded into a map[string]any as a whole.
 func renderMcpArguments(mcpCfg map[string]interface{}, tmplCtx map[string]interface{}) (map[string]interface{}, error) {
 	raw, exists := mcpCfg["arguments"]
 	if !exists || raw == nil {
 		return map[string]interface{}{}, nil
 	}
 
-	// 若已是对象（map），递归渲染字符串值
+	// Already an object (map): render the string values recursively
 	if obj, ok := raw.(map[string]interface{}); ok {
 		return renderMcpArgumentsMap(obj, tmplCtx)
 	}
 
-	// 若为 JSON 字符串，先模板渲染再解码
+	// A JSON string: render the template first, then decode
 	if str, ok := raw.(string); ok {
 		rendered, err := RenderTemplate(str, tmplCtx)
 		if err != nil {
@@ -289,7 +297,7 @@ func renderMcpArguments(mcpCfg map[string]interface{}, tmplCtx map[string]interf
 	return nil, fmt.Errorf("the arguments config is malformed; expected a JSON object or an object string")
 }
 
-// renderMcpArgumentsMap 递归渲染对象内字符串值的模板。
+// renderMcpArgumentsMap renders the templates of the string values inside an object, recursively.
 func renderMcpArgumentsMap(obj map[string]interface{}, tmplCtx map[string]interface{}) (map[string]interface{}, error) {
 	out := make(map[string]interface{}, len(obj))
 	for k, v := range obj {
@@ -323,7 +331,7 @@ func renderMcpValue(v interface{}, tmplCtx map[string]interface{}) (interface{},
 	}
 }
 
-// executeHandlerScript 执行 handler 脚本并处理结果（与 HTTP/LLM 一致）。
+// executeHandlerScript runs the handler script and handles its result (same as HTTP/LLM).
 func (e *McpExecutor) executeHandlerScript(
 	ctx *flow.ExecContext, nr *flow.NodeResult,
 	lang, script string, inputs map[string]interface{}, timeout int,
@@ -336,8 +344,9 @@ func (e *McpExecutor) executeHandlerScript(
 		}
 	}
 
-	// 逐 chunk 调用：return 的 string 字段追加（流式累积）、非 string 覆盖（快照）
-	// 固定变量（result/progress/error）不允许脚本写，由执行器自己写。
+	// A per-chunk call: a returned string field is appended (streaming accumulation) and a non-string field
+	// overwritten (a snapshot). The fixed variables (result/progress/error) are off-limits to scripts and
+	// written by the executor itself.
 	if scriptResult != nil {
 		if err := applyHandlerAppend(nr, scriptResult, mcpReservedOutputVars); err != nil {
 			return &scriptExecError{
