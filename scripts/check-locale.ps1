@@ -12,8 +12,9 @@
 
     2. Every user-visible error carries a machine-readable code. The frontend resolves `error` through
        locales/<locale>/error.json and falls back to `msg` only when no entry exists (see
-       desktop/src/locales/index.js formatError). A handler that calls ErrJSON - no code at all - always
-       leaks its hardcoded msg into the UI, and so does an ErrCode whose code is missing from a bundle.
+       desktop/src/locales/index.js formatError). A handler without a code always leaks its hardcoded msg
+       into the UI, and so does an ErrCode whose code is missing from a bundle. The ErrJSON helper was
+       removed from tools/xhttp in 2026-11; section 3 below stays as a tripwire in case it comes back.
 
     This is a baseline, not a gate. Regex cannot follow variables or helper wrappers, so the numbers are
     a lower bound and the lists are meant to be read by a human, not asserted on by CI.
@@ -125,12 +126,19 @@ foreach ($name in $Module) {
         }
 
         # Backend text handed to the UI as a display field rather than through the error envelope.
+        # Only exported-style fields (Label / Detail / Reason) and JSON keys count: a lowercase local such as
+        # `reason = "未启用"` is prompt-building text for the model, not something a user ever sees.
+        # Test files are skipped here: a JSON fixture with a Chinese label is data, not a display field.
         $lineNo = 0
-        foreach ($line in ($raw -split "`r?`n")) {
-            $lineNo++
-            if ($line -match '^\s*//') { continue }
-            if ($line -match '(Label|Detail|reason|Reason)\s*[:=]\s*"[^"]*' + $han) {
-                $displayHits += ("{0}:{1}  {2}" -f $rel, $lineNo, $line.Trim())
+        if ($rel -notlike '*_test.go') {
+            foreach ($line in ($raw -split "`r?`n")) {
+                $lineNo++
+                if ($line -match '^\s*//') { continue }
+                $displayHit = ($line -cmatch '(Label|Detail|Reason)\s*[:=]\s*"[^"]*' + $han) -or
+                              ($line -match '"(label|detail|reason|display|message)"\s*:\s*"[^"]*' + $han)
+                if ($displayHit) {
+                    $displayHits += ("{0}:{1}  {2}" -f $rel, $lineNo, $line.Trim())
+                }
             }
         }
     }
@@ -159,7 +167,7 @@ function Show-Ranking {
 
 Show-Ranking -Table $commentLines -Title '1. Chinese comments' -Unit 'lines'
 Show-Ranking -Table $otherLines -Title '2. Chinese outside comments (strings, diagnostics, fixtures)' -Unit 'lines'
-Show-Ranking -Table $errJSON -Title '3. ErrJSON calls (no error code, msg always reaches the UI)' -Unit 'calls'
+Show-Ranking -Table $errJSON -Title '3. ErrJSON calls (helper removed; expected to stay at 0)' -Unit 'calls'
 Show-Ranking -Table $msgChinese -Title '4. ErrCode calls whose line contains Chinese (msg is meant to be English)' -Unit 'calls'
 
 Write-Host ''
@@ -203,7 +211,7 @@ if ($Module.Count -eq 4) {
         foreach ($key in $bundles[$locale].Keys) { $allLocaleKeys[$key] = $true }
     }
     $unused = @($allLocaleKeys.Keys | Where-Object { -not $codes.ContainsKey($_) } | Sort-Object)
-    Write-Host ("  entries never emitted: {0}" -f $unused.Count) -ForegroundColor Yellow
+    Write-Host ("  entries never emitted: {0} (dynamic codes such as quota.* land here; verify before pruning)" -f $unused.Count) -ForegroundColor Yellow
     if ($Detailed) {
         foreach ($key in $unused) { Write-Host ("    {0}" -f $key) -ForegroundColor DarkGray }
     }
