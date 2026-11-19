@@ -16,29 +16,36 @@ import (
 )
 
 // ============================================================================
-// 全局变量（{schema}.global_vars）
+// Global variables ({schema}.global_vars)
 //
-// 作用域是「本租户内全局」：所有智能体 / 工作流 / 技能都能引用，**不跨租户**。
-// 与 flows.env_vars（环境变量，单流程）、flows.flow_vars（流程变量）同属
-// <scope>_vars 一族；全局作用域的 scope 就是 global。
+// The scope is "global within this tenant": every agent / flow / skill may
+// reference them, and they never cross tenants. Together with flows.env_vars
+// (environment variables, one flow) and flows.flow_vars (flow variables) they
+// belong to the <scope>_vars family; the global scope is simply "global".
 //
-// 安全口径：
-//   - kind=secret 的值在库里是密文（仓储层加解密，见 shared/secureval），
-//     接口出参一律掩码（回 has_value，不回明文）；
-//   - 导出资产包永远不带值 —— 包里只有引用名，结构上就带不出去。
+// Security rules:
+//   - a kind=secret value is stored encrypted (the repository encrypts and
+//     decrypts, see shared/secureval) and is always masked on the way out
+//     (has_value is returned, never the plaintext);
+//   - an exported asset pack never carries values - it holds reference names
+//     only, so a secret cannot leave by construction.
 // ============================================================================
 
 var store = globalvarsrepo.NewRepository()
 
-// nameRe 变量名字符集：与实体名同一套（字母数字下划线，不能数字开头）。
-// 它会被写进节点输入的 source_key 与文档里的 ${global_vars.名字}，
-// 带点 / 空格 / 中文都会让模板解析或文档替换失败。
+// nameRe is the character set for variable names: the same one as entity names
+// (letters, digits and underscores, not starting with a digit). The name ends
+// up in a node's source_key and in the ${global_vars.<name>} form used by
+// documents, so a dot, a space or a non-ASCII character would break template
+// parsing or document substitution.
 var nameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 
-// secretMask 掩码占位：值无论多长都回这一串，避免从长度反推内容
+// secretMask is the masking placeholder: any value returns this string, so its
+// length cannot hint at the content.
 const secretMask = "••••••"
 
-// toJSON 出参统一走这里：secret 不回明文，只告诉前端「有没有值」。
+// toJSON is the single exit point for responses: a secret is never returned in
+// plaintext, only "has a value" is reported.
 func toJSON(v *globalvarsrepo.GlobalVar) gin.H {
 	if v == nil {
 		return gin.H{}
@@ -51,7 +58,8 @@ func toJSON(v *globalvarsrepo.GlobalVar) gin.H {
 		"has_value":   v.Value != "",
 	}
 	if v.Kind == globalvarsrepo.KindSecret {
-		// 有值给掩码，没值留空 —— 前端据此区分「已设置」与「还没设」
+		// With a value the mask is returned, without one it stays empty - that is how
+		// the frontend tells "already set" from "not set yet".
 		if v.Value != "" {
 			out["value"] = secretMask
 		} else {
@@ -63,7 +71,7 @@ func toJSON(v *globalvarsrepo.GlobalVar) gin.H {
 	return out
 }
 
-// ListGlobalVars 列出本租户的全部全局变量（按 name 升序）。
+// ListGlobalVars lists every global variable of the tenant, by name ascending.
 func ListGlobalVars(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
@@ -71,7 +79,7 @@ func ListGlobalVars(c *gin.Context) {
 	}
 	list, err := store.List(info.Schema)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取全局变量失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read global variables: "+err.Error(), "")
 		return
 	}
 	items := make([]gin.H, 0, len(list))
@@ -81,10 +89,11 @@ func ListGlobalVars(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"items": items}, "")
 }
 
-// saveRequest 新建 / 覆盖一个变量。
+// saveRequest creates or overwrites a variable.
 //
-// value 用 *string：secret 类型下「不传或空串」表示**不修改原值**
-// （界面上不回显明文，用户不改密码时提交的必然是空）。
+// value is a *string: for the secret kind "absent or empty" means **keep the
+// current value** (the plaintext is never echoed back, so a user who does not
+// change the password necessarily submits an empty string).
 type saveRequest struct {
 	Name        string  `json:"name"`
 	Value       *string `json:"value"`
@@ -92,7 +101,7 @@ type saveRequest struct {
 	Description string  `json:"description"`
 }
 
-// UpsertGlobalVar 新建或覆盖一个全局变量（按 name）。
+// UpsertGlobalVar creates or overwrites a global variable by name.
 func UpsertGlobalVar(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
@@ -101,12 +110,12 @@ func UpsertGlobalVar(c *gin.Context) {
 
 	var req saveRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "请求格式错误: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid request body: "+err.Error(), "")
 		return
 	}
 	name := strings.TrimSpace(req.Name)
 	if !nameRe.MatchString(name) {
-		xhttp.ErrCode(c, "globalvar.invalid_name", nil, "变量名只能用字母、数字、下划线，不能以数字开头（≤64）", "")
+		xhttp.ErrCode(c, "globalvar.invalid_name", nil, "variable names may only contain letters, digits and underscores, and must not start with a digit (max 64)", "")
 		return
 	}
 
@@ -118,13 +127,13 @@ func UpsertGlobalVar(c *gin.Context) {
 	case globalvarsrepo.KindText, globalvarsrepo.KindSecret,
 		globalvarsrepo.KindNumber, globalvarsrepo.KindBool:
 	default:
-		xhttp.ErrCode(c, "globalvar.invalid_type", nil, "类型只能是 text / secret / number / bool", "")
+		xhttp.ErrCode(c, "globalvar.invalid_type", nil, "kind must be text / secret / number / bool", "")
 		return
 	}
 
 	prev, err := store.Get(info.Schema, name)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "读取全局变量失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read global variables: "+err.Error(), "")
 		return
 	}
 
@@ -132,7 +141,8 @@ func UpsertGlobalVar(c *gin.Context) {
 	if req.Value != nil {
 		value = *req.Value
 	}
-	// secret + 空值 + 已存在：保留原值（界面上不回显明文，空提交即「不改」）
+	// secret + empty value + already exists: keep the current value (the plaintext
+	// is never echoed back, so an empty submission means "unchanged").
 	if kind == globalvarsrepo.KindSecret && value == "" && prev != nil && prev.Kind == globalvarsrepo.KindSecret {
 		value = prev.Value
 	}
@@ -150,24 +160,28 @@ func UpsertGlobalVar(c *gin.Context) {
 		UpdatedBy:   xsql.UUID(info.ID),
 	}
 	if err := store.Upsert(info.Schema, row); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "保存全局变量失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to save the global variable: "+err.Error(), "")
 		return
 	}
 
-	// 写后失效：本实例立刻生效；别的实例靠 5s TTL 自然过期
+	// Invalidate after the write: this instance takes effect at once, other
+	// instances expire naturally on the 5s TTL.
 	varsvc.Invalidate(info.Schema)
 
 	xhttp.OkJSON(c, "Success", gin.H{"variable": toJSON(row)}, "")
 }
 
-// DeleteGlobalVar 删除一个全局变量。
+// DeleteGlobalVar deletes a global variable.
 //
-// 默认拦「仍被引用」：变量删掉后，引用它的节点与文档要到运行期才失败，
-// 而那往往是很久以后的一次调用。删除这一刻是唯一能把「会坏掉什么」说清楚的机会，
-// 所以先扫一遍引用面（ScanUsage），有引用就拒绝并列出位置。
+// By default it refuses while the variable is still referenced: once deleted,
+// the nodes and documents that reference it only fail at run time, often on a
+// call much later. The moment of deletion is the only chance to say what will
+// break, so the references are scanned first (ScanUsage) and the delete is
+// refused with the locations listed.
 //
-// force=1 才真删：留着是因为「变量本身就建错了，引用是残留」这种情况确实存在，
-// 但那必须是人在看过清单之后按下的第二下。
+// force=1 actually deletes: the escape hatch exists because "the variable
+// itself was created by mistake, the references are leftovers" does happen, but
+// it has to be a second press after reading the list.
 func DeleteGlobalVar(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {
@@ -175,20 +189,21 @@ func DeleteGlobalVar(c *gin.Context) {
 	}
 	name := strings.TrimSpace(c.Param("name"))
 	if name == "" {
-		xhttp.ErrCode(c, "globalvar.name_required", nil, "变量名不能为空", "")
+		xhttp.ErrCode(c, "globalvar.name_required", nil, "variable name is required", "")
 		return
 	}
 
-	// 扫不出来不等于没有引用：错误一律拒绝删除，不拿「未知」当「安全」
+	// No hits does not mean no references: on error the delete is refused,
+	// "unknown" is never treated as "safe".
 	if c.Query("force") != "1" {
 		hits, uerr := ScanUsage(info.Schema, name)
 		if uerr != nil {
-			xhttp.ErrCode(c, "globalvar.in_use", nil, "无法确认引用面，已拒绝删除（确认要删请带 force=1）: "+uerr.Error(), "")
+			xhttp.ErrCode(c, "globalvar.in_use", nil, "cannot determine the reference surface, deletion refused (pass force=1 to delete anyway): "+uerr.Error(), "")
 			return
 		}
 		if len(hits) > 0 {
 			xhttp.ErrCode(c, "globalvar.referenced", gin.H{"name": name, "count": len(hits)},
-				fmt.Sprintf("「%s」仍被 %d 处引用：%s。删除后这些地方运行时会直接失败；确认要删请带 force=1",
+				fmt.Sprintf("%q is still referenced in %d place(s): %s. Those will fail at run time once it is deleted; pass force=1 to delete anyway",
 					name, len(hits), describeHits(hits)), "")
 			return
 		}
@@ -196,11 +211,11 @@ func DeleteGlobalVar(c *gin.Context) {
 
 	removed, err := store.Delete(info.Schema, name)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "删除全局变量失败: "+err.Error(), "")
+		xhttp.ErrCode(c, "common.internal", nil, "failed to delete the global variable: "+err.Error(), "")
 		return
 	}
 	if !removed {
-		xhttp.ErrCode(c, "globalvar.not_found", gin.H{"name": name}, "全局变量不存在: "+name, "")
+		xhttp.ErrCode(c, "globalvar.not_found", gin.H{"name": name}, "global variable not found: "+name, "")
 		return
 	}
 
@@ -208,22 +223,23 @@ func DeleteGlobalVar(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": name}, "")
 }
 
-// validateValue 存之前把类型错误拦下：运行期才发现「声明 number 却存了 abc」，
-// 排查成本远高于保存时一句报错。
+// validateValue rejects a type mismatch before it is stored: discovering at run
+// time that a variable declared as number holds "abc" costs far more to debug
+// than one error at save time.
 func validateValue(name, kind, value string) error {
 	switch kind {
 	case globalvarsrepo.KindNumber:
 		if strings.TrimSpace(value) == "" {
-			return nil // 空 = 0，与 resolve 的取法一致
+			return nil // empty means 0, matching how resolve reads it
 		}
 		if !isNumber(strings.TrimSpace(value)) {
-			return fmt.Errorf("变量 %s 声明为 number，值 %q 不是数字", name, value)
+			return fmt.Errorf("variable %s is declared as number but %q is not a number", name, value)
 		}
 	case globalvarsrepo.KindBool:
 		switch strings.ToLower(strings.TrimSpace(value)) {
 		case "", "true", "false", "0", "1", "yes", "no", "on", "off":
 		default:
-			return fmt.Errorf("变量 %s 声明为 bool，值 %q 不是布尔（true/false/1/0/yes/no/on/off）", name, value)
+			return fmt.Errorf("variable %s is declared as bool but %q is not a boolean (true/false/1/0/yes/no/on/off)", name, value)
 		}
 	}
 	return nil
@@ -237,7 +253,7 @@ func isNumber(s string) bool {
 	return err == nil
 }
 
-// authInfo 取当前登录租户（管理端中间件已注入）。
+// authInfo returns the signed-in tenant (injected by the admin middleware).
 func authInfo(c *gin.Context) (*auth.AuthInfo, bool) {
 	value, exists := c.Get("authInfo")
 	if !exists {
