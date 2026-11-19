@@ -202,8 +202,8 @@ func TestJSONB(t *testing.T) {
 		t.Error("invalid JSON should be rejected")
 	}
 
-	// NULL, the literal null and an empty object all read back as "no data".
-	for _, src := range []interface{}{nil, []byte("null"), []byte("{}"), []byte("")} {
+	// NULL, the literal null and empty data all read back as "no data".
+	for _, src := range []interface{}{nil, []byte("null"), []byte("")} {
 		var j JSONB
 		if err := j.Scan(src); err != nil || !j.IsNil() {
 			t.Errorf("scan %v: %v %v", src, err, j.Data)
@@ -211,6 +211,19 @@ func TestJSONB(t *testing.T) {
 		if v, err := j.Value(); err != nil || v != nil {
 			t.Errorf("value of %v: %v %v", src, err, v)
 		}
+	}
+
+	// An empty object is a value, not a NULL: NOT NULL columns store {} and
+	// must read back as {}, otherwise every edit rewrites them as NULL.
+	var empty JSONB
+	if err := empty.Scan([]byte("{}")); err != nil || empty.IsNil() {
+		t.Fatalf("scan empty object: %v %v", err, empty.Data)
+	}
+	if v, err := empty.Value(); err != nil || string(v.([]byte)) != "{}" {
+		t.Fatalf("empty object round trip: %v %v", err, v)
+	}
+	if out, err := empty.MarshalJSON(); err != nil || string(out) != "{}" {
+		t.Fatalf("empty object marshal: %v %s", err, out)
 	}
 
 	// A scalar survives a database round trip.

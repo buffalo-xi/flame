@@ -82,8 +82,8 @@ func (r *PostgresRepository) Create(schema string, s *models.Skill) (string, err
 // Update 按 id 更新 name/description/metadata/status/updated_by，
 // 以及 user_invocable/command_dispatch/command_tool。
 func (r *PostgresRepository) Update(schema string, s *models.Skill) error {
-	// 与 Create 同口径的兜底：xsql.JSONB 的 Scan 会把库里的 '{}' 读成 nil（见 tools/xsql/sql.go），
-	// 而 Value() 又把 nil 写回成 SQL NULL。少了这一步，任何一次编辑都会让 metadata 从 '{}' 退化成 NULL。
+	// 与 Create 同口径的兜底：metadata 列是 NOT NULL，而 xsql.JSONB 的 nil 会被 Value()
+	// 写成 SQL NULL。少了这一步，任何一次编辑都会撞约束。
 	if s.Metadata.IsNil() {
 		s.Metadata = xsql.JSONB{Data: map[string]any{}}
 	}

@@ -3,7 +3,6 @@ package xsql
 import (
 	"database/sql/driver"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -398,60 +397,12 @@ func (e Int) Int() int {
 	return int(e)
 }
 
-// JSON is a custom jsonb type.
-type JSON []byte
-
-// MarshalJSON serialises for the frontend.
-func (j JSON) MarshalJSON() ([]byte, error) {
-	if len(j) == 0 {
-		return []byte("null"), nil
-	}
-	return j, nil
-}
-
-// UnmarshalJSON deserialises data coming from the frontend.
-func (j *JSON) UnmarshalJSON(data []byte) error {
-	if j == nil {
-		return errors.New("xsql.JSON: unmarshal on nil pointer")
-	}
-	*j = append((*j)[0:0], data...)
-	return nil
-}
-
-// Value writes the value into the database.
-func (j JSON) Value() (driver.Value, error) {
-	if len(j) == 0 {
-		return nil, nil
-	}
-	return []byte(j), nil
-}
-
-// Scan reads a jsonb column from the database.
-func (j *JSON) Scan(src any) error {
-	if src == nil {
-		*j = JSON("null")
-		return nil
-	}
-
-	var bytes []byte
-	switch v := src.(type) {
-	case []byte:
-		bytes = v
-	case string:
-		bytes = []byte(v)
-	default:
-		return fmt.Errorf("unsupported type: %T", src)
-	}
-
-	*j = append((*j)[0:0], bytes...)
-	return nil
-}
-
 // JSONB is a custom JSONB type dedicated to PostgreSQL's jsonb columns.
 // Properties:
-// 1. a database NULL becomes nil
-// 2. JSON serialisation / deserialisation is supported
-// 3. conversion to and from Go types is supported
+// 1. a database NULL becomes nil; IsNil reports exactly that case
+// 2. an empty object is an ordinary value: it is read and written as {}
+// 3. JSON serialisation / deserialisation is supported
+// 4. conversion to and from Go types is supported
 type JSONB struct {
 	Data interface{}
 }
@@ -485,8 +436,10 @@ func (j *JSONB) Scan(value interface{}) error {
 
 	s := string(bytes)
 
-	// A "null" string or an empty object means nil.
-	if s == "null" || s == "{}" {
+	// The literal null means nil. An empty object is a value, not a NULL: the
+	// NOT NULL jsonb columns store {} and must read back as {} so that IsNil
+	// really means "the column was NULL".
+	if s == "null" {
 		j.Data = nil
 		return nil
 	}
