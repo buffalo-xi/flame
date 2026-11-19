@@ -93,3 +93,7 @@ Verification:
 
 - changing one service only: run `go build ./...` in that directory
 - changing `tools/`: build all three — `nexus`, `sandboxd` and `sandboxg` — otherwise downstream compile errors stay hidden
+- changing `nexus/platform/sql/`: run `powershell -File scripts/verify-sql.ps1` against a local PostgreSQL. SQL never reaches
+  the compiler, so a mangled identifier (2026-11: every `s` / `c` silently became `o`, e.g. `platform.tenant_oapabilitieo`)
+  survives `go build`, review and the locale checks, and only fails when someone runs it on a fresh environment. The script
+  creates a throwaway database, runs every script that can run on an empty schema in dependency order, and drops it again.
