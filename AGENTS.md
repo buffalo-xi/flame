@@ -71,8 +71,9 @@ and both `README` files link to them.
 English is the source: write the English version first, then align the Chinese mirror. Editing one version obliges you to
 update the other in the same commit — a half-updated pair is worse than a single language.
 
-Documents not yet migrated (`workspace-layout-and-supervisor-power.md`) stay Chinese until it is translated; do not
-half-translate a file in place.
+Every document under `nexus/docs/` now follows this shape (`asset-sharing`, `design-highlights`, `error-codes`,
+`i18n-plan`, `sandbox-design`, `tenant-template-pack`, `terminology`, `workspace-layout-and-supervisor-power`). Do not
+half-translate a file in place — add or update the `.zh.md` mirror in the same commit.
 
 ## Module map
 

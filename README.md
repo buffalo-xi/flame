@@ -162,6 +162,7 @@ desktop/          Vue 3 admin console
 - `nexus/docs/sandbox-design.md` — sandbox isolation design and the three execution channels
   ([中文](nexus/docs/sandbox-design.zh.md))
 - `nexus/docs/workspace-layout-and-supervisor-power.md` — tenant workspace layout
+  ([中文](nexus/docs/workspace-layout-and-supervisor-power.zh.md))
 - `nexus/docs/design-highlights.md` — design highlights: call-chain recursion, multi-tenant quotas, endpoint model
   ([中文](nexus/docs/design-highlights.zh.md))
 - `nexus/docs/i18n-plan.md` — the layered bilingual plan, its costs and pitfalls ([中文](nexus/docs/i18n-plan.zh.md))
