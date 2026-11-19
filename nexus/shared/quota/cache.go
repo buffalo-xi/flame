@@ -7,7 +7,7 @@ import (
 	"flame/nexus/shared/redis"
 )
 
-// rowCacheKey 返回某租户原始行的缓存键（tenantID 为空表示系统行）。
+// rowCacheKey returns the cache key of one tenant's raw row (an empty tenantID means the system row).
 func rowCacheKey(tenantID string) string {
 	if tenantID == "" {
 		return "quota:row:__system__"
@@ -15,7 +15,7 @@ func rowCacheKey(tenantID string) string {
 	return "quota:row:" + tenantID
 }
 
-// rowDTO 缓存值：*int32 / *int64 表达 NULL（未设置），保留 -1 语义。
+// rowDTO is the cached value: *int32 / *int64 express NULL (not set), preserving the -1 semantics.
 type rowDTO struct {
 	MaxAgents              *int32 `json:"max_agents"`
 	MaxSkills              *int32 `json:"max_skills"`
@@ -24,12 +24,12 @@ type rowDTO struct {
 	MaxUserSessions        *int32 `json:"max_user_sessions"`
 }
 
-// loadRowCached 读一行：Redis 命中直接返回；未命中或 Redis 不可用则回源 DB 并回填。
+// loadRowCached reads one row: a Redis hit returns directly; a miss or an unavailable Redis goes back to the database and refills the cache.
 func loadRowCached(tenantID string) *row {
 	key := rowCacheKey(tenantID)
 
 	if v, ok := cacheGet(key); ok {
-		if v == "null" { // 已缓存「该行不存在」
+		if v == "null" { // "the row does not exist" is cached
 			return nil
 		}
 		var dto rowDTO
@@ -40,19 +40,19 @@ func loadRowCached(tenantID string) *row {
 
 	r, err := loadRow(tenantID)
 	if err != nil {
-		return nil // 真实 DB 错误：不缓存，交给 Resolve 走 fallback
+		return nil // a real DB error: do not cache it, let Resolve fall back
 	}
-	cacheSet(key, r) // r 可能为 nil（无该行）→ 存 "null" 标记
+	cacheSet(key, r) // r may be nil (no such row) -> store the "null" marker
 	return r
 }
 
 func cacheGet(key string) (string, bool) {
-	// 未启用/未创建，或最近一次 Ping 判定不可用 → 直接走 DB，避免等 Redis 超时
+	// Disabled / never created, or the last Ping judged it unavailable -> go straight to the DB instead of waiting out a Redis timeout
 	if redis.Client == nil || !redis.IsConnected() {
 		return "", false
 	}
 	v, err := redis.Client.Get(key)
-	if err != nil || v == "" { // xredis 把 key-missing 映射为 ("", nil)
+	if err != nil || v == "" { // xredis maps key-missing to ("", nil)
 		return "", false
 	}
 	return v, true
@@ -62,14 +62,14 @@ func cacheSet(key string, r *row) {
 	if redis.Client == nil || !redis.IsConnected() {
 		return
 	}
-	b, err := json.Marshal(r.toDTO()) // nil → "null"
+	b, err := json.Marshal(r.toDTO()) // nil -> "null"
 	if err != nil {
 		return
 	}
 	_ = redis.Client.Set(key, b, redis.DefaultCacheTTL)
 }
 
-// Invalidate 主动失效某租户的配额缓存（平台侧改完该租户行后调用）。
+// Invalidate actively invalidates one tenant's quota cache (called after the platform side changes that tenant's row).
 func Invalidate(tenantID string) {
 	if redis.Client == nil {
 		return
@@ -77,8 +77,9 @@ func Invalidate(tenantID string) {
 	_ = redis.Client.Del(rowCacheKey(tenantID))
 }
 
-// InvalidateAll 失效系统行缓存（平台侧改完系统行后调用）。
-// 缓存存的是「原始行」，系统行一变只需删这一个键，各租户下次 Resolve 会自动重新合并。
+// InvalidateAll invalidates the system row's cache (called after the platform side changes the system row).
+// What the cache holds is the **raw row**, so changing the system row only needs this one key deleted; each tenant's next Resolve merges again
+// automatically.
 func InvalidateAll() {
 	if redis.Client == nil {
 		return
@@ -86,7 +87,7 @@ func InvalidateAll() {
 	_ = redis.Client.Del(rowCacheKey(""))
 }
 
-// ---- DTO <-> row 转换 ----
+// ---- DTO <-> row conversion ----
 
 func (r *row) toDTO() *rowDTO {
 	if r == nil {

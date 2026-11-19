@@ -12,27 +12,30 @@ import (
 )
 
 const (
-	// evictMaxPerCall 单次请求最多删多少个文件：删太多会把上传/写文件拖成秒级，
-	// 剩下的交给下一次写入继续淘汰（配额是渐进的，不需要一次清空）。
+	// evictMaxPerCall caps how many files one request deletes: deleting too many would drag an upload / write into the seconds, and the rest is
+	// left to the next write (the quota is gradual, there is no need to empty it in one go).
 	evictMaxPerCall = 50
-	// evictSkipRecent 最近这段时间内改过的文件不删 —— 很可能就是 agent 正在写的产物。
+	// evictSkipRecent spares files modified within this window - they are very likely the artefact the agent is writing right now.
 	evictSkipRecent = 5 * time.Minute
 )
 
-// ExceededError 配额不足。调用方（HTTP handler）据此返回 507，
-// 带上 scope / metric / used / limit 让前端能给出「去清理」这类引导。
+// ExceededError means the quota is exhausted. The caller (an HTTP handler) turns it into a 507 carrying scope / metric / used / limit
+// (plus evicted, when the pre-check deleted files), so the frontend can guide the user with something like "go clean up".
 type ExceededError struct {
 	Scope  string // session | user
 	Metric string // bytes | sessions
 	Used   int64
 	Limit  int64
+	// Evicted lists the files the pre-check deleted before giving up (paths relative to the session root). The caller
+	// reports them: "space is full" alone leaves the user wondering where those files went.
+	Evicted []string
 }
 
 func (e *ExceededError) Error() string {
 	if e.Metric == "sessions" {
-		return fmt.Sprintf("会话数量已达上限（%d），请删除不再使用的会话后再试", e.Limit)
+		return fmt.Sprintf("session count limit reached (%d): delete sessions you no longer need and try again", e.Limit)
 	}
-	return fmt.Sprintf("会话工作区空间已满（%s / %s），请清理不再需要的文件后重试",
+	return fmt.Sprintf("session workspace is full (%s / %s): clean up files you no longer need and try again",
 		humanBytes(e.Used), humanBytes(e.Limit))
 }
 
@@ -58,117 +61,141 @@ type fileInfo struct {
 	mod  time.Time
 }
 
-// Admit 写入前的配额预检：必要时扫描会话目录并按「最旧优先」淘汰，直到这次写入放得下。
+// resolveSessionStorage and resolveSessions are seams: production reads them from the database (user override -> tenant
+// value, clamped), while tests swap in a constant to exercise the admission logic without a database.
+var (
+	resolveSessionStorage = ResolveUserSessionStorage
+	resolveSessions       = ResolveUserSessions
+)
+
+// Admit is the quota pre-check before a write: when necessary it scans the session directory and evicts oldest-first until this write fits.
 //
-// scopeKey 是会话工作区的存储相对路径（paths.UserSessionKey 的结果）；
-// delta 是本次要新增的字节数（覆盖写请传 new-old，可能为负）。
-// 返回被删掉的文件（相对存储根的路径），调用方可以把它们回给前端做提示。
+// scopeKey is the session workspace's storage-relative path (the result of paths.UserSessionKey);
+// delta is how many bytes this write adds (for an overwrite pass new-old, which may be negative).
+// It returns the files it deleted (paths relative to the session workspace root), which the caller can hand back to the frontend
+// or to the model as a hint.
 //
-// 调用约定（顺序很重要）：
+// Call convention (the order matters):
 //
-//	evicted, err := quota.Admit(...)   // 预检 + 淘汰
-//	if err != nil { return err }       // 507：一个文件都不写
-//	写入文件
-//	quota.Commit(...)                  // 只有写成功才记账，失败不记，计数不会虚高
+//	evicted, err := quota.Admit(...)   // pre-check + eviction
+//	if err != nil { return err }       // 507: not a single byte is written
+//	write the file
+//	quota.Commit(...)                  // only account after a successful write; a failure is not counted, so the usage never inflates
 //
-// userID 用于取「该用户」的会话空间上限（user_quotas 覆盖租户值）；
-// 传空串时退化为租户值。
+// userID is used to pick "this user's" session storage ceiling (user_quotas overriding the tenant value);
+// an empty string degrades to the tenant value.
 func Admit(ctx context.Context, st storage.Storage, schema, scopeKey, userID string, delta int64) ([]string, error) {
-	lim := ResolveUserSessionStorage(schema, userID)
+	lim := resolveSessionStorage(schema, userID)
 	if lim == -1 || st == nil || scopeKey == "" {
-		return nil, nil // 不限制 / 不是会话工作区：完全不碰配额
+		return nil, nil // unlimited / not a session workspace: never touch the quota
 	}
 	if delta <= 0 {
-		return nil, nil // 覆盖成更小、或删除：不会让用量增加
+		return nil, nil // an overwrite with a smaller size, or a delete: it cannot increase usage
 	}
 
 	s := GetStore()
 	u, ok, _ := s.Get(ctx, schema, scopeKey)
 
+	var evicted []string
 	if !ok || u.Bytes+delta > lim || expired(u, lim) {
 		total, files, err := scanFiles(ctx, st, scopeKey)
 		if err != nil {
-			// 扫描失败不阻断写入：配额是保护性功能，统计出问题时
-			// 让用户先写进去，比因为统计失败而拒绝服务更合理。
-			xlog.Error("[QUOTA] 扫描会话目录失败 schema=%s key=%s: %v", schema, scopeKey, err)
+			// A failed scan does not block the write: the quota is a protective feature, and when the accounting breaks it is more reasonable
+			// to let the user write than to refuse service because the accounting failed.
+			xlog.Error("[QUOTA] failed to scan the session directory schema=%s key=%s: %v", schema, scopeKey, err)
 			return nil, nil
 		}
-		evicted, enough := evictOldest(ctx, st, scopeKey, files, &total, lim, delta)
-		// 扫描值即当前真实值：回写基准，让后续写入继续走 O(1) 快路径
+		var enough bool
+		evicted, enough = evictOldest(ctx, st, scopeKey, files, &total, lim, delta)
+		// The scanned value is the current truth: write it back as the baseline so later writes keep taking the O(1) fast path
 		if serr := s.Set(ctx, schema, scopeKey, Usage{Bytes: total, VerifiedAt: time.Now()}); serr != nil {
-			xlog.Error("[QUOTA] 回写用量失败 schema=%s key=%s: %v", schema, scopeKey, serr)
+			xlog.Error("[QUOTA] failed to write the usage back schema=%s key=%s: %v", schema, scopeKey, serr)
 		}
 		if !enough {
-			xlog.Error("[QUOTA_ALERT] 会话空间不足 schema=%s key=%s used=%d limit=%d delta=%d",
+			xlog.Error("[QUOTA_ALERT] session storage exhausted schema=%s key=%s used=%d limit=%d delta=%d",
 				schema, scopeKey, total, lim, delta)
-			return evicted, &ExceededError{Scope: "session", Metric: "bytes", Used: total, Limit: lim}
+			return evicted, &ExceededError{Scope: "session", Metric: "bytes", Used: total, Limit: lim, Evicted: evicted}
 		}
 		if len(evicted) > 0 {
-			xlog.Error("[QUOTA_ALERT] 已淘汰旧文件 schema=%s key=%s count=%d", schema, scopeKey, len(evicted))
+			xlog.Error("[QUOTA_ALERT] evicted old files schema=%s key=%s count=%d", schema, scopeKey, len(evicted))
 		}
 	}
-	return nil, nil
+	return evicted, nil
 }
 
-// Commit 写成功后记账（delta 为本次实际新增的字节）。
-// 写入失败时**不要**调用，这样计数不会出现「文件没落地但额度被扣」的假超限。
+// Commit accounts after a successful write (delta is the bytes actually added).
+// Do **not** call it after a failed write, so the accounting never shows a false overrun of "nothing landed but the quota was charged".
 func Commit(ctx context.Context, schema, scopeKey, userID string, delta int64) {
 	if delta == 0 || scopeKey == "" {
 		return
 	}
-	if ResolveUserSessionStorage(schema, userID) == -1 {
-		return // 不限制时不维护计数
+	if resolveSessionStorage(schema, userID) == -1 {
+		return // no accounting while unlimited
+	}
+	if delta < 0 {
+		// Never let a delete push the counter below zero. A negative counter reads as "far from the limit", so the fast
+		// path would happily admit writes that really do overflow until the next calibration. A counter already that low
+		// means it never saw the bytes in the first place (exec writes straight to disk); calibration fixes that, guessing
+		// here does not.
+		u, ok, _ := GetStore().Get(ctx, schema, scopeKey)
+		if !ok || u.Bytes+delta < 0 {
+			return
+		}
 	}
 	if err := GetStore().Add(ctx, schema, scopeKey, delta); err != nil {
-		xlog.Error("[QUOTA] 记账失败 schema=%s key=%s delta=%d: %v", schema, scopeKey, delta, err)
+		xlog.Error("[QUOTA] failed to account schema=%s key=%s delta=%d: %v", schema, scopeKey, delta, err)
 	}
 }
 
-// Reset 会话删除时清掉计数。
+// Reset clears the accounting when a session is deleted.
 func Reset(ctx context.Context, schema, scopeKey string) {
 	if scopeKey == "" {
 		return
 	}
 	if err := GetStore().Reset(ctx, schema, scopeKey); err != nil {
-		xlog.Error("[QUOTA] 清理用量失败 schema=%s key=%s: %v", schema, scopeKey, err)
+		xlog.Error("[QUOTA] failed to clear usage schema=%s key=%s: %v", schema, scopeKey, err)
 	}
 }
 
-// Snapshot 返回某会话当前的用量与上限（工作区工具条的用量条用）。
-// 只读计数，不扫描；计数缺失时返回 0。
+// Snapshot returns a session's current usage and ceiling (for the workspace toolbar's usage bar).
+// It reads the counter only and never scans; a missing counter returns 0.
 func Snapshot(ctx context.Context, schema, scopeKey, userID string) (used, limit int64) {
-	limit = ResolveUserSessionStorage(schema, userID)
+	limit = resolveSessionStorage(schema, userID)
 	if scopeKey == "" {
 		return 0, limit
 	}
 	if u, ok, _ := GetStore().Get(ctx, schema, scopeKey); ok {
+		// A counter left negative by an older build must not surface as "minus five bytes": usage is never negative.
+		if u.Bytes < 0 {
+			return 0, limit
+		}
 		return u.Bytes, limit
 	}
 	return 0, limit
 }
 
-// CheckUserSessions 检查某用户的会话数是否已达上限。超限返回 *ExceededError。
-// 计数失败时放行（fail-open）：配额不该因为一次 DB 抖动就阻断业务。
+// CheckUserSessions checks whether a user has reached their session count ceiling. Over the limit it returns *ExceededError.
+// A failed count lets the request through (fail-open): the quota should not block business because of one database hiccup.
 func CheckUserSessions(schema, ownerType, userID string) error {
-	lim := ResolveUserSessions(schema, userID) // 用户覆盖值 → 租户值（clamp）
+	lim := resolveSessions(schema, userID) // user override -> tenant value (clamped)
 	if lim == -1 || userID == "" {
 		return nil
 	}
 	n, err := CountUserSessions(schema, ownerType, userID)
 	if err != nil {
-		xlog.Error("[QUOTA] 统计会话数失败 schema=%s uid=%s: %v", schema, userID, err)
+		xlog.Error("[QUOTA] failed to count sessions schema=%s uid=%s: %v", schema, userID, err)
 		return nil
 	}
 	if n >= lim {
-		xlog.Error("[QUOTA_ALERT] 会话数超限 schema=%s uid=%s used=%d limit=%d", schema, userID, n, lim)
+		xlog.Error("[QUOTA_ALERT] session count over the limit schema=%s uid=%s used=%d limit=%d", schema, userID, n, lim)
 		return &ExceededError{Scope: "user", Metric: "sessions", Used: int64(n), Limit: int64(lim)}
 	}
 	return nil
 }
 
-// expired 判断计数是否需要重新校准：
-//   - 超过 CalibrateAfter：可能有 exec 直写没被记账
-//   - 接近上限且距上次校准超过 NearLimitInterval：避免"以为是 92% 其实已经 99%"
+// expired decides whether the counter needs recalibrating:
+//   - past CalibrateAfter: exec may have written directly without being accounted
+//   - close to the ceiling and past NearLimitInterval since the last calibration: avoid "thought it was 92% when it was already 99%"
 func expired(u Usage, lim int64) bool {
 	if u.VerifiedAt.IsZero() {
 		return true
@@ -177,13 +204,13 @@ func expired(u Usage, lim int64) bool {
 	if age > CalibrateAfter {
 		return true
 	}
-	if lim > 0 && u.Bytes*10 >= lim*9 && age > NearLimitInterval {
+	if lim > 0 && float64(u.Bytes) >= NearLimitRatio*float64(lim) && age > NearLimitInterval {
 		return true
 	}
 	return false
 }
 
-// scanFiles 递归枚举会话工作区，返回总字节数与文件列表（顺序不定）。
+// scanFiles walks a session workspace recursively and returns the total bytes plus the file list (in no particular order).
 func scanFiles(ctx context.Context, st storage.Storage, key string) (int64, []fileInfo, error) {
 	w, ok := st.(storage.Walker)
 	if !ok {
@@ -199,10 +226,10 @@ func scanFiles(ctx context.Context, st storage.Storage, key string) (int64, []fi
 	return total, files, err
 }
 
-// evictOldest 按 mtime 升序删除，直到 total+delta <= lim 或没有可删的了。
+// evictOldest deletes in ascending mtime order until total+delta <= lim or nothing is left to delete.
 //
-// 保护规则：不删会话根下 skills/ 里的文件、不删最近 evictSkipRecent 内改过的文件、
-// 单次最多删 evictMaxPerCall 个。返回被删列表与"是否已腾出足够空间"。
+// Protection rules: never delete files under the session root's skills/, never delete files modified within evictSkipRecent, and delete at most
+// evictMaxPerCall per call. It returns the deleted list and whether enough space has been freed.
 func evictOldest(ctx context.Context, st storage.Storage, key string, files []fileInfo,
 	total *int64, lim, delta int64) ([]string, bool) {
 	if *total+delta <= lim {
@@ -219,17 +246,17 @@ func evictOldest(ctx context.Context, st storage.Storage, key string, files []fi
 		}
 		sub := strings.TrimPrefix(f.rel, key+"/")
 		if sub == "skills" || strings.HasPrefix(sub, "skills/") {
-			continue // 技能包属于 agent 定义的一部分，不当作产物删
+			continue // a skill package is part of the agent definition and is not treated as an artefact
 		}
 		if !f.mod.IsZero() && now.Sub(f.mod) < evictSkipRecent {
-			continue // 可能是 agent 正在写的文件
+			continue // possibly a file the agent is writing right now
 		}
 		if err := st.Delete(ctx, f.rel); err != nil {
-			xlog.Error("[QUOTA] 淘汰文件失败 key=%s: %v", f.rel, err)
+			xlog.Error("[QUOTA] failed to evict file key=%s: %v", f.rel, err)
 			continue
 		}
 		*total -= f.size
-		// 对外给相对会话根的路径（前端提示用），删除时用的仍是完整 key
+		// Expose the path relative to the session root (for the frontend hint); deleting still used the full key
 		evicted = append(evicted, sub)
 	}
 	return evicted, *total+delta <= lim

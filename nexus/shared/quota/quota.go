@@ -1,51 +1,52 @@
-// Package quota 提供租户资源配额的读取与资源计数（platform.quota_configs）。
+// Package quota reads tenant resource quotas and counts resources (platform.quota_configs).
 //
-// 语义（沿用 flow_configs 约定）：
-//   - tenant_id = ” 为系统行（全局默认）；'t0' 为租户行（覆盖系统行）
-//   - NULL = 未设置（回退：租户行 -> 系统行 -> 代码 fallback）
-//   - -1 = 不限制（有效值，不回退）
+// Semantics (following the flow_configs convention):
+//   - an empty tenant_id is the system row (the global default); 't0' is a tenant row (overriding the system row)
+//   - NULL = not set (fallback: tenant row -> system row -> code fallback)
+//   - -1 = unlimited (a real value, it does not fall back)
 //
-// 系统行同时是**硬顶**（与 flowconfig 同规则）：运行期取 min(租户值, 系统值)，
-// 系统行为 -1 时不限 —— 所以租户行配得比系统行高也没用，会被截断到系统值；
-// 系统行未设置时，用代码 fallback（100 / 300 / 300 / -1 / -1）当硬顶：
-// 会话相关的两项默认不限制（单会话空间、单用户会话数），其余三项仍是有限值。
+// The system row is also a **hard ceiling** (the same rule as flowconfig): at run time min(tenant value, system value) is used, and a system
+// row of -1 means no limit - so configuring a tenant row above the system row is useless, it is clamped to the system value.
+// When the system row is not set, the code fallback (100 / 300 / 300 / -1 / -1) is the ceiling: the two session-related limits are unlimited
+// by default (per-session storage, sessions per user), while the other three stay finite.
 //
-// 缓存：不再使用进程内 sync.Map，改为 Redis 共享缓存（见 cache.go）；
-// Redis 未启用/不可用时直连数据库。
+// Caching: an in-process sync.Map is no longer used; a shared Redis cache took its place (see cache.go); when Redis is disabled or unavailable
+// it goes straight to the database.
 package quota
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 
 	"flame/nexus/shared/config"
 	"flame/nexus/shared/db"
 )
 
-// Limits 最终生效的配额上限（-1 表示不限制）。
+// Limits is the finally effective quota ceiling (-1 means unlimited).
 type Limits struct {
 	MaxAgents int
 	MaxSkills int
 	MaxFlows  int
 
-	// MaxSessionStorageBytes 单个会话工作区的字节上限（超限时删该会话最旧的文件）。
+	// MaxSessionStorageBytes is the byte ceiling of one session workspace (over the limit, the session's oldest files are deleted).
 	MaxSessionStorageBytes int64
-	// MaxUserSessions 单个用户拥有的会话数量上限（超限拒绝新建，不删旧会话）。
+	// MaxUserSessions is the number of sessions one user may own (over the limit, new ones are refused; old ones are not deleted).
 	MaxUserSessions int
 }
 
-// fallback 代码兜底默认值（表未建、或表里未配置时使用）。
+// fallback holds the code defaults (used when the table does not exist or has nothing configured).
 //
-// 会话相关的两项取 -1（不限制）：会话是「工作场地」而不是可数资产，
-// 默认设限的后果是到顶后连一轮都跑不了（存储 507 / 建会话 507），
-// 而这两项在系统行、租户行、user_quotas 三处都能显式收紧。
+// The two session-related limits are -1 (unlimited): a session is a "working venue" rather than a countable asset, and a default limit means
+// that once it is reached not even one round can run (storage 507 / create session 507) - while both can still be tightened explicitly in the
+// system row, the tenant row or user_quotas.
 var fallback = Limits{
 	MaxAgents: 100, MaxSkills: 300, MaxFlows: 300,
-	MaxSessionStorageBytes: -1, // 单会话工作区不限
-	MaxUserSessions:        -1, // 单用户会话数不限
+	MaxSessionStorageBytes: -1, // per-session workspace unlimited
+	MaxUserSessions:        -1, // sessions per user unlimited
 }
 
-// row 对应 quota_configs 一行，NULL 用 Null 类型表达
+// row corresponds to one quota_configs row; NULL is expressed with the Null types.
 type row struct {
 	MaxAgents              sql.NullInt32
 	MaxSkills              sql.NullInt32
@@ -58,9 +59,9 @@ func tableName() string {
 	return config.Cfg.Database.PlatformSchema + ".quota_configs"
 }
 
-// Resolve 返回指定租户最终生效的配额（租户行 -> 系统行 -> fallback）。
-// 数据来源：Redis 共享缓存（见 cache.go）；Redis 未启用/不可用时直连数据库。
-// tenantID 为空字符串表示系统级。
+// Resolve returns the finally effective quota for a tenant (tenant row -> system row -> fallback).
+// The data comes from the shared Redis cache (see cache.go); when Redis is disabled or unavailable it goes straight to the database.
+// An empty tenantID means the system level.
 func Resolve(tenantID string) Limits {
 	t := loadRowCached(tenantID)
 	s := loadRowCached("")
@@ -88,13 +89,17 @@ func Resolve(tenantID string) Limits {
 	}
 }
 
-// Fallback 返回代码内置兜底默认值（系统行未设置时用），供管理界面展示"不填会退到哪"。
+// Fallback returns the built-in code defaults (used when the system row is unset), so the admin UI can show "what it falls back to when left
+// empty".
 func Fallback() Limits {
 	return fallback
 }
 
-// loadRow 读取某 tenant_id 的配置行；无该行返回 (nil, nil)，查询出错返回 (nil, err)。
+// loadRow reads one tenant_id's configuration row; (nil, nil) when the row does not exist, (nil, err) when the query fails.
 func loadRow(tenantID string) (*row, error) {
+	if db.DB == nil {
+		return nil, errors.New("database is not initialised")
+	}
 	var r row
 	err := db.DB.QueryRow(
 		`SELECT max_agents, max_skills, max_flows, max_session_storage_bytes, max_user_sessions
@@ -110,9 +115,9 @@ func loadRow(tenantID string) (*row, error) {
 	return &r, nil
 }
 
-// Row 配额原始一行（nil = NULL = 未设置，回退系统行）。
+// Row is one raw quota row (nil = NULL = not set, fall back to the system row).
 //
-// 管理界面必须看原始值才能区分「未设置」与「显式设成某个数」；要最终生效值请用 Resolve。
+// The admin UI needs the raw values to tell "not set" from "explicitly set to a number"; for the effective value use Resolve.
 type Row struct {
 	MaxAgents              *int
 	MaxSkills              *int
@@ -121,7 +126,7 @@ type Row struct {
 	MaxSessionStorageBytes *int64
 }
 
-// GetRow 读某租户（空串 = 系统行）的原始配额行；无该行时返回全 nil 结构。
+// GetRow reads a tenant's raw quota row (an empty string = the system row); with no such row it returns an all-nil structure.
 func GetRow(tenantID string) (*Row, error) {
 	r, err := loadRow(strings.TrimSpace(tenantID))
 	if err != nil {
@@ -139,10 +144,10 @@ func GetRow(tenantID string) (*Row, error) {
 	}, nil
 }
 
-// SetRow 覆盖某租户（空串 = 系统行）的配额行并失效缓存。
-// nil = 写 NULL（回退系统行）；-1 = 不限；正数 = 上限。
+// SetRow overwrites a tenant's quota row (an empty string = the system row) and invalidates the cache.
+// nil = write NULL (fall back to the system row); -1 = unlimited; a positive number = the ceiling.
 //
-// 用「事务内先删后插」而不是 UPSERT：不依赖该表上唯一约束的形态。
+// It uses "delete then insert inside one transaction" rather than UPSERT, so it does not depend on the unique constraint's shape.
 func SetRow(tenantID string, v *Row) error {
 	id := strings.TrimSpace(tenantID)
 	tx, err := db.DB.Begin()
@@ -203,7 +208,7 @@ func nilIfNil64(v *int64) any {
 	return *v
 }
 
-// field 安全取指定 int 字段，r 为 nil（无该行）时返回空 NullInt32
+// field safely reads the named int field, returning an empty NullInt32 when r is nil (no such row).
 func field(r *row, name string) sql.NullInt32 {
 	if r == nil {
 		return sql.NullInt32{}
@@ -221,7 +226,7 @@ func field(r *row, name string) sql.NullInt32 {
 	return sql.NullInt32{}
 }
 
-// field64 安全取指定 int64 字段（字节数用，避开 int32 上限）。
+// field64 safely reads the named int64 field (used for byte counts, avoiding the int32 ceiling).
 func field64(r *row, name string) sql.NullInt64 {
 	if r == nil {
 		return sql.NullInt64{}
@@ -233,7 +238,7 @@ func field64(r *row, name string) sql.NullInt64 {
 	return sql.NullInt64{}
 }
 
-// pick 两级回退：tenant -> sys -> fallback。只有 NULL（未设置）才回退下级。
+// pick is the two-level fallback: tenant -> sys -> fallback. Only NULL (not set) falls through to the next level.
 func pick(tenant, sys sql.NullInt32, fb int) int {
 	if tenant.Valid {
 		return int(tenant.Int32)
@@ -244,7 +249,7 @@ func pick(tenant, sys sql.NullInt32, fb int) int {
 	return fb
 }
 
-// pick64 同 pick，用于 int64（字节数）。
+// pick64 is pick for int64 (byte counts).
 func pick64(tenant, sys sql.NullInt64, fb int64) int64 {
 	if tenant.Valid {
 		return tenant.Int64
@@ -255,8 +260,8 @@ func pick64(tenant, sys sql.NullInt64, fb int64) int64 {
 	return fb
 }
 
-// clampMax 上限截断：v 相对 ceiling 取 min，-1 视为无限大（与 flowconfig 同规则）。
-// 例：系统顶 100、租户配 500 → 100；系统顶 -1（不限）→ 原样返回租户值。
+// clampMax clamps to a ceiling: v is min'd against ceiling, and -1 counts as infinity (the same rule as flowconfig).
+// Example: a system ceiling of 100 with a tenant value of 500 -> 100; a system ceiling of -1 (unlimited) -> the tenant value as is.
 func clampMax(v, ceiling int) int {
 	if ceiling == -1 {
 		return v
@@ -270,7 +275,7 @@ func clampMax(v, ceiling int) int {
 	return v
 }
 
-// clampMax64 同 clampMax，用于 int64（字节数）。
+// clampMax64 is clampMax for int64 (byte counts).
 func clampMax64(v, ceiling int64) int64 {
 	if ceiling == -1 {
 		return v
@@ -285,29 +290,29 @@ func clampMax64(v, ceiling int64) int64 {
 }
 
 // ---------------------------------------------------------------------------
-// 单用户覆盖（{schema}.user_quotas）
+// Per-user overrides ({schema}.user_quotas)
 //
-// 语义：**无行**或该列 NULL = 跟随租户；有值 = 覆盖，但不得超过租户值
-// （租户管理员只能在平台给的天花板内分配）。
+// Semantics: **no row**, or a NULL column = follow the tenant; a value = override, but never above the tenant value (a tenant administrator can
+// only allocate within the ceiling the platform gives).
 //
-// 单独一张表而不是往 users 上加列：认证表不承载资源治理，
-// 将来再加配额维度（总空间/文件数/并发）只动这张表。
+// A separate table rather than columns on users: the authentication table does not carry resource governance, and adding further quota
+// dimensions later (total storage / file count / concurrency) touches only this table.
 // ---------------------------------------------------------------------------
 
-// UserQuota 单用户的配额覆盖值，各自 Valid=false 表示跟随租户。
+// UserQuota is one user's quota overrides, each with Valid=false meaning "follow the tenant".
 type UserQuota struct {
 	MaxSessions            sql.NullInt32
 	MaxSessionStorageBytes sql.NullInt64
 }
 
-// UserQuotaInput 覆盖值入参：nil = 跟随租户；两个都为 nil 时删除覆盖行。
+// UserQuotaInput is the override input: nil = follow the tenant; when both are nil the override row is deleted.
 type UserQuotaInput struct {
 	MaxSessions            *int
 	MaxSessionStorageBytes *int64
 }
 
-// ResolveUserSessions 返回某用户最终生效的会话数上限。
-// 租户值（已 clamp 到系统行）是硬顶；用户只能在它之内调整。
+// ResolveUserSessions returns a user's finally effective session count ceiling.
+// The tenant value (already clamped to the system row) is the hard ceiling; a user can only adjust within it.
 func ResolveUserSessions(schema, userID string) int {
 	base := Resolve(schema).MaxUserSessions
 	if userID == "" {
@@ -320,8 +325,8 @@ func ResolveUserSessions(schema, userID string) int {
 	return clampMax(int(q.MaxSessions.Int32), base)
 }
 
-// ResolveUserSessionStorage 返回某用户「每个会话」的空间上限：
-// user 覆盖 → 租户 max_session_storage_bytes（clamp）。
+// ResolveUserSessionStorage returns a user's "per session" storage ceiling: the user override clamped to the tenant
+// max_session_storage_bytes.
 func ResolveUserSessionStorage(schema, userID string) int64 {
 	base := Resolve(schema).MaxSessionStorageBytes
 	if userID == "" {
@@ -334,17 +339,17 @@ func ResolveUserSessionStorage(schema, userID string) int64 {
 	return clampMax64(q.MaxSessionStorageBytes.Int64, base)
 }
 
-// UserSessionsCeiling 返回该用户能配置的会话数硬顶（= 租户值），供界面提示与后端校验。
+// UserSessionsCeiling returns the hard ceiling for what this user may configure (= the tenant value), for UI hints and backend validation.
 func UserSessionsCeiling(schema string) int {
 	return Resolve(schema).MaxUserSessions
 }
 
-// UserSessionStorageCeiling 返回该用户能配置的会话空间硬顶（= 租户值）。
+// UserSessionStorageCeiling returns the hard ceiling for the session storage this user may configure (= the tenant value).
 func UserSessionStorageCeiling(schema string) int64 {
 	return Resolve(schema).MaxSessionStorageBytes
 }
 
-// SetUserQuota 写入/清除某用户的覆盖值（两个都为 nil = 删除行，恢复跟随租户）。
+// SetUserQuota writes / clears a user's overrides (both nil = delete the row, back to following the tenant).
 func SetUserQuota(schema, userID string, in UserQuotaInput, updatedBy string) error {
 	if in.MaxSessions == nil && in.MaxSessionStorageBytes == nil {
 		_, err := db.DB.Exec(`DELETE FROM `+schema+`.user_quotas WHERE user_id = $1`, userID)
@@ -363,10 +368,13 @@ func SetUserQuota(schema, userID string, in UserQuotaInput, updatedBy string) er
 	return err
 }
 
-// loadUserQuota 读 user_quotas 一行；无行返回 (nil,false,nil)。
-// 表不存在（老租户还没补表）时同样按"无行"处理 —— 配额照常按租户值工作，
-// 而不是因为查不到表就拒绝建会话。
+// loadUserQuota reads one user_quotas row; (nil,false,nil) when there is no row.
+// A missing table (an older tenant that has not been migrated) is treated the same way - quotas keep working from the tenant values, rather
+// than refusing to create sessions because the table cannot be queried.
 func loadUserQuota(schema, userID string) (*UserQuota, bool, error) {
+	if db.DB == nil {
+		return nil, false, errors.New("database is not initialised")
+	}
 	var q UserQuota
 	err := db.DB.QueryRow(
 		`SELECT max_sessions, max_session_storage_bytes
@@ -389,30 +397,33 @@ func nullUUID(s string) interface{} {
 }
 
 // ---------------------------------------------------------------------------
-// 资源计数（配额检查用）
+// Resource counting (for quota checks)
 //
-// 与 flowconfig 一样，本包直接查库而不走 repository 接口，
-// 避免为了"计数"而在三个仓储接口上各加一个方法。
+// Like flowconfig, this package queries the database directly instead of going through repository interfaces, so that "counting" does not add a
+// method to three repository interfaces.
 // ---------------------------------------------------------------------------
 
-// CountAgents 统计租户下的智能体数量。
+// CountAgents counts the agents in a tenant.
 func CountAgents(schema string) (int, error) {
 	return countRows(schema, "agents")
 }
 
-// CountSkills 统计租户下的 skill 数量。
+// CountSkills counts the skills in a tenant.
 func CountSkills(schema string) (int, error) {
 	return countRows(schema, "skills")
 }
 
-// CountFlows 统计租户下的工作流数量。
+// CountFlows counts the workflows in a tenant.
 func CountFlows(schema string) (int, error) {
 	return countRows(schema, "flows")
 }
 
-// CountUserSessions 统计某用户在指定 owner 类型下的会话数量。
-// 走 sessions 表已有的 idx_sessions_user_latest，索引扫描，代价可忽略。
+// CountUserSessions counts a user's sessions under the given owner type.
+// It uses the sessions table's existing idx_sessions_user_latest (an index scan), so the cost is negligible.
 func CountUserSessions(schema, ownerType, userID string) (int, error) {
+	if db.DB == nil {
+		return 0, errors.New("database is not initialised")
+	}
 	var n int
 	err := db.DB.QueryRow(
 		`SELECT COUNT(*) FROM `+schema+`.sessions WHERE owner_type = $1 AND user_id = $2`,
@@ -421,8 +432,11 @@ func CountUserSessions(schema, ownerType, userID string) (int, error) {
 	return n, err
 }
 
-// countRows 统计某表行数。table 仅由本包内常量传入，不接受外部输入。
+// countRows counts the rows of a table. table is only ever passed from constants inside this package; it never accepts external input.
 func countRows(schema, table string) (int, error) {
+	if db.DB == nil {
+		return 0, errors.New("database is not initialised")
+	}
 	var n int
 	err := db.DB.QueryRow(`SELECT COUNT(*) FROM ` + schema + `.` + table).Scan(&n)
 	return n, err

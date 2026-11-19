@@ -5,38 +5,38 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"flame/nexus/shared/db"
 	"flame/nexus/shared/redis"
 )
 
-// Usage 一个工作场地当前占用的字节数与"上次精确扫描"的时间。
+// Usage is the bytes one workspace currently occupies plus the time of the last exact scan.
 //
-// VerifiedAt 超过 CalibrateAfter 就说明这个数字可能被旁路写入（沙箱里的 exec / shell）
-// 弄脏了，下次写入时要重新扫一次。
+// When VerifiedAt is older than CalibrateAfter the number may have been dirtied by a bypass write (exec / shell inside the
+// sandbox), so the next write rescans.
 type Usage struct {
 	Bytes      int64
 	VerifiedAt time.Time
 }
 
 const (
-	// CalibrateAfter 计数「保鲜期」：超过这个时间，下一次写入会触发一次精确扫描。
-	// 这是唯一覆盖「exec 直写 nexus 看不到」的手段 —— 只在有写入时触发，不设后台任务。
+	// CalibrateAfter is how long a counter stays fresh: past it the next write triggers an exact scan. It is the only way to
+	// cover "exec writes straight to disk, nexus cannot see it" - triggered only by a write, with no background job.
 	CalibrateAfter = 10 * time.Minute
-	// NearLimitRatio 用量超过上限的这个比例时，把扫描间隔收紧到 NearLimitInterval。
+	// NearLimitRatio is the share of the limit above which the scan interval tightens to NearLimitInterval.
 	NearLimitRatio = 0.9
-	// NearLimitInterval 接近上限时的最小扫描间隔，避免连续写入每次都扫。
+	// NearLimitInterval is the minimum scan interval close to the limit, so back-to-back writes do not scan every time.
 	NearLimitInterval = 60 * time.Second
 
 	usageTTL = 7 * 24 * time.Hour
 )
 
-// Store 计数后端：有 Redis 时用 Redis，否则落 PG（租户 schema 内的 session_usage 表）。
+// Store is the counter backend: Redis when available, otherwise PostgreSQL (the session_usage table inside the tenant schema).
 //
-// scopeKey 是工作场地的存储相对路径（如 tenants/t0/users/u1/sessions/s1）：
-// 用它而不是 (uid, sid) 是为了让 session 与将来的 run 场地共用同一套计数，
-// 调用方也不必为了记账再去查一次会话归属。
+// scopeKey is the workspace's storage-relative path (e.g. tenants/t0/users/u1/sessions/s1): using it instead of (uid, sid) lets a
+// session and a future run workspace share one counter, and the caller does not have to look up the session's owner to account.
 type Store interface {
 	Get(ctx context.Context, schema, scopeKey string) (Usage, bool, error)
 	Add(ctx context.Context, schema, scopeKey string, delta int64) error
@@ -44,11 +44,19 @@ type Store interface {
 	Reset(ctx context.Context, schema, scopeKey string) error
 }
 
-var store Store
+var (
+	// storeMu guards the lazy initialisation below. Without it the check-then-set on a plain package variable is a data
+	// race the moment two of the first concurrent requests hit GetStore, and - worse than the race - both could build a
+	// backend and end up counting into different stores.
+	storeMu sync.Mutex
+	store   Store
+)
 
-// GetStore 返回计数后端。首次调用时决定，运行期不再切换 ——
-// Redis 抖动时来回换后端会让两个源各自计数，反而制造漂移。
+// GetStore returns the counter backend. It is decided on the first call and never switches at run time - flipping backends while
+// Redis flaps would make the two sources count separately and manufacture drift.
 func GetStore() Store {
+	storeMu.Lock()
+	defer storeMu.Unlock()
 	if store != nil {
 		return store
 	}
@@ -61,7 +69,7 @@ func GetStore() Store {
 }
 
 // ---------------------------------------------------------------------------
-// Redis 后端
+// Redis backend
 // ---------------------------------------------------------------------------
 
 type redisStore struct{}
@@ -76,7 +84,7 @@ func (redisStore) Get(_ context.Context, _ string, scopeKey string) (Usage, bool
 	}
 	m, err := redis.Client.HGetAll(usageKey(scopeKey))
 	if err != nil {
-		return Usage{}, false, nil // Redis 抖动按「没有计数」处理，交给扫描回填
+		return Usage{}, false, nil // a Redis hiccup counts as "no counter", left to the scan to refill
 	}
 	if len(m) == 0 {
 		return Usage{}, false, nil
@@ -123,17 +131,20 @@ func (redisStore) Reset(_ context.Context, _ string, scopeKey string) error {
 }
 
 // ---------------------------------------------------------------------------
-// PostgreSQL 后端（没有 Redis 的部署）
+// PostgreSQL backend (deployments without Redis)
 //
-// 表在租户 schema 内：
+// The table lives in the tenant schema:
 //   {schema}.session_usage(scope_key text PRIMARY KEY, used_bytes bigint, verified_at timestamptz)
-// 建表语句见 platform/sql/quota_storage.sql。
-// 单会话并发通常是 1（agent 串行跑工具），热点行锁不是问题。
+// The DDL is in platform/sql/quota_storage.sql.
+// A session usually has a single writer (the agent runs tools serially), so row-lock contention is not a concern.
 // ---------------------------------------------------------------------------
 
 type pgStore struct{}
 
 func (pgStore) Get(_ context.Context, schema, scopeKey string) (Usage, bool, error) {
+	if db.DB == nil {
+		return Usage{}, false, fmt.Errorf("database is not initialised")
+	}
 	var u Usage
 	var verified time.Time
 	err := db.DB.QueryRow(
@@ -150,6 +161,9 @@ func (pgStore) Get(_ context.Context, schema, scopeKey string) (Usage, bool, err
 }
 
 func (pgStore) Add(_ context.Context, schema, scopeKey string, delta int64) error {
+	if db.DB == nil {
+		return fmt.Errorf("database is not initialised")
+	}
 	_, err := db.DB.Exec(
 		`INSERT INTO `+schema+`.session_usage (scope_key, used_bytes, verified_at)
 		 VALUES ($1, $2, now())
@@ -161,6 +175,9 @@ func (pgStore) Add(_ context.Context, schema, scopeKey string, delta int64) erro
 }
 
 func (pgStore) Set(_ context.Context, schema, scopeKey string, u Usage) error {
+	if db.DB == nil {
+		return fmt.Errorf("database is not initialised")
+	}
 	_, err := db.DB.Exec(
 		`INSERT INTO `+schema+`.session_usage (scope_key, used_bytes, verified_at)
 		 VALUES ($1, $2, $3)
@@ -171,6 +188,9 @@ func (pgStore) Set(_ context.Context, schema, scopeKey string, u Usage) error {
 }
 
 func (pgStore) Reset(_ context.Context, schema, scopeKey string) error {
+	if db.DB == nil {
+		return fmt.Errorf("database is not initialised")
+	}
 	_, err := db.DB.Exec(`DELETE FROM `+schema+`.session_usage WHERE scope_key = $1`, scopeKey)
 	return err
 }

@@ -2,16 +2,39 @@ package models
 
 import "fmt"
 
-// CheckQuota 检查资源用量是否已达上限（max < 0 表示不限制，即 -1）。
-// kind 用于错误提示（agent / skill / flow）。
+// LimitError means a count quota (agents / skills / flows) is exhausted.
 //
-// ⚠️ 新增"创建"入口时必须调用本函数，否则该入口不受配额约束。
+// It carries the numbers instead of shipping copy: the HTTP layer turns it into a localized code (quota.agent_limit_reached
+// and friends) with {used} / {limit}, and the message below is only the diagnostic text for logs and curl.
+type LimitError struct {
+	Kind    string // agent | skill | flow
+	Current int
+	Max     int
+}
+
+func (e *LimitError) Error() string {
+	return fmt.Sprintf("%s limit reached (%d/%d): delete an unused %s first", e.Kind, e.Current, e.Max, e.Kind)
+}
+
+// Params are the copy placeholders the bundle interpolates (used by ErrCode's params argument).
+//
+// The code itself stays a literal at each call site (quota.agent_limit_reached / quota.skill_limit_reached /
+// quota.flow_limit_reached): scripts/check-locale.ps1 only sees literals, and a computed code would silently escape the
+// "every code has a bundle entry" check.
+func (e *LimitError) Params() map[string]any {
+	return map[string]any{"used": e.Current, "limit": e.Max}
+}
+
+// CheckQuota checks whether a resource's usage has reached its ceiling (max < 0 means unlimited, i.e. -1).
+// On failure it returns a *LimitError, so callers report a quota code rather than an internal error.
+//
+// ⚠️ Every new "create" entry point must call this function, or that entry point is not subject to the quota.
 func CheckQuota(kind string, current, max int) error {
 	if max < 0 {
-		return nil // -1 = 不限制
+		return nil // -1 = unlimited
 	}
 	if current >= max {
-		return fmt.Errorf("%s 数量已达上限（%d/%d），请先删除不再使用的 %s", kind, current, max, kind)
+		return &LimitError{Kind: kind, Current: current, Max: max}
 	}
 	return nil
 }
