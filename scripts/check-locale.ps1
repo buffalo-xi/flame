@@ -195,14 +195,21 @@ foreach ($locale in $bundles.Keys) {
     }
 }
 
-$allLocaleKeys = @{}
-foreach ($locale in $bundles.Keys) {
-    foreach ($key in $bundles[$locale].Keys) { $allLocaleKeys[$key] = $true }
+# "entry never emitted" only means something when every module was scanned: a partial scan
+# sees a subset of the codes and would report the rest as dead.
+if ($Module.Count -eq 4) {
+    $allLocaleKeys = @{}
+    foreach ($locale in $bundles.Keys) {
+        foreach ($key in $bundles[$locale].Keys) { $allLocaleKeys[$key] = $true }
+    }
+    $unused = @($allLocaleKeys.Keys | Where-Object { -not $codes.ContainsKey($_) } | Sort-Object)
+    Write-Host ("  entries never emitted: {0}" -f $unused.Count) -ForegroundColor Yellow
+    if ($Detailed) {
+        foreach ($key in $unused) { Write-Host ("    {0}" -f $key) -ForegroundColor DarkGray }
+    }
 }
-$unused = @($allLocaleKeys.Keys | Where-Object { -not $codes.ContainsKey($_) } | Sort-Object)
-Write-Host ("  entries never emitted: {0}" -f $unused.Count) -ForegroundColor Yellow
-if ($Detailed) {
-    foreach ($key in $unused) { Write-Host ("    {0}" -f $key) -ForegroundColor DarkGray }
+else {
+    Write-Host '  entries never emitted: not computed (partial module scan)' -ForegroundColor DarkGray
 }
 
 Write-Host ''
