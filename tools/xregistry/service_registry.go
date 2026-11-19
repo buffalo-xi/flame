@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Type 注册中心类型。
+// Type is the registry kind.
 type Type string
 
 const (
@@ -15,7 +15,7 @@ const (
 	TypeNacos  Type = "nacos"
 )
 
-// Instance 一个健康服务实例（发现侧返回）。
+// Instance is one healthy service instance (returned by the discovery side).
 type Instance struct {
 	ID      string
 	Name    string
@@ -24,33 +24,34 @@ type Instance struct {
 	Tags    []string
 }
 
-// Discovery 服务发现接口（消费者视角）：sandboxg、nexus_gw 用。
+// Discovery is the service discovery interface (consumer side): used by sandboxg and nexus_gw.
 type Discovery interface {
-	// ListInstances 列出某服务的全部健康实例，按 ID 稳定排序。
+	// ListInstances lists every healthy instance of a service, stably sorted by ID.
 	ListInstances(ctx context.Context, serviceName string) ([]Instance, error)
 }
 
-// Registrar 服务注册接口（提供者视角）：sandboxd、nexus_gw 用。
+// Registrar is the service registration interface (provider side): used by sandboxd and nexus_gw.
 type Registrar interface {
-	// Register 注册服务（含健康检查）。
+	// Register registers the service, including its health check.
 	Register() error
-	// Deregister 注销服务。
+	// Deregister unregisters the service.
 	Deregister() error
-	// KeepRegistered 保活自愈：定期确认自己还在注册中心，被摘除（如注册中心断连）
-	// 则重新注册。ctx 取消时退出循环；interval <= 0 时用默认值。
+	// KeepRegistered is the liveness loop: it periodically confirms the service is still registered
+	// and re-registers when it has been evicted (e.g. the registry dropped the connection).
+	// It returns when ctx is cancelled; interval <= 0 means the default.
 	KeepRegistered(ctx context.Context, interval time.Duration)
 }
 
-// DiscoveryConfig 服务发现配置。
+// DiscoveryConfig configures service discovery.
 type DiscoveryConfig struct {
 	Type       Type
 	Address    string
 	Datacenter string
 	Token      string
-	// nacos 预留：Namespace / Group / Cluster 等，将来补
+	// nacos placeholders: Namespace / Group / Cluster and friends, to be added later.
 }
 
-// RegistrarConfig 服务注册配置。
+// RegistrarConfig configures service registration.
 type RegistrarConfig struct {
 	Type       Type
 	Address    string
@@ -69,7 +70,7 @@ type RegistrarConfig struct {
 	HealthCheckDeregisterAfter string
 }
 
-// NewDiscovery 创建发现客户端。
+// NewDiscovery creates a discovery client.
 func NewDiscovery(cfg *DiscoveryConfig) (Discovery, error) {
 	switch cfg.Type {
 	case TypeConsul:
@@ -81,7 +82,7 @@ func NewDiscovery(cfg *DiscoveryConfig) (Discovery, error) {
 	}
 }
 
-// NewRegistrar 创建注册客户端。
+// NewRegistrar creates a registration client.
 func NewRegistrar(cfg *RegistrarConfig) (Registrar, error) {
 	applyRegistrarDefaults(cfg)
 	switch cfg.Type {
@@ -94,7 +95,7 @@ func NewRegistrar(cfg *RegistrarConfig) (Registrar, error) {
 	}
 }
 
-// applyRegistrarDefaults 注册配置默认值。
+// applyRegistrarDefaults fills in the registration defaults.
 func applyRegistrarDefaults(cfg *RegistrarConfig) {
 	if cfg.ServiceID == "" {
 		cfg.ServiceID = fmt.Sprintf("%s-%d", cfg.ServiceName, cfg.ServicePort)
@@ -113,7 +114,7 @@ func applyRegistrarDefaults(cfg *RegistrarConfig) {
 	}
 }
 
-// —— nacos 占位：接口先就位，将来用 nacos-sdk-go 补实现 ——
+// --- nacos placeholder: the interface is in place, the implementation follows via nacos-sdk-go ---
 
 var errNacosNotImplemented = errors.New("xregistry: nacos not implemented yet")
 

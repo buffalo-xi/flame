@@ -1,7 +1,9 @@
-// Package conv 提供基础类型转换与反射取值：把 interface{} 安全地转成
-// bool / string，或按字段名从 struct / map 中取出属性。
+// Package conv provides basic type conversion and reflection-based property
+// access: safely turn an interface{} into a bool / string, or read a property
+// from a struct / map by field name.
 //
-// 只做「取值与转换」，不做业务校验；取不到时返回错误而不是 panic。
+// It only reads and converts — no business validation — and reports a missing
+// property as an error instead of panicking.
 package conv
 
 import (
@@ -10,16 +12,16 @@ import (
 	"reflect"
 )
 
-// GetPropertyAsString 从对象中获取属性并转换为字符串
+// GetPropertyAsString reads a property from an object and converts it to a string.
 func GetPropertyAsString(obj interface{}, property string) (string, bool, error) {
 	if obj == nil {
 		return "", false, errors.New("object is nil")
 	}
 
-	// 使用反射获取属性
+	// Read the property through reflection.
 	v := reflect.ValueOf(obj)
 
-	// 处理指针类型
+	// Handle pointer types.
 	if v.Kind() == reflect.Ptr {
 		if v.IsNil() {
 			return "", false, errors.New("object is nil")
@@ -27,7 +29,7 @@ func GetPropertyAsString(obj interface{}, property string) (string, bool, error)
 		v = v.Elem()
 	}
 
-	// 处理结构体
+	// Handle structs.
 	if v.Kind() == reflect.Struct {
 		field := v.FieldByName(property)
 		if !field.IsValid() {
@@ -39,7 +41,7 @@ func GetPropertyAsString(obj interface{}, property string) (string, bool, error)
 		return fmt.Sprint(field.Interface()), true, nil
 	}
 
-	// 处理映射
+	// Handle maps.
 	if v.Kind() == reflect.Map {
 		key := reflect.ValueOf(property)
 		value := v.MapIndex(key)
@@ -52,16 +54,16 @@ func GetPropertyAsString(obj interface{}, property string) (string, bool, error)
 	return "", false, errors.New("unsupported object type")
 }
 
-// GetProperty 从对象中获取属性值
+// GetProperty reads a property value from an object.
 func GetProperty(obj interface{}, property string) (interface{}, error) {
 	if obj == nil {
 		return nil, errors.New("object is nil")
 	}
 
-	// 使用反射获取属性
+	// Read the property through reflection.
 	v := reflect.ValueOf(obj)
 
-	// 处理指针类型
+	// Handle pointer types.
 	if v.Kind() == reflect.Ptr {
 		if v.IsNil() {
 			return nil, errors.New("object is nil")
@@ -69,7 +71,7 @@ func GetProperty(obj interface{}, property string) (interface{}, error) {
 		v = v.Elem()
 	}
 
-	// 处理结构体
+	// Handle structs.
 	if v.Kind() == reflect.Struct {
 		field := v.FieldByName(property)
 		if !field.IsValid() {
@@ -81,7 +83,7 @@ func GetProperty(obj interface{}, property string) (interface{}, error) {
 		return field.Interface(), nil
 	}
 
-	// 处理映射
+	// Handle maps.
 	if v.Kind() == reflect.Map {
 		key := reflect.ValueOf(property)
 		value := v.MapIndex(key)
@@ -94,17 +96,17 @@ func GetProperty(obj interface{}, property string) (interface{}, error) {
 	return nil, errors.New("unsupported object type")
 }
 
-// GetPropertyAsBool 从对象中获取属性并转换为布尔值
-// 返回三个参数：布尔值、是否存在、错误
+// GetPropertyAsBool reads a property from an object and converts it to a bool.
+// It returns three values: the bool, whether the property existed, and an error.
 func GetPropertyAsBool(obj interface{}, property string) (bool, bool, error) {
 	if obj == nil {
 		return false, false, errors.New("object is nil")
 	}
 
-	// 使用反射获取属性
+	// Read the property through reflection.
 	v := reflect.ValueOf(obj)
 
-	// 处理指针类型
+	// Handle pointer types.
 	if v.Kind() == reflect.Ptr {
 		if v.IsNil() {
 			return false, false, errors.New("object is nil")
@@ -112,7 +114,7 @@ func GetPropertyAsBool(obj interface{}, property string) (bool, bool, error) {
 		v = v.Elem()
 	}
 
-	// 处理结构体
+	// Handle structs.
 	if v.Kind() == reflect.Struct {
 		field := v.FieldByName(property)
 		if !field.IsValid() {
@@ -125,7 +127,7 @@ func GetPropertyAsBool(obj interface{}, property string) (bool, bool, error) {
 		return ToBool(value), true, nil
 	}
 
-	// 处理映射
+	// Handle maps.
 	if v.Kind() == reflect.Map {
 		key := reflect.ValueOf(property)
 		value := v.MapIndex(key)
@@ -138,7 +140,7 @@ func GetPropertyAsBool(obj interface{}, property string) (bool, bool, error) {
 	return false, false, errors.New("unsupported object type")
 }
 
-// ToBool 将任意类型转换为布尔值
+// ToBool converts any value to a bool.
 func ToBool(value interface{}) bool {
 	if value == nil {
 		return false
@@ -167,7 +169,7 @@ func ToBool(value interface{}) bool {
 	}
 }
 
-// ToString 将任意类型转换为字符串
+// ToString converts any value to a string.
 func ToString(value interface{}) string {
 	if value == nil {
 		return ""

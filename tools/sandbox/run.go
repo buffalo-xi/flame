@@ -8,29 +8,30 @@ import (
 	"sync"
 )
 
-// Run 一次性执行的便捷封装：
+// Run is the convenience wrapper for a one-shot execution:
 //
-//	Start → 写入 Spec.Stdin（若有）→ 关闭 stdin → 收集 stdout/stderr → Wait
+//	Start → write Spec.Stdin (if any) → close stdin → collect stdout/stderr → Wait
 //
-// 它不改动传入的 spec（内部复制一份），并把 stderr 收进 Result。
-// 输出受 Limits.MaxOutputBytes 约束（超出即截断并标记 Truncated），
-// 避免大输出吃爆内存。长驻交互场景不要用它 —— 直接用 Sandbox.Start。
+// It does not mutate the spec it is given (a copy is made internally) and folds
+// stderr into Result. Output is bounded by Limits.MaxOutputBytes (excess is cut
+// off and flagged as Truncated) so a huge output cannot exhaust memory. For a
+// long-lived interactive session do not use this — call Sandbox.Start directly.
 func Run(ctx context.Context, sb Sandbox, spec *Spec) (*Result, error) {
 	if sb == nil {
 		return nil, errors.New("sandbox: nil sandbox")
 	}
 
 	stderrOut := newLimitedWriter(spec.Limits.MaxOutputBytes)
-	local := *spec // 复制，避免污染调用方
+	local := *spec // copy, so the caller's spec stays untouched
 	local.Stderr = stderrOut
-	local.Stdin = nil // Stdin 字段仅由 Run 消费，不回传给实现
+	local.Stdin = nil // Stdin is consumed by Run only; never passed to the implementation
 
 	proc, err := sb.Start(ctx, &local)
 	if err != nil {
 		return nil, err
 	}
 
-	// 写输入并关闭 stdin（表示"发送结束"）
+	// Write the input and close stdin (signals end of input).
 	if len(spec.Stdin) > 0 {
 		if _, werr := proc.Stdin().Write(spec.Stdin); werr != nil {
 			_ = proc.Kill()
@@ -39,7 +40,7 @@ func Run(ctx context.Context, sb Sandbox, spec *Spec) (*Result, error) {
 	}
 	_ = proc.Stdin().Close()
 
-	// 并发读 stdout（与 stderr 写入同步进行，避免管道写满阻塞子进程）
+	// Read stdout concurrently (a full pipe would block the child process).
 	stdoutOut := newLimitedWriter(spec.Limits.MaxOutputBytes)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -60,15 +61,16 @@ func Run(ctx context.Context, sb Sandbox, spec *Spec) (*Result, error) {
 		var ee *ExitError
 		if errors.As(waitErr, &ee) {
 			res.ExitCode = ee.ExitCode()
-			return res, nil // 非零退出码不算错误，交给调用方判断
+			return res, nil // a non-zero exit code is not an error; the caller decides
 		}
 		return res, waitErr
 	}
 	return res, nil
 }
 
-// limitedWriter 带上限的缓冲区：达到上限后继续接收但丢弃内容，
-// 并置 Truncated。始终返回 len(p) 是为了不阻塞写入方（子进程）。
+// limitedWriter buffers up to a cap: past the cap it keeps accepting but
+// discards the content and sets Truncated. It always returns len(p) so the
+// writer (the child process) is never blocked.
 type limitedWriter struct {
 	buf       bytes.Buffer
 	max       int64

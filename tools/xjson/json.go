@@ -282,22 +282,22 @@ func ExtractJSONField(data interface{}, fieldName string) (interface{}, error) {
 }
 
 var (
-	// 匹配所有 \uXXXX 格式
+	// Matches every \uXXXX sequence.
 	unicodeRegex = regexp.MustCompile(`\\u[0-9a-fA-F]{4}`)
-	// 匹配零宽字符
+	// Matches zero-width characters.
 	//zeroWidthRegex = regexp.MustCompile("[\u200B\u200C\u200D\uFEFF]")
 
-	// 匹配所有不可见字符（包含零宽、控制符、所有看不见的）
+	// Matches every invisible character (zero-width, control, anything unseen).
 	invisibleRegex = regexp.MustCompile("[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\u200B\u200C\u200D\u200E\u200F\u2028\u2029\uFEFF]")
-	// 匹配非法转义
+	// Matches invalid escapes.
 	invalidEscapeRegex = regexp.MustCompile(`\\[^"\\/bfnrt]`)
 )
 
 func SanitizeJSON(input string) string {
-	// 1. 清除所有不可见字符（核心！你要的功能）
+	// 1. Strip every invisible character (the core of this function).
 	input = invisibleRegex.ReplaceAllString(input, "")
 
-	// 2. 把 \u003e 这类字符还原成正常字符
+	// 2. Turn sequences like \u003e back into the characters they stand for.
 	input = unicodeRegex.ReplaceAllStringFunc(input, func(m string) string {
 		code, err := strconv.ParseInt(m[2:], 16, 32)
 		if err != nil {
@@ -306,30 +306,30 @@ func SanitizeJSON(input string) string {
 		return string(rune(code))
 	})
 
-	// 3. 清理非法转义 \s \m \g 等
+	// 3. Drop invalid escapes such as \s \m \g.
 	input = invalidEscapeRegex.ReplaceAllString(input, "")
 
-	// 4. 转义双引号 " → \" 防止 JSON 断裂
+	// 4. Escape double quotes " → \" so the JSON does not break apart.
 	input = strings.ReplaceAll(input, `"`, `\"`)
 
-	//// 1. 清理零宽字符
+	//// 1. Strip zero-width characters.
 	//input = zeroWidthRegex.ReplaceAllString(input, "")
-	//// 2. 移除非法 Unicode 转义
+	//// 2. Remove invalid Unicode escapes.
 	//input = unicodeRegex.ReplaceAllStringFunc(input, func(m string) string {
-	//	// 尝试解析为正常字符，解析失败则删除
+	//	// Try to decode into a character; drop it when decoding fails.
 	//	r, ok := decodeUnicode(m)
 	//	if ok {
 	//		return string(r)
 	//	}
 	//	return ""
 	//})
-	//// 3. 清理非法转义（如 \s \m \g）
+	//// 3. Drop invalid escapes (such as \s \m \g).
 	//input = invalidEscapeRegex.ReplaceAllString(input, "")
 
 	return input
 }
 
-// 解码 \uXXXX
+// decodeUnicode decodes a \uXXXX sequence.
 func decodeUnicode(s string) (rune, bool) {
 	if len(s) != 6 || !strings.HasPrefix(s, "\\u") {
 		return 0, false

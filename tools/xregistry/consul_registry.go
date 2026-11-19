@@ -10,7 +10,7 @@ import (
 	consulapi "github.com/hashicorp/consul/api"
 )
 
-// ConsulDiscovery consul 服务发现实现。
+// ConsulDiscovery is the consul service discovery implementation.
 type ConsulDiscovery struct {
 	client *consulapi.Client
 }
@@ -23,7 +23,7 @@ func newConsulDiscovery(cfg *DiscoveryConfig) (*ConsulDiscovery, error) {
 	return &ConsulDiscovery{client: client}, nil
 }
 
-// ListInstances 列出某服务的全部健康实例（passingOnly），按 ID 稳定排序。
+// ListInstances lists every healthy instance of a service (passingOnly), stably sorted by ID.
 func (d *ConsulDiscovery) ListInstances(ctx context.Context, serviceName string) ([]Instance, error) {
 	q := (&consulapi.QueryOptions{}).WithContext(ctx)
 	entries, _, err := d.client.Health().Service(serviceName, "", true, q)
@@ -44,7 +44,7 @@ func (d *ConsulDiscovery) ListInstances(ctx context.Context, serviceName string)
 	return out, nil
 }
 
-// ConsulRegistrar consul 服务注册实现。
+// ConsulRegistrar is the consul service registration implementation.
 type ConsulRegistrar struct {
 	client *consulapi.Client
 	cfg    *RegistrarConfig
@@ -58,7 +58,7 @@ func newConsulRegistrar(cfg *RegistrarConfig) (*ConsulRegistrar, error) {
 	return &ConsulRegistrar{client: client, cfg: cfg}, nil
 }
 
-// Register 注册服务，挂 HTTP 健康检查（consul agent 主动探）。
+// Register registers the service with an HTTP health check (the consul agent probes it actively).
 func (r *ConsulRegistrar) Register() error {
 	reg := &consulapi.AgentServiceRegistration{
 		ID:      r.cfg.ServiceID,
@@ -79,7 +79,7 @@ func (r *ConsulRegistrar) Register() error {
 	return nil
 }
 
-// Deregister 注销服务。
+// Deregister unregisters the service.
 func (r *ConsulRegistrar) Deregister() error {
 	if err := r.client.Agent().ServiceDeregister(r.cfg.ServiceID); err != nil {
 		return fmt.Errorf("xregistry: deregister %s: %w", r.cfg.ServiceID, err)
@@ -87,8 +87,10 @@ func (r *ConsulRegistrar) Deregister() error {
 	return nil
 }
 
-// KeepRegistered 保活自愈：定期确认自己还在注册中心，被摘除（如注册中心断连）则重新注册。
-// 覆盖两类自愈场景：初始注册失败、运行中失联被摘除。ctx 取消时退出循环。
+// KeepRegistered is the liveness loop: it periodically confirms the service is still registered and
+// re-registers when it has been evicted (e.g. the registry dropped the connection).
+// It covers both self-healing cases: a failed initial registration, and eviction while running.
+// It returns when ctx is cancelled.
 func (r *ConsulRegistrar) KeepRegistered(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -109,7 +111,7 @@ func (r *ConsulRegistrar) KeepRegistered(ctx context.Context, interval time.Dura
 	}()
 }
 
-// ensureRegistered 确认自己还在注册中心，被摘除则重新注册。
+// ensureRegistered confirms the service is still registered and re-registers it when evicted.
 func (r *ConsulRegistrar) ensureRegistered() error {
 	svcs, err := r.client.Agent().Services()
 	if err != nil {
@@ -121,7 +123,7 @@ func (r *ConsulRegistrar) ensureRegistered() error {
 	return r.Register()
 }
 
-// newConsulClient 构造 consul 客户端（discovery / registrar 共用）。
+// newConsulClient builds the consul client (shared by discovery and registrar).
 func newConsulClient(address, datacenter, token string) (*consulapi.Client, error) {
 	cc := consulapi.DefaultConfig()
 	if address != "" {
