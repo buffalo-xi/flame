@@ -205,6 +205,25 @@ func (req *agentRequest) toModel() models.Agent {
 	return m
 }
 
+// checkJSONPayload reports the first JSON text field that is not valid JSON.
+// config and endpoints travel as strings; xsql.JSONB refuses to write anything
+// that is not valid JSON, so the check keeps the failure at the request layer
+// instead of letting it surface as a database error.
+func (req *agentRequest) checkJSONPayload() (string, bool) {
+	for _, f := range []struct {
+		name string
+		val  string
+	}{
+		{"config", req.Config},
+		{"endpoints", req.Endpoints},
+	} {
+		if f.val != "" && !json.Valid([]byte(f.val)) {
+			return f.name, false
+		}
+	}
+	return "", true
+}
+
 // CreateAgent 创建智能体
 func CreateAgent(c *gin.Context) {
 	// 从context中获取认证信息
@@ -221,6 +240,13 @@ func CreateAgent(c *gin.Context) {
 	}
 
 	info := authInfo.(*auth.AuthInfo)
+
+	// config / endpoints are JSON text: reject malformed values here, before any
+	// storage is deleted or written.
+	if field, ok := req.checkJSONPayload(); !ok {
+		xhttp.ErrCode(c, "common.invalid_params", gin.H{"field": field}, field+" must be valid JSON", "")
+		return
+	}
 
 	// 先校验：名称合法 + 不与其它 agent、工作流重名（任何写库之前）
 	req.Name = strings.TrimSpace(req.Name)
@@ -571,6 +597,13 @@ func UpdateAgent(c *gin.Context) {
 				req.Endpoints = string(b)
 			}
 		}
+	}
+
+	// Same check as CreateAgent; the fallback above already yields valid JSON,
+	// so this only rejects what the client actually sent.
+	if field, ok := req.checkJSONPayload(); !ok {
+		xhttp.ErrCode(c, "common.invalid_params", gin.H{"field": field}, field+" must be valid JSON", "")
+		return
 	}
 
 	// 状态只接受两态：未传则沿用库中旧值（全字段覆盖式 UPDATE 不能把状态清零）
