@@ -1,22 +1,27 @@
-# 租户创建资源方案
+# Tenant provisioning resource plan
 
-新建租户的资产来源：一个**提交进仓库的模板包**。
+[中文](tenant-template-pack.zh.md) | English
 
-一句话：t0 只用来生成这个包一次，**运行时完全不读 t0、也不读 `data/tenants/t0`**。
+Where a new tenant's assets come from: a **template pack committed to the repository**.
 
-## 为什么是包，而不是从 t0 复制
+In one sentence: t0 is used once to generate this pack; **at runtime nothing reads t0, and nothing reads `data/tenants/t0`**.
 
-1. t0 是开发机上的一个真实租户，生产环境并不存在 —— 按它复制等于把开发数据当成依赖。
-2. 整库复制会把 t0 的业务数据（LLM 服务商、连接、工作流、会话、用户）一起带过去，新租户不干净。
-3. 旧的 `tenant_template.sql` 是某次 t0 dump 的静态快照，已经落后（缺 `agents.is_supervisor`
-   等只存在于增量迁移里的列），继续用它建表会开出缺列的租户。
+## Why a pack instead of copying t0
 
-## 包结构
+1. t0 is a real tenant on the development machine and does not exist in production — copying it would turn development data
+   into a dependency.
+2. A whole-schema copy would drag t0's business data (LLM providers, connections, workflows, sessions, users) along, so the new
+   tenant would not be clean.
+3. The old `tenant_template.sql` is a static snapshot of some past t0 dump and is already stale (it lacks columns that only
+   exist in incremental migrations, such as `agents.is_supervisor`); creating tables from it yields tenants with missing
+   columns.
+
+## Pack layout
 
 ```
 nexus/platform/provision/template/
-├── schema.sql      # 全部表结构（28 张表 / 约束 / 索引 / 注释，对象名不带 schema 前缀）
-├── seed.sql        # 预置资产的数据行（固定 uuid）
+├── schema.sql      # full table definitions (28 tables / constraints / indexes / comments, no schema prefix on object names)
+├── seed.sql        # data rows for the seeded assets (fixed uuids)
 └── files/
     ├── agents/main/AGENT.md
     ├── skills/skill-authoring/SKILL.md
@@ -25,59 +30,63 @@ nexus/platform/provision/template/
     └── skills/flow-authoring/SKILL.md
 ```
 
-Go 侧整体嵌入：
+Embedded as a whole on the Go side:
 
 ```go
 //go:embed template
 var templateAssets embed.FS
 ```
 
-## 开通流程（`provision.Provision`）
+## Provisioning flow (`provision.Provision`)
 
-单个事务，顺序即设计：
+One transaction; the order is the design:
 
 1. `CREATE SCHEMA "<new>"`
-2. `SELECT set_config('search_path', '<new>', true)` —— 包内 SQL 全部不带 schema 前缀
-3. 执行 `template/schema.sql`
-4. 执行 `template/seed.sql`（固定 uuid，**不幂等**：开通只做一次）
-5. `INSERT users`（首个 `manage` 用户 `primary`，密码由调用方给）
-6. 提交前物化 `template/files/` → storage 的 `tenants/<new>/<rel>`
+2. `SELECT set_config('search_path', '<new>', true)` — the SQL inside the pack carries no schema prefix
+3. run `template/schema.sql`
+4. run `template/seed.sql` (fixed uuids, **not idempotent**: provisioning happens once)
+5. `INSERT users` (the first `manage` user, `primary`, with the password supplied by the caller)
+6. materialise `template/files/` → storage `tenants/<new>/<rel>` before committing
 7. `INSERT platform.tenants`
-8. 写 `platform.tenant_capabilities`：`capability.All()` 的每一项 `is_allowed = true`（**缺省全开**）
+8. write `platform.tenant_capabilities`: `is_allowed = true` for every entry of `capability.All()` (**open by default**)
 9. `COMMIT`
-10. 提交后失效缓存：`sharedtenants.Invalidate` / `quota.Invalidate`
+10. invalidate caches after commit: `sharedtenants.Invalidate` / `quota.Invalidate`
 
-### 关于缺省能力授权
+### On default capability grants
 
-新租户开箱就能用 exec / shell / code / browser / egress，靠的是**把行写出来**，而不是改缺省值：
+A new tenant can use exec / shell / code / browser / egress out of the box because the **rows are written**, not because
+defaults were changed:
 
-`capabilitypolicy` 的语义是「没有行 = 未开通」（缺省拒绝）。如果把缺省改成放行，平台侧这层闸
-对所有存量租户会整体失效 —— 租户又能给自己放行，等于没有闸。所以只能在开通时物化 5 行。
+the semantics of `capabilitypolicy` is "no row = not granted" (deny by default). Changing the default to allow would disable
+this platform-side gate for every existing tenant — a tenant could then grant itself anything, which is no gate at all. So the
+only option is to materialise 5 rows at provisioning time.
 
-平台侧仍有两层可控：
+There are still two platform-side controls:
 
-- 逐项关闭：管理台「能力授权」把某租户的某项改成 `false`（或删行 = 回到未开通）
-- 全局急停：`platform.capability_gates` 一旦拦下，压过租户的显式开启
+- switch items off one by one: the console's "capabilities" page sets an item to `false` for a tenant (or deletes the row =
+  back to not granted)
+- a global kill switch: once `platform.capability_gates` blocks something, it overrides the tenant's explicit enablement
 
-同一能力的两层关系是 `生效 = 租户行 AND NOT 全局闸`。
+For the same capability: `effective = tenant row AND NOT global gate`.
 
-任何一步失败都回滚事务；已写入的文件用 `DeletePrefix("tenants/<new>")` 回收 ——
-保证「要么是一个完整租户，要么什么都没留下」。文件放在提交前写就是为了这一点。
+Any failing step rolls the transaction back; files already written are reclaimed with `DeletePrefix("tenants/<new>")` —
+guaranteeing "either a complete tenant or nothing at all". Files are written before commit precisely for this reason.
 
-## 预置资产口径
+## Seeded assets
 
-`seed.sql` 必须与下面两份 SQL 同口径，改一边要同步另一边，否则新租户开出来是半残的：
+`seed.sql` must stay in step with the two SQL files below; change one and you must change the other, otherwise new tenants come
+out half-built:
 
-| 来源 | 内容 |
+| Source | Content |
 | --- | --- |
-| `nexus/sql/main_core_tool_grants.sql` | main 的 6 个 required 组：`builtin:file` / `exec` / `shell` / `agent` / `skill` / `agent-admin` |
-| `nexus/sql/supervisor_on_demand_groups.sql` | 超级智能体的 5 个 allow 组：`builtin:skill-own` / `skill-admin` / `tool-grant` / `custom-tool` / `flow-admin` |
-| 同上 | 技能工具依赖：`skill-authoring`→`skill-own`+`skill-admin`；`agent-authoring`→`tool-grant`+`skill-admin`；`custom-tool-authoring`→`custom-tool`；`flow-authoring`→`flow-admin` |
-| 同上 | main 绑定这四份技能（起步套件，system prompt 会带上它们的说明） |
+| `nexus/sql/main_core_tool_grants.sql` | main's 6 required groups: `builtin:file` / `exec` / `shell` / `agent` / `skill` / `agent-admin` |
+| `nexus/sql/supervisor_on_demand_groups.sql` | the supervisor agent's 5 allow groups: `builtin:skill-own` / `skill-admin` / `tool-grant` / `custom-tool` / `flow-admin` |
+| same | skill tool dependencies: `skill-authoring`→`skill-own`+`skill-admin`; `agent-authoring`→`tool-grant`+`skill-admin`; `custom-tool-authoring`→`custom-tool`; `flow-authoring`→`flow-admin` |
+| same | main binds these four skills (the starter kit; its system prompt carries their descriptions) |
 
-固定 uuid（seed 里的授权行 / 绑定行靠它引用）：
+Fixed uuids (the grant / binding rows in the seed reference them):
 
-| 实体 | uuid |
+| Entity | uuid |
 | --- | --- |
 | agent `main` | `a0000000-0000-4000-8000-000000000001` |
 | skill `skill-authoring` | `a0000000-0000-4000-8000-000000000011` |
@@ -85,17 +94,18 @@ var templateAssets embed.FS
 | skill `custom-tool-authoring` | `a0000000-0000-4000-8000-000000000013` |
 | skill `flow-authoring` | `a0000000-0000-4000-8000-000000000014` |
 
-受保护技能名单的真源是 `shared/models/protected.go` 的 `protectedSkills`
-（`models.ProtectedSkillNames()` 提供只读副本）。**加一个保护技能时，seed.sql 与 files/ 都要补**。
+The single source of truth for the protected-skill list is `protectedSkills` in `shared/models/protected.go`
+(`models.ProtectedSkillNames()` exposes a read-only copy). **When adding a protected skill, both seed.sql and files/ must be
+extended.**
 
-## 重新生成（源库结构变了才需要）
+## Regenerating (only needed when the source schema changed)
 
 ```powershell
 cd d:/proj/flame
 $env:PGPASSWORD='pg'
 pg_dump -h localhost -p 5432 -U postgres -d flame --schema-only -n t0 --no-owner --no-privileges -f t0_ddl.sql
 
-# 转成无 schema 前缀的版本：去 psql 元命令、SET、set_config、CREATE SCHEMA、注释行，再去 t0. 前缀
+# convert to the no-schema-prefix version: drop psql meta commands, SET, set_config, CREATE SCHEMA and comment lines, then strip the t0. prefix
 $lines = [System.IO.File]::ReadAllLines('d:/proj/flame/t0_ddl.sql', [System.Text.Encoding]::UTF8)
 $out = New-Object System.Collections.Generic.List[string]
 foreach ($line in $lines) {
@@ -113,24 +123,25 @@ foreach ($line in $lines) {
   (New-Object System.Text.UTF8Encoding($false)))
 ```
 
-> **必须全程 UTF-8 读写**。PowerShell 的 `Get-Content` 默认按系统 ANSI 解码，
-> 会把 `COMMENT ON … IS '中文'` 读成乱码再写回去（`-f` 加 `ReadAllLines(..., UTF8)` 可避开）。
+> **UTF-8 throughout is mandatory**. PowerShell's `Get-Content` decodes with the system ANSI code page by default, so
+> `COMMENT ON … IS '<Chinese>'` is read as garbage and written back that way (`-f` plus `ReadAllLines(..., UTF8)` avoids it).
 
-预置文件（`files/`）来自开发机上 t0 的定义域目录，只在改模板时同步一次：
+The seeded files (`files/`) come from t0's definition-domain directories on the development machine and are synced only when the
+template changes:
 
 ```powershell
 cd d:/proj/flame/nexus
 $dst = "platform/provision/template/files"
 New-Item -ItemType Directory -Force "$dst/agents","$dst/skills" | Out-Null
 Copy-Item -Recurse -Force "data/tenants/t0/agents/main" "$dst/agents/"
-foreach ($s in 'skill-authoring','agent-authoring','custom-tool-authoring') {
+foreach ($s in 'skill-authoring','agent-authoring','custom-tool-authoring','flow-authoring') {
   Copy-Item -Recurse -Force "data/tenants/t0/skills/$s" "$dst/skills/"
 }
 ```
 
-## 自检
+## Self-check
 
-不开服务，直接在事务里试跑一遍（跑完回滚，不留痕迹）：
+Without starting the service, run it once inside a transaction (it rolls back afterwards and leaves no trace):
 
 ```sql
 BEGIN;
@@ -145,4 +156,4 @@ SELECT count(*) FROM agent_skill_bindings;                   -- 3
 ROLLBACK;
 ```
 
-用 `psql -v ON_ERROR_STOP=1 -f verify.sql` 执行，任何一条语句失败都会中断。
+Run it with `psql -v ON_ERROR_STOP=1 -f verify.sql`; any failing statement aborts the run.
