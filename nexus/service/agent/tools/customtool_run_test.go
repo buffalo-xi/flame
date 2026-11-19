@@ -13,10 +13,11 @@ import (
 	"flame/tools/sandbox"
 )
 
-// runStubSandbox 捕获 Spec 与 stdin，用 out / wait 决定进程行为。
+// runStubSandbox captures the Spec and stdin, and uses out / wait to decide how the process behaves.
 //
-// 不落真进程：执行内核的判定（超限、遮蔽、JSON 解析、退出码）全在 Go 侧，
-// 用桩就能覆盖；起真沙箱只会让用例依赖环境（sandboxd / 解释器是否就绪）。
+// No real process: the execution kernel's decisions (over-limit, masking, JSON parsing, exit codes) all live in Go and are covered
+// by a stub; starting a real sandbox would only make the cases depend on the environment (whether sandboxd / the interpreter is
+// ready).
 type runStubSandbox struct {
 	sandbox.Sandbox
 	spec    *sandbox.Spec
@@ -31,7 +32,8 @@ func (s *runStubSandbox) Name() string { return "stub" }
 func (s *runStubSandbox) Start(_ context.Context, spec *sandbox.Spec) (sandbox.Process, error) {
 	s.spec = spec
 	s.stdin.Reset()
-	// stderr 由实现直写 spec.Stderr（真实实现如此），这里照做才能验证错误文案里带 stderr。
+	// stderr is written straight into spec.Stderr by the implementation (as the real one does); doing the same here is what makes
+	// it possible to verify that the error text carries the stderr.
 	if s.errText != "" && spec.Stderr != nil {
 		_, _ = spec.Stderr.Write([]byte(s.errText))
 	}
@@ -57,8 +59,9 @@ func (n nopWriteCloser) Write(p []byte) (int, error) { return n.w.Write(p) }
 
 func (n nopWriteCloser) Close() error { return nil }
 
-// newRunFixture 造一个「盘上真的有工具目录」的执行输入。
-// ToolsRoot / Workspace 都落在临时目录里：内核会 os.Stat 挂载源，假路径会掩盖真实错误。
+// newRunFixture builds an execution input where "the tool directory really exists on disk".
+// ToolsRoot / Workspace both live in temp directories: the kernel os.Stat's the mount sources, and fake paths would mask the real
+// errors.
 func newRunFixture(t *testing.T, spec CustomToolSpec) (CustomToolRun, *runStubSandbox) {
 	t.Helper()
 	if spec.Name == "" {
@@ -85,8 +88,9 @@ func newRunFixture(t *testing.T, spec CustomToolSpec) (CustomToolRun, *runStubSa
 	}, sb
 }
 
-// 成功路径：结果解析、stdin 协议、隔离参数三件事一起钉住。
-// stdin 是脚本唯一能拿到参数与配置的渠道，格式漂移等于所有自定义工具同时坏掉。
+// The success path pins three things at once: result parsing, the stdin protocol and the isolation arguments.
+// stdin is the only channel through which a script receives arguments and config, so any drift in its format breaks every custom
+// tool at the same time.
 func TestRunCustomToolSpecSuccess(t *testing.T) {
 	run, sb := newRunFixture(t, CustomToolSpec{
 		Lang:    "python",
@@ -96,48 +100,50 @@ func TestRunCustomToolSpecSuccess(t *testing.T) {
 
 	res, err := RunCustomToolSpec(context.Background(), run, map[string]any{"month": "2026-09"})
 	if err != nil {
-		t.Fatalf("应成功，实际 %v", err)
+		t.Fatalf("should succeed, got %v", err)
 	}
 	m, ok := res.Result.(map[string]any)
 	if !ok || m["total"] != float64(3) {
-		t.Fatalf("结果解析错误: %#v", res.Result)
+		t.Fatalf("result parsing failed: %#v", res.Result)
 	}
 	if res.ExitCode != 0 || res.Truncated || res.Masked {
-		t.Errorf("成功路径不该带这些标记: %+v", res)
+		t.Errorf("the success path must not carry these flags: %+v", res)
 	}
 	if !strings.Contains(sb.stdin.String(), `"month":"2026-09"`) {
-		t.Errorf("stdin 未带上模型参数: %s", sb.stdin.String())
+		t.Errorf("stdin did not carry the model arguments: %s", sb.stdin.String())
 	}
 	if !strings.Contains(sb.stdin.String(), `"region":"cn"`) {
-		t.Errorf("stdin 未带上工具配置: %s", sb.stdin.String())
+		t.Errorf("stdin did not carry the tool config: %s", sb.stdin.String())
 	}
 	if sb.spec == nil || len(sb.spec.Mounts) != 2 {
-		t.Fatalf("隔离参数异常: %+v", sb.spec)
+		t.Fatalf("unexpected isolation arguments: %+v", sb.spec)
 	}
 	if sb.spec.Mounts[1].Guest != scriptGuestDir || !sb.spec.Mounts[1].ReadOnly {
-		t.Errorf("工具目录应以只读挂到 %s: %+v", scriptGuestDir, sb.spec.Mounts[1])
+		t.Errorf("the tool directory should be mounted read-only at %s: %+v", scriptGuestDir, sb.spec.Mounts[1])
 	}
 }
 
-// stdout 不是 JSON 时必须失败，但诊断要留下来 —— 试跑靠它显示「脚本到底打了什么」。
+// Non-JSON stdout must fail, but the diagnostics have to be kept - the test run relies on them to show "what the script actually
+// printed".
 func TestRunCustomToolSpecNonJSONKeepsDiagnostics(t *testing.T) {
 	run, sb := newRunFixture(t, CustomToolSpec{Lang: "python"})
 	sb.out = "debug line\n"
 
 	res, err := RunCustomToolSpec(context.Background(), run, nil)
 	if err == nil || !strings.Contains(err.Error(), "non-JSON to stdout") {
-		t.Fatalf("应报 stdout 不是 JSON，实际 %v", err)
+		t.Fatalf("it should report that stdout is not JSON, got %v", err)
 	}
 	if res == nil || !strings.Contains(res.Stdout, "debug line") {
-		t.Fatalf("失败时也要带回 stdout 诊断: %+v", res)
+		t.Fatalf("stdout diagnostics must be returned on failure too: %+v", res)
 	}
 }
 
-// 非 0 退出码：错误里必须带退出码与 stderr，且结果对象照样返回（供试跑展示）。
+// A non-zero exit code: the error must carry the exit code and stderr, and the result object is still returned (for the test run to
+// display).
 //
-// 回归点：远端沙箱返回的是 *sandbox.ExitError（remote.go FrameExit）。只判
-// *exec.ExitError 时整个失败会退化成裸的 "exit status 2"——退出码变 0、stderr 全丢，
-// 试跑看到的就是「失败但没有任何原因」。
+// The regression this guards: a remote sandbox returns *sandbox.ExitError (remote.go FrameExit). Checking only *exec.ExitError
+// degrades the whole failure into a bare "exit status 2" - the exit code becomes 0, stderr is lost, and the test run shows "it
+// failed with no reason at all".
 func TestRunCustomToolSpecNonZeroExit(t *testing.T) {
 	run, sb := newRunFixture(t, CustomToolSpec{Lang: "python"})
 	sb.wait = &sandbox.ExitError{Code: 2}
@@ -146,17 +152,18 @@ func TestRunCustomToolSpecNonZeroExit(t *testing.T) {
 
 	res, err := RunCustomToolSpec(context.Background(), run, nil)
 	if err == nil || !strings.Contains(err.Error(), "exited with code 2") {
-		t.Fatalf("应报退出码 2，实际 %v", err)
+		t.Fatalf("it should report exit code 2, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "参数 principal 必填") {
-		t.Fatalf("错误里应带 stderr 原文，实际 %v", err)
+		t.Fatalf("the error should carry the verbatim stderr, got %v", err)
 	}
 	if res == nil || res.ExitCode != 2 {
-		t.Fatalf("失败时要带回退出码 2: %+v", res)
+		t.Fatalf("exit code 2 must be returned on failure: %+v", res)
 	}
 }
 
-// 输出超限即失败（截断后就是坏 JSON，静默截断比报错难查得多）。
+// Output over the limit fails outright (a truncated value is broken JSON, and silent truncation is far harder to diagnose than an
+// error).
 func TestRunCustomToolSpecTruncated(t *testing.T) {
 	run, sb := newRunFixture(t, CustomToolSpec{Lang: "python"})
 	run.Spec.MaxOutput = 4
@@ -164,15 +171,15 @@ func TestRunCustomToolSpecTruncated(t *testing.T) {
 
 	res, err := RunCustomToolSpec(context.Background(), run, nil)
 	if err == nil || !strings.Contains(err.Error(), "byte limit") {
-		t.Fatalf("应报超出上限，实际 %v", err)
+		t.Fatalf("it should report exceeding the limit, got %v", err)
 	}
 	if res == nil || !res.Truncated {
-		t.Fatalf("应标记 truncated: %+v", res)
+		t.Fatalf("it should be flagged truncated: %+v", res)
 	}
 }
 
-// 密钥遮蔽：输出里出现够长的配置值要被替换，并给结果打 _masked 标记。
-// 这条同时守住「诊断信封里的 stdout 也遮蔽」—— 试跑会把 stdout 原样送到浏览器。
+// Secret masking: a long enough config value appearing in the output is replaced, and the result is flagged _masked.
+// This also holds "stdout in the diagnostics envelope is masked too" - the test run sends stdout to the browser verbatim.
 func TestRunCustomToolSpecMasksSecrets(t *testing.T) {
 	run, sb := newRunFixture(t, CustomToolSpec{
 		Lang:    "python",
@@ -182,21 +189,22 @@ func TestRunCustomToolSpecMasksSecrets(t *testing.T) {
 
 	res, err := RunCustomToolSpec(context.Background(), run, nil)
 	if err != nil {
-		t.Fatalf("应成功，实际 %v", err)
+		t.Fatalf("should succeed, got %v", err)
 	}
 	if !res.Masked {
-		t.Fatal("应标记已遮蔽")
+		t.Fatal("it should be flagged as masked")
 	}
 	if strings.Contains(res.Stdout, "sk-1234567890") {
-		t.Errorf("stdout 诊断里仍有明文密钥: %s", res.Stdout)
+		t.Errorf("the stdout diagnostics still contain the plaintext secret: %s", res.Stdout)
 	}
 	m, _ := res.Result.(map[string]any)
 	if m["_masked"] != true {
-		t.Errorf("结果应带 _masked 提示: %#v", res.Result)
+		t.Errorf("the result should carry the _masked hint: %#v", res.Result)
 	}
 }
 
-// 必填配置缺失在执行前就报，并指出缺哪个 key —— 这是唯一能给出这个信息的地方。
+// A missing required config is reported before execution, naming the key - this is the only place that can provide that
+// information.
 func TestRunCustomToolSpecMissingRequiredConfig(t *testing.T) {
 	run, _ := newRunFixture(t, CustomToolSpec{
 		Lang:            "python",
@@ -205,22 +213,23 @@ func TestRunCustomToolSpecMissingRequiredConfig(t *testing.T) {
 
 	_, err := RunCustomToolSpec(context.Background(), run, nil)
 	if err == nil || !strings.Contains(err.Error(), "api_key") {
-		t.Fatalf("应指出缺哪个配置，实际 %v", err)
+		t.Fatalf("it should name the missing config, got %v", err)
 	}
 }
 
-// 盘上目录不可达（挂载源缺失）要说清路径，别拖到沙箱启动才报一个 ENOENT。
+// An unreachable on-disk directory (missing mount source) must be reported with its path, not deferred to sandbox start as a bare
+// ENOENT.
 func TestRunCustomToolSpecMissingToolDir(t *testing.T) {
 	run, _ := newRunFixture(t, CustomToolSpec{Lang: "python"})
-	run.ToolsRoot = t.TempDir() // 空目录：没有 demo/
+	run.ToolsRoot = t.TempDir() // empty directory: no demo/
 
 	_, err := RunCustomToolSpec(context.Background(), run, nil)
 	if err == nil || !strings.Contains(err.Error(), "not reachable on the host") {
-		t.Fatalf("应报目录不可达，实际 %v", err)
+		t.Fatalf("it should report the directory as unreachable, got %v", err)
 	}
 }
 
-// 出网取「工具声明 ∧ 平台开通」两层：任一层没开就必须断网。
+// Egress needs both layers: "declared by the tool AND enabled by the platform" - if either is off the network is closed.
 func TestRunCustomToolSpecEgressNeedsBothLayers(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -228,9 +237,9 @@ func TestRunCustomToolSpecEgressNeedsBothLayers(t *testing.T) {
 		caps   map[string]bool
 		want   bool
 	}{
-		{"声明但平台未开", true, map[string]bool{capability.Exec: true}, false},
-		{"声明且平台已开", true, map[string]bool{capability.Exec: true, capability.Egress: true}, true},
-		{"未声明但平台已开", false, map[string]bool{capability.Exec: true, capability.Egress: true}, false},
+		{"declared but not enabled by the platform", true, map[string]bool{capability.Exec: true}, false},
+		{"declared and enabled by the platform", true, map[string]bool{capability.Exec: true, capability.Egress: true}, true},
+		{"not declared even though the platform allows it", false, map[string]bool{capability.Exec: true, capability.Egress: true}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -238,7 +247,7 @@ func TestRunCustomToolSpecEgressNeedsBothLayers(t *testing.T) {
 			run.Caps = tc.caps
 			sb.out = `{}`
 			if _, err := RunCustomToolSpec(context.Background(), run, nil); err != nil {
-				t.Fatalf("执行应成功: %v", err)
+				t.Fatalf("execution should succeed: %v", err)
 			}
 			if sb.spec.Egress == nil || *sb.spec.Egress != tc.want {
 				t.Fatalf("egress = %v, want %v", sb.spec.Egress, tc.want)

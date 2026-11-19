@@ -9,25 +9,28 @@ import (
 	"github.com/google/uuid"
 )
 
-// 会话解析的三类失败。分开是为了让入口层能给出不同的协议错误码，
-// 同时保证「不存在」与「不是你的」在**对外文案**上永远合流（见 Lookup）。
+// The three ways session resolution can fail. They are kept apart so the entry points can map them to different protocol
+// error codes, while guaranteeing that "does not exist" and "is not yours" always merge into one outward message (see
+// Lookup).
 var (
-	// ErrSessionRequired 需要 session_id 但没给。
+	// ErrSessionRequired means a session_id was needed but not supplied.
 	ErrSessionRequired = errors.New("session_id is required")
-	// ErrSessionInvalid session_id 不是合法 UUID。
-	// 必须先挡住：sessions.id / session_records.session_id 都是 uuid 列，
-	// 把脏字符串交给 PG 只会换来一句「invalid input syntax for type uuid」。
+	// ErrSessionInvalid means session_id is not a valid UUID.
+	// It must be blocked up front: sessions.id and session_records.session_id are both uuid columns, and handing a dirty
+	// string to PG only buys "invalid input syntax for type uuid".
 	ErrSessionInvalid = errors.New("session_id is not a valid UUID")
-	// ErrSessionForbidden 会话不存在，或不属于这个 owner。
-	// 两种情况刻意共用同一个错误：分开就等于提供了一个探测 sid 是否存在的接口。
+	// ErrSessionForbidden means the session does not exist, or does not belong to this owner.
+	// The two cases deliberately share one error: separating them would hand out an interface for probing whether a sid
+	// exists.
 	ErrSessionForbidden = errors.New("session not found or not owned by this owner")
 )
 
-// ParseID 规范化并校验客户端给来的会话 id：空 → ErrSessionRequired；非 UUID → ErrSessionInvalid。
+// ParseID normalises and validates a session id supplied by the client: empty -> ErrSessionRequired; not a UUID ->
+// ErrSessionInvalid.
 //
-// 任何要把 sid 交给 SQL 的地方都必须先过这一道 —— sessions.id / session_records.session_id
-// 都是 uuid 列，脏字符串换来的是 PG 的 22P02，那既不是给调用方看的错误，
-// 也会把「这个值被当成 id 用了」的实现细节漏到响应里。
+// Every place that hands a sid to SQL must pass through here first - sessions.id and session_records.session_id are both
+// uuid columns, so a dirty string buys PG's 22P02, which is neither an error meant for the caller nor free of the
+// implementation detail "this value was used as an id".
 func ParseID(sessionID string) (string, error) {
 	sid := strings.TrimSpace(sessionID)
 	if sid == "" {
@@ -39,14 +42,15 @@ func ParseID(sessionID string) (string, error) {
 	return sid, nil
 }
 
-// ResolveForUser 按「会话归属用户」解析 session_id —— 外部入口（HTTP chat / MCP / RPC）的统一判据。
+// ResolveForUser resolves a session_id by "the user the session belongs to" - the single criterion for external entry
+// points (HTTP chat / MCP / RPC).
 //
-// 与 Lookup 的区别：只校验 user_id，不校验 owner。会话归属的是用户，
-// owner_type / owner_id 只记录创建者；父子 agent 共用同一个 session 时 owner 必然对不上，
-// 用 owner 收口会把 call_agent 的合法级联整体拒掉。
+// It differs from Lookup in that it checks only user_id, never the owner. A session belongs to a user; owner_type /
+// owner_id merely record who created it, and when a parent and a child agent share one session the owner cannot match -
+// gating on the owner would reject call_agent's legitimate cascade wholesale.
 //
-// 失败口径与 Lookup 一致：空 → ErrSessionRequired；非 UUID → ErrSessionInvalid；
-// 不存在或不属于该用户 → ErrSessionForbidden（两者同一句话，防探测）。
+// Failure modes match Lookup: empty -> ErrSessionRequired; not a UUID -> ErrSessionInvalid; missing or not owned by that
+// user -> ErrSessionForbidden (one shared message, to defeat probing).
 func ResolveForUser(schema, sessionID, userID string) (*models.Session, error) {
 	id, err := ParseID(sessionID)
 	if err != nil {
@@ -62,10 +66,11 @@ func ResolveForUser(schema, sessionID, userID string) (*models.Session, error) {
 	return sess, nil
 }
 
-// ResolveOrCreateForUser 按用户口径解析会话；不存在则用该 id 创建（受会话数配额约束）。
+// ResolveOrCreateForUser resolves a session by the user criterion, creating it with that id when it does not exist (subject
+// to the session-count quota).
 //
-// 协议端点（RPC / MCP）专用：调用方自带 UUID，首次调用即建档。
-// 与 ResolveForUser 一样只校验 user_id —— 会话归属用户，owner 只记录创建者。
+// For protocol endpoints (RPC / MCP) only: the caller brings its own UUID, so the first call is also the first record. Like
+// ResolveForUser it checks only user_id - a session belongs to a user, and the owner merely records who created it.
 func ResolveOrCreateForUser(schema, sessionID, ownerType, ownerID, userID, title string) (*models.Session, error) {
 	id, err := ParseID(sessionID)
 	if err != nil {
@@ -85,36 +90,49 @@ func ResolveOrCreateForUser(schema, sessionID, ownerType, ownerID, userID, title
 	return repo.CreateWithID(schema, id, ownerType, ownerID, userID, title)
 }
 
-// Repository 会话存储接口（泛化：agent + flow）
+// Repository is the session store interface (generalised: agent + flow).
 type Repository interface {
-	// Create 创建会话（userID 可空），返回会话 ID。
-	// 会话数超限返回 *quota.ExceededError（控制台据此回 507，由人删旧会话后再试）。
+	// Create creates a session (userID may be empty) and returns its ID.
+	// Over the session-count quota it returns *quota.ExceededError (the console turns that into a 507, and the human
+	// deletes old sessions before retrying).
 	Create(schema, ownerType, ownerID, userID, title string) (string, error)
-	// CreateWithID 用指定 id 幂等建会话：冲突时回读并校验可见性，且走会话数配额。
-	// 协议端点（调用方自带 UUID）用这个，不要用 EnsureExists。
-	// 与 Create 的差别：超限时自动回收该用户最旧的会话再建（端点没有删除接口）。
+	// CreateWithID idempotently creates a session with the given id: on conflict it reads back and checks visibility, and
+	// it goes through the session-count quota.
+	// Protocol endpoints (which bring their own UUID) use this, not EnsureExists.
+	// The difference from Create: over the limit it reclaims this user's oldest session and then creates (endpoints have
+	// no delete API).
 	CreateWithID(schema, id, ownerType, ownerID, userID, title string) (*models.Session, error)
-	// ListByOwner 列出某 owner 的会话（updated_at 倒序）。
-	// userID 非空按用户过滤；limit<=0 不限制；keyword 非空按 title 模糊匹配。
+	// ListByOwner lists one owner's sessions (updated_at descending).
+	// A non-empty userID filters by user; limit<=0 does not limit; a non-empty keyword matches the title fuzzily.
 	ListByOwner(schema, ownerType, ownerID, userID string, limit int, keyword string) ([]models.Session, error)
-	// ListByUser 列出某用户指定 owner_type 的全部会话（updated_at 倒序）。limit<=0 不限制。
+	// ListByUser lists all of one user's sessions under the given owner_type (updated_at descending). limit<=0 does not
+	// limit.
 	ListByUser(schema, ownerType, userID string, limit int) ([]models.Session, error)
-	// Get 按 ID 获取会话；不存在返回 (nil, nil)
+	// Get reads a session by ID; (nil, nil) when it does not exist.
 	Get(schema, sessionID string) (*models.Session, error)
-	// Lookup 按 ID 取会话并校验「创建者」(ownerType, ownerID)：
-	// 空 → ErrSessionRequired；非 UUID → ErrSessionInvalid；
-	// 不存在或不属于 (ownerType, ownerID) → ErrSessionForbidden（两者同一句话，防探测）。
+	// Lookup reads a session by ID and checks its "creator" (ownerType, ownerID):
+	// empty -> ErrSessionRequired; not a UUID -> ErrSessionInvalid;
+	// missing or not owned by (ownerType, ownerID) -> ErrSessionForbidden (one shared message, to defeat probing).
 	//
-	// 外部入口（HTTP chat / MCP / RPC）请用 ResolveForUser 按 user 收口：
-	// 会话归属的是用户，owner 只记录创建者；父子 agent 共用同一 session 时 owner 对不上。
-	// 这里保留 owner 维度，供「服务端自签票据」这类没有登录态、只确认创建者的场景。
+	// External entry points (HTTP chat / MCP / RPC) should use ResolveForUser and gate on the user: a session belongs to a
+	// user, the owner only records who created it, and when a parent and a child agent share one session the owner cannot
+	// match. The owner dimension stays here for cases with no login state that only need "did this owner create it", such
+	// as server-signed tickets.
 	Lookup(schema, sessionID, ownerType, ownerID string) (*models.Session, error)
-	// UpdateTitle 更新标题并刷新 updated_at
+	// UpdateTitle updates the title and refreshes updated_at.
 	UpdateTitle(schema, sessionID, title string) error
-	// Touch 刷新 updated_at（对话后调用）
+	// Touch refreshes updated_at (called after a turn).
 	Touch(schema, sessionID string) error
-	// EnsureExists 确保指定 id 的会话存在：不存在则创建（用指定 id），存在则刷新 updated_at
+	// EnsureExists makes sure the session with the given id exists: missing means create it with that id, present means
+	// refresh updated_at.
 	EnsureExists(schema, id, ownerType, ownerID, userID, title string) error
-	// Delete 删除会话（连带删除其 session_records）
+	// Delete deletes a session (its session_records, workspace directory and usage counter included).
 	Delete(schema, sessionID string) error
+	// DeleteByOwner deletes every session of one owner (agent / flow) - records, rows, workspace directories and usage
+	// counters included - and returns how many were removed.
+	//
+	// Deleting an agent or a flow must call this: once the owner is gone its sessions can no longer be listed anywhere
+	// (the console lists them per agent / flow), yet they keep counting against the user's session quota and keep their
+	// workspaces on disk.
+	DeleteByOwner(schema, ownerType, ownerID string) (int, error)
 }

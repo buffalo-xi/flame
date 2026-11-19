@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// stubEndpointRunner 本地端点工具的执行通道替身（local__ 归它管）。
+// stubEndpointRunner is a stand-in for the local endpoint execution channel (it owns local__).
 type stubEndpointRunner struct {
 	called bool
 	in     LocalCall
@@ -22,8 +22,8 @@ func (s *stubEndpointRunner) Invoke(_ context.Context, in LocalCall) (any, error
 	return map[string]any{"content": "ok", "is_error": false}, nil
 }
 
-// local__<端点> 必须交给 EndpointRunner，而不是 externalToolRunner ——
-// 后者只认 mcp__ / rpc__，转过去只会得到「不是可执行的外部连接工具」。
+// local__<endpoint> has to go to the EndpointRunner, not the externalToolRunner -
+// the latter only knows mcp__ / rpc__, so forwarding it there would only produce "not an executable external connection tool".
 func TestExecuteToolDelegatesToEndpointRunner(t *testing.T) {
 	ext := &stubExternalRunner{}
 	ep := &stubEndpointRunner{}
@@ -41,36 +41,36 @@ func TestExecuteToolDelegatesToEndpointRunner(t *testing.T) {
 		t.Fatalf("ExecuteTool = %v", err)
 	}
 	if !ep.called {
-		t.Fatal("本地端点执行器没被调用")
+		t.Fatal("the local endpoint runner was not invoked")
 	}
 	if ext.called {
-		t.Fatal("local__ 不该被外部连接执行器接管")
+		t.Fatal("local__ must not be taken over by the external connection runner")
 	}
-	// 身份必须透传：被调 flow 要落在调用方的租户 / 会话场地上。
+	// Identity must be forwarded: the invoked flow lands in the caller's tenant / session venue.
 	if ep.in.Schema != "t0" || ep.in.UserID != "user-1" || ep.in.SessionID != "sess-1" || ep.in.RunID != "run-1" {
-		t.Errorf("身份透传不对：%+v", ep.in)
+		t.Errorf("identity was not forwarded correctly: %+v", ep.in)
 	}
 	if ep.in.AgentID != "agent-1" || ep.in.ToolName != "local__daily-report" {
-		t.Errorf("工具上下文透传不对：%+v", ep.in)
+		t.Errorf("tool context was not forwarded correctly: %+v", ep.in)
 	}
 	if ep.in.Args["topic"] != "x" {
-		t.Errorf("入参没透传：%v", ep.in.Args)
+		t.Errorf("the arguments were not forwarded: %v", ep.in.Args)
 	}
-	// 栈深度必须透传：本地端点以深度 +1 执行，agent → flow → agent 的环靠它收敛。
-	// 漏了这一项，执行侧永远看到 0，护栏等于不存在。
+	// The stack depth must be forwarded: a local endpoint runs at depth +1, and the agent -> flow -> agent cycle is bounded by
+	// it. Drop this and the execution side always sees 0, which means the guard rail does not exist.
 	if ep.in.CallDepth != 2 {
 		t.Errorf("CallDepth = %d, want 2", ep.in.CallDepth)
 	}
-	// 输出上限与外部工具同口径：端点可能直接吐出整份报告。
+	// The output limit matches the external tools: an endpoint may return a whole report.
 	if ep.in.MaxOutput != DefaultMaxOutput {
 		t.Errorf("maxOutput = %d, want %d", ep.in.MaxOutput, DefaultMaxOutput)
 	}
 	if _, ok := got.(map[string]any); !ok {
-		t.Fatalf("结果类型 = %T", got)
+		t.Fatalf("result type = %T", got)
 	}
 }
 
-// 未授权仍在分发之前挡掉：连端点表都不会查（与外部连接同理）。
+// An unauthorized call is still blocked before dispatch: the endpoint table is not even queried (the same as external connections).
 func TestExecuteToolRejectsUnauthorizedLocalBeforeInvoke(t *testing.T) {
 	ep := &stubEndpointRunner{}
 	c := &Context{
@@ -81,9 +81,9 @@ func TestExecuteToolRejectsUnauthorizedLocalBeforeInvoke(t *testing.T) {
 
 	_, err := ExecuteTool(context.Background(), c, "local__daily-report", nil)
 	if err == nil || !strings.Contains(err.Error(), "not granted") {
-		t.Fatalf("未授权调用应被授权闸拒绝，实际 %v", err)
+		t.Fatalf("an unauthorized call should be refused by the grant gate, got %v", err)
 	}
 	if ep.called {
-		t.Fatal("未授权调用不该触达端点执行器")
+		t.Fatal("an unauthorized call must not reach the endpoint runner")
 	}
 }

@@ -1,11 +1,11 @@
-// Package pmusers 平台用户表（platform.users）的数据访问。
+// Package pmusers is the data access layer for the platform user table (platform.users).
 //
-// 平台用户（管理员 admin / 用户 user）与各租户 <schema>.users 完全无关
-// （同名但不同物：这里是平台登录身份，那里是租户内账号）：
-// 密码、状态、角色都在本表，平台登录只查这张表。
+// Platform users (administrator admin / user user) are completely unrelated to each tenant's <schema>.users
+// (same name, different thing: this is the platform login identity, that is an account inside a tenant):
+// password, status and role all live in this table, and platform login only queries it.
 //
-// 注意：平台表一律显式带 schema 前缀引用，禁止裸写 users ——
-// 租户 schema 里也有同名表，漏前缀会静默命中错误的表。
+// Note: platform tables are always referenced with an explicit schema prefix; never write a bare users -
+// tenant schemas have a table of the same name, and a missing prefix silently hits the wrong table.
 package pmusers
 
 import (
@@ -19,10 +19,10 @@ import (
 	"flame/nexus/shared/db"
 )
 
-// User platform.users 一行（Password 为 bcrypt 哈希）。
+// User is one platform.users row (Password is the bcrypt hash).
 type User struct {
 	ID          string
-	Name        string // 登录名，唯一且不可改
+	Name        string // login name, unique and immutable
 	DisplayName string
 	Password    string
 	Role        string // admin | user
@@ -36,7 +36,7 @@ func tableName() string { return config.Cfg.Database.PlatformSchema + ".users" }
 const columns = `id, name, COALESCE(display_name,''), COALESCE(password,''), COALESCE(role,''), COALESCE(status,''),
                  created_at, updated_at`
 
-// scanner 兼容 *sql.Row 与 *sql.Rows
+// scanner works with both *sql.Row and *sql.Rows
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -45,7 +45,7 @@ func scan(s scanner, u *User) error {
 	return s.Scan(&u.ID, &u.Name, &u.DisplayName, &u.Password, &u.Role, &u.Status, &u.CreatedAt, &u.UpdatedAt)
 }
 
-// GetByName 按登录名取用户；不存在返回 (nil, nil)。
+// GetByName fetches a user by login name; a missing one returns (nil, nil).
 func GetByName(name string) (*User, error) {
 	var u User
 	err := scan(db.DB.QueryRow(
@@ -59,7 +59,7 @@ func GetByName(name string) (*User, error) {
 	return &u, nil
 }
 
-// GetByID 按 id 取用户；不存在返回 (nil, nil)。
+// GetByID fetches a user by id; a missing one returns (nil, nil).
 func GetByID(id string) (*User, error) {
 	var u User
 	err := scan(db.DB.QueryRow(
@@ -73,8 +73,8 @@ func GetByID(id string) (*User, error) {
 	return &u, nil
 }
 
-// filter 构造筛选条件（WHERE 子句 + 参数）。
-// List 与 Count 必须用同一套条件，抽出来避免两处漂移。
+// filter builds the WHERE clause and its arguments.
+// List and Count must use the same conditions, so they are extracted here to keep the two from drifting.
 func filter(role, status, q string) (string, []any) {
 	where := []string{"1=1"}
 	args := []any{}
@@ -93,8 +93,9 @@ func filter(role, status, q string) (string, []any) {
 	return strings.Join(where, " AND "), args
 }
 
-// List 列出平台用户。role / status 为空表示不过滤；q 对 name 与 display_name 做不区分大小写的模糊匹配。
-// limit <= 0 表示不分页（返回全部）；否则按 LIMIT/OFFSET 取一页，offset 从 0 起。
+// List lists platform users. An empty role / status means no filter; q does a case-insensitive fuzzy match on name and
+// display_name.
+// limit <= 0 means no paging (return everything); otherwise one page is taken with LIMIT/OFFSET, offset starting at 0.
 func List(role, status, q string, limit, offset int) ([]User, error) {
 	cond, args := filter(role, status, q)
 	sqlStr := `SELECT ` + columns + ` FROM ` + tableName() + ` WHERE ` + cond + ` ORDER BY role, name`
@@ -119,7 +120,8 @@ func List(role, status, q string, limit, offset int) ([]User, error) {
 	return items, rows.Err()
 }
 
-// Count 统计满足条件的平台用户数（与 List 同条件）——分页的 total 用它，而不是 len(items)。
+// Count counts the platform users matching the conditions (the same ones as List) - the paged total uses it rather than
+// len(items).
 func Count(role, status, q string) (int, error) {
 	cond, args := filter(role, status, q)
 	var n int
@@ -127,7 +129,7 @@ func Count(role, status, q string) (int, error) {
 	return n, err
 }
 
-// Create 新建平台用户（id 由调用方生成，Password 需为已哈希值）。
+// Create inserts a platform user (the caller generates the id; Password must already be hashed).
 func Create(u *User) error {
 	_, err := db.DB.Exec(
 		`INSERT INTO `+tableName()+` (id, name, display_name, password, role, status, created_at, updated_at)
@@ -136,7 +138,7 @@ func Create(u *User) error {
 	return err
 }
 
-// UpdateProfile 更新显示名 / 角色 / 状态（name 不可改：它是登录名与审计锚点）。
+// UpdateProfile updates the display name / role / status (name is immutable: it anchors login and the audit trail).
 func UpdateProfile(id, displayName, role, status string) error {
 	_, err := db.DB.Exec(
 		`UPDATE `+tableName()+` SET display_name=$2, role=$3, status=$4, updated_at=NOW() WHERE id=$1`,
@@ -144,20 +146,20 @@ func UpdateProfile(id, displayName, role, status string) error {
 	return err
 }
 
-// UpdatePassword 重置密码（hash 需为 bcrypt 值）。
+// UpdatePassword resets the password (hash must be a bcrypt value).
 func UpdatePassword(id, hash string) error {
 	_, err := db.DB.Exec(
 		`UPDATE `+tableName()+` SET password=$2, updated_at=NOW() WHERE id=$1`, strings.TrimSpace(id), hash)
 	return err
 }
 
-// CountActiveAdmins 统计「可登录的管理员」数量。
-// 用于「不能停用/降级最后一个管理员」的守卫（否则平台自锁，只能改库救场）。
+// CountActiveAdmins counts the "signable administrators".
+// It backs the guard "the last administrator cannot be disabled or demoted" (otherwise the platform locks itself out and only
+// editing the database can save it).
 //
-// 唯一调用点是「不能停用/降级最后一个管理员」的守卫（handler/users.go）——
-// 否则平台自锁，只能改库救场。
+// The only call site is that guard in handler/users.go.
 //
-// 仍显式判空连接池：database/sql 对 nil *DB 会 panic（真实踩过）。
+// The pool is still checked explicitly: database/sql panics on a nil *DB (this has actually happened).
 func CountActiveAdmins() (int, error) {
 	if db.DB == nil {
 		return 0, errors.New("database not initialized")

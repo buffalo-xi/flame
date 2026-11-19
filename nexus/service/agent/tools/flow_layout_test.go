@@ -7,8 +7,9 @@ import (
 	"testing"
 )
 
-// 排版口径：主链横向一行、分支各占一行纵向下排、折行与分支首节点的入边走 top。
-// 这几条是「工具建的图能看」的底线，改 layout 时先让它们过。
+// Layout rule: the main chain is one horizontal row, each branch takes its own row below, and on a wrap the branch's first node takes
+// its incoming edge at the top.
+// These are the baseline for "a graph the tool built is readable"; make them pass first when changing the layout.
 func TestLayoutDiagramMainChainAndBranches(t *testing.T) {
 	b := &diagramBuilder{}
 	b.addStart()
@@ -31,7 +32,7 @@ func TestLayoutDiagramMainChainAndBranches(t *testing.T) {
 				return b.nodes[i].Position["x"], b.nodes[i].Position["y"]
 			}
 		}
-		t.Fatalf("节点 %s 不存在", id)
+		t.Fatalf("node %s does not exist", id)
 		return 0, 0
 	}
 
@@ -39,26 +40,26 @@ func TestLayoutDiagramMainChainAndBranches(t *testing.T) {
 	lx, ly := pos(llm)
 	bx, by := pos(br)
 	if sy != ly || ly != by {
-		t.Errorf("主链没有排在同一行：start=(%d,%d) llm=(%d,%d) branch=(%d,%d)", sx, sy, lx, ly, bx, by)
+		t.Errorf("the main chain is not on one row: start=(%d,%d) llm=(%d,%d) branch=(%d,%d)", sx, sy, lx, ly, bx, by)
 	}
 	if !(sx < lx && lx < bx) {
-		t.Errorf("主链没有从左往右：x = %d / %d / %d", sx, lx, bx)
+		t.Errorf("the main chain does not run left to right: x = %d / %d / %d", sx, lx, bx)
 	}
 
 	ax, ay := pos(a1)
 	a2x, a2y := pos(a2)
 	dx, dy := pos(d1)
 	if ax <= bx {
-		t.Errorf("分支首节点 x=%d 未让开分支节点 x=%d", ax, bx)
+		t.Errorf("branch head x=%d does not clear the branch node x=%d", ax, bx)
 	}
 	if ay <= by {
-		t.Errorf("分支首节点 y=%d 未排到分支节点下方（y=%d）", ay, by)
+		t.Errorf("branch head y=%d is not below the branch node (y=%d)", ay, by)
 	}
 	if a2y != ay || a2x <= ax {
-		t.Errorf("同一分支内的节点应继续向右：a1=(%d,%d) a2=(%d,%d)", ax, ay, a2x, a2y)
+		t.Errorf("nodes in one branch should continue to the right: a1=(%d,%d) a2=(%d,%d)", ax, ay, a2x, a2y)
 	}
 	if dy <= a2y {
-		t.Errorf("第二条分支没有排到第一条分支下方：乙=(%d,%d) 甲二=(%d,%d)", dx, dy, a2x, a2y)
+		t.Errorf("the second branch is not below the first: d1=(%d,%d) a2=(%d,%d)", dx, dy, a2x, a2y)
 	}
 
 	for _, e := range b.edges {
@@ -66,12 +67,12 @@ func TestLayoutDiagramMainChainAndBranches(t *testing.T) {
 			continue
 		}
 		if e.TargetHandle == nil || *e.TargetHandle != "target"+e.Target+"top" {
-			t.Errorf("分支首节点的入边应走 top，实际 = %v", e.TargetHandle)
+			t.Errorf("a branch head's incoming edge should take the top, got = %v", e.TargetHandle)
 		}
 	}
 }
 
-// 主链一行放不下时要折行，并让开上一行分支占用的高度。
+// When the main chain does not fit on one row it wraps, clearing the height the previous row's branches occupy.
 func TestLayoutDiagramWrapsLongChain(t *testing.T) {
 	b := &diagramBuilder{}
 	b.addStart()
@@ -95,22 +96,23 @@ func TestLayoutDiagramWrapsLongChain(t *testing.T) {
 			y := b.nodes[i].Position["y"]
 			if y != lastY {
 				if y <= lastY {
-					t.Fatalf("折行后 y 没有下移：%d → %d", lastY, y)
+					t.Fatalf("after a wrap y did not move down: %d -> %d", lastY, y)
 				}
 				rows++
 				lastY = y
 			}
 			if x := b.nodes[i].Position["x"]; x > layoutRowMaxWidth {
-				t.Errorf("节点 %s 的 x=%d 超出单行宽度 %d", id, x, layoutRowMaxWidth)
+				t.Errorf("node %s has x=%d, beyond the single-row width %d", id, x, layoutRowMaxWidth)
 			}
 		}
 	}
 	if rows < 2 {
-		t.Errorf("12 个宽节点应当折行，实际只有 %d 行", rows)
+		t.Errorf("12 wide nodes should wrap, got only %d row(s)", rows)
 	}
 }
 
-// 容器：子节点纵向排列，容器尺寸按包围盒撑开，写进 config.size（前端直接读它设宽高）。
+// Containers: children are stacked vertically, the container is expanded to its bounding box, and that is written into config.size
+// (the frontend reads it directly for width and height).
 func TestLayoutDiagramContainer(t *testing.T) {
 	b := &diagramBuilder{}
 	b.addStart()
@@ -128,37 +130,37 @@ func TestLayoutDiagramContainer(t *testing.T) {
 				return &b.nodes[i]
 			}
 		}
-		t.Fatalf("节点 %s 不存在", id)
+		t.Fatalf("node %s does not exist", id)
 		return nil
 	}
 
 	entryNode := nodeByID(entry)
 	innerNode := nodeByID(inner)
 	if entryNode.Position["x"] != childBaseX || entryNode.Position["y"] != childBaseY {
-		t.Errorf("entry 落点 = %v，want (%d,%d)", entryNode.Position, childBaseX, childBaseY)
+		t.Errorf("entry position = %v, want (%d,%d)", entryNode.Position, childBaseX, childBaseY)
 	}
 	wantY := childBaseY + 32 + childGap
 	if innerNode.Position["x"] != childBaseX || innerNode.Position["y"] != wantY {
-		t.Errorf("子节点落点 = %v，want (%d,%d)", innerNode.Position, childBaseX, wantY)
+		t.Errorf("child position = %v, want (%d,%d)", innerNode.Position, childBaseX, wantY)
 	}
 
 	cfg, _ := nodeByID(loop).Data["config"].(map[string]any)
 	size, _ := cfg["size"].(map[string]any)
 	if size["width"] != "300px" {
-		t.Errorf("容器宽度 = %v，want 300px（叶子宽 120 + 左右各 20 时仍是下限）", size["width"])
+		t.Errorf("container width = %v, want 300px (leaf width 120 plus 20 on each side is still the floor)", size["width"])
 	}
 	if size["height"] != "145px" {
-		t.Errorf("容器高度 = %v，want 145px（子节点底 125 + 下边距 20）", size["height"])
+		t.Errorf("container height = %v, want 145px (child bottom 125 plus a 20 bottom margin)", size["height"])
 	}
 }
 
-// ===== 模型给坐标（step.position）=====
+// ===== Model-supplied coordinates (step.position) =====
 
-// createdPositions 解析 create_flow 落库的 diagram，取 id → (x, y)。
+// createdPositions parses the diagram stored by create_flow into id -> (x, y).
 func createdPositions(t *testing.T, fk *fakeFlows) map[string][2]int {
 	t.Helper()
 	if fk.created == nil {
-		t.Fatal("未调用 FlowsManager.Create")
+		t.Fatal("FlowsManager.Create was not called")
 	}
 	var doc struct {
 		Nodes []struct {
@@ -167,7 +169,7 @@ func createdPositions(t *testing.T, fk *fakeFlows) map[string][2]int {
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(fk.created.Diagram, &doc); err != nil {
-		t.Fatalf("diagram 解析失败: %v", err)
+		t.Fatalf("failed to parse the diagram: %v", err)
 	}
 	out := make(map[string][2]int, len(doc.Nodes))
 	for _, n := range doc.Nodes {
@@ -192,7 +194,7 @@ func createPosFlow(t *testing.T, steps []any) (map[string][2]int, []string) {
 	return createdPositions(t, fk), warnings
 }
 
-// 顶层节点全给坐标：完全按模型摆，start 自动挪到首个节点左侧同行。
+// All top-level positions supplied: laid out exactly as the model asked, with start moved to the same row left of the first node.
 func TestCreateFlowHonorsModelPositions(t *testing.T) {
 	code := map[string]any{"code": map[string]any{"lang": "lua", "script": "return {}"}}
 	pos, _ := createPosFlow(t, []any{
@@ -202,14 +204,14 @@ func TestCreateFlowHonorsModelPositions(t *testing.T) {
 			"position": map[string]any{"x": 800.0, "y": 200.0}},
 	})
 	if pos["1"] != [2]int{200, 200} {
-		t.Errorf("start 应摆在首个节点左侧同行 (200,200)，实际 %v", pos["1"])
+		t.Errorf("start should sit to the left of the first node on the same row (200,200), got %v", pos["1"])
 	}
 	if pos["2"] != [2]int{400, 200} || pos["3"] != [2]int{800, 200} {
-		t.Errorf("模型给的坐标被改写了：%v", pos)
+		t.Errorf("the model's coordinates were rewritten: %v", pos)
 	}
 }
 
-// 只给一半坐标：整体退回自动排版，并点名还差哪些节点。
+// Only half the positions given: everything falls back to automatic layout, and the missing nodes are named.
 func TestCreateFlowPartialPositionsFallBack(t *testing.T) {
 	code := map[string]any{"code": map[string]any{"lang": "lua", "script": "return {}"}}
 	pos, warnings := createPosFlow(t, []any{
@@ -217,17 +219,17 @@ func TestCreateFlowPartialPositionsFallBack(t *testing.T) {
 			"position": map[string]any{"x": 400.0, "y": 200.0}},
 		map[string]any{"type": "code", "label": "乙", "config": code},
 	})
-	// 自动排版：start(100,50) → 甲 x=100+120+80=300、同 y=50
+	// Automatic layout: start(100,50) -> a x=100+120+80=300, same y=50
 	if pos["2"] != [2]int{300, 50} {
-		t.Errorf("应退回自动排版，甲落点 = %v，want (300,50)", pos["2"])
+		t.Errorf("it should fall back to automatic layout, a is at %v, want (300,50)", pos["2"])
 	}
 	joined := strings.Join(warnings, "\n")
 	if !strings.Contains(joined, "have no position") {
-		t.Errorf("缺坐标要回 warning，实际 warnings = %v", warnings)
+		t.Errorf("missing coordinates should produce a warning, got warnings = %v", warnings)
 	}
 }
 
-// 坐标重叠只提示不挪动：挪了会破坏模型自己的构图意图。
+// Overlapping coordinates are reported but not moved: moving them would break the model's own composition.
 func TestCreateFlowWarnsOverlap(t *testing.T) {
 	code := map[string]any{"code": map[string]any{"lang": "lua", "script": "return {}"}}
 	same := map[string]any{"x": 400.0, "y": 200.0}
@@ -236,14 +238,14 @@ func TestCreateFlowWarnsOverlap(t *testing.T) {
 		map[string]any{"type": "code", "label": "乙", "config": code, "position": same},
 	})
 	if pos["2"] != [2]int{400, 200} || pos["3"] != [2]int{400, 200} {
-		t.Errorf("重叠的坐标也不该被偷偷改掉：%v", pos)
+		t.Errorf("overlapping coordinates must not be quietly changed either: %v", pos)
 	}
 	if !strings.Contains(strings.Join(warnings, "\n"), "overlap") {
-		t.Errorf("重叠要回 warning，实际 warnings = %v", warnings)
+		t.Errorf("an overlap should produce a warning, got warnings = %v", warnings)
 	}
 }
 
-// layout 是视觉拐点：允许出现在 steps 里，链条照常穿过（runner 会跳过它并直通）。
+// layout is a visual waypoint: it may appear in steps and the chain runs straight through it (the runner skips it and continues).
 func TestCreateFlowAllowsLayoutNode(t *testing.T) {
 	code := map[string]any{"code": map[string]any{"lang": "lua", "script": "return {}"}}
 	pos, warnings := createPosFlow(t, []any{
@@ -252,49 +254,50 @@ func TestCreateFlowAllowsLayoutNode(t *testing.T) {
 		map[string]any{"type": "code", "label": "乙", "config": code},
 	})
 	if len(pos) != 4 {
-		t.Fatalf("nodes = %v，want start + 3 个节点", pos)
+		t.Fatalf("nodes = %v, want start plus 3 nodes", pos)
 	}
-	// 自动排版：start(100,50) → 甲(300,50) → layout(500,50) → 乙(640,50)
+	// Automatic layout: start(100,50) -> a(300,50) -> layout(500,50) -> b(640,50)
 	want := map[string][2]int{"1": {100, 50}, "2": {300, 50}, "3": {500, 50}, "4": {640, 50}}
 	for id, p := range want {
 		if pos[id] != p {
-			t.Errorf("节点 %s 落点 = %v，want %v（layout 宽度按 60 计）", id, pos[id], p)
+			t.Errorf("node %s is at %v, want %v (layout counts as 60 wide)", id, pos[id], p)
 		}
 	}
 	for _, w := range warnings {
-		if strings.Contains(w, "layout") || strings.Contains(w, "不支持") {
-			t.Errorf("layout 节点不该产生结构告警：%s", w)
+		if strings.Contains(w, "layout") || strings.Contains(w, "unsupported") {
+			t.Errorf("a layout node should not produce a structural warning: %s", w)
 		}
 	}
 }
 
-// 并发节点会多出一行「并发控制 + 下拉」，宽度顶到 280、高度约 64 —— 排版要按这个留间距。
+// A concurrent node gains a row with "concurrency control + dropdown", its width reaching 280 and height about 64 - the layout has to
+// leave that much room.
 func TestNodeSizeAccountsForConcurrency(t *testing.T) {
 	plain := diagramNode{Type: "code", Data: map[string]any{"label": "代码"}}
 	if w, h := nodeSize(plain); w != 120 || h != 32 {
-		t.Errorf("普通叶子 = %d×%d，want 120×32", w, h)
+		t.Errorf("a plain leaf = %dx%d, want 120x32", w, h)
 	}
 	withConc := diagramNode{Type: "code", Data: map[string]any{
 		"label":  "代码",
 		"config": map[string]any{"concurrency": map[string]any{"mode": "mono"}},
 	}}
 	if w, h := nodeSize(withConc); w != 280 || h != 64 {
-		t.Errorf("开了并发的叶子 = %d×%d，want 280×64", w, h)
+		t.Errorf("a concurrent leaf = %dx%d, want 280x64", w, h)
 	}
-	// 空对象等于没开（前端不会渲染并发行）
+	// An empty object counts as off (the frontend renders no concurrency row)
 	emptyConc := diagramNode{Type: "code", Data: map[string]any{
 		"label":  "代码",
 		"config": map[string]any{"concurrency": map[string]any{}},
 	}}
 	if w, h := nodeSize(emptyConc); w != 120 || h != 32 {
-		t.Errorf("空 concurrency 不该撑大节点：%d×%d", w, h)
+		t.Errorf("an empty concurrency must not enlarge the node: %dx%d", w, h)
 	}
 	if w, h := nodeSize(diagramNode{Type: "layout", Data: map[string]any{"label": "折行"}}); w != 60 || h != 32 {
-		t.Errorf("layout = %d×%d，want 60×32", w, h)
+		t.Errorf("layout = %dx%d, want 60x32", w, h)
 	}
 }
 
-// 循环 / 流程容器默认串行：模型抄示例带上来的 config.concurrency 要被摘掉并回显。
+// Loop / process containers are serial by default: a config.concurrency the model copied from an example is stripped and echoed back.
 func TestCreateFlowStripsContainerConcurrency(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-cc"}
 	out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
@@ -324,23 +327,23 @@ func TestCreateFlowStripsContainerConcurrency(t *testing.T) {
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(fk.created.Diagram, &doc); err != nil {
-		t.Fatalf("diagram 解析失败: %v", err)
+		t.Fatalf("failed to parse the diagram: %v", err)
 	}
 	for _, n := range doc.Nodes {
 		if n.Type != "loop" {
 			continue
 		}
 		if _, ok := n.Data.Config["concurrency"]; ok {
-			t.Errorf("loop 节点的 config 不该带 concurrency：%v", n.Data.Config)
+			t.Errorf("a loop node's config must not carry concurrency: %v", n.Data.Config)
 		}
 	}
 	joined := strings.Join(warningsOf(out), "\n")
 	if !strings.Contains(joined, "config.concurrency ignored") {
-		t.Errorf("摘掉 concurrency 要回 warning，实际 = %v", joined)
+		t.Errorf("stripping concurrency should produce a warning, got = %v", joined)
 	}
 }
 
-// create_node 同口径：容器不落 concurrency。
+// create_node follows the same rule: containers do not store concurrency.
 func TestCreateNodeStripsContainerConcurrency(t *testing.T) {
 	c, fk := edgeTestCtx(nodeTestDiagram)
 	out, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{
@@ -354,14 +357,14 @@ func TestCreateNodeStripsContainerConcurrency(t *testing.T) {
 	data, _ := storedNodes(t, fk)[nodeID]["data"].(map[string]any)
 	cfg, _ := data["config"].(map[string]any)
 	if _, ok := cfg["concurrency"]; ok {
-		t.Errorf("process 节点的 config 不该带 concurrency：%v", cfg)
+		t.Errorf("a process node's config must not carry concurrency: %v", cfg)
 	}
 	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "concurrency") {
-		t.Errorf("应回显「已忽略 concurrency」：%v", warningsOf(out))
+		t.Errorf("it should echo that concurrency was ignored: %v", warningsOf(out))
 	}
 }
 
-// 并发默认关闭：不给 concurrency 参数时，叶子节点上的 concurrency 也要摘掉并回显。
+// Concurrency is off by default: without the concurrency argument, concurrency on leaf nodes is stripped and echoed back too.
 func TestCreateFlowConcurrencyDefaultOff(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-off"}
 	out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
@@ -378,14 +381,14 @@ func TestCreateFlowConcurrencyDefaultOff(t *testing.T) {
 		t.Fatalf("create_flow = %v", err)
 	}
 	if _, ok := createdConfig(t, fk, "code")["concurrency"]; ok {
-		t.Errorf("默认应关闭并发，config 不该带 concurrency：%v", createdConfig(t, fk, "code"))
+		t.Errorf("concurrency is off by default, config must not carry it: %v", createdConfig(t, fk, "code"))
 	}
 	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "concurrency is off by default") {
-		t.Errorf("摘掉 concurrency 要回显「并发默认关闭」：%v", warningsOf(out))
+		t.Errorf("stripping concurrency should echo that it is off by default: %v", warningsOf(out))
 	}
 }
 
-// 显式 mono：只保留单体并发，fork 组形态被摘掉并回显。
+// An explicit mono: only single-node concurrency is kept, the fork-group shape is stripped and echoed back.
 func TestCreateFlowConcurrencyMonoKeepsOnlyMono(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-mono"}
 	out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
@@ -411,18 +414,18 @@ func TestCreateFlowConcurrencyMonoKeepsOnlyMono(t *testing.T) {
 		t.Fatalf("create_flow = %v", err)
 	}
 	if got := createdConfig(t, fk, "http")["concurrency"]; got != nil {
-		t.Errorf("mono 模式下 fork 形态应被摘掉，实际 %v", got)
+		t.Errorf("in mono mode the fork shape should be stripped, got %v", got)
 	}
 	cc, _ := createdConfig(t, fk, "code")["concurrency"].(map[string]any)
 	if cc["mode"] != "mono" {
-		t.Errorf("mono 模式下单体并发应保留，实际 %v", createdConfig(t, fk, "code"))
+		t.Errorf("in mono mode single-node concurrency should be kept, got %v", createdConfig(t, fk, "code"))
 	}
 	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "only single-node concurrency is on") {
-		t.Errorf("应回显「只开单体并发」：%v", warningsOf(out))
+		t.Errorf("it should echo that only single-node concurrency is on: %v", warningsOf(out))
 	}
 }
 
-// 显式 group：只保留并发组成员，单体并发形态被摘掉并回显。
+// An explicit group: only concurrency-group members are kept, the single-node shape is stripped and echoed back.
 func TestCreateFlowConcurrencyGroupKeepsOnlyFork(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-group"}
 	out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
@@ -448,18 +451,18 @@ func TestCreateFlowConcurrencyGroupKeepsOnlyFork(t *testing.T) {
 		t.Fatalf("create_flow = %v", err)
 	}
 	if got := createdConfig(t, fk, "code")["concurrency"]; got != nil {
-		t.Errorf("group 模式下单体并发应被摘掉，实际 %v", got)
+		t.Errorf("in group mode single-node concurrency should be stripped, got %v", got)
 	}
 	cc, _ := createdConfig(t, fk, "http")["concurrency"].(map[string]any)
 	if cc["mode"] != "fork" || cc["fork_node_id"] != "9" {
-		t.Errorf("group 模式下并发组成员应保留，实际 %v", createdConfig(t, fk, "http"))
+		t.Errorf("in group mode concurrency-group members should be kept, got %v", createdConfig(t, fk, "http"))
 	}
 	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "a concurrency group is on") {
-		t.Errorf("应回显「并发组」：%v", warningsOf(out))
+		t.Errorf("it should echo that a concurrency group is on: %v", warningsOf(out))
 	}
 }
 
-// 存量流程不受影响：update_node 不传 concurrency 时，已写死的并发配置原样保留。
+// Existing flows are unaffected: when update_node is not given concurrency, the concurrency configuration already written stays as is.
 func TestUpdateNodeKeepsExistingConcurrency(t *testing.T) {
 	c, fk := edgeTestCtx(concurrencyNodeDiagram)
 	if _, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{
@@ -470,11 +473,11 @@ func TestUpdateNodeKeepsExistingConcurrency(t *testing.T) {
 	cfg, _ := storedNodes(t, fk)["2"]["data"].(map[string]any)["config"].(map[string]any)
 	cc, _ := cfg["concurrency"].(map[string]any)
 	if cc["mode"] != "mono" {
-		t.Errorf("没传 concurrency 时不该动存量并发配置：%v", cfg)
+		t.Errorf("without a concurrency argument the existing concurrency config must not be touched: %v", cfg)
 	}
 }
 
-// 显式 off：只有调用方要求关并发时，才把该节点的 concurrency 摘掉。
+// An explicit off: the node's concurrency is stripped only when the caller asks for it to be turned off.
 func TestUpdateNodeConcurrencyOffStrips(t *testing.T) {
 	c, fk := edgeTestCtx(concurrencyNodeDiagram)
 	out, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{
@@ -485,14 +488,14 @@ func TestUpdateNodeConcurrencyOffStrips(t *testing.T) {
 	}
 	cfg, _ := storedNodes(t, fk)["2"]["data"].(map[string]any)["config"].(map[string]any)
 	if _, ok := cfg["concurrency"]; ok {
-		t.Errorf("concurrency=off 应摘掉并发：%v", cfg)
+		t.Errorf("concurrency=off should strip it: %v", cfg)
 	}
 	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "concurrency is off by default") {
-		t.Errorf("应回显摘除原因：%v", warningsOf(out))
+		t.Errorf("it should echo why it was stripped: %v", warningsOf(out))
 	}
 }
 
-// concurrencyNodeDiagram 带单体并发的存量图（update_node 的「不动存量」用例）。
+// concurrencyNodeDiagram is an existing diagram with single-node concurrency (the "leave existing data alone" case for update_node).
 const concurrencyNodeDiagram = `{
   "nodes": [
     {"id": "1", "type": "start", "data": {"label": "开始"}},
@@ -503,11 +506,11 @@ const concurrencyNodeDiagram = `{
   ]
 }`
 
-// createdConfig 从 create_flow 落库的 diagram 里取指定类型的第一个节点 config。
+// createdConfig returns the config of the first node of the given type in the diagram stored by create_flow.
 func createdConfig(t *testing.T, fk *fakeFlows, typ string) map[string]any {
 	t.Helper()
 	if fk.created == nil {
-		t.Fatal("Create 没被调用")
+		t.Fatal("Create was not called")
 	}
 	var doc struct {
 		Nodes []struct {
@@ -518,18 +521,18 @@ func createdConfig(t *testing.T, fk *fakeFlows, typ string) map[string]any {
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(fk.created.Diagram, &doc); err != nil {
-		t.Fatalf("diagram 解析失败: %v", err)
+		t.Fatalf("failed to parse the diagram: %v", err)
 	}
 	for _, n := range doc.Nodes {
 		if n.Type == typ {
 			return n.Data.Config
 		}
 	}
-	t.Fatalf("diagram 里没有 %s 节点", typ)
+	t.Fatalf("the diagram has no %s node", typ)
 	return nil
 }
 
-// warningsOf 取工具返回值里的 warnings 字段。
+// warningsOf takes the warnings field out of a tool result.
 func warningsOf(out any) []string {
 	m, _ := out.(map[string]any)
 	raw, _ := m["warnings"]
@@ -537,7 +540,7 @@ func warningsOf(out any) []string {
 	return list
 }
 
-// update_node 支持单独挪一个节点（模型据此微调自动排版的结果）。
+// update_node can move a single node (the model uses it to fine-tune the automatic layout).
 func TestUpdateNodePosition(t *testing.T) {
 	c, fk := edgeTestCtx(nodeTestDiagram)
 	if _, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{
@@ -547,6 +550,6 @@ func TestUpdateNodePosition(t *testing.T) {
 	}
 	got, _ := storedNodes(t, fk)["2"]["position"].(map[string]any)
 	if got["x"] != float64(520) || got["y"] != float64(640) {
-		t.Errorf("position = %v，want {520 640}", got)
+		t.Errorf("position = %v, want {520 640}", got)
 	}
 }

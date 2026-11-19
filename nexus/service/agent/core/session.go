@@ -2,14 +2,16 @@ package core
 
 import "strings"
 
-// MetaSessionIDKey params._meta 里承载会话 id 的键。
+// MetaSessionIDKey is the key carrying the session id inside params._meta.
 //
-// 会话 id 只认这一处：arguments 里的同名键不再被当作会话开关（只会在入口被 StripSessionID 剥掉）。
+// The session id is only recognised there: a key of the same name in arguments no longer acts as a session switch (it is merely stripped
+// by StripSessionID at the entry point).
 const MetaSessionIDKey = "session_id"
 
-// MetaSessionID 从 params 的 _meta 里取会话 id（MCP 与 JSON-RPC 同一位置）。
+// MetaSessionID takes the session id from params' _meta (the same location for MCP and JSON-RPC).
 //
-// params 不是对象、或 _meta 不是对象时一律返回空串 = 「没给」，由调用方回落旧位置。
+// When params is not an object, or _meta is not an object, it returns an empty string = "not given", and the caller falls back to the
+// legacy location.
 func MetaSessionID(params any) string {
 	mp, ok := params.(map[string]any)
 	if !ok {
@@ -23,10 +25,11 @@ func MetaSessionID(params any) string {
 	return strings.TrimSpace(s)
 }
 
-// WithSessionID 返回带 session_id 键的参数副本（不修改原 map）。
+// WithSessionID returns a copy of the arguments carrying a session_id key (the original map is not modified).
 //
-// 给「会话 id 从 _meta 来、但下游只认 args」的场景用（flow 的 NewFlow）。
-// 下游会再把它剥离出业务入参，所以这只是一次中转，不是"把控制字段塞进业务参数"。
+// It is for the case where "the session id comes from _meta but downstream only reads args" (flow's NewFlow).
+// Downstream strips it out of the business arguments again, so this is a pass-through, not "stuffing a control field into business
+// parameters".
 func WithSessionID(args map[string]any, sid string) map[string]any {
 	if sid == "" {
 		return args
@@ -39,16 +42,17 @@ func WithSessionID(args map[string]any, sid string) map[string]any {
 	return merged
 }
 
-// StripSessionID 返回去掉 session_id 键的参数副本（不修改原 map）。
+// StripSessionID returns a copy of the arguments without the session_id key (the original map is not modified).
 //
-// 会话 id 是控制意图，不该留在业务入参里 —— 否则它会变成模型可见的 {{args.session_id}}，
-// 还能和用户自己的同名字段撞车。flow 与 MCP / RPC 三个入口共用这一份，免得各自实现走样。
+// The session id is a control intent and must not stay in the business arguments - otherwise it becomes a model-visible
+// {{args.session_id}} and can collide with a user field of the same name. flow and the MCP / RPC entry points share this one copy, so
+// none of them drifts.
 func StripSessionID(args map[string]any) map[string]any {
 	if args == nil {
 		return nil
 	}
 	if _, ok := args["session_id"]; !ok {
-		return args // 没有就原样返回，不为绝大多数请求复制一遍 map
+		return args // nothing to strip: return as is rather than copying the map for the vast majority of requests
 	}
 	clean := make(map[string]any, len(args))
 	for k, v := range args {

@@ -9,7 +9,7 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// fakeCustomToolAdmin 记录调用、按需返回预置结果；不碰库、不碰盘。
+// fakeCustomToolAdmin records calls and returns preset results on demand; it touches neither the database nor the disk.
 type fakeCustomToolAdmin struct {
 	created *CustomToolInput
 	updated *CustomToolUpdate
@@ -37,26 +37,26 @@ func (f *fakeCustomToolAdmin) Delete(_ context.Context, name string, force bool)
 
 func (f *fakeCustomToolAdmin) ListAll(context.Context) ([]CustomToolSpec, error) { return f.list, nil }
 
-// 四个元工具都必须落在 CategoryCustomTool：supervisor-only 的唯一判据是分类，
-// 漏标就等于把它们开放给所有 agent（生成式调用的权限边界由分类决定）。
+// All four meta tools must sit in CategoryCustomTool: the category is the only supervisor-only criterion, and leaving it off opens
+// them to every agent (the permission boundary of generative calls is decided by the category).
 func TestCustomToolMetaToolsAreSupervisorOnly(t *testing.T) {
 	for _, name := range []string{
 		"create_custom_tool", "update_custom_tool", "delete_custom_tool", "list_custom_tools",
 	} {
 		tool, ok := Get(name)
 		if !ok {
-			t.Fatalf("%s 未注册", name)
+			t.Fatalf("%s is not registered", name)
 		}
 		if got := tool.Meta().Category; got != CategoryCustomTool {
-			t.Errorf("%s 分类 = %q, want %q", name, got, CategoryCustomTool)
+			t.Errorf("%s category = %q, want %q", name, got, CategoryCustomTool)
 		}
 		if !IsSupervisorOnlyTool(name) {
-			t.Errorf("%s 应判定为仅超级智能体可用", name)
+			t.Errorf("%s should be classified as super-agent only", name)
 		}
 	}
 }
 
-// 名字与入口的校验是这批工具唯一的输入边界：模型给什么都不能越过目录。
+// Name and entry validation is the only input boundary these tools have: whatever the model supplies cannot escape the directory.
 func TestCreateCustomToolValidation(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -64,16 +64,16 @@ func TestCreateCustomToolValidation(t *testing.T) {
 		caps    map[string]bool
 		wantErr string
 	}{
-		// ValidName 本身就不允许下划线，所以 "__" / 前缀这两条属于防御性分支
-		// （将来若放宽名字规则，它们才会真正拦人）。
-		{"下划线", map[string]any{"name": "sum_sales", "description": "d"}, nil, "letters, digits and hyphens"},
-		{"带前缀", map[string]any{"name": "custom__sum", "description": "d"}, nil, "letters, digits and hyphens"},
-		{"空名", map[string]any{"name": "", "description": "d"}, nil, "must not be empty"},
-		{"entry 跳出目录", map[string]any{"name": "sum", "description": "d", "entry": "../evil.py"}, nil, "must not escape"},
-		{"entry 绝对路径", map[string]any{"name": "sum", "description": "d", "entry": "/etc/passwd"}, nil, "must be a path relative"},
-		{"entry 反斜杠", map[string]any{"name": "sum", "description": "d", "entry": "sub\\main.py"}, nil, "/"},
-		{"未开通 exec", map[string]any{"name": "sum", "description": "d"}, map[string]bool{}, capability.Exec},
-		{"egress 未开通", map[string]any{"name": "sum", "description": "d", "egress": true},
+		// ValidName itself forbids underscores, so the "__" and prefix cases are defensive branches
+		// (they only start blocking anyone if the name rule is relaxed later).
+		{"underscore", map[string]any{"name": "sum_sales", "description": "d"}, nil, "letters, digits and hyphens"},
+		{"with prefix", map[string]any{"name": "custom__sum", "description": "d"}, nil, "letters, digits and hyphens"},
+		{"empty name", map[string]any{"name": "", "description": "d"}, nil, "must not be empty"},
+		{"entry escapes the directory", map[string]any{"name": "sum", "description": "d", "entry": "../evil.py"}, nil, "must not escape"},
+		{"entry is absolute", map[string]any{"name": "sum", "description": "d", "entry": "/etc/passwd"}, nil, "must be a path relative"},
+		{"entry has a backslash", map[string]any{"name": "sum", "description": "d", "entry": "sub\\main.py"}, nil, "/"},
+		{"exec not granted", map[string]any{"name": "sum", "description": "d"}, map[string]bool{}, capability.Exec},
+		{"egress not granted", map[string]any{"name": "sum", "description": "d", "egress": true},
 			map[string]bool{capability.Exec: true}, capability.Egress},
 	}
 
@@ -82,13 +82,14 @@ func TestCreateCustomToolValidation(t *testing.T) {
 			c := &Context{AgentName: "main", CustomToolsAdmin: &fakeCustomToolAdmin{}, Caps: tc.caps}
 			_, err := (&createCustomToolTool{}).Execute(context.Background(), c, tc.args)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("应报 %q，实际 %v", tc.wantErr, err)
+				t.Fatalf("want an error matching %q, got %v", tc.wantErr, err)
 			}
 		})
 	}
 }
 
-// 创建成功后要把「下一步」写清楚：模型不该猜代码放哪、授权怎么挂。
+// After a successful creation the "next steps" must be spelled out: the model should not have to guess where the code goes or how
+// the grant is attached.
 func TestCreateCustomToolHints(t *testing.T) {
 	admin := &fakeCustomToolAdmin{}
 	c := &Context{
@@ -100,34 +101,36 @@ func TestCreateCustomToolHints(t *testing.T) {
 		"name": "sum", "description": "求和", "lang": "lua",
 	})
 	if err != nil {
-		t.Fatalf("创建应成功: %v", err)
+		t.Fatalf("creation should succeed: %v", err)
 	}
 	if admin.created == nil || admin.created.Name != "sum" {
-		t.Fatalf("未把入参交给 admin: %+v", admin.created)
+		t.Fatalf("the input was not handed to admin: %+v", admin.created)
 	}
 	next, _ := out.(map[string]any)["next"].([]string)
 	joined := strings.Join(next, " ")
-	// 前导 "/" 不能少：不带它的路径会被当成工作区相对路径，代码写进会话工作区、
-	// 工具仍读 create 时的骨架 —— 模型照抄 next 就会踩这个坑，所以钉死在测试里。
+	// The leading "/" is essential: without it the path is treated as workspace-relative, the code lands in the session workspace
+	// while the tool still reads the skeleton from creation time - a model copying next verbatim falls into exactly that trap, so it
+	// is pinned in a test.
 	if !strings.Contains(joined, "/tools/sum/main.lua") {
-		t.Errorf("next 应指向租户根下的入口文件（/tools/...），实际 %v", next)
+		t.Errorf("next should point at the entry file under the tenant root (/tools/...), got %v", next)
 	}
 	if !strings.Contains(joined, "custom:sum") {
-		t.Errorf("next 应提示授权 ref，实际 %v", next)
+		t.Errorf("next should mention the grant ref, got %v", next)
 	}
 }
 
-// 被引用时必须拒绝，且把引用方告诉模型 —— 静默删除等于让别人的工具目录凭空少一项。
+// Being referenced must refuse the delete and tell the model who references it - deleting silently would make someone else's tool
+// directory lose an entry out of nowhere.
 func TestDeleteCustomToolRequiresForce(t *testing.T) {
 	admin := &fakeCustomToolAdmin{refs: &CustomToolRefs{Agents: []string{"poet"}, Groups: []string{"rpt"}}}
 	c := &Context{AgentName: "main", CustomToolsAdmin: admin}
 
 	_, err := (&deleteCustomToolTool{}).Execute(context.Background(), c, map[string]any{"name": "sum"})
 	if err == nil || !strings.Contains(err.Error(), "force=true") {
-		t.Fatalf("被引用时应提示 force，实际 %v", err)
+		t.Fatalf("when referenced it should mention force, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "poet") {
-		t.Errorf("应列出引用方，实际 %v", err)
+		t.Errorf("it should list the referencing parties, got %v", err)
 	}
 
 	admin.refs = nil
@@ -135,18 +138,19 @@ func TestDeleteCustomToolRequiresForce(t *testing.T) {
 		"name": "sum", "force": true,
 	})
 	if err != nil {
-		t.Fatalf("无人引用时应删除成功: %v", err)
+		t.Fatalf("with no references the delete should succeed: %v", err)
 	}
 	if !admin.deleted || !admin.force {
-		t.Fatalf("force 未透传给 admin: deleted=%v force=%v", admin.deleted, admin.force)
+		t.Fatalf("force was not forwarded to admin: deleted=%v force=%v", admin.deleted, admin.force)
 	}
 	if deleted, _ := out.(map[string]any)["deleted"].(bool); !deleted {
-		t.Errorf("返回值应报告已删除: %+v", out)
+		t.Errorf("the result should report the deletion: %+v", out)
 	}
 }
 
-// force=true 且仍被引用：删除必须成功（引用行保留），不能被误判成「拒绝」。
-// 这条钉住的是一个真实分支：服务层无论 force 与否都会返回引用方，只靠 refs>0 判拒绝会错。
+// force=true while still referenced: the delete must succeed (the reference rows are kept) and must not be mistaken for a refusal.
+// This pins a real branch: the service layer returns the referencing parties whether or not force is set, so deciding by refs>0
+// alone would be wrong.
 func TestDeleteCustomToolForceWithRefs(t *testing.T) {
 	admin := &fakeCustomToolAdmin{refs: &CustomToolRefs{Agents: []string{"poet"}}}
 	c := &Context{AgentName: "main", CustomToolsAdmin: admin}
@@ -155,18 +159,18 @@ func TestDeleteCustomToolForceWithRefs(t *testing.T) {
 		"name": "sum", "force": true,
 	})
 	if err != nil {
-		t.Fatalf("force 删除应成功: %v", err)
+		t.Fatalf("a forced delete should succeed: %v", err)
 	}
 	m, _ := out.(map[string]any)
 	if deleted, _ := m["deleted"].(bool); !deleted {
-		t.Errorf("应报告已删除: %+v", out)
+		t.Errorf("it should report the deletion: %+v", out)
 	}
 	if m["kept_refs"] == nil {
-		t.Error("应报告被保留的引用行（重建同名工具可恢复授权）")
+		t.Error("it should report the reference rows that were kept (recreating a tool with the same name restores the grants)")
 	}
 }
 
-// update 只传部分字段时，其余必须保持 nil（服务层据此判断「不改」）。
+// When update passes only some fields, the rest must stay nil (the service layer reads nil as "leave unchanged").
 func TestUpdateCustomToolPartial(t *testing.T) {
 	admin := &fakeCustomToolAdmin{}
 	c := &Context{AgentName: "main", CustomToolsAdmin: admin}
@@ -174,17 +178,17 @@ func TestUpdateCustomToolPartial(t *testing.T) {
 		"name": "sum", "description": "新描述",
 	})
 	if err != nil {
-		t.Fatalf("更新应成功: %v", err)
+		t.Fatalf("the update should succeed: %v", err)
 	}
 	if admin.updated == nil || admin.updated.Description == nil {
-		t.Fatalf("description 未透传: %+v", admin.updated)
+		t.Fatalf("description was not forwarded: %+v", admin.updated)
 	}
 	if admin.updated.Lang != nil || admin.updated.Entry != nil || admin.updated.Egress != nil {
-		t.Errorf("未传的字段应保持 nil: %+v", admin.updated)
+		t.Errorf("fields that were not passed should stay nil: %+v", admin.updated)
 	}
 }
 
-// 未注入 admin（无租户语义的调用方）时给可读错误，而不是 nil 解引用。
+// Without admin injected (a caller with no tenant semantics) give a readable error rather than a nil dereference.
 func TestCustomToolMetaWithoutAdmin(t *testing.T) {
 	c := &Context{AgentName: "main"}
 	for _, tool := range []Tool{
@@ -194,7 +198,7 @@ func TestCustomToolMetaWithoutAdmin(t *testing.T) {
 		args := map[string]any{"name": "sum", "description": "d"}
 		if _, err := tool.Execute(context.Background(), c, args); err == nil ||
 			!strings.Contains(err.Error(), "is not available") {
-			t.Errorf("%s 应报 admin 不可用，实际 %v", tool.Meta().Name, err)
+			t.Errorf("%s should report that admin is unavailable, got %v", tool.Meta().Name, err)
 		}
 	}
 }

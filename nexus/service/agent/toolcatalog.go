@@ -15,27 +15,27 @@ import (
 	"flame/tools/xlog"
 )
 
-// toolSearchLimit 每类（组 / 工具）每次回多少条上限。
+// toolSearchLimit caps how many results each category (group / tool) returns per call.
 //
-// 这是**上下文预算**而不是性能取舍：结果整段进入模型上下文，一次倒出上百个工具
-// 既挤爆窗口又用不上。超限时置 Truncated 并提示收窄 query。
+// This is a **context budget**, not a performance trade-off: the result enters the model context as a block, and dumping a hundred tools at
+// once both blows up the window and is useless. Over the limit, Truncated is set and the model is asked to narrow the query.
 const toolSearchLimit = 20
 
-// groupMemberPreview 组卡片里回显的成员 ref 上限。
+// groupMemberPreview caps the member refs echoed in a group card.
 //
-// 与 toolSearchLimit 同源考虑：成员摘要也要占上下文。给组概览的目的只是让模型
-// 「授整组之前先看一眼里面是什么」，12 条足够判断类型（文件类 / 连接类 / 混合），
-// 真实总数由 Count 承担，要看全量再用 query 展开。
+// The same reasoning as toolSearchLimit: a member digest also costs context. The point of a group overview is only "look inside before
+// granting the whole group", and 12 entries are enough to tell the kind (files / connections / mixed); Count carries the real total, and the
+// full list is reached by expanding with a query.
 const groupMemberPreview = 12
 
-// toolCatalogManager 实现 tools.ToolCatalogManager：把「可授权目录」摊成可检索的列表。
+// toolCatalogManager implements tools.ToolCatalogManager: it flattens the "grantable catalog" into a searchable list.
 //
-// 数据源就是管理端授权面板用的那份 Catalog，所以「agent 查得到什么」与「面板上看到什么」
-// 永远一致 —— 不会再出现「面板里有、agent 摸不到」的错位。
+// The data source is the very Catalog the admin grant panel uses, so "what an agent can find" and "what the panel shows" always agree -
+// the mismatch of "in the panel, unreachable for the agent" is gone.
 type toolCatalogManager struct {
 	schema       string
 	agentName    string
-	isSupervisor bool // 当前（调用者）agent 的身份，目标未指定时用它
+	isSupervisor bool // identity of the current (calling) agent, used when no target is given
 }
 
 var _ tools.ToolCatalogManager = (*toolCatalogManager)(nil)
@@ -44,17 +44,17 @@ func newToolCatalogManager(schema, agentName string, isSupervisor bool) *toolCat
 	return &toolCatalogManager{schema: schema, agentName: agentName, isSupervisor: isSupervisor}
 }
 
-// Search 检索可授权的组与工具。
+// Search searches grantable groups and tools.
 //
-// 视角取**目标 agent**（可能与调用者不同）：非超级智能体的候选里剔掉 super 类工具，
-// 因为那些授了也执行不了（ExecuteTool 的执行层硬闸会拒），露出来只会诱导一次
-// 必然失败的授权动作。
+// The viewpoint is the **target agent** (possibly different from the caller): super-only tools are stripped from a non-super agent's
+// candidates, because granting them cannot be executed anyway (the hard gate in ExecuteTool refuses), and showing them only lures the model
+// into a grant action that is bound to fail.
 func (m *toolCatalogManager) Search(_ context.Context, query, agentName, agentID string) (*tools.ToolSearchResult, error) {
 	if agentName == "" {
 		agentName = m.agentName
 	}
-	// 视角按**目标**身份（可能与调用者不同）：非 supervisor 的候选里剔掉 super 类工具，
-	// 因为那些授了也执行不了。agentID 为空（未指定目标）时回落调用者身份。
+	// The viewpoint follows the **target** identity (possibly different from the caller): super-only tools are stripped from a non-super
+	// candidate, because granting them cannot be executed. An empty agentID (no target given) falls back to the caller's identity.
 	isSupervisor := m.isSupervisor
 	if agentID != "" {
 		if inst, err := agents.NewRepository().GetAgent(&auth.AuthInfo{Schema: m.schema}, agentID); err == nil && inst != nil {
@@ -74,13 +74,13 @@ func (m *toolCatalogManager) Search(_ context.Context, query, agentName, agentID
 		return nil, err
 	}
 
-	// 目标 agent 当前已授权的 ref：只用于展示（避免重复授权、让「授过什么」可见）。
-	// 读失败不致命 —— 宁可少一列状态，也别让「查目录」整体失败。
+	// The refs currently granted to the target agent: for display only (avoid duplicate grants, make "what was granted" visible).
+	// A read failure is not fatal - one missing status column beats failing the whole catalog lookup.
 	granted := make(map[string]string)
 	if agentID != "" {
 		list, gerr := repo.ListAgentGrants(m.schema, agentID)
 		if gerr != nil {
-			xlog.Info("search_tools 读取授权状态失败，按未授权展示 schema=%s agent=%s err=%v",
+			xlog.Info("search_tools failed to read the grant state, showing items as ungranted schema=%s agent=%s err=%v",
 				m.schema, agentName, gerr)
 		} else {
 			for _, g := range list {
@@ -92,7 +92,7 @@ func (m *toolCatalogManager) Search(_ context.Context, query, agentName, agentID
 	return searchCatalog(query, all, groups, granted), nil
 }
 
-// searchCatalog 纯函数：目录 + 授权现状 → 检索结果（不碰库，便于单测）。
+// searchCatalog is a pure function: catalog + current grants -> search result (no database access, so it is easy to unit test).
 func searchCatalog(query string, all map[string]toolgrant.ToolInfo, groups []toolgrant.GroupInfo, granted map[string]string) *tools.ToolSearchResult {
 	q := strings.ToLower(strings.TrimSpace(query))
 	res := &tools.ToolSearchResult{
@@ -103,8 +103,8 @@ func searchCatalog(query string, all map[string]toolgrant.ToolInfo, groups []too
 
 	var truncatedGroups []string
 	for _, g := range groups {
-		// 合成容器（plugin:* / custom:*）不是可授权对象：ref 会被 ValidateRef 拒，
-		// 它们的成员各自以工具 ref 出现在下面的列表里。
+		// Synthetic containers (plugin:* / custom:*) are not grantable: ValidateRef refuses their ref, and their members appear in the list
+		// below as individual tool refs.
 		if g.Synthetic {
 			continue
 		}
@@ -129,7 +129,8 @@ func searchCatalog(query string, all map[string]toolgrant.ToolInfo, groups []too
 		})
 	}
 
-	// 空 query 只给组概览：工具可能有上百个，全倒进上下文既没用又挤占窗口。
+	// An empty query gives the group overview only: tools may number in the hundreds, and dumping all of them into the context is both
+	// useless and wasteful.
 	if q != "" {
 		for _, t := range all {
 			if !matchQuery(q, t.Ref, t.Name, t.Label, t.Description) {
@@ -150,8 +151,8 @@ func searchCatalog(query string, all map[string]toolgrant.ToolInfo, groups []too
 		}
 	}
 
-	// map 迭代无序 → 必须自己排。否则同样一次查询两次结果顺序不同，
-	// 模型会以为目录变了。
+	// map iteration is unordered -> sort explicitly. Otherwise two runs of the same query return different orders and the model thinks the
+	// catalog changed.
 	sortSearchItems(res.Groups)
 	sortSearchItems(res.Tools)
 	if len(res.Groups) > toolSearchLimit {
@@ -174,9 +175,9 @@ func searchCatalog(query string, all map[string]toolgrant.ToolInfo, groups []too
 		res.Notes = append(res.Notes,
 			"未给 query 时只列组概览（组 ref + 成员数 + 前几个成员 ref）；要看某个组的全部工具，用 query 匹配（如 fs、read_file）")
 	}
-	// 零命中必须明说，并直接给跨语言的退路：matchQuery 是**子串**匹配（见下），
-	// 目录里的名字/描述可能是英文、模型却拿中文原话去查（或反过来）。
-	// 静默返回空会让模型以为「本租户没有这类工具」，比搜不到更误导。
+	// Zero hits must be said outright, with the cross-language way out right there: matchQuery is a **substring** match (see below), and the
+	// catalog's names / descriptions may be English while the model queries with a Chinese phrase copied from the user (or the reverse).
+	// Returning empty silently would make the model think "this tenant has no such tool", which misleads more than a miss.
 	if q != "" && len(res.Groups) == 0 && len(res.Tools) == 0 {
 		res.Notes = append(res.Notes,
 			"没有匹配项：query 是子串匹配（跨语言不会自动对应），可改用工具名 / ref 片段 / 英文关键词再试一次"+
@@ -186,8 +187,8 @@ func searchCatalog(query string, all map[string]toolgrant.ToolInfo, groups []too
 	return res
 }
 
-// memberRefs 取组成员前 limit 个授权 ref，第二个返回值表示是否被截断。
-// 只回 ref 不回描述：组摘要的用途是「看一眼里面是什么类型」，描述留给 query 展开时再给。
+// memberRefs takes the first limit grantable refs of a group's members; the second return value says whether it was truncated.
+// Refs only, no descriptions: a group digest exists to show "what kind of things are inside", and descriptions come when a query expands it.
 func memberRefs(items []toolgrant.ToolInfo, limit int) ([]string, bool) {
 	if len(items) == 0 {
 		return nil, false
@@ -204,7 +205,7 @@ func memberRefs(items []toolgrant.ToolInfo, limit int) ([]string, bool) {
 	return out, cut
 }
 
-// matchQuery 大小写不敏感的「任一字段包含」。
+// matchQuery is a case-insensitive "any field contains".
 func matchQuery(q string, fields ...string) bool {
 	if q == "" {
 		return true
@@ -217,7 +218,7 @@ func matchQuery(q string, fields ...string) bool {
 	return false
 }
 
-// sortSearchItems 可用优先，其次按 ref 字典序（保证同样输入输出稳定）。
+// sortSearchItems puts available items first, then orders by ref lexicographically (so the same input yields stable output).
 func sortSearchItems(items []tools.ToolSearchItem) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Available != items[j].Available {
@@ -227,7 +228,7 @@ func sortSearchItems(items []tools.ToolSearchItem) {
 	})
 }
 
-// kindOfRef 取 ref 的 scope 段（builtin / mcp / rpc / local / plugin / script / custom / preset）。
+// kindOfRef returns the scope segment of a ref (builtin / mcp / rpc / local / plugin / script / custom / preset).
 func kindOfRef(ref string) string {
 	if p, err := toolgrant.ParseRef(ref); err == nil {
 		return p.Scope

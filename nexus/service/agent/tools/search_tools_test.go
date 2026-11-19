@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// stubCatalog 记录 Execute 透传给管理器的东西。
+// stubCatalog records what Execute forwards to the manager.
 type stubCatalog struct {
 	query, agentName, agentID string
 }
@@ -16,8 +16,8 @@ func (s *stubCatalog) Search(_ context.Context, query, agentName, agentID string
 	return &ToolSearchResult{Query: query}, nil
 }
 
-// 没有注入目录管理器时必须是明确错误，而不是空结果 —— 空结果会让模型以为
-// 「本租户没有可授权的东西」，比报错更误导。
+// Without a catalog manager injected the result must be an explicit error, not an empty result - an empty result would make the
+// model believe "this tenant has nothing grantable", which misleads more than an error.
 func TestSearchToolsWithoutCatalog(t *testing.T) {
 	_, err := (&searchToolsTool{}).Execute(context.Background(), &Context{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not available") {
@@ -25,7 +25,7 @@ func TestSearchToolsWithoutCatalog(t *testing.T) {
 	}
 }
 
-// 不传 agent 时按调用者自己的身份查（含回填自己的授权状态）。
+// Without an agent argument the caller's own identity is used (including backfilling its own grant state).
 func TestSearchToolsDefaultsToSelf(t *testing.T) {
 	stub := &stubCatalog{}
 	c := &Context{AgentName: "main", AgentID: "uuid-main", ToolCatalog: stub}
@@ -35,17 +35,17 @@ func TestSearchToolsDefaultsToSelf(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	if res == nil {
-		t.Fatal("结果为空")
+		t.Fatal("result is nil")
 	}
 	if stub.query != "fs" || stub.agentName != "main" || stub.agentID != "uuid-main" {
-		t.Fatalf("透传 = (%q, %q, %q)", stub.query, stub.agentName, stub.agentID)
+		t.Fatalf("forwarded = (%q, %q, %q)", stub.query, stub.agentName, stub.agentID)
 	}
 }
 
-// search_tools 属于 super 分类：执行层硬闸只放行超级智能体。
+// search_tools is a super category: the execution-layer hard gate only lets the super agent through.
 func TestSearchToolsIsSupervisorOnly(t *testing.T) {
 	if !IsSupervisorOnlyTool("search_tools") {
-		t.Fatal("search_tools 应为超级智能体专属")
+		t.Fatal("search_tools should be super-agent only")
 	}
 	_, err := ExecuteTool(context.Background(), &Context{
 		AgentName:    "poet",
@@ -53,6 +53,6 @@ func TestSearchToolsIsSupervisorOnly(t *testing.T) {
 		AllowedTools: map[string]bool{"search_tools": true},
 	}, "search_tools", nil)
 	if err == nil || !strings.Contains(err.Error(), "restricted") {
-		t.Fatalf("非超级智能体调用应被拒，实际 %v", err)
+		t.Fatalf("a non-super agent call should be refused, got %v", err)
 	}
 }

@@ -2,12 +2,57 @@ package tools
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
+	"flame/nexus/shared/quota"
 	"flame/nexus/shared/storage"
 )
 
-// stubAgents 供跨域写闸门（checkWrite）读取目标 agent 状态；delete_file 路径只用到 Get。
+// TestQuotaFreedMeasuresFilesAndDirectories: delete_file has to report the bytes it gave back, so the counter does not keep
+// the workspace looking full after a cleanup.
+func TestQuotaFreedMeasuresFilesAndDirectories(t *testing.T) {
+	st := storage.NewFilesystemStorage(t.TempDir())
+	ctx := context.Background()
+	for p, n := range map[string]int{"ws/s/file.txt": 120, "ws/s/dir/a.txt": 30, "ws/s/dir/sub/b.txt": 12} {
+		if err := st.WriteFile(ctx, p, make([]byte, n)); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+
+	if got := quotaFreed(ctx, st, "ws/s/file.txt"); got != 120 {
+		t.Fatalf("quotaFreed(file) = %d, want 120", got)
+	}
+	if got := quotaFreed(ctx, st, "ws/s/dir"); got != 42 {
+		t.Fatalf("quotaFreed(dir) = %d, want 42", got)
+	}
+	if got := quotaFreed(ctx, st, "ws/s/missing"); got != 0 {
+		t.Fatalf("quotaFreed(missing) = %d, want 0", got)
+	}
+}
+
+// TestQuotaExceededErrorKeepsCause: the model-visible message must name the files the pre-check already deleted, while the
+// error must stay unwrappable (handlers rely on errors.As).
+func TestQuotaExceededErrorKeepsCause(t *testing.T) {
+	base := &quota.ExceededError{Scope: "session", Metric: "bytes", Used: 2048, Limit: 1024}
+	wrapped := quotaExceededError(base, []string{"old.txt", "notes/a.md"})
+	if !errors.Is(wrapped, base) {
+		t.Fatalf("errors.Is = false, want the cause to survive wrapping")
+	}
+	for _, want := range []string{"old.txt", "notes/a.md", "full"} {
+		if !strings.Contains(wrapped.Error(), want) {
+			t.Fatalf("message %q does not mention %q", wrapped.Error(), want)
+		}
+	}
+
+	// No evictions: the original error is returned untouched
+	if got := quotaExceededError(base, nil); got != error(base) {
+		t.Fatalf("expected the original error, got %v", got)
+	}
+}
+
+// stubAgents lets the cross-domain write gate (checkWrite) read the target agent's status; delete_file only uses Get.
 type stubAgents struct{ status int }
 
 func (s stubAgents) Create(context.Context, string, string, bool) (string, error) { return "", nil }
@@ -28,7 +73,7 @@ func (s stubAgents) SetSupervisor(context.Context, string, bool) error { return 
 
 func (s stubAgents) Delete(context.Context, string) error { return nil }
 
-// newFileCtx 造最小可用 Context：Storage 落在临时目录，Agents 桩返回固定 status。
+// newFileCtx builds the smallest usable Context: Storage points at a temp directory and the Agents stub returns a fixed status.
 func newFileCtx(t *testing.T, agentName string, status int) (*Context, storage.Storage) {
 	t.Helper()
 	st := storage.NewFilesystemStorage(t.TempDir())
@@ -36,7 +81,8 @@ func newFileCtx(t *testing.T, agentName string, status int) (*Context, storage.S
 		Schema:    "t0",
 		AgentName: agentName,
 		AgentID:   "self",
-		// 身份判据是属性不是名字：测试里用 "main" 表示超权 agent 时须显式置位
+		// The identity criterion is an attribute, not the name: using "main" for the super agent in a test means setting it
+		// explicitly
 		IsSupervisor: agentName == "main",
 		UserID:       "u1",
 		WorkKey:      "tenants/t0/users/u1/sessions/s1",
@@ -67,7 +113,7 @@ func exists(t *testing.T, st storage.Storage, key string) bool {
 	return ex
 }
 
-// 工作区内：目标是目录时递归删除（非超级智能体，走普通工作区路径）。
+// Inside the workspace: deleting a directory removes it recursively (a non-super agent taking the ordinary workspace path).
 func TestDeleteFileRecursesInWorkspace(t *testing.T) {
 	c, st := newFileCtx(t, "joker", 1)
 	deep := c.StoragePath("sub/deep/a.md")
@@ -77,14 +123,14 @@ func TestDeleteFileRecursesInWorkspace(t *testing.T) {
 		t.Fatalf("delete sub = %v, want nil", err)
 	}
 	if exists(t, st, deep) {
-		t.Error("sub/deep/a.md 应随目录一并删除")
+		t.Error("sub/deep/a.md should be deleted together with the directory")
 	}
 	if exists(t, st, c.StoragePath("sub")) {
-		t.Error("sub 目录应已删除")
+		t.Error("the sub directory should be gone")
 	}
 }
 
-// 工作区内：单个文件照旧可删（回归）。
+// Inside the workspace: a single file is still deletable (regression).
 func TestDeleteFileSingleFile(t *testing.T) {
 	c, st := newFileCtx(t, "joker", 1)
 	key := c.StoragePath("a.md")
@@ -94,73 +140,76 @@ func TestDeleteFileSingleFile(t *testing.T) {
 		t.Fatalf("delete a.md = %v, want nil", err)
 	}
 	if exists(t, st, key) {
-		t.Error("a.md 应已删除")
+		t.Error("a.md should be gone")
 	}
 }
 
-// 超级智能体跨域：删实体内部的子树，目录树整棵消失。
+// The super agent crossing domains: deleting a subtree inside an entity removes the whole tree.
 func TestDeleteFileRecursesAcrossRoot(t *testing.T) {
 	c, st := newFileCtx(t, "main", 1)
 	deep := "tenants/t0/agents/poet/sub/deep/a.md"
 	mustWrite(t, st, deep)
 
 	if err := runDelete(t, c, "/agents/poet/sub"); err != nil {
-		t.Fatalf("超级智能体递归删子树 = %v, want nil", err)
+		t.Fatalf("super agent deleting a subtree recursively = %v, want nil", err)
 	}
 	if exists(t, st, deep) {
-		t.Error("子树内容应已递归删除")
+		t.Error("the subtree content should have been deleted recursively")
 	}
 }
 
-// 超级智能体也不能删实体根目录本身（一律递归不等于越过 D6 的边界）。
+// The super agent must not delete an entity's root directory either (recursive everywhere is not the same as crossing D6's
+// boundary).
 func TestDeleteFileRejectsEntityRoot(t *testing.T) {
 	c, st := newFileCtx(t, "main", 1)
 	agentMd := "tenants/t0/agents/poet/AGENT.md"
 	mustWrite(t, st, agentMd)
 
 	if err := runDelete(t, c, "/agents/poet"); err == nil {
-		t.Fatal("删除 agent 实体根目录应被拒绝")
+		t.Fatal("deleting an agent's entity root should be refused")
 	}
 	if !exists(t, st, agentMd) {
-		t.Error("被拒绝的删除不应产生任何副作用")
+		t.Error("a refused delete must have no side effect")
 	}
 }
 
-// 目标废弃时一律拒绝（状态闸优先于删除动作）。
+// A deprecated target is always refused (the status gate outranks the delete action).
 func TestDeleteFileRejectsDeprecatedTarget(t *testing.T) {
 	c, st := newFileCtx(t, "main", 3)
 	deep := "tenants/t0/agents/poet/sub/a.md"
 	mustWrite(t, st, deep)
 
 	if err := runDelete(t, c, "/agents/poet/sub"); err == nil {
-		t.Fatal("目标废弃时应拒绝删除")
+		t.Fatal("a deprecated target should refuse the delete")
 	}
 	if !exists(t, st, deep) {
-		t.Error("被拒绝的删除不应产生任何副作用")
+		t.Error("a refused delete must have no side effect")
 	}
 }
 
-// skills 容器层（agents/{a}/skills）不是可写目标，报"缺少 skill 名"。
+// The skills container layer (agents/{a}/skills) is not a writable target; the error says a skill name is missing.
 func TestDeleteFileRejectsSkillsContainer(t *testing.T) {
 	c, st := newFileCtx(t, "main", 1)
 	mustWrite(t, st, "tenants/t0/agents/poet/skills/x/SKILL.md")
 
 	if err := runDelete(t, c, "/agents/poet/skills"); err == nil {
-		t.Fatal("skills 容器层应被拒绝")
+		t.Fatal("the skills container layer should be refused")
 	}
 }
 
-// 删除不存在的路径是幂等成功（与 S3 口径一致；固化契约，避免被改回严格模式）。
+// Deleting a missing path is an idempotent success (the same rule as S3; the contract is pinned so it cannot regress to strict
+// mode).
 func TestDeleteFileMissingPathIsIdempotent(t *testing.T) {
 	c, _ := newFileCtx(t, "joker", 1)
 
 	if err := runDelete(t, c, "nope.md"); err != nil {
-		t.Fatalf("删除不存在的路径应为幂等成功, got %v", err)
+		t.Fatalf("deleting a missing path should succeed idempotently, got %v", err)
 	}
 }
 
-// SKILL.md 是技能入口文件，根寻址下不允许单独删除：删掉会留下「登记在库、没有正文」
-// 的空技能（运行时静默降级为空内容）。与管理端 isSkillEntry 同口径。
+// SKILL.md is a skill's entry file and cannot be deleted on its own under root addressing: doing so would leave an empty skill
+// registered in the database with no body (which degrades silently to empty content at run time). The same rule as the admin
+// side's isSkillEntry.
 func TestDeleteFileRejectsSkillEntryOwn(t *testing.T) {
 	c := newOwnSkillCtx(t, "joker", 1, map[string]*SkillInfo{
 		"foo": {ID: "sk1", Name: "foo", Scope: SkillScopeAgent, Status: 1},
@@ -169,24 +218,25 @@ func TestDeleteFileRejectsSkillEntryOwn(t *testing.T) {
 	mustWrite(t, c.Storage, entry)
 
 	if err := runDelete(t, c, "/agents/joker/skills/foo/SKILL.md"); err == nil {
-		t.Fatal("单独删除 SKILL.md 应被拒绝")
+		t.Fatal("deleting SKILL.md on its own should be refused")
 	}
 	if !exists(t, c.Storage, entry) {
-		t.Error("被拒绝的删除不应产生任何副作用")
+		t.Error("a refused delete must have no side effect")
 	}
 
-	// 附属文件不受影响（这正是本次放开的能力）
+	// Attached files are unaffected (that is exactly what was opened up here)
 	extra := c.TenantPath("agents/joker/skills/foo/docs/a.md")
 	mustWrite(t, c.Storage, extra)
 	if err := runDelete(t, c, "/agents/joker/skills/foo/docs/a.md"); err != nil {
-		t.Errorf("附属文件应可删, got %v", err)
+		t.Errorf("an attached file should be deletable, got %v", err)
 	}
 	if exists(t, c.Storage, extra) {
-		t.Error("附属文件应已删除")
+		t.Error("the attached file should be gone")
 	}
 }
 
-// 超级智能体同样受 SKILL.md 保护 —— 三个入口（管理端 / 超级智能体 / 非超级智能体）口径一致。
+// The super agent is protected by the SKILL.md rule too - all three entry points (admin side / super agent / non-super agent)
+// share one criterion.
 func TestDeleteFileRejectsSkillEntryForSupervisor(t *testing.T) {
 	c := newOwnSkillCtx(t, "main", 1, nil)
 	c.Agents = stubAgentsByName{byName: map[string]*AgentInfo{
@@ -200,19 +250,19 @@ func TestDeleteFileRejectsSkillEntryForSupervisor(t *testing.T) {
 	mustWrite(t, c.Storage, entry)
 
 	if err := runDelete(t, c, "/agents/poet/skills/foo/SKILL.md"); err == nil {
-		t.Fatal("超级智能体单独删除 SKILL.md 也应被拒绝")
+		t.Fatal("the super agent deleting SKILL.md on its own should be refused too")
 	}
 	if !exists(t, c.Storage, entry) {
-		t.Error("被拒绝的删除不应产生任何副作用")
+		t.Error("a refused delete must have no side effect")
 	}
 
-	// 整个技能目录仍可删（走元工具的场景不在此，但实体内部子树要放行）
+	// A whole skill directory is still deletable (the meta-tool scenario is elsewhere, but a subtree inside an entity must pass)
 	sub := c.TenantPath("agents/poet/skills/foo/docs")
 	mustWrite(t, c.Storage, c.TenantPath("agents/poet/skills/foo/docs/a.md"))
 	if err := runDelete(t, c, "/agents/poet/skills/foo/docs"); err != nil {
-		t.Errorf("实体内部子树应可删, got %v", err)
+		t.Errorf("a subtree inside an entity should be deletable, got %v", err)
 	}
 	if exists(t, c.Storage, sub) {
-		t.Error("子树应已递归删除")
+		t.Error("the subtree should have been deleted recursively")
 	}
 }

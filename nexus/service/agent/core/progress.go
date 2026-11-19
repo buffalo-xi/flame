@@ -7,39 +7,39 @@ import (
 	"strings"
 )
 
-// 流式输出分类（notifications/progress 帧的 _meta.category）。
+// Streaming output categories (the _meta.category of a notifications/progress frame).
 //
-// 全部都是「过程」：协议里的最终结果只认响应中的 result / CallToolResult，
-// notifications/progress 里的任何一帧都不构成结果，所以这里没有 final 之类的档位。
+// They are all "process": the protocol only recognises the result / CallToolResult of the response as the final result, and no
+// notifications/progress frame constitutes one, so there is no final-like tier here.
 const (
-	CategoryThinking   = "thinking"    // 模型推理增量
-	CategoryText       = "text"        // 文本增量（agent 正文 / flow 的 progress 与 result 通道）
-	CategoryToolCall   = "tool_call"   // 开始执行工具
-	CategoryToolResult = "tool_result" // 工具执行完成
+	CategoryThinking   = "thinking"    // model reasoning delta
+	CategoryText       = "text"        // text delta (agent body / the progress and result channels of a flow)
+	CategoryToolCall   = "tool_call"   // a tool is starting
+	CategoryToolResult = "tool_result" // a tool finished
 )
 
-// ProgressItem 一条可外发的流式输出。
+// ProgressItem is one piece of streaming output ready to be sent out.
 type ProgressItem struct {
 	Category string
 	Message  string
-	// Meta 结构化附加字段（仅工具类事件）：call_id / tool / args / ok / duration_ms / agent
+	// Meta holds structured extra fields (tool events only): call_id / tool / args / ok / duration_ms / agent
 	Meta map[string]any
 }
 
 var progressMarkerRe = regexp.MustCompile(`\[\[(?:action|think|tools)\]\].*?\[\[/(?:action|think|tools)\]\]`)
 
-// CleanProgressMarkers 清理流里的内部标记：
-// - 删除 [[action]]/[[think]]/[[tools]] 区块
-// - 将 [[content]] 前缀替换为内容分隔符 "."
+// CleanProgressMarkers cleans the internal markers out of a stream:
+// - [[action]]/[[think]]/[[tools]] blocks are removed
+// - the [[content]] prefix is replaced by the content separator "."
 //
-// 原 mcp/server、rpc/server、flow/executors 三处各有一份同名实现，统一到这里。
+// mcp/server, rpc/server and flow/executors each carried a copy of this; they are unified here.
 func CleanProgressMarkers(s string) string {
 	s = progressMarkerRe.ReplaceAllString(s, "")
 	return strings.ReplaceAll(s, "[[content]]", ".")
 }
 
-// ToProgress 把一条 agent 事件转成流式输出。
-// ok=false 表示无需外发（如清理后为空的文本增量）。
+// ToProgress turns one agent event into streaming output.
+// ok=false means there is nothing to send (such as a text delta that is empty after cleaning).
 func (ev Event) ToProgress() (ProgressItem, bool) {
 	switch ev.Type {
 	case EventThinking, EventText:
@@ -81,48 +81,50 @@ func (ev Event) ToProgress() (ProgressItem, bool) {
 	return ProgressItem{}, false
 }
 
-// ===== 进度订阅：notifications/progress 的发送侧 =====
+// ===== Progress subscription: the sending side of notifications/progress =====
 //
-// MCP 2026-07-28 对进度的规定里只有两条硬约束，缺一条通知就不合规：
-//  ① 没有 progressToken 就不得发（通知 MUST 只引用「活跃请求里提供过的 token」）；
-//  ② progress 每次 MUST 递增（即使没有 total）。
+// MCP 2026-07-28's rules on progress state two hard constraints, and missing either one makes a notification non-compliant:
+//  1. without a progressToken none may be sent (a notification MUST only reference a token "provided in an active request");
+//  2. progress MUST increase on every frame (even without a total).
 //
-// 把这两条绑进同一个对象，调用方就没有「只记起一条」的余地。
-// 早先的写法是「请求参数里的 stream 布尔值」+「服务端兜底生成一个 UUID token」：
-// 前者位置错（控制参数混进业务入参，还会污染 flow 的业务变量），后者直接违反 ①。
+// Binding both into one object leaves the caller no room to remember only one of them.
+// The earlier shape was "a stream boolean in the request arguments" plus "a server-side fallback UUID token":
+// the former was in the wrong place (a control parameter mixed into business arguments, which also polluted a flow's business
+// variables), and the latter directly violated 1.
 
-// ProgressPump 一次调用的进度发送器：持有客户端给的 progressToken 与单调递增序号。
+// ProgressPump is one call's progress sender: it holds the client's progressToken and the monotonically increasing sequence.
 //
-// 没有 token 时 Enabled() 为 false，调用方应走「同步执行、一帧不推」的路径 ——
-// 这不是降级，而是规范要求的默认行为（server MAY 发进度，前提是客户端订阅了）。
+// Without a token Enabled() is false, and the caller should take the "run synchronously, push nothing" path - that is not a degraded mode
+// but the default the spec requires (a server MAY send progress, provided the client subscribed).
 type ProgressPump struct {
 	Token any
 	seq   float64
 }
 
-// NewProgressPump 创建发送器。token 为 nil 表示客户端没订阅进度。
+// NewProgressPump creates a sender. A nil token means the client did not subscribe to progress.
 func NewProgressPump(token any) *ProgressPump { return &ProgressPump{Token: token} }
 
-// Enabled 客户端是否订阅了本次调用的进度。
+// Enabled reports whether the client subscribed to this call's progress.
 func (p *ProgressPump) Enabled() bool { return p != nil && p.Token != nil }
 
-// Next 取下一个进度序号（从 1 开始）。
-// 只在 Enabled() 为真时调用；同一 pump 由单协程消费，无需加锁。
+// Next returns the next progress sequence number (starting at 1).
+// Only call it when Enabled() is true; a pump is consumed by a single goroutine, so no lock is needed.
 func (p *ProgressPump) Next() float64 {
 	p.seq++
 	return p.seq
 }
 
-// LegacyStreamKey 已废弃的「要不要流式」开关在业务入参里的键名。
+// LegacyStreamKey is the key of the deprecated "should this stream" switch inside the business arguments.
 //
-// 它曾经是 mcp / rpc 两个 server 的判定依据，但位置错了：控制参数混在业务入参里，
-// 会被当成 flow / agent 的业务变量，也与 params._meta.progressToken 重复。
+// It used to be what both the mcp and rpc servers decided on, but it sat in the wrong place: a control parameter mixed into business
+// arguments is treated as a flow / agent business variable, and it duplicated params._meta.progressToken.
 const LegacyStreamKey = "stream"
 
-// StripLegacyStream 剥掉已废弃的 arguments.stream，返回是否真的剥掉了（调用方据此记日志）。
+// StripLegacyStream strips the deprecated arguments.stream and reports whether anything was actually stripped (the caller logs on it).
 //
-// 保留剥除动作（而不是直接忽略）的理由：让它既不被解释成控制参数，也不作为业务变量
-// 流进 flow / agent —— 否则某个 flow 恰好有同名入参时会被调用方的旧配置意外覆盖。
+// The strip is kept rather than simply ignored so that it is neither interpreted as a control parameter nor flows into a flow / agent as a
+// business variable - otherwise a flow that happens to have an argument of the same name would be silently overwritten by the caller's
+// old configuration.
 func StripLegacyStream(input map[string]any) bool {
 	if _, existed := input[LegacyStreamKey]; !existed {
 		return false
@@ -131,8 +133,9 @@ func StripLegacyStream(input map[string]any) bool {
 	return true
 }
 
-// ValidProgressToken 规范约束：progressToken 必须是 string 或 integer，其余一律视为未提供。
-// JSON 解码后整数是 float64，所以按「是否为整数值」判定（1.5 这类要拒绝）。
+// ValidProgressToken applies the spec's constraint: progressToken must be a string or an integer, and anything else counts as not
+// provided.
+// JSON-decoded integers are float64, so the test is "is it an integer value" (1.5 and the like are refused).
 func ValidProgressToken(v any) bool {
 	switch t := v.(type) {
 	case string:

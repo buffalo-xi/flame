@@ -2,18 +2,18 @@ package core
 
 import "context"
 
-// EventType agent 运行过程中的事件类型。
+// EventType is the type of an event emitted while an agent runs.
 type EventType string
 
 const (
-	EventThinking   EventType = "thinking"    // 模型推理内容（reasoning）
-	EventText       EventType = "text"        // 正文增量（过程说明或最终回答）
-	EventToolCall   EventType = "tool_call"   // 开始执行工具
-	EventToolResult EventType = "tool_result" // 工具执行完成
+	EventThinking   EventType = "thinking"    // model reasoning content
+	EventText       EventType = "text"        // text delta (running commentary or the final answer)
+	EventToolCall   EventType = "tool_call"   // a tool is starting
+	EventToolResult EventType = "tool_result" // a tool finished
 )
 
-// Event agent 运行过程中的结构化事件，供 SSE 等流式消费方推送。
-// 文本类事件（thinking/text）的 Delta 为增量片段，消费方需自行拼接。
+// Event is a structured event emitted while an agent runs, pushed to streaming consumers such as SSE.
+// For text-like events (thinking / text) Delta is the incremental fragment, and the consumer joins the pieces.
 type Event struct {
 	Type EventType `json:"type"`
 	// thinking / text
@@ -25,49 +25,50 @@ type Event struct {
 	Result     string `json:"result,omitempty"`
 	OK         bool   `json:"ok,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
-	// 来源：子 agent 的事件转发给父级时填充（空 = 当前 agent 自身）
+	// Origin: filled when a child agent's event is forwarded to its parent (empty = this agent itself)
 	Agent string `json:"agent,omitempty"`
-	// 调用深度（0 = 顶层 agent）
+	// Call depth (0 = the top-level agent)
 	Depth int `json:"depth,omitempty"`
 }
 
-// Agent 智能体运行时接口。
+// Agent is the agent runtime interface.
 //
-// 只保留"外部消费方真正会调用"的方法（消费方：admin/agents 的 SSE、
-// service/rpc/server、service/mcp/server、service/flow/executors）。
-// 其余仅供实现内部使用的能力（如 setResult/setError/logInfo）不进接口，
-// 接口越小，新增第二种实现（如 remote / container）时负担越轻。
+// It keeps only the methods an external consumer really calls (consumers: the SSE endpoints under admin/agents,
+// service/rpc/server, service/mcp/server, service/flow/executors).
+// Everything internal to the implementation (setResult/setError/logInfo and the like) stays out of the interface - the smaller the
+// interface, the lighter a second implementation (remote / container) will be to add.
 //
-// 与 flow.ExecContext 的约定一致：执行过程把中间事件推入事件 channel，
-// 最终结果与错误存在实例上；是否需要流式由消费方决定（读 channel 或只读结果）。
+// The convention matches flow.ExecContext: execution pushes intermediate events into the event channel, while the final result and error
+// live on the instance; whether to stream is the consumer's decision (read the channel, or read the result only).
 type Agent interface {
-	// Stream 执行 agent 循环（LLM 推理 → 工具调用 → 结果回填 → 再推理）。
+	// Stream runs the agent loop (LLM reasoning -> tool calls -> results fed back -> reason again).
 	//
-	// parent 只用于**级联终止**：它被取消时本轮立即退出 —— call_agent 的子智能体
-	// 因此能随父一起停（此前子实例自己从 Background 起 ctx，父被停后子仍会跑完）。
-	// 顶层入口传 context.Background()：终止由 runcontrol.go 的 StopRun / StopSession
-	// 负责，那条路上还要区分「用户请求」与「客户端断开」两类原因。
+	// parent is only used for **cascading termination**: when it is cancelled the round exits immediately - which is how a call_agent
+	// child stops together with its parent (previously a child instance started its own ctx from Background, so it kept running after
+	// the parent was stopped).
+	// A top-level entry passes context.Background(): termination is handled by runcontrol.go's StopRun / StopSession, which also has to
+	// tell "the user asked" and "the client disconnected" apart.
 	Stream(parent context.Context) error
 
-	// Close 释放资源（等价于 CloseChans）。
+	// Close releases resources (equivalent to CloseChans).
 	Close() error
-	// CloseChans 关闭事件 channel。
+	// CloseChans closes the event channel.
 	CloseChans() error
 
-	// GetEventChan 返回结构化事件 channel（思考 / 正文 / 工具调用）。
-	// 这是唯一的流式出口：思考与工具调用不体现在别处。
+	// GetEventChan returns the structured event channel (thinking / text / tool calls).
+	// It is the only streaming outlet: thinking and tool calls appear nowhere else.
 	GetEventChan() chan Event
 
-	// GetResult 返回最终结果。
+	// GetResult returns the final result.
 	GetResult() string
-	// GetDurationMs 返回本轮执行耗时。
+	// GetDurationMs returns how long this round took.
 	//
-	// 写 session_records 时冻结，入口用它渲染「刚跑完」的秒数 —— 与历史回显的
-	// duration_ms 必须是同一个值，否则同一个会话里两个数会对不上。
+	// It is frozen when session_records is written, and the entry point uses it to render the seconds of "just finished" - it must be the
+	// same value as the duration_ms replayed from history, otherwise the two numbers in one session disagree.
 	GetDurationMs() int64
-	// GetError 返回执行过程中的错误（空串表示无错）。
+	// GetError returns the error from execution (an empty string means none).
 	GetError() string
 
-	// LogError 记录错误日志。
+	// LogError records an error log line.
 	LogError(message string)
 }

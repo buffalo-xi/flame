@@ -19,18 +19,18 @@ import (
 	"flame/tools/xsql"
 )
 
-// customToolAdmin 实现 tools.CustomToolAdmin：自定义工具的增删改（仅超级智能体的元工具会用到）。
+// customToolAdmin implements tools.CustomToolAdmin: create / update / delete custom tools (used only by the super agent's meta tools).
 //
-// 为什么放在 service 层而不是 tools 包：tools 包只该知道「有哪些工具、怎么跑」，
-// 碰表结构就意味着它要 import xsql / 仓储 / 配置根目录 —— 与 customToolSource
-// 中间隔一层的理由相同。
+// Why it lives in the service layer rather than the tools package: that package should only know "which tools exist and how to run them", and
+// touching the table structure would force it to import xsql / repositories / the config root directory - the same reasoning as the extra
+// layer in customToolSource.
 //
-// 写盘只做本地文件系统、不绕 storage 抽象：脚本执行本身要求宿主路径可达
-// （沙箱挂载源），S3 存储下这条链路本来就不可用，admin/customtools 同口径。
+// Writing to disk only uses the local filesystem and does not go through the storage abstraction: script execution itself needs the host path
+// to be reachable (it is the sandbox mount source), so the chain is unusable with S3 storage anyway; admin/customtools makes the same choice.
 type customToolAdmin struct {
 	schema string
-	// store 合并视图：Get 以目录为准（盘上手工放进来的工具也能被改/删），
-	// Create/Update/Delete 透传给仓储。
+	// store is the merged view: Get follows the catalog (a tool dropped on disk by hand can be updated / deleted too), while
+	// Create/Update/Delete pass straight through to the repository.
 	store  *customtoolstore.Store
 	grants toolgrantsrepo.Repository
 }
@@ -43,28 +43,28 @@ func newCustomToolAdmin(schema string) *customToolAdmin {
 	}
 }
 
-// toolDir 工具目录的宿主绝对路径：{root}/tenants/{schema}/tools/{name}。
+// toolDir is the host absolute path of the tool directory: {root}/tenants/{schema}/tools/{name}.
 func (a *customToolAdmin) toolDir(name string) string {
 	return filepath.Join(paths.ResolveToolsDir(config.Cfg.Agent.RootDir, a.schema), name)
 }
 
-// Create 建实体：表行 + 目录 + 可跑的最小骨架。
+// Create creates the entity: table row + directory + a minimal runnable skeleton.
 //
-// 先落库再落盘，落盘失败回滚那一行 —— 与 admin 的创建顺序一致（避免「库里有、盘上没有」）。
-// 骨架不是空文件：工具在超级智能体写第一版代码之前就应当是**可调用**的，否则调一次得到
-// 「文件不存在」，看起来像工具坏了。
+// The row is written before the disk, and a disk failure rolls the row back - the same order as admin creation (avoiding "in the table, not on
+// disk"). The skeleton is not an empty file: a tool must be **callable** before the super agent writes its first version, otherwise a call
+// hits "file not found" and looks like a broken tool.
 func (a *customToolAdmin) Create(ctx context.Context, in tools.CustomToolInput) (*tools.CustomToolSpec, error) {
 	cur, err := a.store.Get(a.schema, in.Name)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	if cur != nil {
-		return nil, fmt.Errorf("自定义工具 %q 已存在（改名不支持：授权 ref 是 custom:<name>）", in.Name)
+		return nil, fmt.Errorf("custom tool %q already exists (renaming is not supported: the grant ref is custom:<name>)", in.Name)
 	}
-	// 目录在但契约不可用（缺 TOOL.json / JSON 写坏了）时 Get 会返回 ErrNoRows，
-	// 此时不能当成「不存在」直接创建：writeEntryFile 会覆盖掉用户手里的实现代码。
+	// When the directory exists but its contract is unusable (missing TOOL.json / broken JSON), Get returns ErrNoRows. That must not be
+	// treated as "missing" and created: writeEntryFile would overwrite the user's implementation code.
 	if st, serr := os.Stat(a.toolDir(in.Name)); serr == nil && st.IsDir() {
-		return nil, fmt.Errorf("工具目录 %q 已存在但缺可用的 TOOL.json，请先修复或删除该目录", in.Name)
+		return nil, fmt.Errorf("the directory of tool %q exists but has no usable TOOL.json; repair or delete that directory first", in.Name)
 	}
 
 	t := &models.CustomTool{
@@ -85,44 +85,45 @@ func (a *customToolAdmin) Create(ctx context.Context, in tools.CustomToolInput) 
 	if t.Entry == "" {
 		t.Entry = defaultScriptEntry(t.Lang)
 	}
-	// 服务层再校一次入口：工具层的校验只保护元工具这条路径，
-	// 将来若有别的调用方（如管理端复用本实现）不能指望它一定先跑过。
+	// Validate the entry once more in the service layer: the tool layer's check only protects the meta-tool path, and a future caller (the
+	// admin side reusing this implementation, say) cannot be assumed to run it first.
 	if err := models.ValidateToolEntry(t.Entry); err != nil {
 		return nil, err
 	}
 
 	if err := a.store.Create(a.schema, t); err != nil {
-		return nil, fmt.Errorf("创建自定义工具失败: %w", err)
+		return nil, fmt.Errorf("failed to create custom tool: %w", err)
 	}
-	// 契约先于代码落盘：排查时先看「这个工具声明了什么」，代码缺失比契约缺失好查。
+	// The contract hits the disk before the code: when triaging, first look at "what this tool declares", and a missing code file is easier
+	// to spot than a missing contract.
 	if err := a.writeContract(t); err != nil {
 		_ = a.store.Delete(a.schema, t.Name)
-		return nil, fmt.Errorf("写入契约文件失败（已回滚表行）: %w", err)
+		return nil, fmt.Errorf("failed to write the contract file (table row rolled back): %w", err)
 	}
 	if err := writeEntryFile(a.toolDir(t.Name), t.Entry, tools.SkeletonForLang(t.Lang)); err != nil {
 		_ = a.store.Delete(a.schema, t.Name)
-		_ = os.RemoveAll(a.toolDir(t.Name)) // 别留下「有目录、没表行」的孤儿
-		return nil, fmt.Errorf("写入实现骨架失败（已回滚表行）: %w", err)
+		_ = os.RemoveAll(a.toolDir(t.Name)) // do not leave an orphan "directory without row"
+		return nil, fmt.Errorf("failed to write the implementation skeleton (table row rolled back): %w", err)
 	}
 	spec := tools.CustomToolSpecFromModel(t)
 	return &spec, nil
 }
 
-// Update 只改元数据。name 与 status 不在入参里：改名打断授权，状态切换只走管理端。
+// Update changes metadata only. name and status are not arguments: renaming breaks grants, and only the admin side flips the status.
 func (a *customToolAdmin) Update(ctx context.Context, name string, in tools.CustomToolUpdate) (*tools.CustomToolSpec, error) {
 	cur, err := a.store.Get(a.schema, name)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("自定义工具 %q 不存在", name)
+			return nil, fmt.Errorf("custom tool %q does not exist", name)
 		}
 		return nil, err
 	}
-	// 与 agent / skill 同一条闸：锁定(2) / 废弃(3) 的工具不允许改。
+	// The same gate as agents / skills: a locked (2) / deprecated (3) tool cannot be changed.
 	if !models.IsModifiable(cur.Status) {
-		return nil, fmt.Errorf("自定义工具 %q 已锁定或废弃，先由管理员切回正常态", name)
+		return nil, fmt.Errorf("custom tool %q is locked or deprecated; an administrator must switch it back to normal first", name)
 	}
-	// 以文件里的契约为基线再叠加本次改动（读路径文件优先）：
-	// 从表行起改，一次更新就会把 TOOL.json 里手改过的契约悄悄盖回旧值。
+	// Start from the contract in the file and layer this change on top (the read path prefers the file):
+	// starting from the table row would silently overwrite a hand-edited contract in TOOL.json back to the old value.
 	toolfile.Load(config.Cfg.Agent.RootDir, a.schema, cur)
 
 	if in.DisplayName != nil {
@@ -159,8 +160,8 @@ func (a *customToolAdmin) Update(ctx context.Context, name string, in tools.Cust
 		cur.ConfigFields = xsql.JSONB{Data: in.ConfigFields}
 	}
 	if in.Configs != nil {
-		// 按键合并而不是整体替换：模型看不到已有 secret 值，整体替换会把它抹掉。
-		// 显式空串仍然可以清空某一项。
+		// Merge by key instead of replacing wholesale: the model cannot see existing secret values, and a wholesale replacement would wipe
+		// them. An explicit empty string can still clear one entry.
 		merged := cur.ConfigMap()
 		if merged == nil {
 			merged = make(map[string]any, len(in.Configs))
@@ -171,37 +172,37 @@ func (a *customToolAdmin) Update(ctx context.Context, name string, in tools.Cust
 		cur.Configs = xsql.JSONB{Data: merged}
 	}
 
-	// Upsert 而不是 Update：盘上有目录、表里没行的工具（手工放进来 / 从版本库拉下来）
-	// 也要能改状态与配置 —— 缺行不该让「编辑」报一个查不到记录。
+	// Upsert rather than Update: a tool with a directory on disk and no row in the table (dropped in by hand / pulled from the version store)
+	// must still allow status and config changes - a missing row must not make "edit" report a record that cannot be found.
 	if err := a.store.Upsert(cur); err != nil {
-		return nil, fmt.Errorf("更新自定义工具失败: %w", err)
+		return nil, fmt.Errorf("failed to update custom tool: %w", err)
 	}
 	if err := a.writeContract(cur); err != nil {
-		// 文件没写成时必须把它删掉：读路径「文件优先」，留着旧文件会让这次更新
-		// 在下一轮读取里被旧契约盖回去（表改了、表现没变）。
+		// When the file was not written it must be removed: the read path prefers the file, and keeping the old one would let the next read
+		// overwrite this update with the old contract (the table changed, behaviour did not).
 		_ = os.Remove(toolfile.Path(config.Cfg.Agent.RootDir, a.schema, cur.Name))
-		return nil, fmt.Errorf("设置已保存，但写入契约文件失败（已回退为表定义）: %w", err)
+		return nil, fmt.Errorf("settings saved, but writing the contract file failed (fell back to the table definition): %w", err)
 	}
 	spec := tools.CustomToolSpecFromModel(cur)
 	return &spec, nil
 }
 
-// writeContract 把表行写成 TOOL.json —— 契约文件的唯一写入口。
+// writeContract writes the table row out as TOOL.json - the single write entry point for the contract file.
 //
-// 不在这里做「差异比对」：文件就几百字节，无条件重写比「先读再比再决定」少一条
-// 可能出错的路径，也顺带保证格式稳定（同一份序列化函数）。
+// No diffing here: the file is a few hundred bytes, and an unconditional rewrite has one error path fewer than "read, compare, decide", while
+// also keeping the format stable (one serialisation function).
 func (a *customToolAdmin) writeContract(t *models.CustomTool) error {
 	return toolfile.WriteOf(config.Cfg.Agent.RootDir, a.schema, t)
 }
 
-// Delete 删表行 + 删目录。
+// Delete removes the table row and the directory.
 //
-// force=false 且仍被引用时返回 (refs, nil)：由工具层翻译成「拒绝 + 列出引用方」。
-// 引用行不清理 —— 与 admin 同口径，误删后重建同名工具可自动恢复授权。
+// With force=false and references still present it returns (refs, nil): the tool layer turns that into "refuse and list the referencing
+// parties". Reference rows are left alone - the same as the admin side, so recreating a tool with the same name restores the grants.
 func (a *customToolAdmin) Delete(ctx context.Context, name string, force bool) (*tools.CustomToolRefs, error) {
 	if _, err := a.store.Get(a.schema, name); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("自定义工具 %q 不存在", name)
+			return nil, fmt.Errorf("custom tool %q does not exist", name)
 		}
 		return nil, err
 	}
@@ -214,25 +215,26 @@ func (a *customToolAdmin) Delete(ctx context.Context, name string, force bool) (
 		return refs, nil
 	}
 	if err := a.store.Delete(a.schema, name); err != nil {
-		return refs, fmt.Errorf("删除自定义工具失败: %w", err)
+		return refs, fmt.Errorf("failed to delete custom tool: %w", err)
 	}
 	if dir := a.toolDir(name); dir != "" {
 		if rerr := os.RemoveAll(dir); rerr != nil {
-			// 行已删，目录残留只影响盘占用；不吞错但也不回滚（回滚会留下更奇怪的半态）。
-			return refs, fmt.Errorf("已删除 %q，但清理目录失败: %w", name, rerr)
+			// The row is gone; a leftover directory only costs disk. Do not swallow the error but do not roll back either (a rollback would
+			// leave a weirder half state).
+			return refs, fmt.Errorf("%q was deleted, but cleaning up its directory failed: %w", name, rerr)
 		}
 	}
-	// 版本域同样按 name 键：不清会让「删除后同名重建」在发布 v1 时撞上旧目录
-	// （发布前置的 EnsureAbsent 会报 version exists，错误信息完全指不到这里）。
+	// The version domain is keyed by name too: leaving it would make "delete then recreate with the same name" hit the old directory when
+	// releasing v1 (the EnsureAbsent precondition reports version exists, an error that points nowhere near here).
 	ver := filepath.Join(config.Cfg.Agent.RootDir,
 		filepath.FromSlash(paths.VersionEntityKey(a.schema, paths.VersionTools, name)))
 	if rerr := os.RemoveAll(ver); rerr != nil {
-		return refs, fmt.Errorf("已删除 %q，但清理版本目录失败: %w", name, rerr)
+		return refs, fmt.Errorf("%q was deleted, but cleaning up its version directory failed: %w", name, rerr)
 	}
 	return refs, nil
 }
 
-// ListAll 全部工具（含锁定 / 废弃态）。
+// ListAll lists every tool (locked / deprecated ones included).
 func (a *customToolAdmin) ListAll(ctx context.Context) ([]tools.CustomToolSpec, error) {
 	list, err := a.store.List(a.schema)
 	if err != nil {
@@ -245,11 +247,11 @@ func (a *customToolAdmin) ListAll(ctx context.Context) ([]tools.CustomToolSpec, 
 	return out, nil
 }
 
-// customToolRefScope 授权 ref 的命名空间前缀（custom:<name>）。
-// 与 toolgrant.ScopeCustom 同一个值：这里只拼查询串，不引 toolgrant 以免两包循环。
+// customToolRefScope is the namespace prefix of the grant ref (custom:<name>).
+// The same value as toolgrant.ScopeCustom: the query string is built here without importing toolgrant, to avoid a package cycle.
 const customToolRefScope = "custom:"
 
-// usages 查 custom:<name> 被谁引用（agent 授权 / skill 依赖 / 自定义组）。
+// usages finds who references custom:<name> (agent grants / skill dependencies / custom groups).
 func (a *customToolAdmin) usages(name string) (*tools.CustomToolRefs, error) {
 	u, err := a.grants.ListRefUsages(a.schema, customToolRefScope+name, false)
 	if err != nil {
@@ -268,13 +270,13 @@ func (a *customToolAdmin) usages(name string) (*tools.CustomToolRefs, error) {
 	return out, nil
 }
 
-// writeEntryFile 写实现入口文件（自动建父目录，支持 tools/<name>/lib/x.py 这类子目录）。
+// writeEntryFile writes the implementation entry file (creating parent directories, so nested paths like tools/<name>/lib/x.py work).
 func writeEntryFile(dir, entry, content string) error {
 	p := filepath.Join(dir, filepath.FromSlash(entry))
-	// Join 之后再确认一次仍在工具目录内：filepath.Join 会 Clean，但上面的
-	// entryInsideToolDir 只检查了相对路径形态，这里做最终兜底。
+	// Confirm once more after Join that the path is still inside the tool directory: filepath.Join cleans the path, but the
+	// entryInsideToolDir check above only looked at the relative shape, so this is the final backstop.
 	if !strings.HasPrefix(p, filepath.Clean(dir)+string(os.PathSeparator)) {
-		return fmt.Errorf("entry %q 解析后跳出工具目录", entry)
+		return fmt.Errorf("entry %q resolves outside the tool directory", entry)
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err

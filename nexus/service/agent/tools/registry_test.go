@@ -10,7 +10,7 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// stubSchemaTool 提供任意 schema 的桩工具，用于验证参数校验 / 别名归位。
+// stubSchemaTool is a stub tool with an arbitrary schema, used to verify argument validation / alias normalisation.
 type stubSchemaTool struct {
 	meta ToolMeta
 }
@@ -40,7 +40,7 @@ func TestNormalizeArgs(t *testing.T) {
 		t.Fatalf("name = %v, want english-joke-writing", args["name"])
 	}
 	if _, still := args["skill_name"]; still {
-		t.Errorf("alias key skill_name should be removed, got %#v", args)
+		t.Errorf("the alias key skill_name should be removed, got %#v", args)
 	}
 	if err := validateRequired(meta, args); err != nil {
 		t.Errorf("validateRequired = %v, want nil", err)
@@ -59,7 +59,7 @@ func TestNormalizeArgsDoesNotClobberCanonical(t *testing.T) {
 			"required": []any{"agent", "skill"},
 		},
 	}
-	// `agent` / `skill` 是 bind_skill 的规范名，绝不能被别名规则改掉。
+	// agent / skill are bind_skill's canonical names and must never be rewritten by the alias rules.
 	args := map[string]any{"agent": "poet", "skill": "english"}
 	normalizeArgs(meta, args)
 
@@ -105,7 +105,7 @@ func TestExecuteToolSkillNameAlias(t *testing.T) {
 	}
 }
 
-// 未授权工具必须被执行层拒绝（防文本形态调用绕过工具授权）。
+// An ungranted tool must be refused by the execution layer (so a textual call cannot bypass tool grants).
 func TestExecuteToolRejectsUngrantedTool(t *testing.T) {
 	Register(&stubSchemaTool{meta: ToolMeta{
 		Name: "stub_ungranted",
@@ -121,149 +121,155 @@ func TestExecuteToolRejectsUngrantedTool(t *testing.T) {
 		t.Fatal("want error for ungranted tool")
 	}
 
-	// 空集（未配置授权）：任何工具都拒绝
+	// The empty set (no grant configured): every tool is refused
 	c.AllowedTools = map[string]bool{}
 	if _, err := ExecuteTool(context.Background(), c, "stub_ungranted", map[string]any{"name": "x"}); err == nil {
 		t.Fatal("want error when grant set is empty")
 	}
 
-	// 在集合内：放行
+	// In the set: allowed
 	c.AllowedTools = map[string]bool{"stub_ungranted": true}
 	if _, err := ExecuteTool(context.Background(), c, "stub_ungranted", map[string]any{"name": "x"}); err != nil {
 		t.Fatalf("ExecuteTool = %v, want nil", err)
 	}
 }
 
-// 缺省工具集必须都是已注册的普通内置工具：防拼错名字、防把 super 类混进缺省授权。
+// The default tool set must consist of registered ordinary built-in tools: no misspelled names, and no super category smuggled into
+// the defaults.
 func TestDefaultAgentToolsAreRegistered(t *testing.T) {
 	if len(models.DefaultAgentTools) == 0 {
-		t.Fatal("DefaultAgentTools 为空")
+		t.Fatal("DefaultAgentTools is empty")
 	}
 	seen := map[string]bool{}
 	for _, name := range models.DefaultAgentTools {
 		if seen[name] {
-			t.Errorf("缺省工具 %q 重复", name)
+			t.Errorf("default tool %q is duplicated", name)
 		}
 		seen[name] = true
 		if _, ok := Get(name); !ok {
-			t.Errorf("缺省工具 %q 未注册", name)
+			t.Errorf("default tool %q is not registered", name)
 		}
 		if IsSupervisorOnlyTool(name) {
-			t.Errorf("缺省工具 %q 是 super（仅超级智能体）工具，不能进缺省集", name)
+			t.Errorf("default tool %q is a super (super-agent only) tool and must not be in the default set", name)
 		}
 	}
 }
 
-// 技能元工具的分类口径：私有三件套是普通工具（被授权即用，含非超级智能体），
-// 共享三件套与指定归属三件套是 skill-admin（仅超级智能体），绑定类在 agent-admin。
-// 旧的单工具名必须彻底消失。
-// 分类是「谁能用哪个工具」的唯一判据，改错等于权限边界错，故在此显式锁死。
+// Skill meta tool categories: the three private tools are ordinary tools (usable once granted, non-super agents included), the three
+// shared tools and the three explicit-owner tools are skill-admin (super agent only), and the binding tools are agent-admin.
+// The old single-tool names must be gone completely.
+// The category is the only criterion for "who may use which tool", so getting it wrong gets the permission boundary wrong - hence
+// it is locked down explicitly here.
 func TestSkillToolCategories(t *testing.T) {
 	for _, name := range []string{"create_own_skill", "update_own_skill", "delete_own_skill"} {
 		tool, ok := Get(name)
 		if !ok {
-			t.Fatalf("工具 %q 未注册", name)
+			t.Fatalf("tool %q is not registered", name)
 		}
 		if IsSupervisorOnlyTool(name) {
-			t.Errorf("%q 不应仅超级智能体可用（否则 agent 无法自建私有 skill）", name)
+			t.Errorf("%q must not be super-agent only (otherwise an agent cannot build its own private skills)", name)
 		}
-		// 与 builtin:skill 分家：skill 是「看技能」，skill-own 是「写自己的能力面」，
-		// 风险档次不同（D20 特意不放进 DefaultAgentTools），放同一组没法分开授权。
+		// Split from builtin:skill: skill is "view skills", skill-own is "write your own capability surface", and the risk tiers
+		// differ (D20 deliberately keeps it out of DefaultAgentTools) - in one group they could not be granted separately.
 		if got := tool.Meta().Category; got != CategorySkillOwn {
-			t.Errorf("%q 分类 = %q, want %q", name, got, CategorySkillOwn)
+			t.Errorf("%q category = %q, want %q", name, got, CategorySkillOwn)
 		}
 	}
-	// 「看 / 用技能」三件套必须留在 skill 组 —— 它们跟着 core 常驻，不能混进 skill-own。
-	// use_skill 与 read_skill 同组：前者激活、后者纯查看，都不产生写权限。
+	// The three "view / use a skill" tools must stay in the skill group - they are resident with core and must not be mixed into
+	// skill-own.
+	// use_skill and read_skill share a group: the former activates, the latter only views, and neither produces write permission.
 	for _, name := range []string{"list_skills", "read_skill", "use_skill"} {
 		tool, ok := Get(name)
 		if !ok {
-			t.Fatalf("工具 %q 未注册", name)
+			t.Fatalf("tool %q is not registered", name)
 		}
 		if got := tool.Meta().Category; got != CategorySkill {
-			t.Errorf("%q 分类 = %q, want %q", name, got, CategorySkill)
+			t.Errorf("%q category = %q, want %q", name, got, CategorySkill)
 		}
 	}
 	for _, name := range []string{"create_shared_skill", "update_shared_skill", "delete_shared_skill"} {
 		if _, ok := Get(name); !ok {
-			t.Fatalf("工具 %q 未注册", name)
+			t.Fatalf("tool %q is not registered", name)
 		}
 		if !IsSupervisorOnlyTool(name) {
-			t.Errorf("%q 必须仅超级智能体可用（共享 skill 只有超级智能体能建改删）", name)
+			t.Errorf("%q must be super-agent only (only the super agent may create, change and delete shared skills)", name)
 		}
 	}
-	// 指定归属三件套（替别的 agent 管它的私有 skill）：分类 skill-admin，仅超级智能体。
-	// 与 own 三件套对称 —— 那两个是「你自己的私有」，这三个是「指定 agent 的私有」。
+	// The three explicit-owner tools (managing another agent's private skills): category skill-admin, super agent only.
+	// Symmetric to the own trio - those are "your own private", these are "a specified agent's private".
 	for _, name := range []string{"create_agent_skill", "update_agent_skill", "delete_agent_skill"} {
 		tool, ok := Get(name)
 		if !ok {
-			t.Fatalf("工具 %q 未注册", name)
+			t.Fatalf("tool %q is not registered", name)
 		}
 		if !IsSupervisorOnlyTool(name) {
-			t.Errorf("%q 必须仅超级智能体可用（替别的 agent 写私有技能等于改它的提示词）", name)
+			t.Errorf("%q must be super-agent only (writing another agent's private skill is rewriting its prompt)", name)
 		}
 		if got := tool.Meta().Category; got != CategorySkillAdmin {
-			t.Errorf("%q 分类 = %q, want %q", name, got, CategorySkillAdmin)
+			t.Errorf("%q category = %q, want %q", name, got, CategorySkillAdmin)
 		}
 	}
-	// 绑定类（指定「给哪些 agent 用」）仍专属超级智能体
+	// The binding tools (deciding "which agents may use it") remain super-agent only
 	for _, name := range []string{"bind_skill", "unbind_skill"} {
 		if !IsSupervisorOnlyTool(name) {
-			t.Errorf("%q 必须仅超级智能体可用（绑定关系由超级智能体决定）", name)
+			t.Errorf("%q must be super-agent only (bindings are decided by the super agent)", name)
 		}
 	}
-	// 旧的单工具形态必须彻底消失（旧 ref 由 sql/skill_own_tool_rename.sql 迁移）
+	// The old single-tool shape must be gone completely (old refs are migrated by sql/skill_own_tool_rename.sql)
 	for _, name := range []string{"create_skill", "update_skill", "delete_skill"} {
 		if _, ok := Get(name); ok {
-			t.Errorf("旧工具名 %q 仍注册，应已改名（私有加 _own_ 后缀、共享为 *_shared_skill）", name)
+			t.Errorf("the old tool name %q is still registered and should have been renamed (private gets an _own_ suffix, shared is *_shared_skill)", name)
 		}
 	}
 }
 
-// 缺省授权项必须是 required 语义可承载的形态（item_type=tool / ref=builtin:<name>）。
+// A default grant entry must be a shape that required semantics can carry (item_type=tool / ref=builtin:<name>).
 func TestDefaultAgentToolGrantsShape(t *testing.T) {
 	for _, it := range models.DefaultAgentToolGrants() {
 		if it.ItemType != models.GrantItemTool {
 			t.Errorf("item_type = %q, want %q", it.ItemType, models.GrantItemTool)
 		}
 		if !strings.HasPrefix(it.Ref, models.GrantRefBuiltinPrefix) {
-			t.Errorf("ref = %q, 缺少前缀 %q", it.Ref, models.GrantRefBuiltinPrefix)
+			t.Errorf("ref = %q is missing the prefix %q", it.Ref, models.GrantRefBuiltinPrefix)
 		}
 	}
 }
 
-// 「仅超级智能体」的判据必须双向闭合：工具被判为 supervisor-only ⇔ 它的分类在 supervisorOnlyCategoryList 里，
-// 且列表里每个分类都真的有工具（空分类等于列了个不存在的组，面板上会静默消失）。
-// 漏一个分类的后果是提权，多一个空分类的后果是授权面板缺组 —— 两头都要拦。
+// The "super-agent only" criterion must be closed in both directions: a tool is supervisor-only <=> its category is in
+// supervisorOnlyCategoryList, and every category in that list really has tools (an empty category is a group that does not exist,
+// which silently vanishes from the panel).
+// Missing one category means privilege escalation; an extra empty category means a missing group in the grant panel - both ends
+// must be blocked.
 func TestSupervisorOnlyCategoriesAreClosed(t *testing.T) {
 	byCategory := map[string][]string{}
 	for _, tool := range List() {
 		m := tool.Meta()
 		byCategory[m.Category] = append(byCategory[m.Category], m.Name)
 		if got, want := IsSupervisorOnlyTool(m.Name), IsSupervisorOnlyCategory(m.Category); got != want {
-			t.Errorf("%q 的 IsSupervisorOnlyTool=%v，但分类 %q 的 IsSupervisorOnlyCategory=%v（两者必须同源）",
+			t.Errorf("%q has IsSupervisorOnlyTool=%v but its category %q has IsSupervisorOnlyCategory=%v (the two must share one source)",
 				m.Name, got, m.Category, want)
 		}
 	}
 	for _, category := range SupervisorOnlyCategories() {
 		if len(byCategory[category]) == 0 {
-			t.Errorf("supervisor-only 分类 %q 下没有任何工具（空组不会出现在授权面板里）", category)
+			t.Errorf("supervisor-only category %q has no tools (an empty group never shows up in the grant panel)", category)
 		}
 	}
-	// 反向：任何不属于 supervisor-only 分类的工具都不该被判为 supervisor-only。
+	// The reverse: no tool outside a supervisor-only category should be judged supervisor-only.
 	if IsSupervisorOnlyCategory(CategorySuper) {
-		t.Error("CategorySuper 是过渡别名，不应被当作 supervisor-only 分类")
+		t.Error("CategorySuper is a transitional alias and must not be treated as a supervisor-only category")
 	}
 	if IsSupervisorOnlyCategory(CategorySkill) {
-		t.Error("CategorySkill（看技能）对普通 agent 开放，不应是 supervisor-only")
+		t.Error("CategorySkill (viewing skills) is open to ordinary agents and must not be supervisor-only")
 	}
 }
 
-// 超级智能体的 core 集必须是六个「组」ref，且都是已知的内置类别。
-// 拼错组名的后果不是报错，而是超级智能体少一整类工具（静默降级），所以在这里拦。
+// The super agent's core set must be six "group" refs, all of them known built-in categories.
+// A misspelled group name does not raise an error, it just leaves the super agent short of a whole class of tools (a silent
+// downgrade), so it is blocked here.
 func TestSupervisorCoreGrantRefsAreGroups(t *testing.T) {
 	if len(models.SupervisorCoreGrantRefs) == 0 {
-		t.Fatal("SupervisorCoreGrantRefs 为空")
+		t.Fatal("SupervisorCoreGrantRefs is empty")
 	}
 	cats := map[string]bool{}
 	for _, tool := range List() {
@@ -272,18 +278,18 @@ func TestSupervisorCoreGrantRefsAreGroups(t *testing.T) {
 	seen := map[string]bool{}
 	for _, ref := range models.SupervisorCoreGrantRefs {
 		if seen[ref] {
-			t.Errorf("core 组 %q 重复", ref)
+			t.Errorf("core group %q is duplicated", ref)
 		}
 		seen[ref] = true
 		if !strings.HasPrefix(ref, models.GrantRefBuiltinPrefix) {
-			t.Errorf("core 组 %q 缺少前缀 %q", ref, models.GrantRefBuiltinPrefix)
+			t.Errorf("core group %q is missing the prefix %q", ref, models.GrantRefBuiltinPrefix)
 			continue
 		}
 		category := strings.TrimPrefix(ref, models.GrantRefBuiltinPrefix)
 		if !cats[category] {
-			t.Errorf("core 组 %q 不是已知的内置类别", ref)
+			t.Errorf("core group %q is not a known built-in category", ref)
 		}
-		// 每个 core 组下必须有工具，否则常驻了一个空组。
+		// Every core group must have tools, otherwise an empty group is resident.
 		found := false
 		for _, tool := range List() {
 			if tool.Meta().Category == category {
@@ -292,85 +298,91 @@ func TestSupervisorCoreGrantRefsAreGroups(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("core 组 %q 下没有任何已注册工具", ref)
+			t.Errorf("core group %q has no registered tools", ref)
 		}
 	}
 }
 
-// core 的取舍必须被钉住，否则「browser / 四个按需组不该常驻」的结论会被静默推翻。
-// 这几条是「节约超级智能体上下文」的全部收益来源（37 → 20 个工具），改动前先想清楚。
+// The core trade-off must be pinned, otherwise the conclusion "browser / the four on-demand groups must not be resident" gets
+// silently overturned.
+// These are the entire source of the "save the super agent's context" gain (37 -> 20 tools); think it through before changing them.
 func TestSupervisorCoreExcludesOnDemandGroups(t *testing.T) {
 	core := map[string]bool{}
 	for _, ref := range models.SupervisorCoreGrantRefs {
 		core[ref] = true
 	}
-	// browser：自称低频 + schema 最大 + 唯一「出网 + 读任意页面 + 带登录态」组合。
-	// 它不跟随任何技能，要就由管理员加一条 required（见 models.SupervisorCoreGrantRefs 的注释）。
+	// browser: self-described as low frequency + the largest schema + the only "network egress + read any page + carry a login
+	// session" combination.
+	// It follows no skill; if it is needed, an administrator adds a required row (see the notes on models.SupervisorCoreGrantRefs).
 	if core["builtin:browser"] {
-		t.Error("builtin:browser 不应常驻 core")
+		t.Error("builtin:browser must not be resident in core")
 	}
-	// 五个管理组里只有 agent-admin 常驻（超级智能体的自举：能建 agent 才能拉起别的工作面）。
-	// 其余四个跟随技能：use_skill 激活声明它们的技能后才出现（绑定本身不产生工具）。
+	// Of the five management groups only agent-admin is resident (the super agent's bootstrap: being able to create agents is what
+	// lets it raise other working surfaces).
+	// The other four follow skills: they appear only after use_skill activates a skill that declares them (a binding itself produces
+	// no tools).
 	if !core["builtin:agent-admin"] {
-		t.Error("builtin:agent-admin 必须常驻（超级智能体的自举能力）")
+		t.Error("builtin:agent-admin must be resident (the super agent's bootstrap capability)")
 	}
 	for _, ref := range []string{"builtin:skill-own", "builtin:skill-admin",
 		"builtin:tool-grant", "builtin:custom-tool", "builtin:flow-admin"} {
 		if core[ref] {
-			t.Errorf("%q 不应常驻 core（跟随技能按需激活）", ref)
+			t.Errorf("%q must not be resident in core (it follows skills and is activated on demand)", ref)
 		}
 	}
 }
 
-// SupervisorCoreGrants 的形态：item_type=group + builtin: 前缀（与 DefaultAgentToolGrants 的单工具不同）。
+// The shape of SupervisorCoreGrants: item_type=group + a builtin: prefix (unlike DefaultAgentToolGrants' single tools).
 func TestSupervisorCoreGrantsShape(t *testing.T) {
 	for _, it := range models.SupervisorCoreGrants() {
 		if it.ItemType != models.GrantItemGroup {
 			t.Errorf("item_type = %q, want %q", it.ItemType, models.GrantItemGroup)
 		}
 		if !strings.HasPrefix(it.Ref, models.GrantRefBuiltinPrefix) {
-			t.Errorf("ref = %q, 缺少前缀 %q", it.Ref, models.GrantRefBuiltinPrefix)
+			t.Errorf("ref = %q is missing the prefix %q", it.Ref, models.GrantRefBuiltinPrefix)
 		}
 	}
 }
 
-// sql/main_core_tool_grants.sql 里的 refs 数组必须与 models.SupervisorCoreGrantRefs 逐项一致。
-// 这份 SQL 是**硬编码**的，两边漂移的后果是「新租户 6 组、存量租户 5 组」这种只在老环境复现的差异。
+// The refs array in sql/main_core_tool_grants.sql must match models.SupervisorCoreGrantRefs item by item.
+// That SQL is **hard-coded**, and a drift between the two shows up as "new tenants get 6 groups, existing tenants 5" - a difference
+// visible only on old environments.
 func TestSupervisorCoreGrantRefsMatchSQL(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "sql", "main_core_tool_grants.sql")
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("读取 %s 失败: %v", path, err)
+		t.Fatalf("failed to read %s: %v", path, err)
 	}
 	src := string(raw)
 	start := strings.Index(src, "refs text[] := ARRAY[")
 	if start < 0 {
-		t.Fatal("SQL 里找不到 refs 数组声明")
+		t.Fatal("the refs array declaration was not found in the SQL")
 	}
 	body := src[start:]
 	if end := strings.Index(body, "];"); end >= 0 {
 		body = body[:end]
 	}
-	// 数组声明里只有字符串字面量与注释，按单引号切分取奇数段即可。
+	// The array declaration holds only string literals and comments, so splitting on single quotes and taking the odd segments is
+	// enough.
 	parts := strings.Split(body, "'")
 	inSQL := map[string]bool{}
 	for i := 1; i < len(parts); i += 2 {
 		inSQL[parts[i]] = true
 	}
 	if len(inSQL) == 0 {
-		t.Fatal("SQL 的 refs 数组解析为空（格式变了？）")
+		t.Fatal("the refs array in the SQL parsed to nothing (has the format changed?)")
 	}
 
 	inGo := map[string]bool{}
 	for _, ref := range models.SupervisorCoreGrantRefs {
 		inGo[ref] = true
 		if !inSQL[ref] {
-			t.Errorf("SupervisorCoreGrantRefs 里的 %q 不在 SQL 的 refs 数组里", ref)
+			t.Errorf("%q from SupervisorCoreGrantRefs is not in the SQL refs array", ref)
 		}
 	}
 	for ref := range inSQL {
 		if !inGo[ref] {
-			t.Errorf("SQL 里的 %q 不在 SupervisorCoreGrantRefs 里", ref)
+			t.Errorf("%q from the SQL is not in SupervisorCoreGrantRefs", ref)
 		}
 	}
 }

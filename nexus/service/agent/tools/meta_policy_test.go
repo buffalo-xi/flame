@@ -7,11 +7,11 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// 归属类元工具（create / update / delete_agent_skill、技能绑定、工具授权、调用授权）
-// 共用同一条状态闸：目标 agent 必须是正常态（判据 models.IsModifiable）。
+// The owner-targeting meta tools (create / update / delete_agent_skill, skill binding, tool grants, call grants) share one status
+// gate: the target agent must be in the normal state (criterion: models.IsModifiable).
 //
-// 与文件闸门（gate.go 的 checkWrite / checkWriteOwn）和 skillManager.checkOwnerAgent
-// 同源 —— 两处一旦分叉，就会出现「元工具能改、文件工具报错」的分裂。
+// It is the same source as the file gate (checkWrite / checkWriteOwn in gate.go) and skillManager.checkOwnerAgent - once the two
+// diverge you get "the meta tool can change it, the file tool errors out".
 func TestResolveTargetAgentStatusGate(t *testing.T) {
 	c := &Context{
 		Schema:    "t0",
@@ -30,8 +30,8 @@ func TestResolveTargetAgentStatusGate(t *testing.T) {
 		agent   string
 		wantErr bool
 	}{
-		{"废弃：拒绝", "gone", true},
-		{"正常态：放行", "normal", false},
+		{"deprecated: refused", "gone", true},
+		{"normal: allowed", "normal", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

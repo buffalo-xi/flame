@@ -8,8 +8,9 @@ import (
 	"flame/nexus/shared/capability"
 )
 
-// 能力映射按**分类**划档，一档一个分类：exec / shell / script / browser。
-// 拆开的是资源形态（一次性 / 常驻 / 代码片段托管执行），不是权限面 —— 四档都能执行任意代码。
+// The capability mapping is graded by **category**, one category per tier: exec / shell / script / browser.
+// What it separates is the resource shape (one-shot / resident / hosted snippet execution), not the permission surface - all four
+// can execute arbitrary code.
 func TestCapabilityOf(t *testing.T) {
 	cases := map[string]string{
 		CategoryExec:       capability.Exec,
@@ -34,12 +35,12 @@ func TestCapabilityOf(t *testing.T) {
 	}
 }
 
-// 注册表里每个沙箱类工具都必须落到某档能力上。
-// 这条防的是「新增一个执行类工具但忘了归类」—— 分类没写或者写了新分类，
-// 闸门对它就形同虚设，而目录里照样显示为可用。
+// Every sandbox tool in the registry must map to some capability tier.
+// This guards against "an execution tool was added but never classified" - with no category or a new one, the gate is a no-op for
+// it while the catalog still shows it as available.
 func TestEverySandboxToolMapsToCapability(t *testing.T) {
-	// 豁免清单：这些分类不碰沙箱，不需要能力档。
-	// 凡是没被豁免、又映射不到能力的分类，都会在这里报出来。
+	// The exemption list: these categories never touch the sandbox and need no capability tier.
+	// Anything not exempt here that maps to no capability is reported.
 	nonSandbox := map[string]bool{
 		CategoryFile:       true,
 		CategoryAgent:      true,
@@ -58,17 +59,17 @@ func TestEverySandboxToolMapsToCapability(t *testing.T) {
 			continue
 		}
 		if CapabilityOf(m.Category) == "" {
-			t.Errorf("工具 %s 属于 %s 类却映射不到能力（新增沙箱类工具需补 CapabilityOf 与 capability.All）",
+			t.Errorf("tool %s is in category %s but maps to no capability (a new sandbox tool needs CapabilityOf and capability.All)",
 				m.Name, m.Category)
 		}
 	}
 }
 
-// 执行层硬闸：Caps 非 nil 且缺键 → 拒绝并说明是哪档能力；
-// nil → 不限制（仅限无租户语义的调用方，如单测）。
+// The execution-layer hard gate: Caps non-nil and missing the key -> refused, naming the tier;
+// nil -> unrestricted (only for callers with no tenant semantics, such as unit tests).
 //
-// 必要性：能力是平台策略，可能在两次调用之间被收回；只靠目录置灰挡不住
-// 已经绑定该工具的 agent（模型仍按旧工具清单发起调用）。
+// Why it is needed: capabilities are platform policy and can be revoked between two calls; greying out the catalog alone cannot
+// stop an agent that already has the tool bound (the model still calls it from its old tool list).
 func TestExecuteToolHonoursCapabilities(t *testing.T) {
 	Register(&stubSchemaTool{meta: ToolMeta{
 		Name:       "stub_capped",
@@ -81,16 +82,16 @@ func TestExecuteToolHonoursCapabilities(t *testing.T) {
 	c.Caps = map[string]bool{capability.Browser: true}
 	_, err := ExecuteTool(context.Background(), c, "stub_capped", nil)
 	if err == nil || !strings.Contains(err.Error(), capability.Exec) {
-		t.Fatalf("未开通 exec 时应拒绝并指出能力名，got %v", err)
+		t.Fatalf("without exec granted it should refuse and name the capability, got %v", err)
 	}
 
 	c.Caps = map[string]bool{capability.Exec: true}
 	if _, err := ExecuteTool(context.Background(), c, "stub_capped", nil); err != nil {
-		t.Fatalf("开通后应放行: %v", err)
+		t.Fatalf("it should be allowed once granted: %v", err)
 	}
 
 	c.Caps = nil
 	if _, err := ExecuteTool(context.Background(), c, "stub_capped", nil); err != nil {
-		t.Fatalf("Caps 为 nil 时不该拦: %v", err)
+		t.Fatalf("a nil Caps must not block: %v", err)
 	}
 }

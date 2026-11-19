@@ -11,16 +11,17 @@ import (
 
 // ===== list_global_vars =====
 //
-// 为什么需要这把工具：全局变量在工作流里经节点输入（source_type: "global"）、在 AGENT.md / SKILL.md 里用
-// `${global_vars.X}` 引用，但**名字只能靠人告诉模型**。没有它，模型只能猜，猜错就是运行期硬失败
-// （错误信息里会带变量名，但要先跑一次才知道）。技能文档教会了「怎么用」，这把工具补的是
-// 「有哪些」。
+// Why this tool exists: global variables are referenced in workflows through node inputs (source_type: "global") and in
+// AGENT.md / SKILL.md as `${global_vars.X}`, but **only a human can tell the model their names**. Without this tool the model
+// can only guess, and a wrong guess is a hard failure at run time (the error does carry the variable name, but only after
+// a run has failed). The skill docs teach "how to use them"; this tool supplies "which ones exist".
 //
-// 安全口径：
-//   - **永不返回值**，只回 name / kind / description / has_value。值不需要出现在模型上下文里 ——
-//     引用靠名字，而值一旦进了上下文就会进 session 记录与 SSE，那正是我们一直在堵的口子；
-//   - 分类放 flow-admin（仅超级智能体）：消费方是写工作流与文档的那个身份，普通 agent 拿到
-//     这串名字也没有能用的地方。
+// Security stance:
+//   - **the value is never returned**, only name / kind / description / has_value. The value has no business in the model
+//     context - references go by name, and once a value enters the context it lands in session records and SSE, which is
+//     exactly the leak we have been closing;
+//   - the category is flow-admin (super agent only): the consumer is the identity that writes workflows and docs, and an
+//     ordinary agent has no use for the list of names anyway.
 
 type listGlobalVarsTool struct{}
 
@@ -81,7 +82,8 @@ func (t *listGlobalVarsTool) Execute(ctx context.Context, c *Context, args map[s
 			"name":        r.Name,
 			"kind":        r.Kind,
 			"description": r.Description,
-			// 只回「有没有值」：模型不需要真值（引用靠名字），而值进上下文就是泄漏
+			// Only "does it have a value": the model does not need the value itself (references go by name), and a value
+			// in the context is a leak
 			"has_value": r.Value != "",
 		})
 	}

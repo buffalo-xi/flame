@@ -19,16 +19,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// PostgresRepository PostgreSQL 实现的会话存储
+// PostgresRepository is the PostgreSQL-backed session store.
 type PostgresRepository struct{}
 
-// Create 创建会话（userID 可空），返回新会话 ID。
+// Create creates a session (userID may be empty) and returns the new session ID.
 //
-// 同时建好会话工作目录（users/{uid}/sessions/{sid}/）：它是文件工具默认根与 exec 的 cwd，
-// 必须在第一次使用前存在（S3 无空目录，写 .keep 占位）。
+// It also creates the session workspace (users/{uid}/sessions/{sid}/): that is the file tools' default root and the cwd of
+// exec, so it must exist before first use (S3 has no empty directories, hence the .keep placeholder).
 func (r *PostgresRepository) Create(schema, ownerType, ownerID, userID, title string) (string, error) {
-	// 会话数配额：控制台建会话超限直接拒绝（507），由人手工删旧会话 ——
-	// 聊天记录不替用户做决定。协议端点的自动回收在 CreateWithID 里（那边调用方没有删除接口）。
+	// Session-count quota: the console refuses over the limit (507) and the human deletes old sessions by hand - chat
+	// history does not make that decision for the user. The automatic reclaim for protocol endpoints lives in
+	// CreateWithID (their callers have no delete API).
 	if err := quota.CheckUserSessions(schema, ownerType, userID); err != nil {
 		return "", err
 	}
@@ -44,7 +45,8 @@ func (r *PostgresRepository) Create(schema, ownerType, ownerID, userID, title st
 	return id, nil
 }
 
-// ListByOwner 列出某 owner 的会话（updated_at 倒序）。userID 非空按用户过滤；limit<=0 不限制；keyword 非空按 title 模糊匹配。
+// ListByOwner lists one owner's sessions (updated_at descending). A non-empty userID filters by user; limit<=0 does not
+// limit; a non-empty keyword matches the title fuzzily.
 func (r *PostgresRepository) ListByOwner(schema, ownerType, ownerID, userID string, limit int, keyword string) ([]models.Session, error) {
 	where := "WHERE owner_type = $1 AND owner_id = $2"
 	args := []interface{}{ownerType, ownerID}
@@ -84,7 +86,7 @@ func (r *PostgresRepository) ListByOwner(schema, ownerType, ownerID, userID stri
 	return list, rows.Err()
 }
 
-// ListByUser 列出某用户指定 owner_type 的全部会话（updated_at 倒序）。limit<=0 不限制。
+// ListByUser lists all of one user's sessions under the given owner_type (updated_at descending). limit<=0 does not limit.
 func (r *PostgresRepository) ListByUser(schema, ownerType, userID string, limit int) ([]models.Session, error) {
 	where := "WHERE owner_type = $1 AND user_id = $2"
 	args := []interface{}{ownerType, userID}
@@ -114,7 +116,7 @@ func (r *PostgresRepository) ListByUser(schema, ownerType, userID string, limit 
 	return list, rows.Err()
 }
 
-// Get 按 ID 获取会话；不存在返回 (nil, nil)。
+// Get reads a session by ID; (nil, nil) when it does not exist.
 func (r *PostgresRepository) Get(schema, sessionID string) (*models.Session, error) {
 	var s models.Session
 	err := db.DB.QueryRow(`
@@ -130,10 +132,11 @@ func (r *PostgresRepository) Get(schema, sessionID string) (*models.Session, err
 	return &s, nil
 }
 
-// Lookup 按 ID 取会话并校验归属。见接口注释：三类失败分开，对外文案合流。
+// Lookup reads a session by ID and checks ownership. See the interface comment: the three failure kinds stay distinct
+// internally and merge into one outward message.
 //
-// 先校验 UUID 再查库：sessions.id 是 uuid 列，脏字符串会让 PG 报 22P02，
-// 那种错误对调用方毫无意义，还会把 SQL 细节透到 HTTP 响应里。
+// Validate the UUID before querying: sessions.id is a uuid column, so a dirty string makes PG raise 22P02 - meaningless
+// to the caller, and it leaks SQL detail into the HTTP response.
 func (r *PostgresRepository) Lookup(schema, sessionID, ownerType, ownerID string) (*models.Session, error) {
 	sid, herr := ParseID(sessionID)
 	if herr != nil {
@@ -149,19 +152,20 @@ func (r *PostgresRepository) Lookup(schema, sessionID, ownerType, ownerID string
 	return sess, nil
 }
 
-// UpdateTitle 更新标题并刷新 updated_at。
+// UpdateTitle updates the title and refreshes updated_at.
 func (r *PostgresRepository) UpdateTitle(schema, sessionID, title string) error {
 	_, err := db.DB.Exec(`UPDATE `+schema+`.sessions SET title = $1, updated_at = now() WHERE id = $2`, title, sessionID)
 	return err
 }
 
-// Touch 刷新 updated_at。
+// Touch refreshes updated_at.
 func (r *PostgresRepository) Touch(schema, sessionID string) error {
 	_, err := db.DB.Exec(`UPDATE `+schema+`.sessions SET updated_at = now() WHERE id = $1`, sessionID)
 	return err
 }
 
-// EnsureExists 确保指定 id 的会话存在：不存在则创建（用指定 id），存在则刷新 updated_at。
+// EnsureExists makes sure the session with the given id exists: missing means create it with that id, present means refresh
+// updated_at.
 func (r *PostgresRepository) EnsureExists(schema, id, ownerType, ownerID, userID, title string) error {
 	_, err := db.DB.Exec(`
 		INSERT INTO `+schema+`.sessions (id, owner_type, owner_id, user_id, title)
@@ -175,12 +179,13 @@ func (r *PostgresRepository) EnsureExists(schema, id, ownerType, ownerID, userID
 	return nil
 }
 
-// CreateWithID 用调用方指定的 id 幂等建会话（协议端点传了不存在的 session_id 时使用）。
+// CreateWithID idempotently creates a session with the id the caller supplied (used when a protocol endpoint passes a
+// session_id that does not exist yet).
 //
-// 与 EnsureExists 的差别：冲突时先回读再校验可见性，绝不把调用挂到别人的会话上；
-// 且走会话数配额（EnsureExists 这两件都没做）。
+// It differs from EnsureExists in two ways: on conflict it reads back and then checks visibility, so a call is never
+// attached to somebody else's session; and it goes through the session-count quota (EnsureExists does neither).
 func (r *PostgresRepository) CreateWithID(schema, id, ownerType, ownerID, userID, title string) (*models.Session, error) {
-	// 协议端点专用：超限时自动回收该用户最旧的会话腾位置（见 ensureSessionSlot）。
+	// Protocol endpoints only: over the limit, reclaim this user's oldest session to make room (see ensureSessionSlot).
 	if err := r.ensureSessionSlot(schema, ownerType, userID); err != nil {
 		return nil, err
 	}
@@ -190,7 +195,8 @@ func (r *PostgresRepository) CreateWithID(schema, id, ownerType, ownerID, userID
 		id, ownerType, ownerID, nullIfEmpty(userID), title); err != nil {
 		return nil, err
 	}
-	// 回读：并发下另一个请求可能刚用同一个 id 建好（uuid 随机，概率极低但必须兜住）
+	// Read back: a concurrent request may have just created the same id (uuids are random, so it is rare, but it must be
+	// covered)
 	sess, err := r.Get(schema, id)
 	if err != nil {
 		return nil, err
@@ -202,20 +208,23 @@ func (r *PostgresRepository) CreateWithID(schema, id, ownerType, ownerID, userID
 	return sess, nil
 }
 
-// ensureSessionSlot 协议端点的会话数配额：超限时自动回收该用户在该 owner 类型下最旧的会话。
+// ensureSessionSlot is the session-count quota for protocol endpoints: over the limit it reclaims this user's oldest
+// session under that owner type.
 //
-// 为什么只在这里回收：RPC / MCP 的会话由调用方自管生命周期（每次自带 UUID），
-// 而它们没有删除会话的接口 —— 到上限后若一律拒绝，集成方就永久卡死。
-// 控制台（Create）不走这里：那边超限返回 507，由人决定删哪个。
-// 配额按 (owner_type, user_id) 分桶，端点凭证通常绑定了独立账号，回收不会挤掉控制台会话。
+// Why reclaim only here: RPC / MCP sessions are managed by the caller, which brings its own UUID every time and has no
+// delete API - refusing flatly at the limit would lock an integration out forever.
+// The console (Create) does not come through here: it returns 507 and lets the human decide what to delete.
+// The quota is bucketed by (owner_type, user_id), and endpoint credentials are usually bound to a separate account, so
+// reclaiming never squeezes out console sessions.
 //
-// 不回收、直接返回配额错误的情况：
-//   - 上限 <= 0：0 = 禁止新建；-1 = 不限（CheckUserSessions 已放行，走不到这里）
-//   - 回收后仍然超限（并发创建抢了位置）
+// Cases that return the quota error without reclaiming:
+//   - limit <= 0: 0 = creating is forbidden; -1 = unlimited (CheckUserSessions already let it through, so we never get here)
+//   - still over the limit after reclaiming (a concurrent create grabbed the slot)
 //
-// 已知取舍：只按 updated_at 最旧挑，不检查该会话是否有正在跑的 run。
-// 正在跑的会话每轮结束都会刷新 updated_at，而回收目标是「最久没用过的」，
-// 命中活会话的概率极低；要彻底杜绝得把 run 注册表从 service/agent 挪到 shared（跨包循环）。
+// Known trade-off: it picks purely by oldest updated_at and does not check whether that session has a running run. A live
+// session refreshes updated_at at the end of every turn, and the target is "the one unused the longest", so hitting a live
+// session is very unlikely; ruling it out completely would mean moving the run registry from service/agent into shared
+// (an import cycle today).
 func (r *PostgresRepository) ensureSessionSlot(schema, ownerType, userID string) error {
 	err := quota.CheckUserSessions(schema, ownerType, userID)
 	if err == nil {
@@ -228,16 +237,17 @@ func (r *PostgresRepository) ensureSessionSlot(schema, ownerType, userID string)
 	need := evictCount(int(qe.Used), int(qe.Limit))
 	n, eerr := r.evictOldestSessions(schema, ownerType, userID, need)
 	if eerr != nil {
-		xlog.Error("自动回收会话失败 schema=%s owner=%s user=%s: %v", schema, ownerType, userID, eerr)
+		xlog.Error("[QUOTA] failed to reclaim sessions schema=%s owner=%s user=%s: %v", schema, ownerType, userID, eerr)
 		return err
 	}
-	xlog.Info("会话数达到上限，自动回收最旧会话 schema=%s owner=%s user=%s used=%d limit=%d evicted=%d",
+	xlog.Info("[QUOTA_ALERT] session count at the limit, reclaimed oldest sessions schema=%s owner=%s user=%s used=%d limit=%d evicted=%d",
 		schema, ownerType, userID, qe.Used, qe.Limit, n)
-	// 复查：并发下可能仍超限，那就把配额错误如实返回（HTTP 507 / RPC -32000）
+	// Re-check: a concurrent create may still leave it over the limit, in which case the quota error is returned as is
+	// (HTTP 507 / RPC -32000)
 	return quota.CheckUserSessions(schema, ownerType, userID)
 }
 
-// evictCount 返回「把 used 降到 limit 以下」需要腾出的条数；limit<=0 表示不允许新建。
+// evictCount returns how many sessions must be freed to bring used below limit; limit<=0 means creating is not allowed.
 func evictCount(used, limit int) int {
 	if limit <= 0 || used < limit {
 		return 0
@@ -245,10 +255,13 @@ func evictCount(used, limit int) int {
 	return used - limit + 1
 }
 
-// evictOldestSessions 按 updated_at 从旧到新删除 n 个会话（连带记录、目录、用量计数），返回实际删除数。
+// evictOldestSessions deletes the n sessions with the oldest updated_at (records, row, directory and usage counter
+// included) and returns how many were actually deleted.
 //
-// 逐个走 Delete：每个会话要清「记录 + 行 + 目录 + 用量」四样，批量实现等于把 Delete 抄一遍。
-// 单条失败跳过并继续，尽量腾出位置；够不够由调用方复查配额决定。
+// It goes through Delete one by one: each session needs four things cleared (records + row + directory + usage), so a
+// batch version would just be a copy of Delete.
+// A single failure is logged and skipped to free as much as possible; whether it was enough is decided by the caller
+// re-checking the quota.
 func (r *PostgresRepository) evictOldestSessions(schema, ownerType, userID string, n int) (int, error) {
 	if n <= 0 {
 		return 0, nil
@@ -279,7 +292,7 @@ func (r *PostgresRepository) evictOldestSessions(schema, ownerType, userID strin
 	deleted := 0
 	for _, id := range ids {
 		if derr := r.Delete(schema, id); derr != nil {
-			xlog.Error("回收会话失败 schema=%s session=%s: %v", schema, id, derr)
+			xlog.Error("[QUOTA] failed to reclaim session schema=%s session=%s: %v", schema, id, derr)
 			continue
 		}
 		deleted++
@@ -287,7 +300,29 @@ func (r *PostgresRepository) evictOldestSessions(schema, ownerType, userID strin
 	return deleted, nil
 }
 
-// nullIfEmpty 空字符串转 nil（uuid 列不接受空串）。
+// DeleteByOwner deletes every session of one owner (agent / flow), records, rows, workspace directories and usage counters
+// included.
+//
+// It goes through Delete one by one for the same reason evictOldestSessions does: a session needs four things cleared, so a
+// batch version would just be a copy of Delete. A single failure is logged and skipped, so one broken session does not block
+// the rest, and the caller learns how many went away.
+func (r *PostgresRepository) DeleteByOwner(schema, ownerType, ownerID string) (int, error) {
+	list, err := r.ListByOwner(schema, ownerType, ownerID, "", -1, "")
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, s := range list {
+		if derr := r.Delete(schema, s.ID); derr != nil {
+			xlog.Error("failed to delete session schema=%s session=%s: %v", schema, s.ID, derr)
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+// nullIfEmpty turns an empty string into nil (a uuid column does not accept an empty string).
 func nullIfEmpty(s string) interface{} {
 	if s == "" {
 		return nil
@@ -295,9 +330,9 @@ func nullIfEmpty(s string) interface{} {
 	return s
 }
 
-// Delete 删除会话（连带删除其 session_records 与会话工作目录）。
+// Delete deletes a session (its session_records and its workspace directory included).
 func (r *PostgresRepository) Delete(schema, sessionID string) error {
-	// 先取 user_id：会话目录按 user 组织，删行后就无法定位了
+	// Read user_id first: the workspace directory is organised by user, so it cannot be located after the row is gone
 	sess, _ := r.Get(schema, sessionID)
 
 	tx, err := db.DB.Begin()
@@ -317,15 +352,16 @@ func (r *PostgresRepository) Delete(schema, sessionID string) error {
 	}
 	if sess != nil {
 		removeSessionDir(schema, sess.UserID, sessionID)
-		// 目录没了，会话用量计数也一并清掉（否则同名重建会继承旧用量）
+		// The directory is gone, so clear the usage counter too (otherwise a re-created session under the same key would
+		// inherit the old usage)
 		quota.Reset(context.Background(), schema, paths.UserSessionKey(schema, sess.UserID, sessionID))
 	}
 	return nil
 }
 
 // ============================================================================
-// 会话工作目录生命周期（与 DB 行同步）
-//   目录形态：users/{uid}/sessions/{sid}/；user 为空时不建（目录按 user 组织）。
+// Session workspace lifecycle (kept in step with the DB row)
+//   Shape: users/{uid}/sessions/{sid}/; not created when user is empty (directories are organised by user).
 // ============================================================================
 
 var (
@@ -334,7 +370,7 @@ var (
 	sessStoreErr  error
 )
 
-// sessionStorage 懒加载会话目录所用的存储实例（与 agent 存储同配置）。
+// sessionStorage lazily builds the storage instance used for session directories (same config as agent storage).
 func sessionStorage() (storage.Storage, error) {
 	sessStoreOnce.Do(func() {
 		if config.Cfg == nil {
@@ -346,7 +382,7 @@ func sessionStorage() (storage.Storage, error) {
 	return sessStore, sessStoreErr
 }
 
-// ensureSessionDir 建会话工作目录（S3 无空目录，写 .keep 占位）。
+// ensureSessionDir creates the session workspace (S3 has no empty directories, so a .keep placeholder is written).
 func ensureSessionDir(schema, userID, sessionID string) {
 	if userID == "" {
 		return
@@ -359,7 +395,7 @@ func ensureSessionDir(schema, userID, sessionID string) {
 	_ = st.WriteFile(context.Background(), key, nil)
 }
 
-// removeSessionDir 删会话工作目录（不存在则跳过）。
+// removeSessionDir deletes the session workspace (a missing directory is skipped).
 func removeSessionDir(schema, userID, sessionID string) {
 	if userID == "" {
 		return

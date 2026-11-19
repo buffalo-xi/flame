@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	"flame/nexus/shared/quota"
+	"flame/nexus/shared/storage"
 )
 
-// 文件工具：read_file / write_file / edit_file / list_files / delete_file / file_exists
-// 全部走 storage.Storage，路径经 safePath 锁进工作区。
+// File tools: read_file / write_file / edit_file / list_files / delete_file / file_exists
+// All of them go through storage.Storage, with paths locked into the workspace by safePath.
 
-// fileReadTool 读取文件内容。
+// fileReadTool reads file content.
 type fileReadTool struct{}
 
 func (t *fileReadTool) Meta() ToolMeta {
@@ -52,7 +54,7 @@ func (t *fileReadTool) Execute(ctx context.Context, c *Context, args map[string]
 	return map[string]any{"content": string(data), "size": len(data), "exists": true}, nil
 }
 
-// fileWriteTool 写入或追加文件内容。
+// fileWriteTool writes or appends file content.
 type fileWriteTool struct{}
 
 func (t *fileWriteTool) Meta() ToolMeta {
@@ -94,17 +96,17 @@ func (t *fileWriteTool) Execute(ctx context.Context, c *Context, args map[string
 			content = string(old) + content
 		}
 	} else if sz, _, serr := c.Storage.Stat(ctx, sp); serr == nil {
-		oldSize = sz // 覆盖写：用 new-old 计算真实增量
+		oldSize = sz // overwrite: the real delta is new minus old
 	}
 
-	// 只有写进「会话工作区」才占配额；写 /agents/... 这类定义域不受影响
+	// Only writes into the session workspace consume quota; definition-domain writes such as /agents/... are not affected
 	schema, qkey, qok := quotaScope(c, sp)
 	delta := int64(len(content)) - oldSize
 	var evicted []string
 	if qok && delta > 0 {
 		ev, qerr := quota.Admit(ctx, c.Storage, schema, qkey, c.UserID, delta)
 		if qerr != nil {
-			return nil, qerr
+			return nil, quotaExceededError(qerr, ev)
 		}
 		evicted = ev
 	}
@@ -118,14 +120,41 @@ func (t *fileWriteTool) Execute(ctx context.Context, c *Context, args map[string
 
 	out := map[string]any{"path": rel, "written": len(content)}
 	if len(evicted) > 0 {
-		// 让模型知道有旧文件被配额清理掉了，避免它继续引用已删除的路径
+		// Let the model know that old files were evicted by the quota, so it stops referencing deleted paths
 		out["evicted"] = evicted
 	}
 	return out, nil
 }
 
-// quotaScope 判断这次写入是否落在会话工作区里（只有它会占用会话配额）。
-// sp 是存储相对路径；c.WorkKey 是会话根，/agents/... 之类的定义域一律不算。
+// quotaExceededError keeps the quota error intact (errors.As still works) while telling the model which files the
+// pre-check already deleted to make room. Without that the model keeps referencing paths that no longer exist.
+func quotaExceededError(err error, evicted []string) error {
+	if len(evicted) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w (files deleted to make room: %s)", err, strings.Join(evicted, ", "))
+}
+
+// quotaFreed measures the bytes an entry occupies before it is deleted: a file's size, or a recursive sum for a directory.
+// It only ever gives quota back, so an imprecise estimate costs one extra calibration scan later, never correctness.
+func quotaFreed(ctx context.Context, st storage.Storage, key string) int64 {
+	if sz, _, err := st.Stat(ctx, key); err == nil {
+		return sz
+	}
+	w, ok := st.(storage.Walker)
+	if !ok {
+		return 0
+	}
+	var total int64
+	_ = w.WalkPrefix(ctx, key, func(_ string, size int64, _ time.Time) error {
+		total += size
+		return nil
+	})
+	return total
+}
+
+// quotaScope decides whether this write lands in the session workspace (the only place that consumes session quota).
+// sp is a storage-relative path; c.WorkKey is the session root, and definition domains such as /agents/... never count.
 func quotaScope(c *Context, sp string) (schema, key string, ok bool) {
 	if c == nil || c.SessionID == "" || c.WorkKey == "" {
 		return "", "", false
@@ -136,7 +165,7 @@ func quotaScope(c *Context, sp string) (schema, key string, ok bool) {
 	return c.Schema, c.WorkKey, true
 }
 
-// fileEditTool 编辑文件中的部分文本内容（old → new）。
+// fileEditTool edits part of a file's text (old -> new).
 type fileEditTool struct{}
 
 func (t *fileEditTool) Meta() ToolMeta {
@@ -180,7 +209,7 @@ func (t *fileEditTool) Execute(ctx context.Context, c *Context, args map[string]
 
 	count := argInt(args, "count")
 	if count == 0 {
-		count = 1 // 默认替换第一处
+		count = 1 // replace the first match by default
 	}
 
 	result := strings.Replace(content, old, argString(args, "new"), count)
@@ -196,7 +225,7 @@ func (t *fileEditTool) Execute(ctx context.Context, c *Context, args map[string]
 	if qok && delta > 0 {
 		ev, qerr := quota.Admit(ctx, c.Storage, schema, qkey, c.UserID, delta)
 		if qerr != nil {
-			return nil, qerr
+			return nil, quotaExceededError(qerr, ev)
 		}
 		evicted = ev
 	}
@@ -215,7 +244,7 @@ func (t *fileEditTool) Execute(ctx context.Context, c *Context, args map[string]
 	return out, nil
 }
 
-// fileListTool 列出目录内容。
+// fileListTool lists a directory's content.
 type fileListTool struct{}
 
 func (t *fileListTool) Meta() ToolMeta {
@@ -244,7 +273,7 @@ func (t *fileListTool) Execute(ctx context.Context, c *Context, args map[string]
 	return map[string]any{"dir": rel, "entries": entries}, nil
 }
 
-// fileDeleteTool 删除文件或目录（目录递归删，见 Execute）。
+// fileDeleteTool deletes a file or directory (a directory is deleted recursively, see Execute).
 type fileDeleteTool struct{}
 
 func (t *fileDeleteTool) Meta() ToolMeta {
@@ -262,43 +291,55 @@ func (t *fileDeleteTool) Meta() ToolMeta {
 	}
 }
 
-// Execute 一律按「文件 + 目录」各删一次，不加 recursive 参数 —— 反正都是删。
+// Execute always deletes once as a file and once as a directory, with no recursive flag - either way it is a delete.
 //
-//	Delete       ：文件 / 空目录（local: os.Remove；S3: 删那个对象键）
-//	DeletePrefix ：目录及其全部子孙（local: os.RemoveAll；S3: 批删前缀）
+//	Delete       : file / empty directory (local: os.Remove; S3: delete that object key)
+//	DeletePrefix : the directory and all its descendants (local: os.RemoveAll; S3: batch-delete the prefix)
 //
-// 刻意不做「文件还是目录」判定 —— storage 层没有可靠的 IsDir：local 的 Exists 对目录
-// 同样为真；S3 的 List(文件路径) 因 prefixOf 补了 "/" 而返回空列表，与空目录无法区分。
-// 管理端 DeleteAgentEntry 同款取舍（admin/agents/files.go）。
+// It deliberately avoids deciding "file or directory" - storage has no reliable IsDir: local's Exists is true for
+// directories too, and S3's List(file path) returns an empty list because prefixOf appends "/", which is indistinguishable
+// from an empty directory. The admin-side DeleteAgentEntry makes the same trade-off (admin/agents/files.go).
 //
-// 失败判据只认 DeletePrefix：它是"通吃"操作，成功即代表目标已不存在；而 Delete 在 S3 上
-// 对任意键都返回成功、在 local 上删非空目录必然失败，都不适合当判据。副作用是删除
-// 不存在的路径也算成功（幂等）—— 与 S3 原本的行为一致，即把 local 收敛到同一口径。
+// Only DeletePrefix serves as the failure criterion: it is the "catch-all" operation, so success means the target no longer
+// exists; Delete returns success for any key on S3 and necessarily fails on a non-empty directory locally, so neither works
+// as a criterion. The side effect is that deleting a non-existent path also succeeds (idempotent) - the same as S3's
+// original behaviour, i.e. local is brought to the same rule.
 //
-// 一处例外：根寻址下的 SKILL.md 不允许单独删除（见下方守卫）。
+// One exception: SKILL.md under root addressing may not be deleted on its own (see the guard below).
 func (t *fileDeleteTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	sp, rel, fromRoot, err := resolveWrite(ctx, c, argString(args, "path"))
 	if err != nil {
 		return nil, err
 	}
-	// SKILL.md 是技能的入口文件：删掉会留下「登记在库、没有正文」的空技能，而运行时
-	// 读不到正文会**静默降级为空内容**（见 skillManager.Get）。管理端接口早已保护
-	// （admin/skills/files.go 的 isSkillEntry），这里补齐 —— 让三个入口（管理端 /
-	// 超级智能体 / 非超级智能体）口径一致。要删整个技能请用 delete_own_skill / delete_agent_skill /
-	// delete_shared_skill。
+	// SKILL.md is a skill's entry file: deleting it would leave an empty skill "registered in the database but with no
+	// body", and at run time an unreadable body **degrades silently to empty content** (see skillManager.Get). The admin API
+	// has long protected it (isSkillEntry in admin/skills/files.go); this fills the gap - so all three entries (admin /
+	// super agent / non-super agent) follow the same rule. To delete a whole skill use delete_own_skill /
+	// delete_agent_skill / delete_shared_skill.
 	if fromRoot && strings.EqualFold(path.Base(rel), skillEntryFile) {
 		if tgt, e := resolveTarget(rel); e == nil && tgt.kind == "skill" {
 			return nil, fmt.Errorf("%s is the skill entry file and cannot be deleted on its own; use delete_own_skill / delete_agent_skill / delete_shared_skill to delete the whole skill", skillEntryFile)
 		}
 	}
+	// Measure before deleting: deleting frees quota and the accounting has to hear about it. Without this the workspace
+	// keeps looking full after the agent cleans up (the admin-side DeleteSessionEntry does the same), so the agent would
+	// keep deleting one file per turn until the next calibration scan.
+	schema, qkey, qok := quotaScope(c, sp)
+	var freed int64
+	if qok {
+		freed = quotaFreed(ctx, c.Storage, sp)
+	}
 	_ = c.Storage.Delete(ctx, sp)
 	if err := c.Storage.DeletePrefix(ctx, sp); err != nil {
 		return nil, err
 	}
+	if qok && freed > 0 {
+		quota.Commit(ctx, schema, qkey, c.UserID, -freed)
+	}
 	return map[string]any{"path": rel, "deleted": true}, nil
 }
 
-// fileExistsTool 判断文件是否存在。
+// fileExistsTool reports whether a file exists.
 type fileExistsTool struct{}
 
 func (t *fileExistsTool) Meta() ToolMeta {

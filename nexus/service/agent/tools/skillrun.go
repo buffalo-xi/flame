@@ -14,63 +14,64 @@ import (
 	"flame/tools/sandbox"
 )
 
-// run_skill_script：跑技能自带的脚本。
+// run_skill_script: runs a script bundled with a skill.
 //
-// 定位：**受约束的 exec**。exec 能跑任意命令（含任意路径的脚本），本工具只能跑
-// 「登记在册的技能目录内」的脚本。这条收窄是刻意的 —— 若本工具也接受任意路径，
-// 它就不是收窄而是放宽，还会绕过 gate.go 的路径闸门。
+// Position: a **constrained exec**. exec can run any command (including scripts at any path), whereas this tool can only run
+// scripts "inside a registered skill directory". That narrowing is deliberate - if this tool also accepted arbitrary paths it
+// would be a widening rather than a narrowing, and would bypass the path gate in gate.go.
 //
-// 它解掉两个问题：
-//  1. 共享技能不可达：exec 只挂 /workspace 与 /agent，租户级技能目录
-//     （tenants/{schema}/skills/）挂不进沙箱，脚本跑不了；
-//  2. 抄代码：没有本工具时，模型只能 read_skill 把正文抄到工作区再跑，
-//     正文与工作区副本就此分叉，技能沉淀不下来。
+// It solves two problems:
+//  1. shared skills are unreachable: exec mounts only /workspace and /agent, and the tenant-level skill directory
+//     (tenants/{schema}/skills/) cannot be mounted into the sandbox, so its scripts cannot run;
+//  2. copying code: without this tool the model can only read_skill the body, copy it into the workspace and run that, at
+//     which point the body and the workspace copy diverge and the skill never accumulates.
 
-// skillGuestDir 技能目录在沙箱内的只读挂载点。
+// skillGuestDir is the read-only mount point of a skill directory inside the sandbox.
 const skillGuestDir = "/skill"
 
-// skillEntryScript 技能入口脚本的默认相对路径（相对技能目录）。
+// skillEntryScript is the default relative path of a skill's entry script (relative to the skill directory).
 const skillEntryScript = "scripts/main.py"
 
-// langByExt 脚本扩展名 → 语言名（sandboxd 顶层 langs 的 key）。
+// langByExt maps a script extension -> language name (the key of sandboxd's top-level langs).
 //
-// 这里只给「语言名」，不给命令名：解释器入口名随 mode 而变（none 看宿主 PATH、
-// nsjail 看 chroot、docker 看镜像内），而这份认知只有 sandboxd 有 —— 由它按当前
-// mode 解析（见 sandboxd config.yaml 的 langs.<lang>.command / commands）。
-// 注意语言名 ≠ 命令名：js 语言在镜像里的命令是 node。
+// Only the language name is given here, never the command name: the interpreter entry point varies with mode (none uses the
+// host PATH, nsjail the chroot, docker the image), and only sandboxd has that knowledge - it resolves it for the current mode
+// (see langs.<lang>.command / commands in sandboxd's config.yaml).
+// Note that the language name is not the command name: the js language runs as node in the image.
 var langByExt = map[string]string{
 	".py":  "python",
 	".js":  "js",
 	".lua": "lua",
 }
 
-// interpreterByExt 扩展名 → 直传用的解释器命令（仅用于 sandboxd 没有语言定义的类型）。
+// interpreterByExt maps an extension -> the interpreter command passed straight through (only for types sandboxd has no
+// language definition for).
 //
-// 目前只剩 shell：它不是双工语言，也没有需要按 mode 分辨的入口名（三种 mode 下都叫
-// sh）；给它建语言定义反而会让 mode=none 的启动期校验在 Windows 上失败（宿主没有 sh）。
-// 所以它维持 argv 直传，行为与改造前一致。
+// Only shell is left: it is not a duplex language and has no mode-dependent entry name (it is sh in all three modes); giving
+// it a language definition would make the mode=none startup validation fail on Windows (the host has no sh).
+// So it keeps the argv pass-through, behaving exactly as before the refactor.
 var interpreterByExt = map[string]string{
 	".sh": "sh",
 }
 
-// skillRun 一次「跑技能脚本」所需的路径与命令（解析结果，便于单测）。
+// skillRun holds the paths and command one "run skill script" call needs (the resolved result, for unit tests).
 type skillRun struct {
-	Skill       string // 技能名
-	Rel         string // 脚本相对技能目录的路径
-	StorageKey  string // 技能目录的存储相对 key（存活判定，local / s3 通用）
-	HostDir     string // 技能目录的宿主绝对路径（挂载源）
-	GuestScript string // 沙箱内脚本路径
-	// Lang 语言名；非空 → 走语言路径，解释器入口由 sandboxd 按 mode 解析。
+	Skill       string // skill name
+	Rel         string // the script's path relative to the skill directory
+	StorageKey  string // the skill directory's storage-relative key (existence check, works for local / s3)
+	HostDir     string // the skill directory's host absolute path (mount source)
+	GuestScript string // the script's path inside the sandbox
+	// Lang is the language name; non-empty -> the language path, the interpreter entry resolved by sandboxd per mode.
 	Lang string
-	// Interpreter 直传用的解释器命令；仅在 Lang 为空时使用（目前只有 .sh）。
+	// Interpreter is the interpreter command passed straight through; used only when Lang is empty (currently .sh only).
 	Interpreter string
 }
 
-// resolveSkillScript 解析技能与脚本，产出运行所需的路径。
+// resolveSkillScript resolves the skill and the script, producing the paths the run needs.
 //
-// 可见性口径刻意比 read_skill 更紧：只认「注入给本 agent」的技能
-// （私有 ∪ 已绑定，与 system prompt 常驻清单同源）。开 discovery 的 agent 能读到
-// 未绑定的共享技能正文，但不该能执行它的代码 —— 可发现是读权，不是执行权。
+// The visibility criterion is deliberately tighter than read_skill's: only skills "injected into this agent" count
+// (private ∪ bound, the same source as the resident system-prompt list). An agent with discovery on may read the body of an
+// unbound shared skill, but must not be able to execute its code - being discoverable is a read right, not an execution right.
 func resolveSkillScript(ctx context.Context, c *Context, skillName, script string) (*skillRun, error) {
 	name := strings.TrimSpace(skillName)
 	if name == "" {
@@ -89,7 +90,7 @@ func resolveSkillScript(ctx context.Context, c *Context, skillName, script strin
 		if list[i].Name != name {
 			continue
 		}
-		// 同名时私有覆盖共享（与运行时口径一致）
+		// a private skill overrides a shared one of the same name (the same rule as at run time)
 		if hit == nil || list[i].Scope == SkillScopeAgent {
 			hit = &list[i]
 		}
@@ -109,7 +110,8 @@ func resolveSkillScript(ctx context.Context, c *Context, skillName, script strin
 	if rel == "" {
 		return nil, errors.New("script path is empty")
 	}
-	// 两种支持方式：有语言定义（交给 sandboxd 解析解释器入口），或直传解释器命令。
+	// Two supported ways: a language definition (sandboxd resolves the interpreter entry), or an interpreter command passed
+	// straight through.
 	ext := strings.ToLower(path.Ext(rel))
 	lang, isLang := langByExt[ext]
 	interp, isPassthrough := interpreterByExt[ext]
@@ -120,8 +122,8 @@ func resolveSkillScript(ctx context.Context, c *Context, skillName, script strin
 	if c.SkillRoot == "" || c.AgentRoot == "" {
 		return nil, errors.New("skill root not initialized (definition root / mount source not set)")
 	}
-	// 读哪一份由运行模式决定（草稿 / 当前版本），写路径不经过这里。
-	// 私有技能取「归属者」—— 注入清单里的私有技能只可能是自己的。
+	// Which copy is read is decided by the run mode (draft / current version); the write path does not go through here.
+	// A private skill takes "its owner" - a private skill in the injected list can only be its own.
 	var ownerName string
 	switch hit.Scope {
 	case SkillScopeTenant:
@@ -135,7 +137,8 @@ func resolveSkillScript(ctx context.Context, c *Context, skillName, script strin
 		return nil, kerr
 	}
 
-	// 存活判定走 storage（local / nfs / s3 通用）；挂载源另需宿主路径真实存在。
+	// The existence check goes through storage (works for local / nfs / s3); the mount source additionally needs a real host
+	// path.
 	if c.Storage != nil {
 		exists, eerr := c.Storage.Exists(ctx, key)
 		if eerr != nil {
@@ -160,11 +163,12 @@ func resolveSkillScript(ctx context.Context, c *Context, skillName, script strin
 	}, nil
 }
 
-// runSkillCustomTool 跑技能自带脚本的工具（受约束的 exec）。
+// runSkillCustomTool is the tool that runs scripts bundled with a skill (a constrained exec).
 //
-// 归 exec 档而不是 script 档：判据是通道与进程形态，不是「跑的是不是脚本文件」。
-// 它走 sb.Start → sandboxd 的 /v1/exec（一次性进程、无池、无 script_max_sec 硬闸），
-// 与 exec 工具同一条单工通道；code 档是 /v1/code 通道，只归工作流 code 节点。
+// It belongs to the exec tier rather than the script tier: the criterion is the channel and the process shape, not "whether
+// what runs is a script file".
+// It goes sb.Start -> sandboxd's /v1/exec (a one-shot process, no pool, no script_max_sec hard limit), the same single-shot
+// channel as the exec tool; the code tier is the /v1/code channel and belongs to workflow code nodes only.
 type runSkillCustomTool struct{}
 
 func (t *runSkillCustomTool) Meta() ToolMeta {
@@ -187,7 +191,8 @@ func (t *runSkillCustomTool) Meta() ToolMeta {
 }
 
 func (t *runSkillCustomTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
-	// 与 exec 同通道，准入也共用：capabilities 从未成功返回时不猜环境、直接拒绝。
+	// The same channel as exec, and the same admission check: when capabilities have never been returned successfully, do not
+	// guess the environment - refuse outright.
 	if err := ensureSandboxReady("run_skill_script"); err != nil {
 		return nil, err
 	}
@@ -232,17 +237,19 @@ func (t *runSkillCustomTool) Execute(ctx context.Context, c *Context, args map[s
 			{Host: run.HostDir, Guest: skillGuestDir, ReadOnly: true},
 		},
 	}
-	// 出网按租户许可自动决定，**不设工具参数**：脚本由技能作者提供，模型改不了，
-	// 也就没有「被提示注入后临时开网」这条路径 —— 与 exec 需要模型显式请求不同。
-	// Caps 为 nil（调用方没接平台策略）时不表态，交给 sandboxd 按部署默认。
+	// Egress follows the tenant's permission automatically and **has no tool parameter**: the script comes from the skill
+	// author and the model cannot change it, so there is no "open the network temporarily after a prompt injection" path -
+	// unlike exec, which needs an explicit request from the model.
+	// When Caps is nil (the caller does not apply platform policy) nothing is stated, and sandboxd's deployment default
+	// applies.
 	if c.Caps != nil {
 		egress := c.Caps[capability.Egress]
 		spec.Egress = &egress
 	}
-	// 两条路径二选一（见 sandbox.Spec 的说明）：
-	//   - 有语言定义（.py / .js / .lua）：只报「语言 + 脚本」，解释器入口由 sandboxd
-	//     按当前 mode 解析 —— nexus 不再持有「镜像里叫什么」这份认知；
-	//   - 无语言定义（.sh）：argv 直传，解释器由本侧给出。
+	// One of two paths (see the notes on sandbox.Spec):
+	//   - a language definition (.py / .js / .lua): report only "language + script", and sandboxd resolves the interpreter
+	//     entry for the current mode - nexus no longer holds the knowledge of "what it is called in the image";
+	//   - no language definition (.sh): argv is passed straight through and the interpreter is supplied here.
 	if run.Lang != "" {
 		spec.Lang = run.Lang
 		spec.Script = run.GuestScript
@@ -256,7 +263,8 @@ func (t *runSkillCustomTool) Execute(ctx context.Context, c *Context, args map[s
 		return nil, err
 	}
 
-	// 并发读 stdout（stderr 由实现直写 limitedBuffer），避免管道写满阻塞
+	// Read stdout concurrently (stderr is written straight into limitedBuffer by the implementation), so that a full pipe
+	// does not block
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
@@ -285,8 +293,8 @@ func (t *runSkillCustomTool) Execute(ctx context.Context, c *Context, args map[s
 	}, nil
 }
 
-// argStrings 解析字符串数组参数：只认数组形态，不把单个字符串按逗号切开
-// —— argv 里的逗号是合法内容，误切会静默改参数。
+// argStrings parses a string-array argument: array shapes only, and a single string is not split on commas
+// - a comma inside argv is legitimate content, and splitting would silently change the arguments.
 func argStrings(args map[string]any, key string) []string {
 	raw, ok := args[key]
 	if !ok || raw == nil {

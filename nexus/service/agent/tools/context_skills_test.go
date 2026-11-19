@@ -5,80 +5,84 @@ import (
 	"testing"
 )
 
-// 「用过即注入」的记账：use_skill 成功后登记技能，agent 循环据此在下一轮重算工具集。
-// 三个不变量必须成立，否则要么白查库、要么工具永远不出现：
-//  1. 新技能才置脏（重复读同一技能不算变化）；
-//  2. 脏标记只能被消费一次（否则每轮都重算）；
-//  3. 快照是拷贝（调用方改它不能污染内部状态）。
+// The "inject once used" bookkeeping: use_skill registers the skill after success, and the agent loop recomputes the tool set on
+// the next round from that. Three invariants must hold, or else you either query the database for nothing or the tools never
+// appear:
+//  1. only a new skill marks dirty (reading the same skill again is not a change);
+//  2. the dirty flag can be consumed only once (otherwise every round recomputes);
+//  3. the snapshot is a copy (a caller mutating it must not pollute internal state).
 func TestSkillLoadedBookkeeping(t *testing.T) {
 	c := &Context{}
 
 	if got := c.LoadedSkills(); len(got) != 0 {
-		t.Fatalf("初始已读技能应为空，got %v", got)
+		t.Fatalf("the initially loaded skills should be empty, got %v", got)
 	}
 	if c.ConsumeSkillsDirty() {
-		t.Fatal("初始不应为脏")
+		t.Fatal("it should not be dirty initially")
 	}
 
-	// 空 id 是无效登记（例如详情里没带回 id），不能污染状态
+	// An empty id is an invalid registration (e.g. the detail came back without an id) and must not pollute the state
 	c.MarkSkillLoaded("", "ghost", nil)
 	if len(c.LoadedSkills()) != 0 || c.ConsumeSkillsDirty() {
-		t.Fatal("空 id 不应登记，也不应置脏")
+		t.Fatal("an empty id should register nothing and mark nothing dirty")
 	}
 
 	c.MarkSkillLoaded("id-1", "custom-tool-authoring", []string{"builtin:exec"})
 	got := c.LoadedSkills()
 	if got["id-1"] != "custom-tool-authoring" {
-		t.Fatalf("登记失败，got %v", got)
+		t.Fatalf("registration failed, got %v", got)
 	}
 	if !c.ConsumeSkillsDirty() {
-		t.Fatal("新登记必须置脏（否则 agent 循环不会重算工具集）")
+		t.Fatal("a new registration must mark dirty (otherwise the agent loop will not recompute the tool set)")
 	}
 	if c.ConsumeSkillsDirty() {
-		t.Fatal("脏标记只能被消费一次（否则每轮都查库）")
+		t.Fatal("the dirty flag can only be consumed once (otherwise every round queries the database)")
 	}
 
-	// 依赖声明随登记带走，且快照是拷贝（调用方改它不能污染内部状态）
+	// The dependency declaration travels with the registration, and the snapshot is a copy (a caller mutating it must not pollute
+	// internal state)
 	entries := c.LoadedSkillEntries()
 	if len(entries) != 1 || entries[0].ID != "id-1" || len(entries[0].Deps) != 1 || entries[0].Deps[0] != "builtin:exec" {
-		t.Fatalf("依赖快照未登记, got %#v", entries)
+		t.Fatalf("the dependency snapshot was not registered, got %#v", entries)
 	}
 	entries[0].Deps[0] = "builtin:write_file"
 	if c.LoadedSkillEntries()[0].Deps[0] != "builtin:exec" {
-		t.Fatal("LoadedSkillEntries 的依赖必须是拷贝")
+		t.Fatal("LoadedSkillEntries' dependencies must be a copy")
 	}
 
-	// 重复读同一技能（同名同依赖）：不算变化
+	// Reading the same skill again (same name and dependencies): not a change
 	c.MarkSkillLoaded("id-1", "custom-tool-authoring", []string{"builtin:exec"})
 	if c.ConsumeSkillsDirty() {
-		t.Fatal("重复读同一技能不应置脏")
+		t.Fatal("re-reading the same skill should not mark dirty")
 	}
 
-	// 同一技能被重新激活但依赖不同：必须重算，否则工具集会停在旧快照
+	// The same skill reactivated with different dependencies: must recompute, otherwise the tool set stays on the old snapshot
 	c.MarkSkillLoaded("id-1", "custom-tool-authoring", []string{"builtin:write_file"})
 	if !c.ConsumeSkillsDirty() {
-		t.Fatal("依赖变化必须置脏")
+		t.Fatal("a dependency change must mark dirty")
 	}
 
-	// nil 与空切片不是一回事：nil = 无快照（解析时回落查库），
-	// 空切片 = 权威的「这一版确实没有依赖」（不得再查库，否则草稿加的依赖会漏进线上）
+	// nil and an empty slice are not the same thing: nil = no snapshot (fall back to the database during resolution),
+	// empty slice = the authoritative "this version really has no dependencies" (never query the database again, otherwise a
+	// dependency added in the draft leaks into production)
 	c2 := &Context{}
 	c2.MarkSkillLoaded("id-2", "no-deps", []string{})
 	if e := c2.LoadedSkillEntries(); len(e) != 1 || e[0].Deps == nil {
-		t.Fatalf("空切片快照必须保持非 nil, got %#v", e)
+		t.Fatalf("an empty-slice snapshot must stay non-nil, got %#v", e)
 	}
 
-	// 快照是拷贝
+	// The snapshot is a copy
 	snap := c.LoadedSkills()
 	snap["id-1"] = "tampered"
 	snap["id-2"] = "injected"
 	if c.LoadedSkills()["id-1"] != "custom-tool-authoring" || len(c.LoadedSkills()) != 1 {
-		t.Fatal("LoadedSkills 必须返回拷贝，调用方不得改到内部状态")
+		t.Fatal("LoadedSkills must return a copy; a caller must not be able to change internal state")
 	}
 }
 
-// 激活入口只有一个：use_skill。read_skill 是纯查看，不能顺手把工具带出来
-// —— 否则「只是想看文档」也会顶起 exec / browser 这类大 schema（占预算、撞 50 上限、扩大误选面）。
+// There is only one activation entry point: use_skill. read_skill is pure viewing and must not drag the tools along -
+// otherwise "I just wanted to read the document" also pulls in large schemas such as exec / browser (consuming budget, hitting the
+// 50 limit, widening the surface of wrong picks).
 func TestReadSkillDoesNotActivate(t *testing.T) {
 	const (
 		skillID   = "sk1"
@@ -96,12 +100,12 @@ func TestReadSkillDoesNotActivate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read_skill = %v", err)
 	}
-	// 依赖清单照常透出（「这个技能需要什么」和「现在就给你」是两件事）
+	// The dependency list is still reported (what the skill needs and what you get right now are two different things)
 	if d, ok := got.(*SkillDetail); !ok || d.Content != body || len(d.ToolDeps) != 1 || d.ToolDeps[0] != "builtin:exec" {
-		t.Fatalf("read_skill 应返回正文 + 依赖清单, got %#v", got)
+		t.Fatalf("read_skill should return the body plus the dependency list, got %#v", got)
 	}
 	if c.ConsumeSkillsDirty() || len(c.LoadedSkills()) != 0 {
-		t.Fatal("read_skill 是纯查看，不应激活技能")
+		t.Fatal("read_skill is pure viewing and must not activate the skill")
 	}
 
 	got, err = (&useSkillTool{}).Execute(context.Background(), c, args)
@@ -109,22 +113,24 @@ func TestReadSkillDoesNotActivate(t *testing.T) {
 		t.Fatalf("use_skill = %v", err)
 	}
 	if d, ok := got.(*SkillDetail); !ok || d.Content != body || len(d.ToolDeps) != 1 {
-		t.Fatalf("use_skill 必须返回正文 + 依赖清单（否则模型还得再 read 一次）, got %#v", got)
+		t.Fatalf("use_skill must return the body plus the dependency list (otherwise the model has to read it again), got %#v", got)
 	}
 	if !c.ConsumeSkillsDirty() {
-		t.Fatal("use_skill 必须置脏（否则下一轮不会重算工具集）")
+		t.Fatal("use_skill must mark dirty (otherwise the next round will not recompute the tool set)")
 	}
 	if c.LoadedSkills()[skillID] != skillName {
-		t.Fatalf("use_skill 应登记技能, got %v", c.LoadedSkills())
+		t.Fatalf("use_skill should register the skill, got %v", c.LoadedSkills())
 	}
-	// 依赖声明也要一起登记：工具解析只认这份快照（正式运行下 = 当前版本）
+	// The dependency declaration is registered as well: tool resolution only trusts this snapshot (in a production run = the
+	// current version)
 	entries := c.LoadedSkillEntries()
 	if len(entries) != 1 || len(entries[0].Deps) != 1 || entries[0].Deps[0] != "builtin:exec" {
-		t.Fatalf("use_skill 应登记依赖快照, got %#v", entries)
+		t.Fatalf("use_skill should register the dependency snapshot, got %#v", entries)
 	}
 }
 
-// stubSkillDetail 只实现 Get：定位口径由 skillManager 保证，这里只关心「读」与「激活」的差异。
+// stubSkillDetail implements Get only: targeting is the skillManager's job, and all that matters here is the difference between
+// "read" and "activate".
 type stubSkillDetail struct {
 	SkillsManager
 	d *SkillDetail

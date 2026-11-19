@@ -17,15 +17,15 @@ import (
 	"flame/tools/sandbox"
 )
 
-// 沙箱内挂载点（逻辑路径，非宿主路径）。
+// Mount points inside the sandbox (logical paths, not host paths).
 const (
-	// workspaceGuestDir 本次运行的工作场地（rw，同时是命令 cwd）。
+	// workspaceGuestDir is this run's working ground (rw, and the command's cwd as well).
 	workspaceGuestDir = "/workspace"
-	// agentGuestDir 本 agent 的定义域（ro）：AGENT.md、私有 skills。
+	// agentGuestDir is this agent's definition domain (ro): AGENT.md, private skills.
 	agentGuestDir = "/agent"
 )
 
-// execTool 跨平台命令执行工具。
+// execTool is the cross-platform command execution tool.
 type execTool struct{}
 
 func (t *execTool) Meta() ToolMeta {
@@ -59,7 +59,8 @@ func (t *execTool) Execute(ctx context.Context, c *Context, args map[string]any)
 		return nil, errors.New("command is required")
 	}
 
-	// 工作目录：默认工作区根，可传相对路径（先经 safePath 校验，防穿越）
+	// Working directory: the workspace root by default; a relative path may be passed in (validated by safePath first, to
+	// block traversal)
 	rel := ""
 	if v := strings.TrimSpace(argString(args, "cwd")); v != "" {
 		r, err := safePath(v)
@@ -69,7 +70,8 @@ func (t *execTool) Execute(ctx context.Context, c *Context, args map[string]any)
 		rel = r
 	}
 
-	// 宿主侧目录：挂载源必须真实存在（bind mount 前提）；cwd 落在挂载点内部，也要预先建好
+	// Host-side directory: the mount source must really exist (a precondition for the bind mount); cwd lies inside the mount
+	// point, so it has to be created up front too
 	hostRoot := c.Workspace
 	if hostRoot == "" {
 		hostRoot = "."
@@ -83,13 +85,14 @@ func (t *execTool) Execute(ctx context.Context, c *Context, args map[string]any)
 		}
 	}
 
-	// 沙箱侧目录：工作区统一映射到 /workspace（none 实现会翻译回宿主路径）
+	// Sandbox-side directory: the workspace is mapped to /workspace uniformly (the none implementation translates it back to
+	// a host path)
 	guestCwd := workspaceGuestDir
 	if rel != "" {
 		guestCwd = path.Join(workspaceGuestDir, rel)
 	}
 
-	// 超时：仅当显式传 timeout 时额外包一层，否则依赖 ExecuteTool 的 Context.Timeout
+	// Timeout: wrap an extra layer only when timeout is passed explicitly, otherwise rely on ExecuteTool's Context.Timeout
 	execCtx := ctx
 	if sec := argInt(args, "timeout"); sec > 0 {
 		var cancel context.CancelFunc
@@ -106,21 +109,23 @@ func (t *execTool) Execute(ctx context.Context, c *Context, args map[string]any)
 	stdout := newLimitedBuffer(limit)
 	stderr := newLimitedBuffer(limit)
 
-	// 沙箱：必须已注入（nexus 不做本地隔离，命令一律委托给 sandboxd）
+	// Sandbox: it must be injected (nexus does no local isolation; commands are always delegated to sandboxd)
 	sb := c.Sandbox
 	if sb == nil {
 		return nil, errors.New("sandbox not initialized: command execution is disabled")
 	}
-	// 出网：显式请求 + 租户许可，缺省断网（fail-closed）—— 出网意味着数据离开沙箱，
-	// 不能由模型默认获得。Caps 为 nil 表示调用方没接平台策略（不限制，与工具级能力闸同口径）。
+	// Egress: an explicit request plus the tenant's permission; the default is no network (fail-closed) - egress means data
+	// leaves the sandbox, so the model must not get it by default. Caps being nil means the caller does not apply platform
+	// policy (unrestricted, the same rule as the tool-level capability gate).
 	egress := argBool(args, "egress")
 	if egress && c.Caps != nil && !c.Caps[capability.Egress] {
-		// 执行层报错用 ShortLabel（只描述能力本身），与工具级闸门同口径。
+		// The execution layer reports the error with ShortLabel (describing the capability itself), the same rule as the
+		// tool-level gate.
 		return nil, fmt.Errorf("the exec tool requires capability %s (%s), which this tenant does not have",
 			capability.Egress, capability.ShortLabel(capability.Egress))
 	}
 
-	// 挂载表：工作区（rw、cwd）+ 本 agent 定义域（ro）
+	// Mount table: the workspace (rw, cwd) + this agent's definition domain (ro)
 	mounts := []sandbox.Mount{
 		{Host: hostRoot, Guest: workspaceGuestDir, ReadOnly: false},
 	}
@@ -133,8 +138,8 @@ func (t *execTool) Execute(ctx context.Context, c *Context, args map[string]any)
 		Env:    buildEnv(c.Env, args),
 		Stderr: stderr,
 		Mounts: mounts,
-		// 明确表态（不是 nil）：sandboxd 会按部署上限裁决，network=on-request 时
-		// 靠这个布尔决定容器起成 none 还是 bridge。
+		// Stated explicitly (not nil): sandboxd decides by the deployment limit, and with network=on-request this boolean
+		// decides whether the container comes up as none or bridge.
 		Egress: &egress,
 	}
 	proc, err := sb.Start(execCtx, spec)
@@ -142,7 +147,8 @@ func (t *execTool) Execute(ctx context.Context, c *Context, args map[string]any)
 		return nil, err
 	}
 
-	// 并发读 stdout（stderr 由实现直写 limitedBuffer），避免管道写满阻塞
+	// Read stdout concurrently (stderr is written straight into limitedBuffer by the implementation), so that a full pipe
+	// does not block
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
@@ -169,12 +175,12 @@ func (t *execTool) Execute(ctx context.Context, c *Context, args map[string]any)
 	}, nil
 }
 
-// exitCodeOf 归一化「进程非 0 退出」。
+// exitCodeOf normalises "the process exited non-zero".
 //
-// 关键事实：沙箱的远端实现（remote.go 的 FrameExit）返回的是 *sandbox.ExitError，
-// 本地实现也按注释约定归一化成它；*exec.ExitError 只在裸起进程时出现。
-// 只判后者的后果非常具体：远端执行的每一个非 0 退出都退化成裸的 "exit status 2"，
-// 退出码、stderr 全丢 —— 而这两样正是排查时唯一有用的信息。
+// Key fact: the sandbox's remote implementation (FrameExit in remote.go) returns *sandbox.ExitError, and the local
+// implementation is normalised to it as well by convention; *exec.ExitError only appears when a process is started bare.
+// Checking only the latter has a very concrete consequence: every non-zero exit of a remote execution degrades to a bare
+// "exit status 2", losing the exit code and stderr - the only two pieces of information that help during triage.
 func exitCodeOf(err error) (int, bool) {
 	var se *sandbox.ExitError
 	if errors.As(err, &se) {
@@ -187,16 +193,18 @@ func exitCodeOf(err error) (int, bool) {
 	return 0, false
 }
 
-// shellSpec shell 可执行文件 + 参数前缀。
+// shellSpec is a shell executable plus its argument prefix.
 type shellSpec struct {
 	bin  string
 	args []string
 }
 
-// ensureSandboxReady 沙箱类工具的统一准入：capabilities 从未成功返回时拒绝服务。
+// ensureSandboxReady is the shared admission check for sandbox-backed tools: refuse service when capabilities have never been
+// returned successfully.
 //
-// 「不猜」：Mode 为空意味着 nexus 不知道沙箱是什么环境（隔离方式、OS、可执行语言）。
-// 此时让命令跑起来只能靠猜，宁可如实报「不可用」，也不要在未知环境里执行。
+// "No guessing": an empty Mode means nexus does not know what environment the sandbox is (isolation kind, OS, available
+// languages). Running a command then could only be a guess, so an honest "unavailable" is better than executing in an unknown
+// environment.
 func ensureSandboxReady(tool string) error {
 	if !sandboxinfo.Ready() {
 		return fmt.Errorf("%s disabled: sandbox capabilities unavailable (sandboxd unreachable or probe failed)", tool)
@@ -204,10 +212,10 @@ func ensureSandboxReady(tool string) error {
 	return nil
 }
 
-// pickShell 按名称或沙箱环境选择 shell。
+// pickShell chooses the shell by name or by the sandbox environment.
 //
-// shell 为空时按 capabilities 探测到的沙箱 OS 选默认值；OS 未知则报错 ——
-// 不拿 nexus 宿主的 runtime.GOOS 去猜（沙箱可能在另一个平台）。
+// An empty shell picks the default from the sandbox OS reported by capabilities; an unknown OS is an error -
+// we do not guess from the nexus host's runtime.GOOS (the sandbox may be on another platform).
 func pickShell(shell string) (shellSpec, error) {
 	switch strings.ToLower(strings.TrimSpace(shell)) {
 	case "cmd":
@@ -230,14 +238,14 @@ func pickShell(shell string) (shellSpec, error) {
 	}
 }
 
-// sandboxShellOS 沙箱的操作系统（来自 capabilities 的 `系统:` 行）；未知返回空串。
+// sandboxShellOS is the sandbox's operating system (from the OS line of capabilities); empty when unknown.
 //
-// 不使用 runtime.GOOS：那是 nexus 宿主的 OS，与沙箱无关。
+// runtime.GOOS is not used: that is the nexus host's OS and has nothing to do with the sandbox.
 func sandboxShellOS() string {
 	return sandboxinfo.OS()
 }
 
-// buildEnv 继承系统环境变量，叠加 Context.Env 与 args.env。
+// buildEnv inherits the system environment variables and layers Context.Env and args.env on top.
 func buildEnv(base map[string]string, args map[string]any) []string {
 	env := os.Environ()
 	for k, v := range base {

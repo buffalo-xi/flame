@@ -9,7 +9,7 @@ import (
 	"flame/nexus/shared/runledger"
 )
 
-// entry 造一条最小登记信息（Schema 留空 → 不碰 Redis，只走进程内台账）。
+// entry builds a minimal ledger record (Schema left empty -> no Redis, in-process ledger only).
 func entry(runID, sessionID string) runledger.Entry {
 	return runledger.Entry{RunID: runID, SessionID: sessionID}
 }
@@ -30,13 +30,13 @@ func TestStopRunCancelsWithCause(t *testing.T) {
 		t.Fatalf("cause = %v, want ErrRunStopped", cause)
 	}
 
-	// 注销后不再计入
+	// No longer counted once unregistered
 	unreg()
 	if n := RunningCount(); n != 0 {
 		t.Fatalf("RunningCount() after unregister = %d, want 0", n)
 	}
 
-	// 已结束的运行：停止是幂等的，返回 false
+	// A finished run: stopping is idempotent and returns false
 	if StopRunCause("run-stop-1", "sess-1", ErrRunStopped) {
 		t.Fatal("StopRunCause on finished run returned true")
 	}
@@ -52,8 +52,8 @@ func TestStopRunRejectsSessionMismatch(t *testing.T) {
 	if cause := context.Cause(ctx); cause != nil {
 		t.Fatalf("cause = %v, want nil", cause)
 	}
-	// 会话不匹配是明确的越权：不能给这条 run 留下待取消，否则它登记时会被误杀。
-	// （别的测试会留下「已结束的 run」那种无害登记，所以只查这一条。）
+	// A session mismatch is a clear authorization failure: no pending stop may be left for this run, or it would be killed by mistake
+	// when it registers. (Other tests leave harmless "finished run" records behind, so only this one is checked.)
 	pendingStops.mu.Lock()
 	stale := 0
 	for _, p := range pendingStops.all {
@@ -67,7 +67,7 @@ func TestStopRunRejectsSessionMismatch(t *testing.T) {
 	}
 }
 
-// 停止早于登记：客户端断开与 Stream 启动之间有窗口，那时的停止不能丢。
+// A stop before registration: there is a window between the client disconnecting and Stream starting, and a stop in it must not be lost.
 func TestStopRunCauseBeforeRegister(t *testing.T) {
 	if StopRunCause("run-early", "sess-early", ErrClientGone) {
 		t.Fatal("StopRunCause on an unregistered run returned true")
@@ -79,17 +79,17 @@ func TestStopRunCauseBeforeRegister(t *testing.T) {
 	if cause := context.Cause(ctx); !errors.Is(cause, ErrClientGone) {
 		t.Fatalf("cause = %v, want ErrClientGone", cause)
 	}
-	// 已经按待取消停过：再停一次仍应返回 false（幂等）。
+	// Already stopped through the pending stop: stopping again must still return false (idempotent).
 	if StopRunCause("run-early", "sess-early", ErrRunStopped) {
 		t.Fatal("StopRunCause should be idempotent after a pending stop")
 	}
 }
 
-// 待取消会过期：很久以前的一次停止不能误杀后来同一会话的新运行。
+// A pending stop expires: a stop from long ago must not kill a later run in the same session by mistake.
 func TestPendingStopExpires(t *testing.T) {
 	rememberPendingStop("run-late", "sess-late", ErrClientGone)
 
-	// 手动把时间戳推回 TTL 之外（同包测试，直接改登记表）。
+	// Push the timestamp beyond the TTL by hand (same-package test, so the registry is edited directly).
 	pendingStops.mu.Lock()
 	for i := range pendingStops.all {
 		if pendingStops.all[i].runID == "run-late" {
@@ -106,7 +106,8 @@ func TestPendingStopExpires(t *testing.T) {
 	}
 }
 
-// 空 session_id 一律拒绝：否则只凭 run_id 就能停掉别人的运行（台账跨 agent 共享）。
+// An empty session_id is always refused: otherwise a run_id alone would be enough to stop someone else's run (the ledger is shared
+// across agents).
 func TestStopRunRequiresSession(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer registerRun(entry("run-no-sess", "sess-owner"), cancel)()
@@ -119,7 +120,7 @@ func TestStopRunRequiresSession(t *testing.T) {
 	}
 }
 
-// 管理端按 run_id 终止：无会话的运行（RPC / MCP 单轮）也要能停。
+// Admin-side stop by run_id: a session-less run (a single RPC / MCP round) has to be stoppable too.
 func TestStopRunByID(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer registerRun(entry("run-by-id", ""), cancel)()
@@ -130,7 +131,7 @@ func TestStopRunByID(t *testing.T) {
 	if cause := context.Cause(ctx); !errors.Is(cause, ErrRunStopped) {
 		t.Fatalf("cause = %v, want ErrRunStopped", cause)
 	}
-	// 幂等：再停一次返回 false
+	// Idempotent: a second stop returns false
 	if StopRunByID("run-by-id") {
 		t.Fatal("StopRunByID should be idempotent")
 	}
@@ -154,7 +155,7 @@ func TestStopSessionStopsAllRuns(t *testing.T) {
 	if cause := context.Cause(ctx2); !errors.Is(cause, ErrRunStopped) {
 		t.Fatalf("run2 cause = %v, want ErrRunStopped", cause)
 	}
-	// 再停一次：已全部结束
+	// Stopping again: everything has finished already
 	if n := StopSession("sess-multi"); n != 0 {
 		t.Fatalf("second StopSession() = %d, want 0", n)
 	}

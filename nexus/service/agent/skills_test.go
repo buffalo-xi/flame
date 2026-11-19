@@ -15,31 +15,31 @@ import (
 	"flame/tools/xsql"
 )
 
-// checkSkillScope 是「own / shared / agent_skill 三套工具各能动哪个空间」的唯一判据。
+// checkSkillScope is the single criterion for "which space each of the own / shared / agent_skill tool families may touch".
 //
-// 与工具分类（skill-own / skill-admin 等）正交、缺一不可：分类管"谁能用哪个工具"，
-// 它管"工具只能动哪个空间的数据"。own 系列人人可用，若不校验归属，
-// 开启「可发现」的 agent 就能借可见口径改到共享 skill。
+// Orthogonal to tool categorisation (skill-own / skill-admin ...) and both are needed: categorisation decides "who may use which tool", this
+// decides "which space's data the tool may touch". The own family is open to everyone, so without an ownership check an agent with discovery on
+// could reach a shared skill through the visibility criterion.
 //
-// target 非空 = *_agent_skill 系列（指定归属，仅超级智能体）：必须落在该归属的私有空间。
+// A non-empty target = the *_agent_skill family (explicit owner, super agent only): it must land in that owner's private space.
 func TestCheckSkillScope(t *testing.T) {
 	const (
 		me    = "agent-me"
 		other = "agent-other"
 	)
-	shared := &models.Skill{Name: "report"}                            // 租户级：agent_id 为 NULL
-	mine := &models.Skill{Name: "draft", AgentID: xsql.UUID(me)}       // 自己的私有
-	theirs := &models.Skill{Name: "secret", AgentID: xsql.UUID(other)} // 别人的私有
+	shared := &models.Skill{Name: "report"}                            // tenant level: agent_id is NULL
+	mine := &models.Skill{Name: "draft", AgentID: xsql.UUID(me)}       // own private skill
+	theirs := &models.Skill{Name: "secret", AgentID: xsql.UUID(other)} // another agent's private skill
 
 	cases := []struct {
 		name         string
 		isSupervisor bool
 		scope        string
-		target       string // 目标归属 agent（*_agent_skill 系列）
+		target       string // target owning agent (the *_agent_skill family)
 		s            *models.Skill
 		wantErr      bool
 	}{
-		// own 工具：只能动**自己的私有**
+		// own tools: only **one's own private** skills
 		{"supervisor+own+my", true, tools.SkillScopeAgent, "", mine, false},
 		{"supervisor+own+shared", true, tools.SkillScopeAgent, "", shared, true},
 		{"supervisor+own+theirs", true, tools.SkillScopeAgent, "", theirs, true},
@@ -47,13 +47,13 @@ func TestCheckSkillScope(t *testing.T) {
 		{"agent+own+shared", false, tools.SkillScopeAgent, "", shared, true},
 		{"agent+own+theirs", false, tools.SkillScopeAgent, "", theirs, true},
 
-		// shared 工具：只能动**租户级共享**
+		// shared tools: only **tenant-level shared** skills
 		{"supervisor+shared+shared", true, tools.SkillScopeTenant, "", shared, false},
 		{"supervisor+shared+my", true, tools.SkillScopeTenant, "", mine, true},
 		{"agent+shared+shared", false, tools.SkillScopeTenant, "", shared, true},
 		{"agent+shared+theirs", false, tools.SkillScopeTenant, "", theirs, true},
 
-		// agent_skill 工具（指定归属）：仅超级智能体，且必须正好是该归属的私有
+		// agent_skill tools (explicit owner): super agent only, and it must be exactly that owner's private skill
 		{"supervisor+target+theirs", true, tools.SkillScopeAgent, other, theirs, false},
 		{"supervisor+target+targetIsMe", true, tools.SkillScopeAgent, me, mine, false},
 		{"supervisor+target+wrongOwner", true, tools.SkillScopeAgent, other, mine, true},
@@ -62,11 +62,11 @@ func TestCheckSkillScope(t *testing.T) {
 		{"agent+target+theirs", false, tools.SkillScopeAgent, other, theirs, true},
 		{"agent+target+ownPrivate", false, tools.SkillScopeAgent, me, mine, true},
 
-		// 无空间定向（read_skill）：不校验
+		// no space declared (read_skill): no check
 		{"none+shared", false, "", "", shared, false},
 		{"none+theirs", false, "", "", theirs, false},
 
-		// 未定位到（nil）：交由调用方报 not found
+		// not located (nil): the caller reports not found
 		{"nil+own", false, tools.SkillScopeAgent, "", nil, false},
 	}
 	for _, tc := range cases {
@@ -82,9 +82,9 @@ func TestCheckSkillScope(t *testing.T) {
 	}
 }
 
-// ===== Update 改名：整目录搬迁 =====
+// ===== Update rename: move the whole directory =====
 
-// stubSkillRepoForUpdate 只实现 Update 流程用到的仓库方法（其余由嵌入接口兜底）。
+// stubSkillRepoForUpdate only implements the repository methods the Update flow uses (the rest fall back to the embedded interface).
 type stubSkillRepoForUpdate struct {
 	skillsrepo.Repository
 	skill   *models.Skill
@@ -103,7 +103,7 @@ func (s *stubSkillRepoForUpdate) Update(_ string, sk *models.Skill) error {
 	return nil
 }
 
-// stubAgentsRepoForSkill 只实现 GetAgent（归属 agent 的状态闸）。
+// stubAgentsRepoForSkill only implements GetAgent (the status gate of the owning agent).
 type stubAgentsRepoForSkill struct {
 	agentsrepo.Repository
 	inst *models.Agent
@@ -113,11 +113,11 @@ func (s stubAgentsRepoForSkill) GetAgent(_ *auth.AuthInfo, _ string) (*models.Ag
 	return s.inst, nil
 }
 
-// 改名必须搬**整个技能目录**。
+// A rename must move the **whole skill directory**.
 //
-// 技能目录现在可以放附属文件与子目录（文件工具的 "/" 根寻址，见 tools/gate.go 的
-// checkWriteOwn）。若仍沿用「写新 SKILL.md + 删旧 SKILL.md」，附属资源会留在旧目录
-// 变成孤儿 —— 表里已指向新名，旧目录再也没人认领。
+// A skill directory may now hold auxiliary files and subdirectories (the "/" root addressing of the file tools, see checkWriteOwn in
+// tools/gate.go). Keeping "write the new SKILL.md + delete the old SKILL.md" would leave those resources orphaned in the old directory - the
+// table already points at the new name, and nobody claims the old directory any more.
 func TestUpdateRenameMovesWholeSkillDir(t *testing.T) {
 	const (
 		schema    = "t0"
@@ -160,7 +160,7 @@ func TestUpdateRenameMovesWholeSkillDir(t *testing.T) {
 		}, st
 	}
 
-	t.Run("只改名：附属文件随目录搬走", func(t *testing.T) {
+	t.Run("rename only: auxiliary files move with the directory", func(t *testing.T) {
 		m, st := newManager(t)
 		write(t, st, oldDir+"/SKILL.md", "# old")
 		write(t, st, oldDir+"/docs/spec.md", "spec")
@@ -171,17 +171,17 @@ func TestUpdateRenameMovesWholeSkillDir(t *testing.T) {
 			t.Fatalf("Update = %v, want nil", err)
 		}
 		if !exists(t, st, newDir+"/SKILL.md") {
-			t.Error("入口文件应已随目录搬到新位置")
+			t.Error("the entry file should have moved with the directory")
 		}
 		if !exists(t, st, newDir+"/docs/spec.md") {
-			t.Error("附属文件应随目录一起搬（这正是本次新增的能力）")
+			t.Error("auxiliary files should move with the directory (this is the capability added here)")
 		}
 		if exists(t, st, oldDir+"/docs/spec.md") {
-			t.Error("旧目录不应残留附属文件（否则成为孤儿）")
+			t.Error("no auxiliary file should be left in the old directory (they would become orphans)")
 		}
 	})
 
-	t.Run("改名+换正文：新正文落在新目录，附属文件仍在", func(t *testing.T) {
+	t.Run("rename + new body: the new body lands in the new directory, auxiliary files stay", func(t *testing.T) {
 		m, st := newManager(t)
 		write(t, st, oldDir+"/SKILL.md", "# old")
 		write(t, st, oldDir+"/docs/spec.md", "spec")
@@ -196,14 +196,14 @@ func TestUpdateRenameMovesWholeSkillDir(t *testing.T) {
 			t.Fatal(err)
 		}
 		if string(body) != "# brand new" {
-			t.Errorf("入口文件=%q, want %q", body, "# brand new")
+			t.Errorf("entry file = %q, want %q", body, "# brand new")
 		}
 		if !exists(t, st, newDir+"/docs/spec.md") {
-			t.Error("换正文不应影响附属文件")
+			t.Error("a new body must not affect auxiliary files")
 		}
 	})
 
-	t.Run("只改正文不改名：目录原地不动", func(t *testing.T) {
+	t.Run("body only, no rename: the directory stays put", func(t *testing.T) {
 		m, st := newManager(t)
 		write(t, st, oldDir+"/SKILL.md", "# old")
 		write(t, st, oldDir+"/docs/spec.md", "spec")
@@ -215,16 +215,16 @@ func TestUpdateRenameMovesWholeSkillDir(t *testing.T) {
 		}
 		body, _ := st.ReadFile(ctx, oldDir+"/SKILL.md")
 		if string(body) != "# rewritten" {
-			t.Errorf("入口文件=%q, want %q", body, "# rewritten")
+			t.Errorf("entry file = %q, want %q", body, "# rewritten")
 		}
 		if !exists(t, st, oldDir+"/docs/spec.md") {
-			t.Error("不改名时不应动目录")
+			t.Error("without a rename the directory must not be touched")
 		}
 	})
 }
 
-// restricted 只对租户级共享 skill 有意义：私有 skill 传了必须在**任何落库动作之前**拒绝。
-// 若校验留在 repo.Update 之后，description / name 会先写进库再报错 —— 留下半写状态。
+// restricted only means something for tenant-level shared skills: passing it for a private skill must be refused **before any write**.
+// If the check stayed after repo.Update, description / name would be written first and the error would come afterwards - a half-written state.
 func TestUpdateRestrictedOnPrivateSkillRejectedBeforeWrite(t *testing.T) {
 	sk := &models.Skill{ID: "s1", Name: "draft", AgentID: xsql.UUID("agent-me")}
 	sk.Status = xsql.Int(models.StatusNormal)
@@ -246,17 +246,17 @@ func TestUpdateRestrictedOnPrivateSkillRejectedBeforeWrite(t *testing.T) {
 		Scope:       tools.SkillScopeAgent,
 	})
 	if err == nil {
-		t.Fatal("私有 skill 传 restricted 应报错")
+		t.Fatal("passing restricted for a private skill should error")
 	}
-	if !strings.Contains(err.Error(), "restricted 只对租户级共享 skill 有意义") {
-		t.Errorf("错误应指明 restricted 的适用范围, got %v", err)
+	if !strings.Contains(err.Error(), "restricted only applies to tenant-level shared skills") {
+		t.Errorf("the error should name restricted's scope, got %v", err)
 	}
 	if repo.updated {
-		t.Error("校验必须先于 repo.Update：元数据不应已落库")
+		t.Error("the check must run before repo.Update: the metadata must not be written yet")
 	}
 }
 
-// stubSkillRepoRestricted 记录 Update 是否被调用（用于断言校验与落库的先后顺序）。
+// stubSkillRepoRestricted records whether Update was called (to assert the order of checks and writes).
 type stubSkillRepoRestricted struct {
 	skillsrepo.Repository
 	skill   *models.Skill
@@ -275,19 +275,19 @@ func (s *stubSkillRepoRestricted) Update(_ string, _ *models.Skill) error {
 	return nil
 }
 
-// ===== checkOwnerAgent：归属 agent 的「私有技能可写」闸 =====
+// ===== checkOwnerAgent: the "private skills are writable" gate of the owning agent =====
 //
-// 只有正常态可写，废弃(3) 一律不可写（判据 models.IsModifiable）。
-// 与 tools/gate.go 的两处（自身档 / 超级智能体跨域档）、admin/skills 的 ensureAgentModifiable
-// 同口径 —— 四处必须一起判，否则会出现「元工具能改、文件工具报错」的分裂。
+// Only the normal state may write; deprecated (3) never may (criterion models.IsModifiable).
+// The same criterion as the two places in tools/gate.go (the self gate / the super agent's cross-domain gate) and admin/skills'
+// ensureAgentModifiable - all four must judge the same way, or "the meta tools can change it while the file tools error" splits apart.
 func TestCheckOwnerAgentStatusGate(t *testing.T) {
 	cases := []struct {
 		name    string
 		status  int
 		wantErr bool
 	}{
-		{"正常 → 放行", models.StatusNormal, false},
-		{"废弃 → 拒绝", models.StatusDeprecated, true},
+		{"normal -> allowed", models.StatusNormal, false},
+		{"deprecated -> refused", models.StatusDeprecated, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -305,18 +305,18 @@ func TestCheckOwnerAgentStatusGate(t *testing.T) {
 		})
 	}
 
-	// 租户级 skill（无归属 agent）：免校验
+	// A tenant-level skill (no owning agent): no check
 	m := &skillManager{agents: stubAgentsRepoForSkill{}}
 	if err := m.checkOwnerAgent(""); err != nil {
-		t.Errorf("ownerID 为空应免校验, got %v", err)
+		t.Errorf("an empty ownerID should skip the check, got %v", err)
 	}
 }
 
-// ===== 提示词里的「能不能改技能」：归属 agent 那道闸要能体现 =====
+// ===== "Can I change skills" in the prompt: the owning-agent gate must show up =====
 
-// capabilityNotes：有 create_own_skill 但 agent 已废弃时，不能再声称「你可建/改自己的
-// 私有技能」—— 否则 prompt 会承诺一个必然被闸门拒掉的能力，正好与它「事前防线」
-// 的存在理由相悖。
+// capabilityNotes: with create_own_skill granted but the agent deprecated, it must no longer claim "you may create / change your own private
+// skills" - the prompt would otherwise promise a capability the gate always refuses, which contradicts the very reason it exists as a
+// "before the fact" line.
 func TestCapabilityNotesDeprecatedAgent(t *testing.T) {
 	const allowedHint = "你可建/改**自己的私有**技能"
 	const blockedHint = "你**当前不能**改**自己的私有**技能"
@@ -328,9 +328,9 @@ func TestCapabilityNotesDeprecatedAgent(t *testing.T) {
 		wantAllowed bool
 		wantBlocked bool
 	}{
-		{"正常 + 有 own → 正常提示", models.StatusNormal, true, true, false},
-		{"废弃 + 有 own → 改成「当前不能」", models.StatusDeprecated, true, false, true},
-		{"无技能工具 → 两条都不该出现", models.StatusNormal, false, false, false},
+		{"normal + own -> normal hint", models.StatusNormal, true, true, false},
+		{"deprecated + own -> 'currently cannot'", models.StatusDeprecated, true, false, true},
+		{"no skill tools -> neither line", models.StatusNormal, false, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -344,16 +344,16 @@ func TestCapabilityNotesDeprecatedAgent(t *testing.T) {
 			}
 			notes := a.capabilityNotes()
 			if got := strings.Contains(notes, allowedHint); got != tc.wantAllowed {
-				t.Errorf("含「可建/改自己的私有技能」= %v, want %v\n%s", got, tc.wantAllowed, notes)
+				t.Errorf("contains \"may create / change own private skills\" = %v, want %v\n%s", got, tc.wantAllowed, notes)
 			}
 			if got := strings.Contains(notes, blockedHint); got != tc.wantBlocked {
-				t.Errorf("含「当前不能改」= %v, want %v\n%s", got, tc.wantBlocked, notes)
+				t.Errorf("contains \"currently cannot change\" = %v, want %v\n%s", got, tc.wantBlocked, notes)
 			}
 		})
 	}
 }
 
-// stubSkillsForCatalog 只实现 ListInjected（skillCatalog 的唯一依赖）。
+// stubSkillsForCatalog only implements ListInjected (skillCatalog's only dependency).
 type stubSkillsForCatalog struct {
 	tools.SkillsManager
 	list []tools.SkillInfo
@@ -363,8 +363,8 @@ func (s stubSkillsForCatalog) ListInjected(context.Context) ([]tools.SkillInfo, 
 	return s.list, nil
 }
 
-// skillCatalog：废弃的 skill 由 ListInjected 过滤，常驻清单里只出现正常态，
-// 不需要再逐行打「只读」标记。
+// skillCatalog: deprecated skills are already filtered by ListInjected, so only normal ones appear in the resident list and there is no need to
+// tag each line "read only".
 func TestSkillCatalogListsNormalSkillsOnly(t *testing.T) {
 	a := &agentImpl{
 		toolCtx: &tools.Context{
@@ -375,16 +375,17 @@ func TestSkillCatalogListsNormalSkillsOnly(t *testing.T) {
 	}
 	out := a.skillCatalog()
 	if !strings.Contains(out, "- draft [私有]: 草稿") {
-		t.Errorf("正常态 skill 应按「- 名 [归属]: 描述」列出, got:\n%s", out)
+		t.Errorf("a normal skill should be listed as \"- name [ownership]: description\", got:\n%s", out)
 	}
 	if strings.Contains(out, "只读") {
-		t.Errorf("清单不应再带状态标记, got:\n%s", out)
+		t.Errorf("the list must not carry a status marker any more, got:\n%s", out)
 	}
 }
 
-// skill_discovery 的注入：
-//   - 零技能时必须仍然出声 —— 那正是该开关的适用场景（没有清单可注入，只能靠 list_skills 去找）
-//   - 截断时不要和「更多已省略」那句重复提 list_skills
+// skill_discovery injection:
+//   - with zero skills it must still speak up - that is exactly the switch's use case (no list to inject, so list_skills is the only way to find
+//     them)
+//   - on truncation it must not repeat list_skills after the "more omitted" line
 func TestSkillCatalogDiscovery(t *testing.T) {
 	newImpl := func(discovery bool, list []tools.SkillInfo) *agentImpl {
 		return &agentImpl{
@@ -393,49 +394,49 @@ func TestSkillCatalogDiscovery(t *testing.T) {
 		}
 	}
 
-	t.Run("零技能 + 开着发现 → 仍给 list_skills 指引", func(t *testing.T) {
+	t.Run("zero skills + discovery on -> still points at list_skills", func(t *testing.T) {
 		out := newImpl(true, nil).skillCatalog()
 		if !strings.Contains(out, "list_skills") {
-			t.Errorf("应给出 list_skills 指引, got %q", out)
+			t.Errorf("should point at list_skills, got %q", out)
 		}
 	})
 
-	t.Run("零技能 + 未开发现 → 空串", func(t *testing.T) {
+	t.Run("zero skills + discovery off -> empty string", func(t *testing.T) {
 		if out := newImpl(false, nil).skillCatalog(); out != "" {
-			t.Errorf("应为空串, got %q", out)
+			t.Errorf("should be an empty string, got %q", out)
 		}
 	})
 
-	t.Run("截断 + 开着发现 → list_skills 只提一次", func(t *testing.T) {
+	t.Run("truncated + discovery on -> list_skills mentioned once", func(t *testing.T) {
 		list := []tools.SkillInfo{
 			{Name: "big", Scope: tools.SkillScopeAgent, Status: models.StatusNormal,
 				Description: strings.Repeat("长", maxSkillPromptChars+500)},
 		}
 		out := newImpl(true, list).skillCatalog()
 		if !strings.Contains(out, "已省略") {
-			t.Fatalf("应触发截断, got:\n%s", out)
+			t.Fatalf("truncation should trigger, got:\n%s", out)
 		}
 		if n := strings.Count(out, "list_skills"); n != 1 {
-			t.Errorf("list_skills 应只出现一次, got %d\n%s", n, out)
+			t.Errorf("list_skills should appear exactly once, got %d\n%s", n, out)
 		}
 	})
 
-	t.Run("未截断 + 开着发现 → 有指引", func(t *testing.T) {
+	t.Run("not truncated + discovery on -> the pointer is there", func(t *testing.T) {
 		list := []tools.SkillInfo{{Name: "draft", Scope: tools.SkillScopeAgent, Status: models.StatusNormal}}
 		out := newImpl(true, list).skillCatalog()
 		if !strings.Contains(out, "list_skills") {
-			t.Errorf("应给出 list_skills 指引, got %q", out)
+			t.Errorf("should point at list_skills, got %q", out)
 		}
 	})
 }
 
-// ===== Delete / Create：技能目录是**目录**，不是单个文件 =====
+// ===== Delete / Create: a skill directory is a **directory**, not a single file =====
 
-// stubSkillRepoForDelete 只实现 Delete 流程用到的仓库方法（FindByName 定位 + Delete 记录）。
+// stubSkillRepoForDelete only implements the repository methods the Delete flow uses (FindByName to locate + Delete to record).
 type stubSkillRepoForDelete struct {
 	skillsrepo.Repository
 	skill   *models.Skill
-	deleted string // 记录被删的 skill id，供断言
+	deleted string // the deleted skill id, for assertions
 }
 
 func (s *stubSkillRepoForDelete) FindByName(_, name, _ string) (*models.Skill, error) {
@@ -466,11 +467,11 @@ func skillPathExists(t *testing.T, st storage.Storage, key string) bool {
 	return ok
 }
 
-// Delete 必须删**整个技能目录**（SKILL.md + 附属文件 + 子目录），与管理端 admin/skills 同口径。
+// Delete must remove the **whole skill directory** (SKILL.md + auxiliary files + subdirectories), the same criterion as admin/skills.
 //
-// 旧实现用 storage.Delete 删的是 skillPath —— 那是 .../skills/{name}/SKILL.md 这个**文件路径**，
-// 于是附属文件与空目录全部残留（线上 poet/skills、joker/skills 下的 probe-* 空目录就是这么来的）。
-// 关键：测试技能必须带附属文件，只放 SKILL.md 的话 Delete 与 DeletePrefix 表现一致，测不出缺陷。
+// The old implementation deleted skillPath with storage.Delete - that is the **file path** .../skills/{name}/SKILL.md, so auxiliary files and
+// empty directories survived (that is where the probe-* empty directories under poet/skills and joker/skills in production came from).
+// The point: the test skill must carry auxiliary files; with only SKILL.md, Delete and DeletePrefix behave the same and the defect stays hidden.
 func TestDeleteRemovesWholeSkillDir(t *testing.T) {
 	const (
 		schema  = "t0"
@@ -489,7 +490,7 @@ func TestDeleteRemovesWholeSkillDir(t *testing.T) {
 			agentID:   agentID,
 			agentName: agentName,
 			userID:    "u1",
-			// 两个子用例都按「当前身份带超权属性」跑（第二个子用例名就是超级智能体）
+			// Both sub-cases run as "the current identity carries the super-privilege attribute" (the second one is named after the super agent)
 			isSupervisor: true,
 			storage:      st,
 			repo:         repo,
@@ -499,7 +500,7 @@ func TestDeleteRemovesWholeSkillDir(t *testing.T) {
 		}, repo
 	}
 
-	t.Run("删自己的私有技能：附属文件与目录一并消失", func(t *testing.T) {
+	t.Run("delete own private skill: auxiliary files and the directory disappear", func(t *testing.T) {
 		const dir = "tenants/t0/agents/joker/skills/old"
 		st := storage.NewFilesystemStorage(t.TempDir())
 		writeSkillFile(t, st, dir+"/SKILL.md", "# old")
@@ -512,28 +513,28 @@ func TestDeleteRemovesWholeSkillDir(t *testing.T) {
 			t.Fatalf("Delete = %v, want nil", err)
 		}
 		if repo.deleted != "s1" {
-			t.Errorf("库记录应被删, deleted=%q", repo.deleted)
+			t.Errorf("the table row should be deleted, deleted=%q", repo.deleted)
 		}
 		if skillPathExists(t, st, dir+"/SKILL.md") {
-			t.Error("入口文件应已删除")
+			t.Error("the entry file should be gone")
 		}
 		if skillPathExists(t, st, dir+"/docs/spec.md") {
-			t.Error("附属文件应随技能目录一起删除（旧实现只删 SKILL.md，这里必为 true）")
+			t.Error("auxiliary files should be deleted with the skill directory (the old implementation only removed SKILL.md, so this must be true)")
 		}
 		if skillPathExists(t, st, dir) {
-			t.Error("技能目录本身不应残留（否则同名重建会继承旧目录）")
+			t.Error("the skill directory itself must not be left behind (recreating with the same name would inherit it)")
 		}
 	})
 
-	t.Run("超级智能体删指定 agent 的私有技能：落在归属者目录上", func(t *testing.T) {
+	t.Run("super agent deletes a named agent's private skill: it lands in the owner's directory", func(t *testing.T) {
 		const dir = "tenants/t0/agents/joker/skills/old"
 		st := storage.NewFilesystemStorage(t.TempDir())
 		writeSkillFile(t, st, dir+"/SKILL.md", "# old")
 		writeSkillFile(t, st, dir+"/docs/spec.md", "spec")
 
-		// 归属 agent 是 joker（otherID），当前身份是超级智能体：路径必须取归属者名
+		// The owning agent is joker (otherID) while the current identity is the super agent: the path must use the owner's name
 		sk := &models.Skill{ID: "s2", Name: "old", AgentID: xsql.UUID(otherID)}
-		m, repo := newDeleteManager(t, st, sk, "agent-main", "main") // "main" = 带超权属性的预置 supervisor
+		m, repo := newDeleteManager(t, st, sk, "agent-main", "main") // "main" = the preinstalled supervisor carrying the super privilege
 
 		if err := m.Delete(ctx, tools.SkillRef{
 			Name: "old", Scope: tools.SkillScopeAgent, OwnerID: otherID,
@@ -541,17 +542,17 @@ func TestDeleteRemovesWholeSkillDir(t *testing.T) {
 			t.Fatalf("Delete = %v, want nil", err)
 		}
 		if repo.deleted != "s2" {
-			t.Errorf("库记录应被删, deleted=%q", repo.deleted)
+			t.Errorf("the table row should be deleted, deleted=%q", repo.deleted)
 		}
 		if skillPathExists(t, st, dir+"/docs/spec.md") || skillPathExists(t, st, dir) {
-			t.Error("归属者目录下的技能应被整目录删除")
+			t.Error("the skill under the owner's directory should be deleted as a whole directory")
 		}
 	})
 }
 
-// ===== 工具依赖的增量维护（grant_skill_tool / revoke_skill_tool）=====
+// ===== Incremental maintenance of tool dependencies (grant_skill_tool / revoke_skill_tool) =====
 
-// stubSkillRepoForDep 只实现超级智能体按名定位（FindForSupervisorByName）。
+// stubSkillRepoForDep only implements the super agent's lookup by name (FindForSupervisorByName).
 type stubSkillRepoForDep struct {
 	skillsrepo.Repository
 	skill *models.Skill
@@ -564,12 +565,13 @@ func (s *stubSkillRepoForDep) FindForSupervisorByName(_, name, _ string) (*model
 	return s.skill, nil
 }
 
-// ListBindings 空白名单：超级智能体读租户级 skill 时 fillVisibility 会查它（约束来自 Get 的展示路径）。
+// ListBindings returns an empty whitelist: fillVisibility queries it when the super agent reads a tenant-level skill (the constraint comes from
+// the display path of Get).
 func (s *stubSkillRepoForDep) ListBindings(_, _ string) ([]models.AgentSkillBinding, error) {
 	return nil, nil
 }
 
-// stubDepGrantsRepo 记录依赖的增删，并充当「当前全量」（ListSkillGrants）。
+// stubDepGrantsRepo records dependency additions / removals and doubles as "the current full set" (ListSkillGrants).
 type stubDepGrantsRepo struct {
 	toolgrants.Repository
 	deps    []models.SkillToolGrant
@@ -596,14 +598,14 @@ func (s *stubDepGrantsRepo) RemoveSkillGrant(_, _, ref string) (int64, error) {
 	return s.removed, nil
 }
 
-// newDepMgr 造一个超级智能体身份、按名定位的 manager；sk 为 nil 表示查无此技能。
+// newDepMgr builds a manager with the super agent identity that locates by name; sk == nil means no such skill.
 func newDepMgr(sk *models.Skill, grants *stubDepGrantsRepo) *skillManager {
 	if sk != nil && sk.Status == 0 {
 		sk.Status = xsql.Int(models.StatusNormal)
 	}
 	return &skillManager{
 		schema: "t0", agentID: "agent-main", agentName: "main", userID: "u1",
-		isSupervisor: true, // 身份判据是属性，不是名字（D30）
+		isSupervisor: true, // the identity criterion is the attribute, not the name (D30)
 		repo:         &stubSkillRepoForDep{skill: sk},
 		grants:       grants,
 	}
@@ -621,19 +623,19 @@ func TestAddToolDepAppendsAndReturnsAllDeps(t *testing.T) {
 		t.Fatalf("AddToolDep = %v", err)
 	}
 	if !ch.Added || ch.Ref != "builtin:read_file" || ch.Skill != "data-crunching" {
-		t.Errorf("变更回显不符：%+v", ch)
+		t.Errorf("the echoed change does not match: %+v", ch)
 	}
-	// 只落一条，且 item_type 由 ref 形态推导（单工具 → tool）
+	// Only one row lands, and item_type is derived from the ref shape (a single tool -> tool)
 	if len(grants.upserts) != 1 || grants.upserts[0].ItemType != models.GrantItemTool {
-		t.Errorf("写入内容不符：%+v", grants.upserts)
+		t.Errorf("written content does not match: %+v", grants.upserts)
 	}
-	// 回的是「变更后的完整依赖」，而不是只回新增的那条（补 read_skill 看不到现状的缺口）
+	// What comes back is "the complete dependency list after the change", not just the added row (that fills read_skill's blind spot)
 	if len(ch.ToolDeps) != 2 || ch.ToolDeps[0] != "builtin:exec" || ch.ToolDeps[1] != "builtin:read_file" {
-		t.Errorf("应回带完整依赖：%+v", ch.ToolDeps)
+		t.Errorf("should return the complete dependency list: %+v", ch.ToolDeps)
 	}
 }
 
-// 幂等：已存在时 added=false，不重复落库。
+// Idempotent: when it already exists, added=false and nothing is written again.
 func TestAddToolDepIsIdempotent(t *testing.T) {
 	grants := &stubDepGrantsRepo{added: false}
 	m := newDepMgr(&models.Skill{ID: "s1", Name: "x"}, grants)
@@ -643,24 +645,24 @@ func TestAddToolDepIsIdempotent(t *testing.T) {
 		t.Fatalf("AddToolDep = %v", err)
 	}
 	if ch.Added {
-		t.Error("已存在时 added 应为 false")
+		t.Error("added should be false when it already exists")
 	}
 }
 
-// 无法展开的 ref（拼错 / 已删除）→ 拒绝，不落库（防写出永不生效的死依赖）。
+// A ref that cannot expand (typo / deleted) -> refused, nothing written (no dead dependency that never takes effect).
 func TestAddToolDepRejectsUnknownRef(t *testing.T) {
 	grants := &stubDepGrantsRepo{added: true}
 	m := newDepMgr(&models.Skill{ID: "s1", Name: "x"}, grants)
 
 	if _, err := m.AddToolDep(context.Background(), tools.SkillRef{Name: "x"}, "builtin:no_such_tool"); err == nil {
-		t.Fatal("无法展开的 ref 应被拒绝")
+		t.Fatal("a ref that cannot expand should be refused")
 	}
 	if len(grants.upserts) != 0 {
-		t.Error("被拒绝时不应落库")
+		t.Error("a refused dependency must not be written")
 	}
 }
 
-// 删除只校验语法：工具/连接已被删后留下的悬空依赖必须能清掉。
+// Removal only validates the syntax: a dangling dependency left behind by a deleted tool / connection must still be removable.
 func TestRemoveToolDepAllowsDanglingRef(t *testing.T) {
 	grants := &stubDepGrantsRepo{removed: 1}
 	m := newDepMgr(&models.Skill{ID: "s1", Name: "x"}, grants)
@@ -670,54 +672,56 @@ func TestRemoveToolDepAllowsDanglingRef(t *testing.T) {
 		t.Fatalf("RemoveToolDep = %v", err)
 	}
 	if ch.Removed != 1 || ch.Ref != "mcp:gone:read" {
-		t.Errorf("变更回显不符：%+v", ch)
+		t.Errorf("the echoed change does not match: %+v", ch)
 	}
 	if len(grants.removes) != 1 || grants.removes[0] != "mcp:gone:read" {
-		t.Errorf("应按原 ref 精确删除：%+v", grants.removes)
+		t.Errorf("it should delete exactly by the original ref: %+v", grants.removes)
 	}
 }
 
-// 废弃的 skill 不允许改依赖（与定义编辑同一道状态闸）。
+// A deprecated skill may not change its dependencies (the same state gate as definition editing).
 func TestToolDepWriteRejectsDeprecatedSkill(t *testing.T) {
 	grants := &stubDepGrantsRepo{added: true}
 	sk := &models.Skill{ID: "s1", Name: "x", Status: xsql.Int(models.StatusDeprecated)}
 	m := newDepMgr(sk, grants)
 
 	if _, err := m.AddToolDep(context.Background(), tools.SkillRef{Name: "x"}, "builtin:file"); err == nil {
-		t.Fatal("废弃态应拒绝写依赖")
+		t.Fatal("the deprecated state should refuse dependency writes")
 	}
 	if len(grants.upserts) != 0 {
-		t.Error("被拒绝时不应落库")
+		t.Error("a refused dependency must not be written")
 	}
 }
 
-// 非超级智能体一律拒绝（依赖是 allow 授权的生效触发器，谁能写谁就握住授权开关）。
+// A non-super agent is always refused (dependencies are the trigger that makes an allow grant take effect, so whoever writes them holds the
+// grant switch).
 func TestToolDepWriteRejectsNonSupervisor(t *testing.T) {
 	grants := &stubDepGrantsRepo{added: true}
 	m := newDepMgr(&models.Skill{ID: "s1", Name: "x"}, grants)
-	m.isSupervisor = false // 降级身份：判据是属性，改名字没用
+	m.isSupervisor = false // demoted identity: the criterion is the attribute, renaming does nothing
 	m.agentName = "poet"
 
 	if _, err := m.AddToolDep(context.Background(), tools.SkillRef{Name: "x"}, "builtin:file"); err == nil {
-		t.Fatal("非超级智能体应被拒绝")
+		t.Fatal("a non-super agent should be refused")
 	}
 	if len(grants.upserts) != 0 {
-		t.Error("被拒绝时不应落库")
+		t.Error("a refused dependency must not be written")
 	}
 }
 
-// ===== read_skill / use_skill 的依赖回显（SkillDetail.ToolDeps）=====
+// ===== Dependency echo of read_skill / use_skill (SkillDetail.ToolDeps) =====
 
-// Get 必须把声明的依赖原样带出：不解组、不剔除悬空 ref。
-// 悬空项留着才有诊断价值（revoke_skill_tool 仍能按原 ref 清掉），悄悄吞掉反而查不出问题。
+// Get must return the declared dependencies as they are: no group expansion, no dangling refs dropped.
+// A dangling entry is only useful for diagnosis if it stays (revoke_skill_tool can still remove it by the original ref), and swallowing it
+// quietly makes the problem unfindable.
 func TestGetReturnsToolDeps(t *testing.T) {
 	grants := &stubDepGrantsRepo{deps: []models.SkillToolGrant{
 		{ItemType: models.GrantItemGroup, Ref: "builtin:exec"},
 		{ItemType: models.GrantItemTool, Ref: "builtin:read_file"},
-		{ItemType: models.GrantItemTool, Ref: "mcp:gone:read", SkillID: "s1"}, // 连接已删 → 悬空
+		{ItemType: models.GrantItemTool, Ref: "mcp:gone:read", SkillID: "s1"}, // connection deleted -> dangling
 	}}
 	m := newDepMgr(&models.Skill{ID: "s1", Name: "data-crunching"}, grants)
-	m.storage = storage.NewFilesystemStorage(t.TempDir()) // 内容缺失也要能返回元数据
+	m.storage = storage.NewFilesystemStorage(t.TempDir()) // the metadata must be returned even when the content is missing
 
 	d, err := m.Get(context.Background(), tools.SkillRef{Name: "data-crunching"})
 	if err != nil {
@@ -729,12 +733,13 @@ func TestGetReturnsToolDeps(t *testing.T) {
 	}
 	for i := range want {
 		if d.ToolDeps[i] != want[i] {
-			t.Fatalf("tool_deps = %v, want %v（声明顺序要原样保留）", d.ToolDeps, want)
+			t.Fatalf("tool_deps = %v, want %v (the declared order must be preserved)", d.ToolDeps, want)
 		}
 	}
 }
 
-// 没有依赖时必须是空数组而不是 nil（JSON 会变成 null，模型读成「不知道」而非「确实没声明」）。
+// With no dependencies it must be an empty array rather than nil (nil serialises to null, which the model reads as "unknown" instead of
+// "genuinely declares none").
 func TestGetToolDepsAlwaysArray(t *testing.T) {
 	m := newDepMgr(&models.Skill{ID: "s1", Name: "x"}, &stubDepGrantsRepo{})
 	m.storage = storage.NewFilesystemStorage(t.TempDir())
@@ -744,130 +749,6 @@ func TestGetToolDepsAlwaysArray(t *testing.T) {
 		t.Fatalf("Get = %v", err)
 	}
 	if d.ToolDeps == nil || len(d.ToolDeps) != 0 {
-		t.Fatalf("无依赖应是空切片（非 nil）: %#v", d.ToolDeps)
-	}
-}
-
-// 依赖仓库缺失（纯读场景）时不 panic：正文照常返回，依赖降级为空。
-func TestGetWithoutGrantRepoSkipsToolDeps(t *testing.T) {
-	m := newDepMgr(&models.Skill{ID: "s1", Name: "x"}, nil)
-	// 注意：newDepMgr 把 (*stubDepGrantsRepo)(nil) 塞进了接口 —— 那仍是非 nil 接口，
-	// 调用时才会在解引用处炸。要测「没有仓库」必须显式置 nil。
-	m.grants = nil
-	m.storage = storage.NewFilesystemStorage(t.TempDir())
-
-	d, err := m.Get(context.Background(), tools.SkillRef{Name: "x"})
-	if err != nil {
-		t.Fatalf("Get = %v", err)
-	}
-	if len(d.ToolDeps) != 0 {
-		t.Fatalf("无仓库时 tool_deps 应为空: %v", d.ToolDeps)
-	}
-}
-
-// Create 的前置清理（purgeStaleSkillDir）：重名检查已过 → 磁盘上的同名目录必是历史残骸。
-//
-// 这里直接测该方法而非 Create 全流程：Create 要先过配额（quota.CountSkills 直接查库），
-// 跑不起纯内存测试；而 WriteFile 会复用已存在的目录，留着残骸就等于让旧附属文件"复活"蹭进新技能。
-func TestCreatePurgesStaleSkillDir(t *testing.T) {
-	const (
-		schema   = "t0"
-		agentID  = "agent-me"
-		dir      = "tenants/t0/agents/joker/skills/old"
-		skillKey = dir + "/SKILL.md"
-	)
-	ctx := context.Background()
-
-	newManager := func(t *testing.T) (*skillManager, storage.Storage) {
-		t.Helper()
-		st := storage.NewFilesystemStorage(t.TempDir())
-		return &skillManager{schema: schema, agentID: agentID, agentName: "joker", storage: st}, st
-	}
-
-	t.Run("有残留：旧附属文件不进入新技能", func(t *testing.T) {
-		m, st := newManager(t)
-		writeSkillFile(t, st, skillKey, "# 上一版")
-		writeSkillFile(t, st, dir+"/docs/spec.md", "上一版的附属文件")
-
-		// 复刻 Create 的步骤：清残留 → 写入口文件
-		if err := m.purgeStaleSkillDir(ctx, "joker", "old"); err != nil {
-			t.Fatalf("purgeStaleSkillDir = %v, want nil", err)
-		}
-		writeSkillFile(t, st, skillKey, "# 这一版")
-
-		if skillPathExists(t, st, dir+"/docs/spec.md") {
-			t.Error("残留的附属文件应被清掉，不能继承到同名新建的技能里")
-		}
-		body, err := st.ReadFile(ctx, skillKey)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(body) != "# 这一版" {
-			t.Errorf("入口文件=%q, want %q", body, "# 这一版")
-		}
-	})
-
-	t.Run("无残留：不报错（幂等）", func(t *testing.T) {
-		m, _ := newManager(t)
-		if err := m.purgeStaleSkillDir(ctx, "joker", "old"); err != nil {
-			t.Fatalf("目录不存在时应静默跳过, got %v", err)
-		}
-	})
-}
-
-// ===== 超级智能体的 list_skills 全可见口径 =====
-
-// stubSkillRepoForSupervisor 只实现超级智能体全可见口径用到的仓库方法（其余由嵌入接口兜底）。
-type stubSkillRepoForSupervisor struct {
-	skillsrepo.Repository
-	list     []models.Skill
-	bindings map[string][]string
-}
-
-func (s *stubSkillRepoForSupervisor) ListForSupervisor(_, _ string) ([]models.Skill, error) {
-	return s.list, nil
-}
-
-func (s *stubSkillRepoForSupervisor) ListBindingNamesBySkills(_ string, _ []string) (map[string][]string, error) {
-	return s.bindings, nil
-}
-
-// 超级智能体是 skill 的管理者：list_skills 必须能列出「未绑定它的租户级 skill」——否则会出现
-// 「能改却看不见」（update_shared_skill / read_skill(by id) 都能动，list 却列不出），
-// 并批量回填白名单供管理。非超级智能体不走这条分支（口径不变）。
-func TestListForSupervisorSeesUnboundTenantSkills(t *testing.T) {
-	repo := &stubSkillRepoForSupervisor{
-		list: []models.Skill{
-			{ID: "s1", Name: "report", Restricted: xsql.Bool(true)},             // 租户级（agent_id 为 NULL）
-			{ID: "s2", Name: "draft", AgentID: xsql.UUID("main-id"), Status: 1}, // 超级智能体自己的私有
-		},
-		bindings: map[string][]string{"s1": {"poet"}},
-	}
-	// 用例名就是「超级智能体」：身份判据要真的置上，否则走的是普通 agent 分支
-	m := &skillManager{schema: "t0", agentID: "main-id", agentName: "main", isSupervisor: true, repo: repo}
-
-	got, err := m.List(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("应列出全部可见 skill, got %+v", got)
-	}
-	byName := map[string]tools.SkillInfo{}
-	for _, s := range got {
-		byName[s.Name] = s
-	}
-	shared, ok := byName["report"]
-	if !ok {
-		t.Fatal("超级智能体应看到未绑定它的租户级 skill")
-	}
-	if !shared.Restricted {
-		t.Error("租户级 skill 应回填 restricted=true")
-	}
-	if len(shared.BoundAgents) != 1 || shared.BoundAgents[0] != "poet" {
-		t.Errorf("应回填白名单 agent 名, got %+v", shared.BoundAgents)
-	}
-	if private, ok := byName["draft"]; !ok || private.Restricted || private.BoundAgents != nil {
-		t.Errorf("私有 skill 不应回填可见性, got %+v", byName["draft"])
+		t.Fatalf("no dependencies should be an empty slice (not nil): %#v", d.ToolDeps)
 	}
 }

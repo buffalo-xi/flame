@@ -8,9 +8,9 @@ import (
 	"flame/nexus/shared/capability"
 )
 
-// 出参校验只做浅层：顶层 required + 基础类型。
-// 断言的重点不是"能拦多少"，而是**该放行的必须放行** —— 多返回字段是常态（前向兼容），
-// 把它判成错误会让每个脚本作者被迫追着 schema 改。
+// Output validation is shallow only: top-level required plus basic types.
+// The point of the assertions is not "how much it blocks" but that **what should pass must pass** - returning extra fields is
+// normal (forward compatibility), and treating it as an error would force every script author to chase the schema.
 func TestValidateScriptOutput(t *testing.T) {
 	schema := map[string]any{
 		"type":     "object",
@@ -27,91 +27,91 @@ func TestValidateScriptOutput(t *testing.T) {
 		result  any
 		wantErr string
 	}{
-		{"合法", map[string]any{"rows": []any{}, "total": float64(3), "ok": true}, ""},
-		{"缺少必填", map[string]any{"total": float64(1)}, "missing fields"},
-		{"类型不符", map[string]any{"rows": []any{}, "total": "3"}, "wrong type"},
-		{"多返回字段放行", map[string]any{"rows": []any{}, "extra": "x"}, ""},
-		{"整体不是对象", []any{1, 2}, "must be a JSON object"},
+		{"valid", map[string]any{"rows": []any{}, "total": float64(3), "ok": true}, ""},
+		{"missing required field", map[string]any{"total": float64(1)}, "missing fields"},
+		{"type mismatch", map[string]any{"rows": []any{}, "total": "3"}, "wrong type"},
+		{"extra fields pass", map[string]any{"rows": []any{}, "extra": "x"}, ""},
+		{"not an object at all", []any{1, 2}, "must be a JSON object"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateScriptOutput("demo", schema, tc.result)
 			if tc.wantErr == "" {
 				if err != nil {
-					t.Fatalf("应通过，实际 %v", err)
+					t.Fatalf("should pass, got %v", err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("应报 %q，实际 %v", tc.wantErr, err)
+				t.Fatalf("want an error matching %q, got %v", tc.wantErr, err)
 			}
 		})
 	}
 }
 
-// 密钥遮蔽：只遮长度 ≥ 8 的值。
-// 短值（如 "cn"）会误伤正常文本，规则必须写死并被测试守住。
+// Secret masking: only values of length >= 8 are masked.
+// Short values (such as "cn") would damage ordinary text, so the rule is fixed and held in place by this test.
 func TestMaskSecrets(t *testing.T) {
 	cfg := map[string]any{"api_key": "sk-1234567890", "region": "cn", "n": 42}
 
 	out, masked := maskSecrets(`{"echo":"sk-1234567890","region":"cn"}`, cfg)
 	if !masked {
-		t.Fatal("应报告已遮蔽")
+		t.Fatal("it should report that masking happened")
 	}
 	if strings.Contains(out, "sk-1234567890") {
-		t.Errorf("密钥未被遮蔽: %s", out)
+		t.Errorf("the secret was not masked: %s", out)
 	}
 	if !strings.Contains(out, `"cn"`) {
-		t.Errorf("短值不应被误伤: %s", out)
+		t.Errorf("a short value must not be damaged: %s", out)
 	}
 
 	if _, m := maskSecrets(`{"x":1}`, nil); m {
-		t.Error("没有配置时不该报告遮蔽")
+		t.Error("without config it must not report masking")
 	}
 }
 
-// 工具名前缀规则：custom__ 是命名空间，去掉前缀才是 DB 里的短名。
+// Tool name prefix rule: custom__ is the namespace, and the short name in the database is the name without it.
 func TestCustomToolNamePrefix(t *testing.T) {
 	if !IsCustomToolName(CustomToolPrefix + "sum_sales") {
-		t.Error("custom__ 前缀应被识别")
+		t.Error("the custom__ prefix should be recognised")
 	}
 	if IsCustomToolName("read_file") || IsCustomToolName("web_search") {
-		t.Error("内置 / 插件工具不该被识别为自定义工具")
+		t.Error("built-in / plugin tools must not be recognised as custom tools")
 	}
 	if got := CustomShortName(CustomToolPrefix + "sum_sales"); got != "sum_sales" {
-		t.Errorf("短名 = %q", got)
+		t.Errorf("short name = %q", got)
 	}
 }
 
-// 能力档必须是 exec：自定义工具走 sb.Start → /v1/exec（一次性进程、无池），
-// 与 run_skill_script 同一条通道。判据是**通道**，不是「跑的是不是脚本文件」。
+// The capability tier must be exec: a custom tool goes sb.Start -> /v1/exec (a one-shot process, no pool), the same channel as
+// run_skill_script. The criterion is the **channel**, not "is a script file being run".
 //
-// 钉住这条是为了防回退：归到 sandbox.code（= /v1/code 通道档）会造成
-// 「关工作流 code 节点把租户的自定义工具一起关掉」，而那种失效**没有报错**，只有功能消失。
+// Pinning it prevents a regression: classifying it under sandbox.code (the /v1/code channel tier) would mean "turning off workflow
+// code nodes turns off the tenant's custom tools too", and that failure **reports nothing** - the feature simply disappears.
 func TestCustomToolRequiresExecCapability(t *testing.T) {
 	c := &Context{
 		CustomTools: &stubCustomToolSource{spec: &CustomToolSpec{Name: "demo", Lang: "sh", Entry: "main.sh"}},
-		// 只开代码片段档：不该放行
+		// Only the snippet tier is on: this must not be allowed
 		Caps: map[string]bool{capability.Code: true},
 	}
 
 	_, err := executeCustomTool(context.Background(), c, CustomToolPrefix+"demo", nil)
 	if err == nil || !strings.Contains(err.Error(), capability.Exec) {
-		t.Fatalf("未开通 exec 时应拒绝并指出 %s，got %v", capability.Exec, err)
+		t.Fatalf("without exec it should refuse and name %s, got %v", capability.Exec, err)
 	}
 
-	// 开通 exec 后应越过能力闸，停在下一道检查（根目录未初始化）
+	// With exec granted it should pass the capability gate and stop at the next check (root not initialized)
 	c.Caps = map[string]bool{capability.Exec: true}
 	_, err = executeCustomTool(context.Background(), c, CustomToolPrefix+"demo", nil)
 	if err == nil || !strings.Contains(err.Error(), "root is not initialized") {
-		t.Fatalf("越过能力闸后应停在根目录检查，got %v", err)
+		t.Fatalf("past the capability gate it should stop at the root check, got %v", err)
 	}
 
-	// Caps == nil 只用于无租户语义的调用方（测试/内部），不拦
+	// Caps == nil is only for callers with no tenant semantics (tests / internal) and blocks nothing
 	c.Caps = nil
 	if _, err := executeCustomTool(context.Background(), c, CustomToolPrefix+"demo", nil); err != nil &&
-		strings.Contains(err.Error(), "能力") {
-		t.Fatalf("Caps 为 nil 时不该按能力拦，got %v", err)
+		strings.Contains(err.Error(), "capability") {
+		t.Fatalf("a nil Caps must not block on capability, got %v", err)
 	}
 }
 

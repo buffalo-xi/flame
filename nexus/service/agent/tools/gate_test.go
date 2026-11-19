@@ -9,7 +9,7 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// 工作区内仿造实体目录的路径形状识别（非超级智能体专用）。
+// Recognising the shape of an entity-like path inside the workspace (non-super agents only).
 func TestEntityLikePath(t *testing.T) {
 	cases := []struct {
 		path string
@@ -32,20 +32,20 @@ func TestEntityLikePath(t *testing.T) {
 	}
 }
 
-// 自己的定义域与别人的定义域，指引必须不同：自己那条要给可执行的根寻址写法，
-// 别人的那条只能指向管理员 / 超级智能体（非超级智能体没有 create_agent 权限）。
+// Your own definition domain and someone else's need different guidance: your own entry should give an actionable root-addressed
+// form, while the other one can only point at the administrator / super agent (non-super agents have no create_agent permission).
 func TestEntityLikePathSelfHint(t *testing.T) {
 	self, ok := entityLikePath("agents/joker/skills/foo/a.md", "joker")
 	if !ok || !strings.Contains(self, "/agents/joker/skills/") {
-		t.Errorf("自己的定义域应指引根寻址写法, got %q", self)
+		t.Errorf("your own definition domain should point at the root-addressed form, got %q", self)
 	}
 	other, ok := entityLikePath("agents/poet/skills/foo/a.md", "joker")
 	if !ok || strings.Contains(other, "/agents/joker/skills/") {
-		t.Errorf("别人的定义域不应指引自己的路径, got %q", other)
+		t.Errorf("someone else's definition domain must not point at your own path, got %q", other)
 	}
 }
 
-// 非超级智能体在工作区里新建假实体 → 拒绝；严格度 B：已存在的同名路径放行。
+// A non-super agent creating a fake entity in the workspace -> refused; strictness B: an existing path of the same name passes.
 func TestResolveWriteRejectsFakeEntity(t *testing.T) {
 	st := storage.NewFilesystemStorage(t.TempDir())
 	c := &Context{
@@ -56,7 +56,7 @@ func TestResolveWriteRejectsFakeEntity(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// 新建假实体：拒（且错误里必须带正确指引）
+	// Creating a fake entity: refused (and the error must carry the correct guidance)
 	for _, p := range []string{"skills/foo/SKILL.md", "agents/poet/AGENT.md"} {
 		_, _, _, err := resolveWrite(ctx, c, p)
 		if err == nil {
@@ -64,33 +64,36 @@ func TestResolveWriteRejectsFakeEntity(t *testing.T) {
 		}
 	}
 
-	// 普通工作区文件：放行
+	// An ordinary workspace file: allowed
 	if _, _, _, err := resolveWrite(ctx, c, "notes/a.md"); err != nil {
 		t.Errorf("resolveWrite(notes/a.md) = %v, want nil", err)
 	}
 
-	// 已存在（如用户上传的同名目录）：放行 —— 严格度 B
+	// Already existing (e.g. a directory the user uploaded with the same name): allowed - strictness B
 	p := "skills/bar/SKILL.md"
 	if err := st.WriteFile(ctx, c.StoragePath(p), []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, err := resolveWrite(ctx, c, p); err != nil {
-		t.Errorf("resolveWrite(%q) 已存在时应放行, got %v", p, err)
+		t.Errorf("resolveWrite(%q) should pass when it already exists, got %v", p, err)
 	}
 
-	// supervisor 的工作区写不受此闸限制（它的跨域写由 "/" 前缀 + checkWrite 管）
-	// 身份是属性不是名字：改名字的同时必须置位，否则走的还是普通 agent 分支
+	// The supervisor's workspace writes are not subject to this gate (its cross-domain writes are governed by the "/" prefix plus
+	// checkWrite)
+	// Identity is an attribute, not the name: changing the name requires setting the flag too, or the ordinary agent branch is still
+	// taken
 	c.AgentName = "main"
 	c.IsSupervisor = true
 	if _, _, _, err := resolveWrite(ctx, c, "skills/foo/SKILL.md"); err != nil {
-		t.Errorf("超级智能体 resolveWrite = %v, want nil", err)
+		t.Errorf("super agent resolveWrite = %v, want nil", err)
 	}
 }
 
-// ===== 根寻址闸门（D23 / D32）：非超级智能体可读自己的定义目录，只能写私有 skill 目录 =====
+// ===== The root-addressing gate (D23 / D32): a non-super agent may read its own definition directory and may only write into its
+// private skill directories =====
 
-// stubAgentsByName 按名返回 agent。跨域闸门既要用它读**目标**状态（checkWrite），
-// 也要用它读**自身**状态（checkWriteOwn），所以不能像 stubAgents 那样固定返回一个名字。
+// stubAgentsByName returns an agent by name. The cross-domain gate needs it both for the **target's** status (checkWrite) and for
+// its **own** status (checkWriteOwn), so it cannot return a single fixed name the way stubAgents does.
 type stubAgentsByName struct {
 	AgentManager
 	byName map[string]*AgentInfo
@@ -100,11 +103,12 @@ func (s stubAgentsByName) Get(_ context.Context, name string) (*AgentInfo, error
 	return s.byName[name], nil
 }
 
-// stubSkillsForWrite 只实现 FindForWrite（根寻址写闸判定 skill 是否存在 / 属于谁 / 什么状态）。
-// 其余方法由嵌入接口兜底（被调用即 panic），保证用例不会悄悄依赖未桩行为。
+// stubSkillsForWrite implements FindForWrite only (the root-addressed write gate decides whether a skill exists, who owns it and what
+// state it is in).
+// The remaining methods fall back to the embedded interface (a call panics), so a case cannot quietly rely on unstubbed behaviour.
 type stubSkillsForWrite struct {
 	SkillsManager
-	// byOwner：归属 agent uuid → skill 名 → 信息（"" 表示租户级，用于反证越权）
+	// byOwner: owning agent uuid -> skill name -> info ("" means tenant-level, used to prove cross-owner access is refused)
 	byOwner map[string]map[string]*SkillInfo
 }
 
@@ -115,8 +119,8 @@ func (s stubSkillsForWrite) FindForWrite(_ context.Context, ownerAgentID, skillN
 	return nil, nil
 }
 
-// newOwnSkillCtx 造一个能走根寻址闸门的 Context：自己 = self / self-status，
-// 名下私有 skill = skills（key 为 skill 名）。
+// newOwnSkillCtx builds a Context that can pass the root-addressing gate: self = self / self-status,
+// and the private skills it owns = skills (keyed by skill name).
 func newOwnSkillCtx(t *testing.T, self string, selfStatus int, skills map[string]*SkillInfo) *Context {
 	t.Helper()
 	byOwner := map[string]map[string]*SkillInfo{}
@@ -127,7 +131,8 @@ func newOwnSkillCtx(t *testing.T, self string, selfStatus int, skills map[string
 		Schema:    "t0",
 		AgentName: self,
 		AgentID:   self + "-id",
-		// 身份判据是属性不是名字：测试里用 "main" 表示超权 agent 时须显式置位
+		// The identity criterion is an attribute, not the name: using "main" for the super agent in a test means setting it
+		// explicitly
 		IsSupervisor: self == "main",
 		UserID:       "u1",
 		WorkKey:      "tenants/t0/users/u1/sessions/s1",
@@ -139,7 +144,7 @@ func newOwnSkillCtx(t *testing.T, self string, selfStatus int, skills map[string
 	}
 }
 
-// 非超级智能体的根寻址写闸：白名单 = agents/{self}/skills/{skill}/**，白名单外一律拒。
+// The non-super agent's root-addressed write gate: the allowlist is agents/{self}/skills/{skill}/**, everything else is refused.
 func TestResolveWriteOwnScope(t *testing.T) {
 	ctx := context.Background()
 	own := map[string]*SkillInfo{"foo": {ID: "sk1", Name: "foo", Scope: SkillScopeAgent, Status: 1}}
@@ -150,16 +155,16 @@ func TestResolveWriteOwnScope(t *testing.T) {
 		path    string
 		wantErr bool
 	}{
-		{"自己的 skill 子文件", 1, "/agents/joker/skills/foo/a.md", false},
-		{"自己的 skill 深层子目录", 1, "/agents/joker/skills/foo/docs/deep/a.md", false},
-		{"自己的 skill 入口文件（可改内容）", 1, "/agents/joker/skills/foo/SKILL.md", false},
-		{"别人的 agent", 1, "/agents/poet/skills/foo/a.md", true},
-		{"未登记的 skill 名", 1, "/agents/joker/skills/bar/a.md", true},
-		{"实体根目录本身", 1, "/agents/joker/skills/foo", true},
-		{"自己的 AGENT.md（不在本次范围）", 1, "/agents/joker/AGENT.md", true},
-		{"租户级共享 skill", 1, "/skills/foo/SKILL.md", true},
-		{"用户域", 1, "/users/u1/files/a.md", true},
-		{"自身废弃态", 3, "/agents/joker/skills/foo/a.md", true},
+		{"a file under your own skill", 1, "/agents/joker/skills/foo/a.md", false},
+		{"a deep subdirectory of your own skill", 1, "/agents/joker/skills/foo/docs/deep/a.md", false},
+		{"your own skill's entry file (content editable)", 1, "/agents/joker/skills/foo/SKILL.md", false},
+		{"someone else's agent", 1, "/agents/poet/skills/foo/a.md", true},
+		{"an unregistered skill name", 1, "/agents/joker/skills/bar/a.md", true},
+		{"the entity root itself", 1, "/agents/joker/skills/foo", true},
+		{"your own AGENT.md (out of scope here)", 1, "/agents/joker/AGENT.md", true},
+		{"a tenant-level shared skill", 1, "/skills/foo/SKILL.md", true},
+		{"the user domain", 1, "/users/u1/files/a.md", true},
+		{"your own deprecated state", 3, "/agents/joker/skills/foo/a.md", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,19 +180,20 @@ func TestResolveWriteOwnScope(t *testing.T) {
 	}
 }
 
-// skill 自身废弃时同样不可改（与 agent 侧、元工具侧同口径）。
+// A deprecated skill itself is equally unwritable (the same rule as the agent side and the meta tool side).
 func TestResolveWriteOwnSkillStatusGate(t *testing.T) {
 	ctx := context.Background()
 	c := newOwnSkillCtx(t, "joker", 1, map[string]*SkillInfo{
 		"foo": {ID: "sk1", Name: "foo", Scope: SkillScopeAgent, Status: models.StatusDeprecated},
 	})
 	if _, _, _, err := resolveWrite(ctx, c, "/agents/joker/skills/foo/a.md"); err == nil {
-		t.Error("skill 废弃时应拒绝")
+		t.Error("it should be refused when the skill is deprecated")
 	}
 }
 
-// 超级智能体写「废弃 agent」名下的私有 skill 同样拒绝。这条闸与 checkWriteOwn 第 3 条对偶：
-// 那里判「自己是不是正常态」，这里判「归属者是不是正常态」—— 同一判据，两档都得有。
+// The super agent writing a private skill owned by a **deprecated agent** is refused as well. This gate is the dual of checkWriteOwn's
+// third criterion: that one checks "am I in the normal state", this one checks "is the owner in the normal state" - one criterion,
+// two tiers.
 func TestResolveWriteCrossRejectsDeprecatedOwnerAgent(t *testing.T) {
 	ctx := context.Background()
 	newCtx := func(ownerStatus int) *Context {
@@ -204,36 +210,37 @@ func TestResolveWriteCrossRejectsDeprecatedOwnerAgent(t *testing.T) {
 				"poet": {ID: "poet-id", Name: "poet", Status: ownerStatus},
 			}},
 			Skills: stubSkillsForWrite{byOwner: map[string]map[string]*SkillInfo{
-				// skill 自身恒为正常态：保证拦截只可能来自归属 agent 那道闸
+				// The skill itself is always in the normal state, so any block can only come from the owning-agent gate
 				"poet-id": {"foo": {ID: "sk1", Name: "foo", Scope: SkillScopeAgent, Status: 1}},
 			}},
 		}
 	}
 
 	if _, _, _, err := resolveWrite(ctx, newCtx(models.StatusDeprecated), "/agents/poet/skills/foo/a.md"); err == nil {
-		t.Error("归属 agent 废弃时应拒绝写它的私有 skill")
+		t.Error("writing a private skill of a deprecated owning agent should be refused")
 	}
-	// 回归：归属 agent 正常态时照常放行，别把整条路堵死
+	// Regression: with the owning agent in the normal state it passes as usual - do not block the whole path
 	if _, _, _, err := resolveWrite(ctx, newCtx(models.StatusNormal), "/agents/poet/skills/foo/a.md"); err != nil {
-		t.Errorf("归属 agent 正常态时应放行, got %v", err)
+		t.Errorf("it should pass with the owning agent in the normal state, got %v", err)
 	}
-	// 读不受影响（D4：废弃也能读）
+	// Reading is unaffected (D4: deprecated is still readable)
 	if _, _, _, err := resolveRead(newCtx(models.StatusDeprecated), "/agents/poet/skills/foo/a.md"); err != nil {
-		t.Errorf("读不应受归属 agent 状态影响, got %v", err)
+		t.Errorf("reading must not depend on the owning agent's status, got %v", err)
 	}
 }
 
-// AgentID 缺失时必须拒绝：FindForWrite 的 agentID=="" 表示「租户级」，
-// 若不拦，共享 skill 会被误当私有放行。
+// A missing AgentID must be refused: FindForWrite treats agentID=="" as "tenant-level",
+// and without this check a shared skill would be mistaken for a private one and allowed.
 func TestResolveWriteOwnRejectsEmptyAgentID(t *testing.T) {
 	c := newOwnSkillCtx(t, "joker", 1, nil)
 	c.AgentID = ""
 	if _, _, _, err := resolveWrite(context.Background(), c, "/agents/joker/skills/foo/a.md"); err == nil {
-		t.Fatal("AgentID 缺失时应拒绝（防共享 skill 被误判为私有）")
+		t.Fatal("a missing AgentID should be refused (so a shared skill is not mistaken for a private one)")
 	}
 }
 
-// 非超级智能体的根寻址读闸：可读自己的定义目录（含私有 skill），但**不设状态闸**（读不受限，D4）。
+// The non-super agent's root-addressed read gate: it may read its own definition directory (private skills included), but there is
+// **no status gate** (reading is unrestricted, D4).
 func TestResolveReadOwnScope(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -242,19 +249,19 @@ func TestResolveReadOwnScope(t *testing.T) {
 		path    string
 		wantErr bool
 	}{
-		{"自己的 skill 文件", "joker", 1, "/agents/joker/skills/foo/a.md", false},
-		{"自己的 skill 入口", "joker", 1, "/agents/joker/skills/foo/SKILL.md", false},
-		{"未登记的 skill 名（读不查库）", "joker", 1, "/agents/joker/skills/nope/a.md", false},
-		{"废弃态仍可读自己的 skill", "joker", 3, "/agents/joker/skills/foo/a.md", false},
-		{"别人的 AGENT.md", "joker", 1, "/agents/poet/AGENT.md", true},
-		{"自己的 AGENT.md（可读）", "joker", 1, "/agents/joker/AGENT.md", false},
-		{"自己的定义域附属文件（可读）", "joker", 1, "/agents/joker/notes/plan.md", false},
-		{"自己的定义根目录（可列）", "joker", 1, "/agents/joker", false},
-		{"自己的 AGENT.md（废弃态也可读）", "joker", 3, "/agents/joker/AGENT.md", false},
-		{"别人的 skill", "joker", 1, "/agents/poet/skills/foo/a.md", true},
-		{"租户级共享 skill", "joker", 1, "/skills/foo/SKILL.md", true},
-		{"用户域", "joker", 1, "/users/u1/files/a.txt", true},
-		{"超级智能体全租户可读", "main", 1, "/agents/poet/AGENT.md", false},
+		{"your own skill file", "joker", 1, "/agents/joker/skills/foo/a.md", false},
+		{"your own skill entry", "joker", 1, "/agents/joker/skills/foo/SKILL.md", false},
+		{"an unregistered skill name (reading does not query the database)", "joker", 1, "/agents/joker/skills/nope/a.md", false},
+		{"a deprecated agent can still read its own skill", "joker", 3, "/agents/joker/skills/foo/a.md", false},
+		{"someone else's AGENT.md", "joker", 1, "/agents/poet/AGENT.md", true},
+		{"your own AGENT.md (readable)", "joker", 1, "/agents/joker/AGENT.md", false},
+		{"an attached file in your definition domain (readable)", "joker", 1, "/agents/joker/notes/plan.md", false},
+		{"your own definition root (listable)", "joker", 1, "/agents/joker", false},
+		{"your own AGENT.md (readable when deprecated too)", "joker", 3, "/agents/joker/AGENT.md", false},
+		{"someone else's skill", "joker", 1, "/agents/poet/skills/foo/a.md", true},
+		{"a tenant-level shared skill", "joker", 1, "/skills/foo/SKILL.md", true},
+		{"the user domain", "joker", 1, "/users/u1/files/a.txt", true},
+		{"the super agent can read the whole tenant", "main", 1, "/agents/poet/AGENT.md", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,18 +274,19 @@ func TestResolveReadOwnScope(t *testing.T) {
 	}
 }
 
-// 读放开不能顺带放开写：自己的 AGENT.md 仍然只能由元工具改（D10 / D32）。
+// Opening up reading must not open up writing: your own AGENT.md is still editable only through the meta tool (D10 / D32).
 func TestResolveWriteOwnAgentMDStillDenied(t *testing.T) {
 	c := newOwnSkillCtx(t, "joker", 1, nil)
 	if _, _, _, err := resolveWrite(context.Background(), c, "/agents/joker/AGENT.md"); err == nil {
-		t.Fatal("非超级智能体不应能写自己的 AGENT.md")
+		t.Fatal("a non-super agent must not be able to write its own AGENT.md")
 	}
 }
 
-// 版本域（tenants/<schema>/versions/**）必须对模型完全不可达 —— 连超级智能体也不行。
+// The version domain (tenants/<schema>/versions/**) must be completely unreachable for the model - not even for the super agent.
 //
-// 它落在租户根下，保护完全依赖 gate.go 路径 switch 的 default 分支：将来有人加 case
-// （比如做「租户根文件浏览」）时，这条断言会立刻红，提醒他版本历史不能被模型读/改。
+// It lives under the tenant root and its protection rests entirely on gate.go's default branch of the path switch: should anyone add
+// a case later (say "browse files in the tenant root"), this assertion goes red immediately and reminds them that version history
+// must never be read or changed by the model.
 func TestVersionDomainUnreachable(t *testing.T) {
 	paths := []string{
 		"/versions/agents/poet/v1/AGENT.md",
@@ -288,22 +296,22 @@ func TestVersionDomainUnreachable(t *testing.T) {
 	}
 	for _, p := range paths {
 		ctx := context.Background()
-		c := newOwnSkillCtx(t, "main", 1, nil) // main = supervisor：连它也必须被拒
+		c := newOwnSkillCtx(t, "main", 1, nil) // main = supervisor: even it must be refused
 		if _, _, _, err := resolveRead(c, p); err == nil {
-			t.Errorf("resolveRead(%q) 应拒绝：版本域不是模型可读的内容", p)
+			t.Errorf("resolveRead(%q) should be refused: the version domain is not model-readable", p)
 		}
 		if _, _, _, err := resolveWrite(ctx, c, p); err == nil {
-			t.Errorf("resolveWrite(%q) 应拒绝：版本不可由模型修改", p)
+			t.Errorf("resolveWrite(%q) should be refused: versions are not model-writable", p)
 		}
 	}
 }
 
-// ===== 归属 agent 的状态闸：只有正常态才能写它名下的私有 skill =====
+// ===== The owning agent's status gate: a private skill may only be written when its owner is in the normal state =====
 //
-// skill 自身状态那道闸不受影响（见 TestResolveWriteOwnSkillStatusGate）。
-// 自身档与超级智能体跨域档必须同口径。
+// The gate on the skill's own status is unaffected (see TestResolveWriteOwnSkillStatusGate).
+// The own tier and the super agent's cross-domain tier must share one rule.
 
-// 自身档：checkWriteOwn 第 3 条。
+// The own tier: checkWriteOwn's third criterion.
 func TestResolveWriteOwnSkillOwnerStatus(t *testing.T) {
 	ctx := context.Background()
 	own := map[string]*SkillInfo{"foo": {ID: "sk1", Name: "foo", Scope: SkillScopeAgent, Status: models.StatusNormal}}
@@ -313,8 +321,8 @@ func TestResolveWriteOwnSkillOwnerStatus(t *testing.T) {
 		selfStatus int
 		wantErr    bool
 	}{
-		{"正常 → 放行", models.StatusNormal, false},
-		{"废弃 → 拒绝", models.StatusDeprecated, true},
+		{"normal -> allowed", models.StatusNormal, false},
+		{"deprecated -> refused", models.StatusDeprecated, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -330,7 +338,7 @@ func TestResolveWriteOwnSkillOwnerStatus(t *testing.T) {
 	}
 }
 
-// 超级智能体跨域档：checkWrite 的 skill 分支（判归属者），与自身档对偶。
+// The super agent's cross-domain tier: checkWrite's skill branch (judging the owner), the dual of the own tier.
 func TestResolveWriteCrossSkillOwnerStatus(t *testing.T) {
 	ctx := context.Background()
 	newCtx := func(ownerStatus int) *Context {
@@ -347,7 +355,7 @@ func TestResolveWriteCrossSkillOwnerStatus(t *testing.T) {
 				"poet": {ID: "poet-id", Name: "poet", Status: ownerStatus},
 			}},
 			Skills: stubSkillsForWrite{byOwner: map[string]map[string]*SkillInfo{
-				// skill 自身恒为正常态：保证结论只可能来自归属 agent 那道闸
+				// The skill itself is always in the normal state, so the conclusion can only come from the owning-agent gate
 				"poet-id": {"foo": {ID: "sk1", Name: "foo", Scope: SkillScopeAgent, Status: models.StatusNormal}},
 			}},
 		}
@@ -358,8 +366,8 @@ func TestResolveWriteCrossSkillOwnerStatus(t *testing.T) {
 		ownerStatus int
 		wantErr     bool
 	}{
-		{"归属者正常 → 放行", models.StatusNormal, false},
-		{"归属者废弃 → 拒绝", models.StatusDeprecated, true},
+		{"owner normal -> allowed", models.StatusNormal, false},
+		{"owner deprecated -> refused", models.StatusDeprecated, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

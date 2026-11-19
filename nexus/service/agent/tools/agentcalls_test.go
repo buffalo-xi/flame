@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// stubRelationsMgr 记录调用并返回预设结果。
+// stubRelationsMgr records calls and returns preset results.
 type stubRelationsMgr struct {
 	removed   int64
 	canCall   []string
@@ -29,8 +29,8 @@ func (s *stubRelationsMgr) ListRelations(context.Context, string) ([]string, []s
 	return s.canCall, s.calledBy, nil
 }
 
-// stubAgentTable 按名字返回 agent（调用授权用例需要区分 caller / target）；
-// 其余方法由嵌入接口兜底（被调用即 panic）。
+// stubAgentTable returns an agent by name (the call grant cases need to tell caller and target apart);
+// the remaining methods fall back to the embedded interface (a call panics).
 type stubAgentTable struct {
 	AgentManager
 	byName map[string]*AgentInfo
@@ -40,7 +40,7 @@ func (s stubAgentTable) Get(_ context.Context, name string) (*AgentInfo, error) 
 	return s.byName[name], nil
 }
 
-// stubSkillsCapture 捕获 Update 的入参（验证 restricted 透传）。
+// stubSkillsCapture captures Update's input (to verify restricted is forwarded).
 type stubSkillsCapture struct {
 	SkillsManager
 	got SkillInput
@@ -56,7 +56,8 @@ func newCallCtx(agentName string, rel AgentRelationsManager, byName map[string]*
 		Schema:    "t0",
 		AgentName: agentName,
 		AgentID:   "self",
-		// 身份判据是属性不是名字：测试里用 "main" 表示超权 agent 时须显式置位
+		// The identity criterion is an attribute, not the name: using "main" for the super agent in a test means setting it
+		// explicitly
 		IsSupervisor: agentName == "main",
 		UserID:       "u1",
 		WorkKey:      "tenants/t0/users/u1/sessions/s1",
@@ -66,7 +67,8 @@ func newCallCtx(agentName string, rel AgentRelationsManager, byName map[string]*
 	}
 }
 
-// 超级智能体可以给自己加出边（允许超级智能体调用子 agent —— 这是刻意的设计，见 relations.go）。
+// The super agent may grant itself an outgoing edge (letting the super agent call child agents - a deliberate design, see
+// relations.go).
 func TestAllowAgentCallFromSupervisorToOthers(t *testing.T) {
 	rel := &stubRelationsMgr{}
 	c := newCallCtx("main", rel, map[string]*AgentInfo{
@@ -80,15 +82,15 @@ func TestAllowAgentCallFromSupervisorToOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if m := out.(map[string]any); m["allowed"] != true || m["target"] != "poet" {
-		t.Errorf("返回不符：%+v", m)
+		t.Errorf("unexpected result: %+v", m)
 	}
 	if rel.gotCaller != "main-id" || rel.gotCallee != "poet-id" {
-		t.Errorf("转发不符：caller=%q callee=%q", rel.gotCaller, rel.gotCallee)
+		t.Errorf("forwarded values are wrong: caller=%q callee=%q", rel.gotCaller, rel.gotCallee)
 	}
 }
 
-// 被调用方可以是超级智能体：它被调起时仍是完整的管理面（恒读草稿），
-// 能不能调完全由这条授权行决定 —— 写时不再按身份排除。
+// The callee may be the super agent: when invoked it still has the full management surface (always reading the draft), so whether
+// it can be called rests entirely on this grant row - the write no longer excludes it by identity.
 func TestAllowAgentCallAcceptsSupervisorTarget(t *testing.T) {
 	rel := &stubRelationsMgr{}
 	c := newCallCtx("main", rel, map[string]*AgentInfo{
@@ -99,17 +101,17 @@ func TestAllowAgentCallAcceptsSupervisorTarget(t *testing.T) {
 	out, err := (&allowAgentCallTool{}).Execute(context.Background(), c,
 		map[string]any{"agent": "poet", "target": "main"})
 	if err != nil {
-		t.Fatalf("把超级智能体作为被调用方不应被拒绝：%v", err)
+		t.Fatalf("using the super agent as the callee must not be refused: %v", err)
 	}
 	if m := out.(map[string]any); m["allowed"] != true || m["target"] != "main" {
-		t.Errorf("返回不符：%+v", m)
+		t.Errorf("unexpected result: %+v", m)
 	}
 	if rel.gotCaller != "poet-id" || rel.gotCallee != "main-id" {
-		t.Errorf("转发不符：caller=%q callee=%q", rel.gotCaller, rel.gotCallee)
+		t.Errorf("forwarded values are wrong: caller=%q callee=%q", rel.gotCaller, rel.gotCallee)
 	}
 }
 
-// 自环无意义。
+// A self-loop is meaningless.
 func TestAllowAgentCallRejectsSelf(t *testing.T) {
 	rel := &stubRelationsMgr{}
 	c := newCallCtx("main", rel, map[string]*AgentInfo{
@@ -118,11 +120,11 @@ func TestAllowAgentCallRejectsSelf(t *testing.T) {
 
 	if _, err := (&allowAgentCallTool{}).Execute(context.Background(), c,
 		map[string]any{"agent": "poet", "target": "poet"}); err == nil {
-		t.Fatal("自环应被拒绝")
+		t.Fatal("a self-loop should be refused")
 	}
 }
 
-// 目标不存在 / 已废弃都拒绝（废弃与 caller.go 的 IsRunnable 判定对齐）。
+// A missing or deprecated target is refused (deprecation aligns with caller.go's IsRunnable check).
 func TestAllowAgentCallRejectsBadTarget(t *testing.T) {
 	c := newCallCtx("main", &stubRelationsMgr{}, map[string]*AgentInfo{
 		"poet": {ID: "poet-id", Name: "poet", Status: 1},
@@ -131,12 +133,12 @@ func TestAllowAgentCallRejectsBadTarget(t *testing.T) {
 	for _, target := range []string{"ghost", "dead"} {
 		if _, err := (&allowAgentCallTool{}).Execute(context.Background(), c,
 			map[string]any{"agent": "poet", "target": target}); err == nil {
-			t.Errorf("target=%q 应被拒绝", target)
+			t.Errorf("target=%q should be refused", target)
 		}
 	}
 }
 
-// 调用方须处于正常态（复用 resolveTargetAgent 的状态闸）。
+// The caller must be in the normal state (it reuses resolveTargetAgent's status gate).
 func TestAllowAgentCallRejectsDeprecatedCaller(t *testing.T) {
 	c := newCallCtx("main", &stubRelationsMgr{}, map[string]*AgentInfo{
 		"poet": {ID: "poet-id", Name: "poet", Status: 3},
@@ -145,11 +147,11 @@ func TestAllowAgentCallRejectsDeprecatedCaller(t *testing.T) {
 
 	if _, err := (&allowAgentCallTool{}).Execute(context.Background(), c,
 		map[string]any{"agent": "poet", "target": "bard"}); err == nil {
-		t.Fatal("调用方废弃时应拒绝")
+		t.Fatal("a deprecated caller should be refused")
 	}
 }
 
-// 收回不套写时守卫：陈数据（比如曾被误授的 main）必须还能清理。
+// Revoking does not apply the write guard: stale data (such as main having been granted by mistake) must still be cleanable.
 func TestRevokeAgentCallIsLenient(t *testing.T) {
 	rel := &stubRelationsMgr{removed: 1}
 	c := newCallCtx("main", rel, map[string]*AgentInfo{
@@ -160,29 +162,29 @@ func TestRevokeAgentCallIsLenient(t *testing.T) {
 	out, err := (&revokeAgentCallTool{}).Execute(context.Background(), c,
 		map[string]any{"agent": "poet", "target": "main"})
 	if err != nil {
-		t.Fatalf("收回悬空 / 陈授权不应被写时守卫挡住: %v", err)
+		t.Fatalf("revoking a dangling / stale grant must not be blocked by the write guard: %v", err)
 	}
 	if m := out.(map[string]any); m["removed"] != int64(1) || m["revoked"] != true {
-		t.Errorf("返回不符：%+v", m)
+		t.Errorf("unexpected result: %+v", m)
 	}
 	if rel.gotCaller != "poet-id" || rel.gotCallee != "main-id" {
-		t.Errorf("转发不符：caller=%q callee=%q", rel.gotCaller, rel.gotCallee)
+		t.Errorf("forwarded values are wrong: caller=%q callee=%q", rel.gotCaller, rel.gotCallee)
 	}
 }
 
-// 两个新工具同样必须仅超级智能体可用（三层收口的执行层判据）。
+// The two new tools must also be super-agent only (the execution-layer criterion of the three-layer closure).
 func TestAgentCallToolsAreSupervisorOnly(t *testing.T) {
 	for _, name := range []string{"allow_agent_call", "revoke_agent_call"} {
 		if _, ok := Get(name); !ok {
-			t.Fatalf("工具 %q 未注册", name)
+			t.Fatalf("tool %q is not registered", name)
 		}
 		if !IsSupervisorOnlyTool(name) {
-			t.Errorf("%q 必须仅超级智能体可用", name)
+			t.Errorf("%q must be super-agent only", name)
 		}
 	}
 }
 
-// update_shared_skill 接受 restricted（透传到 SkillInput）。
+// update_shared_skill accepts restricted (forwarded into SkillInput).
 func TestUpdateSharedSkillPassesRestricted(t *testing.T) {
 	sk := &stubSkillsCapture{}
 	c := &Context{Schema: "t0", AgentName: "main", AgentID: "self", UserID: "u1", Skills: sk}
@@ -192,29 +194,30 @@ func TestUpdateSharedSkillPassesRestricted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sk.got.Restricted == nil {
-		t.Fatal("restricted 未透传（应为非 nil）")
+		t.Fatal("restricted was not forwarded (it should be non-nil)")
 	}
 	if *sk.got.Restricted {
-		t.Error("restricted 应为 false")
+		t.Error("restricted should be false")
 	}
-	// 不传则不改（nil）
+	// Not passing it leaves it unchanged (nil)
 	sk.got = SkillInput{}
 	if _, err := (&updateSharedSkillTool{}).Execute(context.Background(), c,
 		map[string]any{"name": "report-format"}); err != nil {
 		t.Fatal(err)
 	}
 	if sk.got.Restricted != nil {
-		t.Error("未传 restricted 时应为 nil（不改动）")
+		t.Error("without restricted it should be nil (unchanged)")
 	}
 }
 
-// 私有 skill 不接受 restricted：可见性由归属 agent 决定，静默忽略会让模型以为改了。
+// A private skill does not accept restricted: its visibility is decided by the owning agent, and ignoring the argument silently
+// would make the model believe it changed something.
 func TestUpdateOwnSkillRejectsRestricted(t *testing.T) {
 	sk := &stubSkillsCapture{}
 	c := &Context{Schema: "t0", AgentName: "joker", AgentID: "self", UserID: "u1", Skills: sk}
 
 	if _, err := (&updateOwnSkillTool{}).Execute(context.Background(), c,
 		map[string]any{"name": "my-skill", "restricted": true}); err == nil {
-		t.Fatal("own 系列应拒绝 restricted 参数")
+		t.Fatal("the own series should refuse the restricted argument")
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"flame/nexus/service/agent/tools"
 )
 
-// local__ 只归本地端点执行器管，与 mcp__ / rpc__ 前缀不重叠。
+// local__ belongs to the local endpoint runner only and does not overlap the mcp__ / rpc__ prefixes.
 func TestLocalEndpointRunnerHas(t *testing.T) {
 	r := &localEndpointRunner{}
 	for _, name := range []string{"local__daily-report", "local__x"} {
@@ -23,10 +23,10 @@ func TestLocalEndpointRunnerHas(t *testing.T) {
 	}
 }
 
-// 缺租户上下文必须直接报错：没有 schema 就无法定位端点所在的租户表。
+// A missing tenant context must fail outright: without a schema there is no way to locate the tenant tables holding the endpoint.
 func TestLocalEndpointRunnerRequiresSchema(t *testing.T) {
 	_, err := (&localEndpointRunner{}).Invoke(context.Background(), tools.LocalCall{ToolName: "local__daily-report"})
-	if err == nil || !strings.Contains(err.Error(), "租户上下文") {
-		t.Fatalf("期望租户上下文错误，实际 %v", err)
+	if err == nil || !strings.Contains(err.Error(), "tenant context") {
+		t.Fatalf("want a tenant-context error, got %v", err)
 	}
 }

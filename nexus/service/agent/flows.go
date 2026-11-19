@@ -22,21 +22,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// flowsManager 实现 tools.FlowsManager：包装 flows 仓储与端点仓储。
+// flowsManager implements tools.FlowsManager: it wraps the flows repository and the endpoint repository.
 //
-// schema 与当前用户在这里固化，工具层传不进来 —— 与 agentManager / skillManager 同一套惯例，
-// 「能读写哪个租户」不取决于模型给了什么参数。
+// The schema and the current user are frozen here and cannot be passed in from the tool layer - the same convention as agentManager /
+// skillManager, so "which tenant may be read or written" never depends on what the model passed.
 type flowsManager struct {
 	schema string
 	userID string
 	repo   flows.Repository
 	eps    svcendpoints.SvcEndpointRepository
-	// agents 只用于「工作流名不能与 agent 重名」的前置校验：两个实体共享命名空间，
-	// 端点名又恒等于实体名，创建前不拦就会在 svc_endpoints 里撞成同一个名字。
+	// agents is only used for the pre-check "a workflow name must not collide with an agent": the two entities share one namespace, and an
+	// endpoint name is always equal to the entity name, so without this check creation would collide inside svc_endpoints.
 	agents agents.Repository
 }
 
-// NewFlowsManager 创建 tools.FlowsManager（租户 schema 与当前用户固定）。
+// NewFlowsManager creates tools.FlowsManager (tenant schema and current user fixed).
 func NewFlowsManager(schema, userID string) tools.FlowsManager {
 	return &flowsManager{
 		schema: schema,
@@ -48,14 +48,14 @@ func NewFlowsManager(schema, userID string) tools.FlowsManager {
 }
 
 func (m *flowsManager) auth() *auth.AuthInfo {
-	// 带上 userID：仓储用 authInfo.ID 写 created_by / updated_by（空串会被转成 NULL）
+	// Carry userID: the repository uses authInfo.ID to write created_by / updated_by (an empty string becomes NULL)
 	return &auth.AuthInfo{Schema: m.schema, ID: m.userID}
 }
 
-// Exists 工作流名是否已被占用。
+// Exists reports whether a workflow name is taken.
 //
-// 同时看 agents：两边共享命名空间（CreateFlow 内部也会查一次 agents，这里提前查是为了
-// 给出「撞的是智能体」这种能直接纠正的错误，而不是让仓储返回一句笼统的已存在）。
+// Agents are checked too: both sides share one namespace (CreateFlow also checks agents internally; doing it early here is what produces a
+// correctable error like "it collides with an agent" instead of a generic already-exists from the repository).
 func (m *flowsManager) Exists(ctx context.Context, name string) (bool, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -68,35 +68,36 @@ func (m *flowsManager) Exists(ctx context.Context, name string) (bool, error) {
 	return m.agents.ExistsName(m.auth(), name, "")
 }
 
-// 新建工作流的限额沿用编辑器「新增工作流」的默认值（前端 Flows.vue 的初始表单）。
+// A newly created workflow keeps the editor's "new workflow" defaults (the initial form in frontend Flows.vue).
 //
-// 为什么不能落零值：max_run_records 的 0 在运行时的语义是「一条运行记录都不保留」，
-// max_session_records 的 0 等同「不做会话记忆」。直接留零会让工具建的流程在运行记录页
-// 里永远是空白，而排查的人只会觉得「这个流程从来没跑过」。
+// Why the zero values must not be stored: at runtime max_run_records = 0 means "keep no run records at all", and max_session_records = 0 means
+// "no session memory". Leaving zeros would make a tool-created flow show an empty run-record page forever, and whoever triages it would only
+// conclude "this flow has never run".
 const (
-	defaultFlowTimeout           = 300 // 秒
+	defaultFlowTimeout           = 300 // seconds
 	defaultFlowMaxRunRecords     = 50
 	defaultFlowMaxSessionRecords = 30
 )
 
-// Create 创建工作流；Endpoints 非空时一并把这些协议对外开放成端点。
+// Create creates a workflow; when Endpoints is non-empty it also exposes those protocols as endpoints.
 func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, error) {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
-		return "", errors.New("工作流名不能为空")
+		return "", errors.New("workflow name cannot be empty")
 	}
-	// 名字会变成端点名 / 模型侧工具名 local__<name>，只能用 ASCII 字母数字横线。
-	// 工具层（create_flow）已经挡过一次，这里是给其它调用方兜底 —— 少一处就等于
-	// 又留了一条「前端建不出来、工具建得出来」的口子。
+	// The name becomes an endpoint name / the model-facing tool name local__<name>, so ASCII letters, digits and hyphens only.
+	// The tool layer (create_flow) already blocks this once; the check here is a backstop for other callers - skipping it would leave another
+	// hole where "the frontend cannot create it but a tool can".
 	if !tools.ValidName(name) {
-		return "", fmt.Errorf("工作流名 %q 不合法：只能用字母、数字与横线（不能以横线开头，≤64），中文说明请写进描述", name)
+		return "", fmt.Errorf("workflow name %q is invalid: letters, digits and hyphens only (no leading hyphen, at most 64 characters); put the readable description in the description field", name)
 	}
 	description := strings.TrimSpace(in.Description)
 	if description == "" {
-		return "", errors.New("工作流描述不能为空")
+		return "", errors.New("workflow description cannot be empty")
 	}
 
-	// 配额：与 agent 创建同一套口径（CountFlows 直查库，不为一次计数往仓储接口上加方法）
+	// Quota: the same criterion as agent creation (CountFlows queries the database directly rather than adding a method to the repository
+	// interface for one count)
 	cnt, err := quota.CountFlows(m.schema)
 	if err != nil {
 		return "", err
@@ -117,8 +118,8 @@ func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, 
 		MaxSessionRecords: defaultFlowMaxSessionRecords,
 	}
 	if len(in.Arguments) > 0 {
-		// 入口参数声明：对外开放后端点对外的 input_schema 就取自这一列
-		// （仓储 CreateFlow 里的 CreateManagedRPC 会强制覆盖过去）。
+		// Entry argument declaration: once exposed, the endpoint's input_schema is taken from this column
+		// (CreateManagedRPC inside the repository's CreateFlow overwrites it).
 		inst.Arguments = xsql.JSONB{Data: in.Arguments}
 	}
 	id, err := m.repo.CreateFlow(m.auth(), inst)
@@ -127,8 +128,9 @@ func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, 
 	}
 
 	if err := m.expose(id, in.Endpoints); err != nil {
-		// 端点没发出去就把刚建的定义回滚掉：留下一个「用户以为带端点、实际没有」的半成品，
-		// 比直接报错难排查得多。先删端点：刚建的可能已经对外，DeleteFlow 会拒绝。
+		// Roll back the definition just created when the endpoints could not be exposed: leaving a half-built flow that the user believes has
+		// endpoints is far harder to triage than a plain error. Endpoints are deleted first: the fresh one may already be exposed, and
+		// DeleteFlow would refuse.
 		_ = m.eps.DeleteByTarget(m.auth(), "flow", id)
 		_ = m.repo.DeleteFlow(m.auth(), id)
 		return "", err
@@ -136,13 +138,13 @@ func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, 
 	return id, nil
 }
 
-// expose 为这些协议打开对外（落到 svc_endpoints）。
+// expose opens these protocols to the outside (written to svc_endpoints).
 //
-// 建流程时仓储已经自动补了一条未对外的 RPC 端点（CreateManagedRPC），所以这里是
-// 「确保存在 + 打开开关」：直接 Create 会撞 (target, protocol) 唯一约束。
+// Creating the flow already added an unexposed RPC endpoint (CreateManagedRPC), so this is "make sure it exists and flip the switch": a direct
+// Create would hit the (target, protocol) unique constraint.
 //
-// 不写 flows.endpoints：那一列是 svc_endpoints 的派生镜像，由仓储的 syncEndpoints
-// 在每次增删后整列重写 —— 直接写它会被覆盖，看起来对外开放成功、实际没有入口。
+// It does not write flows.endpoints: that column is a derived mirror of svc_endpoints, rewritten as a whole by the repository's syncEndpoints
+// after every add / delete - writing it directly would be overwritten, looking exposed while having no entry point at all.
 func (m *flowsManager) expose(flowID string, protocols []string) error {
 	if len(protocols) == 0 {
 		return nil
@@ -152,7 +154,7 @@ func (m *flowsManager) expose(flowID string, protocols []string) error {
 		TargetID:   flowID,
 	})
 	if err != nil {
-		return fmt.Errorf("查询流程端点失败: %w", err)
+		return fmt.Errorf("failed to query flow endpoints: %w", err)
 	}
 	endpointIDs := make(map[string]string, len(existing))
 	for i := range existing {
@@ -161,9 +163,9 @@ func (m *flowsManager) expose(flowID string, protocols []string) error {
 
 	for _, p := range protocols {
 		if id, ok := endpointIDs[p]; ok {
-			// 自动补的 RPC 端点就在这一类：只切开关，不重建
+			// The auto-added RPC endpoint is in this class: only flip the switch, never recreate
 			if err := m.eps.UpdateExposed(m.auth(), id, true); err != nil {
-				return fmt.Errorf("开放 %s 端点失败: %w", p, err)
+				return fmt.Errorf("failed to expose the %s endpoint: %w", p, err)
 			}
 			continue
 		}
@@ -174,13 +176,13 @@ func (m *flowsManager) expose(flowID string, protocols []string) error {
 			Exposed:    xsql.Bool(true),
 		}
 		if _, err := m.eps.Create(m.auth(), ep); err != nil {
-			return fmt.Errorf("创建 %s 端点失败: %w", p, err)
+			return fmt.Errorf("failed to create the %s endpoint: %w", p, err)
 		}
 	}
 	return nil
 }
 
-// List 列出本租户全部工作流。Limit=-1 是仓储约定的「取全部」，工具层再按条数截断展示。
+// List lists every workflow of this tenant. Limit=-1 is the repository's "take everything" convention; the tool layer truncates for display.
 func (m *flowsManager) List(ctx context.Context) ([]tools.FlowInfo, error) {
 	list, _, err := m.repo.ListFlows(m.auth(), &flows.ListFlowsRequest{Page: 1, Limit: -1})
 	if err != nil {
@@ -193,7 +195,7 @@ func (m *flowsManager) List(ctx context.Context) ([]tools.FlowInfo, error) {
 	return out, nil
 }
 
-// Get 按 id 优先、名称兜底取详情；不存在返回 (nil, nil)（与 AgentManager.Get 一致，由调用方报错）。
+// Get takes the details by id first and falls back to name; missing returns (nil, nil) (consistent with AgentManager.Get, the caller reports).
 func (m *flowsManager) Get(ctx context.Context, id, name string) (*tools.FlowDetail, error) {
 	f, err := m.find(ctx, id, name)
 	if err != nil || f == nil {
@@ -204,7 +206,7 @@ func (m *flowsManager) Get(ctx context.Context, id, name string) (*tools.FlowDet
 		return nil, err
 	}
 	detail := &tools.FlowDetail{FlowInfo: flowInfo(f), Diagram: json.RawMessage(diagram)}
-	// 没声明过就留空（omitempty）：让工具层能区分「没有入参」与「有入参但读不到」。
+	// Leave it empty (omitempty) when nothing was declared: the tool layer can then tell "no arguments" from "arguments that cannot be read".
 	if !f.Arguments.IsNil() {
 		args, err := f.Arguments.MarshalJSON()
 		if err != nil {
@@ -215,10 +217,10 @@ func (m *flowsManager) Get(ctx context.Context, id, name string) (*tools.FlowDet
 	return detail, nil
 }
 
-// UpdateDiagram 只替换 diagram：名称 / 描述 / 限额 / 断点都不动。
+// UpdateDiagram replaces only the diagram: name / description / limits / breakpoints are untouched.
 //
-// 为什么不用 UpdateFlow：那是整行重写，而 GetFlow 不加载 breakpoints，
-// 拿它改图会把断点清空。边工具只该动图，所以走仓储的窄更新。
+// Why not UpdateFlow: that rewrites the whole row, and GetFlow does not load breakpoints, so editing the diagram through it would clear them.
+// The edge tools should only touch the diagram, hence the repository's narrow update.
 func (m *flowsManager) UpdateDiagram(ctx context.Context, id, name string, diagram json.RawMessage) (*tools.FlowInfo, error) {
 	f, err := m.find(ctx, id, name)
 	if err != nil || f == nil {
@@ -231,11 +233,11 @@ func (m *flowsManager) UpdateDiagram(ctx context.Context, id, name string, diagr
 	return &info, nil
 }
 
-// UpdateArguments 只替换入口参数声明：名字 / 描述 / diagram / 限额 / 断点都不动。
+// UpdateArguments replaces only the entry argument declaration: name / description / diagram / limits / breakpoints are untouched.
 //
-// 为什么不用 UpdateFlow：那是整行重写，而 GetFlow 不加载 breakpoints，
-// 拿它改参数会把断点清空（与 UpdateDiagram 同一个坑）。
-// 端点 input_schema 由仓储在同一事务里同步，工具层不用再手动刷一遍。
+// Why not UpdateFlow: that rewrites the whole row, and GetFlow does not load breakpoints, so editing the arguments through it would clear them
+// (the same trap as UpdateDiagram). The endpoint input_schema is synced by the repository in the same transaction, so the tool layer does not
+// have to refresh it by hand.
 func (m *flowsManager) UpdateArguments(ctx context.Context, id, name string, arguments json.RawMessage) (*tools.FlowInfo, error) {
 	f, err := m.find(ctx, id, name)
 	if err != nil || f == nil {
@@ -248,11 +250,11 @@ func (m *flowsManager) UpdateArguments(ctx context.Context, id, name string, arg
 	return &info, nil
 }
 
-// Delete 删除工作流，并返回被删掉的那一行；不存在返回 (nil, nil)。
+// Delete deletes a workflow and returns the deleted row; missing returns (nil, nil).
 //
-// 返回实体是为了让工具层回显「真实 id + 名称」：名称在「改名 / 删后同名重建」的场景下
-// 会指向另一份定义，破坏性操作必须留下可核对的痕迹。缺失时的报错文案也收到工具层，
-// 口径与其他工具一致。
+// The entity is returned so the tool layer can echo "the real id + name": the name may point at another definition after "rename / delete then
+// recreate with the same name", and a destructive operation must leave a trace that can be checked. The missing-case error text also lives in
+// the tool layer, consistent with the other tools.
 func (m *flowsManager) Delete(ctx context.Context, id, name string) (*tools.FlowInfo, error) {
 	f, err := m.find(ctx, id, name)
 	if err != nil {
@@ -261,9 +263,9 @@ func (m *flowsManager) Delete(ctx context.Context, id, name string) (*tools.Flow
 	if f == nil {
 		return nil, nil
 	}
-	// 端点交给 DeleteFlow 统一处理：未对外的（含自动补的 RPC）随流程级联删除；
-	// 仍有对外开放的端点时仓储会拒绝 —— 那是「外部还在用」的信号，不该由一次
-	// 模型发起的删除悄悄掐断，让用户先收回对外。
+	// Endpoints are handled by DeleteFlow in one place: unexposed ones (including the auto-added RPC) are deleted with the flow; when an
+	// exposed endpoint remains the repository refuses - that is the signal "the outside is still using it", and a deletion started by a model
+	// must not cut it off quietly; the user retracts it first.
 	if err := m.repo.DeleteFlow(m.auth(), f.ID); err != nil {
 		return nil, err
 	}
@@ -271,20 +273,20 @@ func (m *flowsManager) Delete(ctx context.Context, id, name string) (*tools.Flow
 	return &deleted, nil
 }
 
-// RunTest 试运行：定位到流程后交给 executors 注册的执行通道真实跑一遍。
+// RunTest is the trial run: after locating the flow it goes to the execution channel registered by executors and really runs it.
 //
-// 不校验 exposed（试跑的对象通常还没端点），但状态按运行时同口径拦废弃 ——
-// 「测试通过、上线跑不了」比直接拒绝更难查。
+// exposed is not checked (the object of a trial run usually has no endpoint yet), but a deprecated flow is refused on the same criterion as the
+// runtime - "the test passes and production cannot run" is harder to triage than a plain refusal.
 func (m *flowsManager) RunTest(ctx context.Context, ref string, args map[string]any, sessionID string, callDepth int, followDrafts bool) (*tools.FlowRunResult, error) {
 	f, err := m.find(ctx, ref, ref)
 	if err != nil {
 		return nil, err
 	}
 	if f == nil {
-		return nil, nil // 由工具层报「不存在」
+		return nil, nil // the tool layer reports "does not exist"
 	}
 	if !models.IsRunnable(int(f.Status)) {
-		return nil, fmt.Errorf("工作流 %q 已废弃，不可运行", f.Name)
+		return nil, fmt.Errorf("workflow %q is deprecated and cannot run", f.Name)
 	}
 	if runFlowTest == nil {
 		return nil, errFlowTestUnavailable
@@ -292,24 +294,24 @@ func (m *flowsManager) RunTest(ctx context.Context, ref string, args map[string]
 	return runFlowTest(ctx, m.auth(), f.ID, args, sessionID, callDepth, followDrafts)
 }
 
-// GetRun 读一次运行记录（run + 节点记录）。
+// GetRun reads one run record (the run plus its node records).
 //
-// 数据与前端「运行记录」页同源（executors.persistRun 落的 flow_run_records /
-// flow_node_records），所以 agent 不只能查自己 run_flow 跑的那次，前端 debug 跑、
-// 别的 agent 调起来的运行也都能按 run_id 查 —— 这才是排障时的真实入口。
+// The data has the same source as the frontend "run records" page (flow_run_records / flow_node_records written by executors.persistRun), so an
+// agent can look up not only its own run_flow runs but also a frontend debug run or a run triggered by another agent, by run_id - which is the
+// real entry point when triaging.
 func (m *flowsManager) GetRun(ctx context.Context, runID string) (*tools.FlowRunDetail, error) {
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
-		return nil, errors.New("需要运行 id")
+		return nil, errors.New("a run id is required")
 	}
-	// flow_run_records.id 也是 uuid 列：非 UUID 一定查不到，但错误是 22P02 而不是 no rows，
-	// 会把一句 SQL 报错糊到模型脸上。直接当「不存在」，让工具层给「run_id 不存在」的人话。
+	// flow_run_records.id is a uuid column too: a non-UUID can never match, but the error is 22P02 rather than no rows, which would smear a
+	// SQL error in the model's face. Treat it as "missing" and let the tool layer say "run_id does not exist" in plain words.
 	if !isUUID(runID) {
 		return nil, nil
 	}
 	run, nodes, err := flowruns.NewRepository().GetRunDetail(m.schema, runID)
 	if err != nil {
-		// 找不到不是错误：由工具层给一句「run_id 不存在」的提示，别把 sql 错误抛给模型
+		// Not found is not an error: the tool layer gives a "run_id does not exist" hint, and an sql error is never thrown at the model
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -342,7 +344,7 @@ func (m *flowsManager) GetRun(ctx context.Context, runID string) (*tools.FlowRun
 	return out, nil
 }
 
-// toFlowRunNode 把落库的节点记录转成工具返回体。
+// toFlowRunNode converts a stored node record into the tool response body.
 func toFlowRunNode(n *models.FlowNodeRecord) tools.FlowRunNode {
 	return tools.FlowRunNode{
 		NodeID:      n.NodeID,
@@ -359,12 +361,12 @@ func toFlowRunNode(n *models.FlowNodeRecord) tools.FlowRunNode {
 		LocalVars:   decodeRunVar(n.LocalVars),
 		Extra:       decodeRunVar(n.Extra),
 		Logs:        decodeRunLogs(n.RunLogs),
-		// 落库时就截断过：告诉调用方「值不全」，别据此断言数据只有这些
+		// Truncation already happened at write time: tell the caller "the value is not complete", so nobody asserts the data is only this
 		Truncated: n.InputVarsTruncated || n.OutputVarsTruncated || n.LocalVarsTruncated || n.RunLogsTruncated,
 	}
 }
 
-// decodeRunVar 把 jsonb 解成可直接读的对象；坏数据原样给字符串，至少不丢信息。
+// decodeRunVar decodes jsonb into a directly readable object; bad data is handed back as a string, so at least nothing is lost.
 func decodeRunVar(raw []byte) any {
 	if len(raw) == 0 {
 		return nil
@@ -376,7 +378,7 @@ func decodeRunVar(raw []byte) any {
 	return v
 }
 
-// decodeRunLogs run_logs 存的是 JSON 字符串数组，转成多行文本给模型读。
+// decodeRunLogs turns run_logs (a JSON array of strings) into multi-line text for the model to read.
 func decodeRunLogs(raw []byte) string {
 	if len(raw) == 0 {
 		return ""
@@ -395,20 +397,19 @@ func formatRunTime(t xsql.Time) string {
 	return time.Time(t).Format(time.RFC3339)
 }
 
-// find 定位一行工作流（含 diagram）。id 优先，name 兜底。
+// find locates one workflow row (with its diagram). id first, name as the fallback.
 //
-// 仓储没有「按名字取」的方法：列表查询刻意不取 diagram（避免拖着一张大 JSON 扫全表），
-// 所以按名字命中后还要再取一次整行。为了一个只读工具往共享接口上加方法不划算。
+// The repository has no "get by name": the list query deliberately skips the diagram (to avoid scanning the whole table with a big JSON), so a
+// name hit still needs a second read of the full row. Adding a method to the shared interface for one read-only tool is not worth it.
 func (m *flowsManager) find(ctx context.Context, id, name string) (*models.Flow, error) {
 	id = strings.TrimSpace(id)
 	name = strings.TrimSpace(name)
 	if id == "" && name == "" {
-		return nil, errors.New("需要工作流 id 或名称")
+		return nil, errors.New("a workflow id or name is required")
 	}
-	// 只有 UUID 形态才当 id 查。flows.id 是 uuid 列：把名称塞进 `WHERE id = $1` 不会得到
-	// 「查无此行」，而是让 Postgres 报 22P02（invalid input syntax for type uuid），
-	// 于是 name 兜底永远走不到 —— 工具文档里写的「id 或名称」就成了假的。
-	// 工具层统一按 (ref, ref) 传参，所以这里是唯一的形态判定点。
+	// Only a UUID shape is looked up as an id. flows.id is a uuid column: putting a name into `WHERE id = $1` does not yield "no such row",
+	// it makes Postgres report 22P02 (invalid input syntax for type uuid), so the name fallback would never be reached and the "id or name"
+	// promised in the tool documentation would be a lie. The tool layer always passes (ref, ref), so this is the only place deciding the shape.
 	if id != "" && isUUID(id) {
 		f, err := m.repo.GetFlow(m.auth(), id)
 		switch {
@@ -434,17 +435,17 @@ func (m *flowsManager) find(ctx context.Context, id, name string) (*models.Flow,
 	return nil, nil
 }
 
-// isUUID 判断 ref 是不是 id 形态。
+// isUUID reports whether ref has the id shape.
 //
-// 存在的理由见 find 里那段：flows.id / flow_run_records.id 都是 uuid 列，非 UUID 值不会
-// 得到「没查到」，而是整条语句报错。在应用层先分流，才能让「名称兜底」真正可执行。
+// The reason is in find: flows.id / flow_run_records.id are uuid columns, and a non-UUID value does not "find nothing" - it fails the whole
+// statement. Splitting in the application layer is what makes the name fallback really executable.
 func isUUID(s string) bool {
 	_, err := uuid.Parse(s)
 	return err == nil
 }
 
-// flowInfo 把模型行压成工具层视图：端点只回已对外开放的协议名（协议 + 开关是存储形态，
-// 模型要的是「对外有什么入口」）。
+// flowInfo compresses the model row into the tool-layer view: endpoints only list the exposed protocols (protocol + switch is the storage shape,
+// while the model wants "which entry points exist").
 func flowInfo(f *models.Flow) tools.FlowInfo {
 	eps := make([]string, 0, len(f.Endpoints))
 	for _, ep := range f.Endpoints {

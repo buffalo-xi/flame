@@ -1,11 +1,13 @@
-// Package sandboxinfo 持有 sandboxd 的能力快照：沙箱能否联网（声明）+ 沙箱里有什么（探测）。
+// Package sandboxinfo holds the sandboxd capability snapshot: whether the sandbox may reach the network (declared) and what is inside it
+// (probed).
 //
-// 为什么是共享包而不是塞进 agent 内部：拉取（HTTP + 定期刷新）与使用（拼提示词）是两件事
-// —— main 负责拉，agent 负责读。注册风格与 tools.SetSandbox 一致（包级单例）。
+// Why a shared package rather than something inside the agent: fetching (HTTP + periodic refresh) and using (assembling the prompt) are two
+// different things - main does the fetching, the agent does the reading. The registration style matches tools.SetSandbox (a package-level
+// singleton).
 //
-// 为什么必须定期刷新：sandboxd 改配置重启是常态（网络声明、镜像都会变），只在 nexus
-// 启动时拉一次，提示词会立刻开始撒谎 —— 而"提示词不许撒谎"正是这套机制存在的理由：
-// agent 会据它决定要不要写联网代码、用哪些库。
+// Why it must refresh periodically: changing sandboxd's configuration and restarting is routine (the network declaration and the image both
+// change), and fetching once at nexus startup would make the prompt start lying immediately - and "the prompt must not lie" is exactly why
+// this mechanism exists: the agent decides from it whether to write networked code and which libraries to use.
 package sandboxinfo
 
 import (
@@ -22,79 +24,81 @@ import (
 	"flame/tools/xlog"
 )
 
-// Environment 沙箱环境的探测结果（与 sandboxd 侧的 JSON 结构对齐）。
+// Environment is the result of probing the sandbox environment (aligned with the JSON structure on the sandboxd side).
 type Environment struct {
-	// Text 各探针输出的原文（"label: value" 行）。刻意不解析成结构 ——
-	// 「沙箱里有什么」是沙箱自己的事实，读它的是 LLM。
+	// Text is the raw output of each probe (a "label: value" line each). It is deliberately not parsed into a structure - "what is inside
+	// the sandbox" is the sandbox's own fact, and the reader is the LLM.
 	Text     string    `json:"text"`
 	ProbedAt time.Time `json:"probed_at"`
-	// Error 非空表示 sandboxd 那边探测整体失败，Text 不可信。
+	// Error non-empty means the probe as a whole failed on the sandboxd side, and Text cannot be trusted.
 	Error string `json:"error,omitempty"`
 }
 
-// Info 一份能力快照。
+// Info is one capability snapshot.
 type Info struct {
-	// Mode 隔离方式（none / nsjail / docker）。
+	// Mode is the isolation method (none / nsjail / docker).
 	Mode string `json:"mode"`
-	// Network 按通道的网络策略（**部署上限**，不是某次调用的事实）。见 NetworkInfo。
+	// Network is the per-channel network policy (**a deployment ceiling**, not a fact about one call). See NetworkInfo.
 	Network NetworkInfo `json:"network"`
 	Langs   []string    `json:"langs"`
-	// CodeLangs 可用作**工作流 code 节点**的语言 —— 沙箱当下真的会对外服务的那些
-	// （sandboxd 侧 code.pools 里配了、解释器入口解析成功的那些）。
+	// CodeLangs are the languages usable as a **workflow code node** - the ones the sandbox would actually serve right now (configured in
+	// code.pools on the sandboxd side and with a successfully resolved interpreter entry).
 	//
-	// 与 Langs 不是一回事：Langs 是「沙箱能跑起来的语言」，单工也会用（只跑技能脚本的
-	// 语言不必开 code 池），照它去选 code 节点语言会选到 unsupported_lang。
+	// Not the same thing as Langs: Langs are "the languages the sandbox can run", which the single-worker channel uses too (a language
+	// that only runs skill scripts need not have a code pool), and choosing a code node language from it lands on unsupported_lang.
 	//
-	// nil 与空切片语义不同，别合并成一条：nil = 对端没报这一项（旧版本 / 字段名对不上）、
-	// 空 = 对端明确说「一个 code 语言都没配」。依据是 encoding/json 把 `[]` 解成非 nil
-	// 空切片 —— 这条行为被 sandboxinfo_test.go 钉住了。
+	// nil and an empty slice mean different things, so do not merge them: nil = the peer did not report the field (older version / a
+	// field name mismatch), empty = the peer explicitly says "not a single code language is configured". The basis is encoding/json
+	// decoding `[]` into a non-nil empty slice - sandboxinfo_test.go pins that behaviour.
 	CodeLangs []string `json:"code_langs"`
-	// LegacyCodeLangs 旧字段名（sandboxd 2026-10 之前叫 script_langs）。
-	// 只用于过渡期读取：CodeLangs() 在新字段缺失时回退到它，让「sandboxd 先升 / nexus
-	// 先升」都不至于把可用语言列表变成「未知」。
+	// LegacyCodeLangs is the old field name (script_langs before sandboxd 2026-10).
+	// It is only read for the transition: CodeLangs falls back to it when the new field is missing, so that neither "sandboxd upgraded
+	// first" nor "nexus upgraded first" turns the usable language list into "unknown".
 	LegacyCodeLangs []string `json:"script_langs,omitempty"`
 
 	Environment Environment `json:"environment"`
 
-	// Browser 浏览器能力（sandboxd 的实测结论：镜像里有没有 Chromium、能不能有头）。
+	// Browser is the browser capability (sandboxd's measured conclusion: whether the image has Chromium and whether it can run headed).
 	//
-	// nil 与「Enabled=false」语义不同，别合并：nil = 对端没报这一项（旧版本
-	// sandboxd / 字段名对不上），false = 对方明确说「不可用」并给了原因。
-	// 前者不该让 agent 得出「浏览器坏了」的结论，只能说「这个沙箱没告诉我」。
+	// nil and "Enabled=false" mean different things, so do not merge them: nil = the peer did not report the field (an older sandboxd / a
+	// field name mismatch), false = the peer explicitly says "unavailable" and gives a reason.
+	// The former must not lead the agent to conclude "the browser is broken"; it can only say "this sandbox did not tell me".
 	Browser *BrowserInfo `json:"browser,omitempty"`
 
-	// FetchedAt 最近一次**成功**拉取的时刻。
+	// FetchedAt is when the last **successful** fetch happened.
 	FetchedAt time.Time `json:"-"`
-	// Err 最近一次拉取失败的原因。非空时上面的字段是上一次成功的快照（可能已过期），
-	// 而不是"没有能力" —— 这两件事对 agent 的意义完全不同，文案里必须分开说。
+	// Err is why the last fetch failed. When non-empty, the fields above are the last successful snapshot (possibly stale) rather than
+	// "no capability" - the two mean completely different things to the agent, and the copy must keep them apart.
 	Err string `json:"-"`
 }
 
-// NetworkInfo 按通道的网络策略（与 sandboxd 的 capabilities.network 对齐）。
+// NetworkInfo is the per-channel network policy (aligned with sandboxd's capabilities.network).
 //
-// 为什么按通道拆：exec 走单工、每请求新建进程，网络可以按请求切；code 是全局池化
-// 单元，网络在建单元时写死，且恒为 off。合成一个值必然在其中一条通道上给出错误结论。
+// Why split by channel: exec goes through the single-worker channel and creates a process per request, so the network can be switched per
+// request; code is a global pooled unit whose network is baked in when the unit is created and is always off. A single combined value would
+// necessarily give a wrong conclusion on one of the two channels.
 //
-// ⚠️ 这两个值都是**部署上限**，不是「这次调用能不能联网」：最终结果还要叠加租户许可
-// （capability.Egress）与请求标志。提示词必须按叠加后的结论说，见 agent 的 sandboxNotes。
+// ⚠️ Both values are **deployment ceilings**, not "may this call reach the network": the final answer also layers on the tenant permission
+// (capability.Egress) and the request flag. The prompt must speak from the combined conclusion, see the agent's sandboxNotes.
 type NetworkInfo struct {
-	// Exec /v1/exec（含技能脚本）的策略：off / on-request / on。
+	// Exec is the policy of /v1/exec (skill scripts included): off / on-request / on.
 	Exec string `json:"exec"`
-	// Code /v1/code（工作流 code 节点）的策略：恒为 off —— sandboxd 不提供配置项。
+	// Code is the policy of /v1/code (workflow code nodes): always off - sandboxd offers no configuration for it.
 	Code string `json:"code"`
-	// Script 旧字段名（sandboxd 2026-10 之前叫 script）。只用于过渡期读取：
-	// UnmarshalJSON 会把它归一到 Code，调用方只看 Code。
+	// Script is the old field name (script before sandboxd 2026-10). Read for the transition only: UnmarshalJSON normalises it into Code,
+	// and callers only look at Code.
 	Script string `json:"script,omitempty"`
 }
 
-// UnmarshalJSON 兼容两种旧格式：
+// UnmarshalJSON accepts two old formats:
 //
-//  1. 更早的 sandboxd 报的是单个字符串（"off" / "on"），没有按通道拆分 —— 按 exec
-//     档位理解，code 恒 off；
-//  2. 2026-10 之前按通道拆了，但第二条通道叫 "script" —— 归一到 Code。
+//  1. an even older sandboxd reported a single string ("off" / "on") with no per-channel split - it is read as the exec tier, with code
+//     always off;
+//  2. before 2026-10 the split existed but the second channel was called "script" - it is normalised into Code.
 //
-// 不做兼容的代价是升级顺序被绑死：sandboxd 先升则 nexus 解析失败、整份快照降级为
-// 「未知」（不会撒谎，但暂时没有信息）。多写这十几行就不必协调上线顺序。
+// Without this compatibility the upgrade order would be frozen: were sandboxd upgraded first, nexus would fail to parse and degrade the
+// whole snapshot to "unknown" (which does not lie, but leaves no information for a while). A dozen extra lines removes the need to
+// coordinate a rollout order.
 func (n *NetworkInfo) UnmarshalJSON(b []byte) error {
 	if len(b) > 0 && b[0] == '"' {
 		var s string
@@ -116,7 +120,7 @@ func (n *NetworkInfo) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// BrowserInfo 浏览器能力快照（与 sandboxd 的 daemon.BrowserInfo 对齐）。
+// BrowserInfo is the browser capability snapshot (aligned with sandboxd's daemon.BrowserInfo).
 type BrowserInfo struct {
 	Enabled         bool   `json:"enabled"`
 	Engine          string `json:"engine,omitempty"`
@@ -126,16 +130,17 @@ type BrowserInfo struct {
 	Error           string `json:"error,omitempty"`
 }
 
-// Network 策略取值（与 sandboxd 的 daemon.NetworkXxx 对齐）。
+// Network policy values (aligned with sandboxd's daemon.NetworkXxx).
 const (
-	// NetworkOff 不能联网（含「请求要出网也拒绝」）。
+	// NetworkOff means no network at all (including refusing a request that asks for one).
 	NetworkOff = "off"
-	// NetworkOn 一律能联网（不看请求）。
+	// NetworkOn means always allowed, regardless of the request.
 	NetworkOn = "on"
-	// NetworkOnRequest 按请求裁决，只对 exec 通道有意义：实际能否出网取决于租户许可。
+	// NetworkOnRequest decides per request and is only meaningful for the exec channel: whether egress actually happens depends on the
+	// tenant permission.
 	//
-	// 提示词里**不要**把这一档原样告诉 agent —— 它无法据此判断自己该不该写联网代码，
-	// 必须由 agent 侧叠加租户能力算出结论（见 agent 的 sandboxNotes）。
+	// The prompt must **not** pass this tier to the agent verbatim - it cannot decide from it whether to write networked code; the agent
+	// side has to combine it with the tenant capability (see the agent's sandboxNotes).
 	NetworkOnRequest = "on-request"
 )
 
@@ -144,13 +149,13 @@ var (
 	configured atomic.Bool
 )
 
-// Set 注入一份能力快照。
+// Set injects a capability snapshot.
 func Set(i Info) {
 	current.Store(&i)
 	configured.Store(true)
 }
 
-// Get 取当前快照；从未注入过时返回零值（调用方用 Configured 区分）。
+// Get returns the current snapshot; a zero value when nothing was ever injected (callers tell the two apart with Configured).
 func Get() Info {
 	if p := current.Load(); p != nil {
 		return *p
@@ -158,24 +163,24 @@ func Get() Info {
 	return Info{}
 }
 
-// Configured 是否注入过。未注入时 agent 侧不该给出任何环境说明
-// （宁可不提，也不要凭空告诉它一个环境）。
+// Configured reports whether a snapshot was ever injected. Before that the agent side must say nothing about the environment - better to
+// stay silent than to invent an environment for it.
 func Configured() bool { return configured.Load() }
 
-// Ready 沙箱是否可用作服务：至少成功拉到过一次能力快照（Mode 非空）。
+// Ready reports whether the sandbox is usable as a service: at least one capability snapshot has been fetched successfully (Mode non-empty).
 //
-// 这是沙箱类工具（exec / shell）的准入判据 —— 不知道沙箱是什么环境，就不要在
-// 里面跑命令。注意与 Err 区分：Err 非空只是「最近一次刷新失败」，此时 Mode 仍非空，
-// 快照是上一次成功的结果（可能过期但可用），不构成拒绝服务的理由。
+// This is the admission criterion for sandbox tools (exec / shell): without knowing what environment the sandbox is, do not run commands
+// in it. Note the difference from Err: a non-empty Err only means "the last refresh failed" - Mode is still non-empty and the snapshot is
+// the last successful one (stale but usable), which is no reason to refuse service.
 func Ready() bool { return Get().Mode != "" }
 
-// CodeLangs 取「可用作工作流 code 节点的语言」，ok 表示这份快照能不能用。
+// CodeLangs returns "the languages usable as a workflow code node"; ok says whether this snapshot is usable.
 //
-// ok=false 的两种情况合一：从未成功拉到（Mode 为空，与 agent 的 sandboxNotes 同口径）；
-// 或对端没报语言列表（更旧的 sandboxd 两个字段都没有）。两种都不该猜 ——
-// 调用方要么退回自己的兜底（编辑器），要么干脆不提（提示词）。
+// ok=false merges two cases: it was never fetched successfully (Mode empty, the same criterion as the agent's sandboxNotes), or the peer
+// reported no language list (an even older sandboxd has neither field). Neither may be guessed - the caller either falls back to its own
+// default (the editor) or says nothing (the prompt).
 //
-// 返回（空, true）是合法结果：沙箱在，且它一个 code 语言都没配。
+// Returning (empty, true) is a legal result: the sandbox is there and has no code language configured.
 func CodeLangs() ([]string, bool) {
 	info := Get()
 	if info.Mode == "" {
@@ -183,7 +188,8 @@ func CodeLangs() ([]string, bool) {
 	}
 	langs := info.CodeLangs
 	if langs == nil {
-		// 旧版 sandboxd 只报 script_langs：回退读取，避免「沙箱在、却报语言未知」。
+		// An older sandboxd reports script_langs only: read the fallback, so it is not "the sandbox is there but the languages are
+		// unknown".
 		langs = info.LegacyCodeLangs
 	}
 	if langs == nil {
@@ -192,14 +198,13 @@ func CodeLangs() ([]string, bool) {
 	return langs, true
 }
 
-// OS 从沙箱环境探测原文里读取操作系统（"windows" / "linux"）；读不到返回空串。
+// OS reads the operating system ("windows" / "linux") out of the raw sandbox environment probe; it returns an empty string when unreadable.
 //
-// capabilities 已经用 `系统: …` 这一行给出 OS（见 sandboxd 的 probeHost /
-// formatOSRelease），所以这里不需要再猜、也不该用 nexus 宿主的 runtime.GOOS：
-// 沙箱可能跑在另一个平台上。只读这一行、不做任何能力推断，因此与「Text 原样给
-// LLM 读」并不冲突。
+// capabilities already gives the OS on the `系统: …` line (see sandboxd's probeHost / formatOSRelease), so there is no need to guess here,
+// and nexus's host runtime.GOOS must not be used either: the sandbox may run on another platform. It reads that one line and infers no
+// capability, which is why it does not conflict with "hand Text to the LLM as is".
 //
-// 探测失败（Error 非空）时返回空串 —— 不可信的文本不能拿来选 shell。
+// When the probe failed (a non-empty Error) it returns an empty string - untrusted text must not be used to pick a shell.
 func OS() string {
 	info := Get()
 	if info.Environment.Error != "" {
@@ -213,33 +218,33 @@ func OS() string {
 		if strings.Contains(strings.ToLower(v), "windows") {
 			return "windows"
 		}
-		// os-release 只存在于 Linux 系；能读到 `系统:` 行且不是 Windows 即 Linux。
+		// os-release only exists on the Linux family; a readable `系统:` line that is not Windows means Linux.
 		return "linux"
 	}
 	return ""
 }
 
-// MaxBodyBytes 响应体读取上限：这段文本会进 LLM 上下文，别被异常响应撑爆。
+// MaxBodyBytes caps how much of the response body is read: this text goes into the LLM context, so an abnormal response must not blow it up.
 const MaxBodyBytes = 1 << 20
 
-// FetchTimeout 单次拉取的上限。sandboxd 是内网服务，给足即可 ——
-// 拖太久会挤掉刷新间隔，也拖慢优雅退出的收敛。
+// FetchTimeout is the ceiling for one fetch. sandboxd is an internal service, so a generous value is fine - dragging on would eat into the
+// refresh interval and slow down the convergence of a graceful shutdown.
 const FetchTimeout = 10 * time.Second
 
-// firstRetry 尚未拿到任何快照时的重试间隔（拿到第一份后回到 interval）。
+// firstRetry is the retry interval while no snapshot has been obtained yet (it returns to interval once the first one is in).
 //
-// 为什么要单独一档：StartRefresher 起来就立刻拉一次，若此刻 sandboxd 还没就绪
-// （部署顺序不定、重启是常态），按 interval 算，下一次要等满一分钟 —— 而 nexus 的
-// 就绪判定认这份快照，整个进程会带着 503 干等。冷启动赌的是「对端只是起得慢」，
-// 成本是一次内网 GET。
+// Why a separate tier: StartRefresher fetches immediately on start, and if sandboxd is not ready at that moment (the deploy order is not
+// fixed and restarts are routine), the next attempt at interval would be a full minute away - while nexus's readiness check trusts this
+// snapshot, so the whole process would sit there returning 503. A cold start is betting on "the peer is merely slow", at the cost of one
+// internal GET.
 //
-// 反过来，快照已在手时失败不再加急：那多半是真的坏了，缩短重试只会放大日志和负载，
-// 而且此时 Ready() 仍为真（快照过期但可用），没有必要急着换一份。
+// Conversely, a failure once a snapshot is in hand is not expedited: it is probably genuinely broken, and a shorter retry only amplifies
+// logs and load - and Ready() is still true at that point (a stale but usable snapshot), so there is no need to hurry a replacement.
 //
-// 是变量而非常量，只为测试能把等待压到毫秒级。
+// It is a variable rather than a constant only so tests can shrink the wait to milliseconds.
 var firstRetry = 2 * time.Second
 
-// Fetch 从 sandboxd 拉取一次能力快照。
+// Fetch pulls one capability snapshot from sandboxd.
 func Fetch(ctx context.Context, endpoint, token string) (Info, error) {
 	if endpoint == "" {
 		return Info{}, errors.New("sandboxinfo: capabilities endpoint is empty")
@@ -273,14 +278,14 @@ func Fetch(ctx context.Context, endpoint, token string) (Info, error) {
 	return payload, nil
 }
 
-// StartRefresher 启动后台刷新：立即拉一次，之后每 interval 一次，直到 ctx 结束。
+// StartRefresher starts the background refresh: fetch immediately, then once per interval until ctx ends.
 //
-// 失败**不覆盖**上一次成功的数据，只把 Err 记上 —— 让 agent 拿到"可能过期的真实环境"，
-// 比直接退化成"未知"有用得多（文案会注明可能过期）。只在 成功↔失败 切换时打日志，
-// 免得 sandboxd 没起来时把日志刷成噪声。
+// A failure **does not overwrite** the last successful data and only records Err - handing the agent a "possibly stale but real
+// environment" is far more useful than degrading to "unknown" (the copy notes that it may be stale). It logs only on success<->failure
+// transitions, so an absent sandboxd does not turn the log into noise.
 func StartRefresher(ctx context.Context, endpoint, token string, interval time.Duration) {
 	if endpoint == "" {
-		xlog.Error("sandboxinfo: capabilities endpoint is empty — agent 将看不到沙箱环境")
+		xlog.Error("sandboxinfo: capabilities endpoint is empty - the agent will see no sandbox environment")
 		return
 	}
 	if interval <= 0 {

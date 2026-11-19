@@ -1,13 +1,13 @@
-// Package versions 实体版本（发布快照）的公共内核。
+// Package versions is the shared core of entity versions (release snapshots).
 //
-// 三种实体（agent / skill / custom_tool）的版本表各自独立（列镜像各自的实体表），
-// 只有这几件事完全相同，所以集中在这里：
-//   - 错误语义：未发布 / 当前版不可删 / 版本目录已存在 / 说明过长
-//   - 快照：把草稿目录整棵冻结成版本目录，产出 files 清单（path / size / sha256）
-//   - 清单的编码与改写（工具会在快照里补写 TOOL.json，清单必须跟着改）
+// The three entity kinds (agent / skill / custom_tool) each have their own version table (whose columns mirror the entity table), and only
+// these few things are identical, so they are collected here:
+//   - error semantics: not released / the current version cannot be deleted / the version directory already exists / the note is too long
+//   - snapshot: freeze the draft directory wholesale into a version directory and produce a files manifest (path / size / sha256)
+//   - encoding and rewriting that manifest (a tool writes TOOL.json into the snapshot, and the manifest must follow)
 //
-// 工作流不走这里：它的本体是 flows.diagram 一列，没有目录，
-// 见 shared/repository/flows/versions.go。
+// Workflows do not go through here: their body is the flows.diagram column, with no directory - see
+// shared/repository/flows/versions.go.
 package versions
 
 import (
@@ -25,34 +25,35 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// ErrNoReleasedVersion 实体没有正式版本（版本表里没有 is_current）。
+// ErrNoReleasedVersion means the entity has no released version (the version table has no is_current).
 //
-// 正式入口（MCP / RPC / 端点 / flow 之间的直调）遇到它必须拒绝，
-// 不能悄悄退回草稿 —— 那样「正式运行用正式版本」就没有意义了。
-// 调试入口（编辑页调试器 / 试跑）读的是草稿，不经过这里。
-var ErrNoReleasedVersion = errors.New("尚未发布正式版本")
+// A production entry (a direct call across MCP / RPC / an endpoint / a flow) must refuse on it and must not quietly fall back to the draft -
+// that would make "production runs use the released version" meaningless.
+// Debug entries (the editor debugger / a test run) read the draft and never come through here.
+var ErrNoReleasedVersion = errors.New("no released version yet")
 
-// ErrCannotDeleteCurrentVersion 当前版本不能删除。
+// ErrCannotDeleteCurrentVersion means the current version cannot be deleted.
 //
-// 它是正式调用的定义来源，也是「线上正在跑什么」的唯一记录。要删就先切到别的版本 ——
-// 切换是另一个动作，删除不该兼职下线。
-var ErrCannotDeleteCurrentVersion = errors.New("当前版本不能删除，请先把线上切到其它版本")
+// It is the definition source of production calls and the only record of "what is running in production". To delete it, switch to another
+// version first - switching is a different action, and a delete should not also mean taking something offline.
+var ErrCannotDeleteCurrentVersion = errors.New("the current version cannot be deleted; switch production to another version first")
 
-// ErrVersionExists 版本号已被占用（版本目录已存在）。
+// ErrVersionExists means the version number is taken (the version directory already exists).
 //
-// 版本是不可变快照，任何情况下都不覆盖；出现它说明编号与磁盘不同步，
-// 应当停下来查，而不是把旧快照盖掉。
-var ErrVersionExists = errors.New("该版本号已被占用（版本目录已存在），版本不可覆盖")
+// A version is an immutable snapshot and is never overwritten under any circumstance; seeing this means the numbering and the disk are out
+// of sync, so stop and investigate rather than overwrite the old snapshot.
+var ErrVersionExists = errors.New("that version number is taken (the version directory already exists); versions are immutable")
 
-// MaxNoteLen 版本说明的长度上限，与版本表的 note varchar(200) 同口径。
+// MaxNoteLen is the length limit of a version note, matching the version tables' note varchar(200).
 const MaxNoteLen = 200
 
-// ErrNoteTooLong 版本说明超出列宽。
-var ErrNoteTooLong = fmt.Errorf("版本说明最多 %d 个字符", MaxNoteLen)
+// ErrNoteTooLong means the version note exceeds the column width.
+var ErrNoteTooLong = fmt.Errorf("the version note is limited to %d characters", MaxNoteLen)
 
-// NormalizeNote 规范化版本说明：去首尾空白 + 校验长度。
+// NormalizeNote normalises a version note: trim the edges and validate the length.
 //
-// 刻意不静默截断：说明是给人回溯用的，悄悄砍掉后半句会让「为什么发这一版」失真。
+// It deliberately does not truncate silently: a note exists for people to trace back, and quietly cutting off the second half would distort
+// "why was this version released".
 func NormalizeNote(note string) (string, error) {
 	note = strings.TrimSpace(note)
 	if utf8.RuneCountInString(note) > MaxNoteLen {
@@ -61,16 +62,16 @@ func NormalizeNote(note string) (string, error) {
 	return note, nil
 }
 
-// Snapshot 把草稿目录冻结成版本目录，返回清单（按 path 升序）。
+// Snapshot freezes the draft directory into a version directory and returns the manifest (sorted by path ascending).
 //
-//	srcDir  实体草稿目录（tenants/<schema>/{agents|skills|tools}/<name>）
-//	dstDir  版本目录（tenants/<schema>/versions/<kind>/<name>/v<n>）
+//	srcDir  the entity draft directory (tenants/<schema>/{agents|skills|tools}/<name>)
+//	dstDir  the version directory (tenants/<schema>/versions/<kind>/<name>/v<n>)
 //
-// 体积闸与上架打包同口径（assetpack.DefaultLimits）：定义域都是文本，
-// 触顶通常意味着有人在目录里塞了数据集或产物。
+// The size gate follows the same criterion as listing packaging (assetpack.DefaultLimits): the definition domain is text, and hitting the
+// ceiling usually means someone dropped a dataset or an artefact into the directory.
 //
-// 调用方负责失败清理（DeletePrefix dstDir）与「目标目录不得已存在」的前置校验：
-// 本函数只写盘，不碰库、不覆盖判定。
+// The caller owns failure cleanup (DeletePrefix dstDir) and the "target must not already exist" pre-check: this function only writes to
+// disk and touches neither the database nor the overwrite decision.
 func Snapshot(ctx context.Context, st storage.Storage, srcDir, dstDir, entry string, skipDirs []string) ([]assetpack.FileEntry, error) {
 	if st == nil {
 		return nil, errors.New("storage not ready")
@@ -79,9 +80,10 @@ func Snapshot(ctx context.Context, st storage.Storage, srcDir, dstDir, entry str
 		assetpack.PackOptions{SkipDirs: skipDirs})
 }
 
-// EnsureAbsent 校验版本目录尚不存在。
+// EnsureAbsent verifies that the version directory does not exist yet.
 //
-// 在拷贝前调用：先判后拷，避免「发现已存在时已经写了一半」。
+// Call it before copying: check first, copy second, so that "half of it is already written by the time the collision is noticed" cannot
+// happen.
 func EnsureAbsent(ctx context.Context, st storage.Storage, dir string) error {
 	ex, err := st.Exists(ctx, dir)
 	if err != nil {
@@ -93,11 +95,12 @@ func EnsureAbsent(ctx context.Context, st storage.Storage, dir string) error {
 	return nil
 }
 
-// PutEntry 把一份内容写进清单：已有同路径项则更新 size / sha256，没有则追加。
+// PutEntry writes one piece of content into the manifest: an entry with the same path has its size / sha256 updated, otherwise one is
+// appended.
 //
-// 存在的理由只有一个：自定义工具的版本必须自带合法的 TOOL.json（草稿里缺或坏时
-// 由合并视图补写），补写之后清单里那一项的摘要就过期了 —— 不清掉它会变成
-// 「安装/载入时校验和对不上」，比缺文件更难查。
+// It exists for one reason only: a custom tool's version must carry a valid TOOL.json (written by the merged view when the draft lacks one
+// or it is broken), and after that write the entry's digest in the manifest is stale - leaving it would turn into "the checksum does not
+// match when installing / loading", which is harder to diagnose than a missing file.
 func PutEntry(files []assetpack.FileEntry, rel string, data []byte) []assetpack.FileEntry {
 	sum := sha256.Sum256(data)
 	e := assetpack.FileEntry{Path: rel, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}
@@ -112,7 +115,7 @@ func PutEntry(files []assetpack.FileEntry, rel string, data []byte) []assetpack.
 	return files
 }
 
-// Encode 清单 → 版本行 files 列的 JSON。
+// Encode turns a manifest into the JSON for a version row's files column.
 func Encode(files []assetpack.FileEntry) ([]byte, error) {
 	if files == nil {
 		files = []assetpack.FileEntry{}
@@ -120,19 +123,19 @@ func Encode(files []assetpack.FileEntry) ([]byte, error) {
 	return json.Marshal(files)
 }
 
-// Decode 版本行 files 列 → 清单（载入版本时用它校验并还原）。
+// Decode turns a version row's files column back into a manifest (used to verify and restore when loading a version).
 func Decode(raw []byte) ([]assetpack.FileEntry, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 	var files []assetpack.FileEntry
 	if err := json.Unmarshal(raw, &files); err != nil {
-		return nil, fmt.Errorf("解析版本文件清单失败: %w", err)
+		return nil, fmt.Errorf("failed to parse the version file manifest: %w", err)
 	}
 	return files, nil
 }
 
-// Summary 清单的文件数与合计字节数（列表接口只回这两个数，不回整份清单）。
+// Summary returns the manifest's file count and total bytes (a list endpoint returns just these two numbers, not the whole manifest).
 func Summary(files []assetpack.FileEntry) (count int, total int64) {
 	for _, f := range files {
 		total += f.Size

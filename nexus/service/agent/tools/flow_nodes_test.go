@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-// nodeTestDiagram 带引用的图：
+// nodeTestDiagram is a graph with references:
 //
-//	1 start（孤岛，只为占位）
-//	5 code ──> 2 code（2 通过 config.inputs.x.source_ref 引用 5）
-//	7 process ── 9 entry ──> 8 code（容器内）
+//	1 start (an island, only to take up space)
+//	5 code ──> 2 code (2 references 5 through config.inputs.x.source_ref)
+//	7 process ── 9 entry ──> 8 code (inside the container)
 const nodeTestDiagram = `{
   "nodes": [
     {"id": "1", "type": "start", "data": {"label": "开始"}},
@@ -31,17 +31,17 @@ const nodeTestDiagram = `{
   ]
 }`
 
-// storedNodes 解析落库的 nodes，按 id 取。
+// storedNodes parses the stored nodes and indexes them by id.
 func storedNodes(t *testing.T, fk *fakeFlows) map[string]map[string]any {
 	t.Helper()
 	if len(fk.updatedDiagram) == 0 {
-		t.Fatal("UpdateDiagram 没被调用：图没落库")
+		t.Fatal("UpdateDiagram was not called: the graph was not stored")
 	}
 	var doc struct {
 		Nodes []map[string]any `json:"nodes"`
 	}
 	if err := json.Unmarshal(fk.updatedDiagram, &doc); err != nil {
-		t.Fatalf("落库 diagram 解析失败: %v", err)
+		t.Fatalf("failed to parse the stored diagram: %v", err)
 	}
 	out := make(map[string]map[string]any, len(doc.Nodes))
 	for _, n := range doc.Nodes {
@@ -65,18 +65,18 @@ func TestCreateNodeTopLevel(t *testing.T) {
 	node, _ := m["node"].(map[string]any)
 	id, _ := node["id"].(string)
 	if id == "" || len(id) != 5 {
-		t.Errorf("新节点 id = %q, want 5 位数字串（与画布一致）", id)
+		t.Errorf("new node id = %q, want a 5-digit string (the same as the canvas)", id)
 	}
 	if _, ok := storedNodes(t, fk)[id]; !ok {
-		t.Error("新节点没落库")
+		t.Error("the new node was not stored")
 	}
 	h, _ := m["handles"].(map[string]any)
 	if ins, _ := h["in"].([]string); len(ins) == 0 {
-		t.Errorf("handles.in 为空: %v", h)
+		t.Errorf("handles.in is empty: %v", h)
 	}
 }
 
-// 容器必须自动带 entry：没有 entry，执行器记一行日志就直接成功返回。
+// A container must bring an entry automatically: without one the executor logs a line and returns success straight away.
 func TestCreateNodeInContainerAddsEntry(t *testing.T) {
 	c, fk := edgeTestCtx(edgeTestDiagram)
 	out, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{
@@ -88,7 +88,7 @@ func TestCreateNodeInContainerAddsEntry(t *testing.T) {
 	m := out.(map[string]any)
 	entry, ok := m["parent_entry"].(map[string]any)
 	if !ok {
-		t.Fatal("容器里建节点没有给容器补 entry（容器没有 entry 会静默空转）")
+		t.Fatal("creating a node inside a container did not add an entry (a container without one spins empty silently)")
 	}
 	entryID, _ := entry["id"].(string)
 	nodes := storedNodes(t, fk)
@@ -100,7 +100,7 @@ func TestCreateNodeInContainerAddsEntry(t *testing.T) {
 	}
 	node, _ := m["node"].(map[string]any)
 	if got := nodes[node["id"].(string)]["parent_node"]; got != "7" {
-		t.Errorf("新节点 parent_node = %v, want 7", got)
+		t.Errorf("the new node's parent_node = %v, want 7", got)
 	}
 }
 
@@ -110,30 +110,31 @@ func TestCreateNodeRejectsIllegalContainer(t *testing.T) {
 		args   map[string]any
 		wantEr string
 	}{
-		{"function 进容器", map[string]any{"flow": "demo", "type": "function", "parent_node": "7"}, "only be created at the top level"},
-		{"return 不在 function 里", map[string]any{"flow": "demo", "type": "return", "parent_node": "7"}, "inside a function container"},
-		{"父节点不是容器", map[string]any{"flow": "demo", "type": "code", "parent_node": "2"}, "only loop / process / function are containers"},
-		{"父节点不存在", map[string]any{"flow": "demo", "type": "code", "parent_node": "zz"}, "does not exist"},
-		{"start 不能建", map[string]any{"flow": "demo", "type": "start"}, "cannot create a node of type"},
-		{"entry 不能建", map[string]any{"flow": "demo", "type": "entry"}, "cannot create a node of type"},
-		{"knowledge 没有执行器", map[string]any{"flow": "demo", "type": "knowledge"}, "no executor registered"},
+		{"function inside a container", map[string]any{"flow": "demo", "type": "function", "parent_node": "7"}, "only be created at the top level"},
+		{"return outside a function", map[string]any{"flow": "demo", "type": "return", "parent_node": "7"}, "inside a function container"},
+		{"the parent is not a container", map[string]any{"flow": "demo", "type": "code", "parent_node": "2"}, "only loop / process / function are containers"},
+		{"the parent does not exist", map[string]any{"flow": "demo", "type": "code", "parent_node": "zz"}, "does not exist"},
+		{"start cannot be created", map[string]any{"flow": "demo", "type": "start"}, "cannot create a node of type"},
+		{"entry cannot be created", map[string]any{"flow": "demo", "type": "entry"}, "cannot create a node of type"},
+		{"knowledge has no executor", map[string]any{"flow": "demo", "type": "knowledge"}, "no executor registered"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, fk := edgeTestCtx(edgeTestDiagram)
 			_, err := (&createNodeTool{}).Execute(context.Background(), c, tc.args)
 			if err == nil || !strings.Contains(err.Error(), tc.wantEr) {
-				t.Fatalf("err = %v, want 含 %q", err, tc.wantEr)
+				t.Fatalf("err = %v, want it to contain %q", err, tc.wantEr)
 			}
 			if len(fk.updatedDiagram) != 0 {
-				t.Error("校验失败时不应落库")
+				t.Error("nothing should be stored when validation fails")
 			}
 		})
 	}
 }
 
-// 能建的类型清单在这里钉死：增删类型时必须同时确认 executors 注册表、前端 palette 与技能文档，
-// 否则就会出现「能渲染、一运行就 no executor registered」（knowledge 就是这么掉的）。
+// The list of creatable types is pinned here: adding or removing a type requires confirming the executors registry, the frontend
+// palette and the skill docs at the same time, otherwise you get "renders fine, fails at run time with no executor registered"
+// (that is how knowledge was lost).
 func TestCreatableNodeTypesFixed(t *testing.T) {
 	want := []string{
 		"llm", "code", "http", "mcp", "rpc", "branch", "intent", "loop", "process", "function",
@@ -147,17 +148,17 @@ func TestCreatableNodeTypesFixed(t *testing.T) {
 	sort.Strings(got)
 	sort.Strings(want)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("creatableNodeTypes = %v，want %v（增删类型请同步 executors / 前端 palette / 技能文档）", got, want)
+		t.Fatalf("creatableNodeTypes = %v, want %v (sync executors / the frontend palette / the skill docs when adding or removing a type)", got, want)
 	}
-	// 结构节点与无执行器的历史类型不能出现在可建清单里。
+	// Structural nodes and legacy types without an executor must not appear in the creatable list.
 	for _, typ := range []string{"start", "entry", "knowledge"} {
 		if creatableNodeTypes[typ] {
-			t.Errorf("%q 不该允许创建", typ)
+			t.Errorf("%q must not be creatable", typ)
 		}
 	}
 }
 
-// branch 没给 children 时要自动带一条：执行器靠 children[].id 找出边。
+// When branch gets no children one is added automatically: the executor finds outgoing edges by children[].id.
 func TestCreateNodeBranchDefaultsChildren(t *testing.T) {
 	c, fk := edgeTestCtx(edgeTestDiagram)
 	out, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{"flow": "demo", "type": "branch"})
@@ -177,14 +178,14 @@ func TestCreateNodeBranchDefaultsChildren(t *testing.T) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &n); err != nil {
-		t.Fatalf("节点解析失败: %v", err)
+		t.Fatalf("failed to parse the node: %v", err)
 	}
 	if len(n.Data.Config.Children) != 1 || n.Data.Config.Children[0].ID == "" {
-		t.Errorf("branch 的 children 没自动生成: %s", raw)
+		t.Errorf("branch's children were not generated automatically: %s", raw)
 	}
 }
 
-// insert_node：删旧边 + 建 A→新→B 两条，原子完成。
+// insert_node: delete the old edge and create A->new->B, atomically.
 func TestInsertNodeRewiresEdge(t *testing.T) {
 	c, fk := edgeTestCtx(edgeTestDiagram)
 	out, err := (&insertNodeTool{}).Execute(context.Background(), c, map[string]any{
@@ -200,16 +201,16 @@ func TestInsertNodeRewiresEdge(t *testing.T) {
 
 	edges := storedEdges(t, fk)
 	if len(edges) != 2 {
-		t.Fatalf("落库边数 = %d, want 2（旧边删掉，插两条）", len(edges))
+		t.Fatalf("stored edge count = %d, want 2 (the old edge deleted, two inserted)", len(edges))
 	}
 	if edges[0]["source"] != "1" || edges[0]["target"] != id {
-		t.Errorf("前一条边不对: %+v", edges[0])
+		t.Errorf("the first edge is wrong: %+v", edges[0])
 	}
 	if edges[1]["source"] != id || edges[1]["target"] != "2" {
-		t.Errorf("后一条边不对: %+v", edges[1])
+		t.Errorf("the second edge is wrong: %+v", edges[1])
 	}
 	if edges[1]["target_handle"] != "target2left" {
-		t.Errorf("后一条边应保留原入边 handle，实际 %v", edges[1]["target_handle"])
+		t.Errorf("the second edge should keep the original incoming handle, got %v", edges[1]["target_handle"])
 	}
 }
 
@@ -219,10 +220,10 @@ func TestInsertNodeRejectsTerminalType(t *testing.T) {
 		"flow": "demo", "edge_id": "10001", "type": "exit",
 	})
 	if err == nil || !strings.Contains(err.Error(), "no outgoing handle") {
-		t.Fatalf("err = %v, want 没有出边", err)
+		t.Fatalf("err = %v, want no outgoing edge", err)
 	}
 	if len(fk.updatedDiagram) != 0 {
-		t.Error("校验失败时不应落库")
+		t.Error("nothing should be stored when validation fails")
 	}
 }
 
@@ -236,15 +237,16 @@ func TestUpdateNodeConfigPatch(t *testing.T) {
 	}
 	cfg, _ := out.(map[string]any)["config"].(map[string]any)
 	if cfg["limit"] == nil {
-		t.Errorf("patch 没生效: %v", cfg)
+		t.Errorf("the patch did not take effect: %v", cfg)
 	}
 	if _, ok := cfg["code"]; !ok {
-		t.Errorf("patch 把原有键弄丢了（应该是合并，不是替换）: %v", cfg)
+		t.Errorf("the patch lost existing keys (it should merge, not replace): %v", cfg)
 	}
 	_ = fk
 }
 
-// 移进容器：横跨新旧作用域的边会被删掉并回显（画布本来也不允许跨父节点连线）。
+// Moving into a container: edges spanning the old and new scope are deleted and echoed back (the canvas does not allow crossing
+// parents either).
 func TestUpdateNodeMoveDropsCrossScopeEdges(t *testing.T) {
 	c, fk := edgeTestCtx(nodeTestDiagram)
 	out, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{
@@ -256,14 +258,14 @@ func TestUpdateNodeMoveDropsCrossScopeEdges(t *testing.T) {
 	m := out.(map[string]any)
 	removed, _ := m["removed_edges"].([]any)
 	if len(removed) != 1 {
-		t.Fatalf("removed_edges = %v, want 1 条（5→2 跨容器）", m["removed_edges"])
+		t.Fatalf("removed_edges = %v, want 1 (5->2 crosses the container)", m["removed_edges"])
 	}
 	if got := storedNodes(t, fk)["2"]["parent_node"]; got != "7" {
 		t.Errorf("2.parent_node = %v, want 7", got)
 	}
-	// 容器内的 9→8 不受影响
+	// The in-container edge 9->8 is unaffected
 	if edges := storedEdges(t, fk); len(edges) != 1 || edges[0]["id"] != "20002" {
-		t.Errorf("剩下的边不对: %+v", edges)
+		t.Errorf("the remaining edge is wrong: %+v", edges)
 	}
 }
 
@@ -278,19 +280,19 @@ func TestDeleteNodeCascadesEdges(t *testing.T) {
 		t.Errorf("edge_count = %v, want 0", got)
 	}
 	if _, ok := storedNodes(t, fk)["2"]; ok {
-		t.Error("节点没删掉")
+		t.Error("the node was not deleted")
 	}
 }
 
-// 被引用时拒绝：source_ref 指向的节点删了，运行期一定报取值失败。
+// Refused when referenced: deleting a node some source_ref points at guarantees a failed lookup at run time.
 func TestDeleteNodeRefusesReferenced(t *testing.T) {
 	c, fk := edgeTestCtx(nodeTestDiagram)
 	_, err := (&deleteNodeTool{}).Execute(context.Background(), c, map[string]any{"flow": "demo", "node_id": "5"})
 	if err == nil || !strings.Contains(err.Error(), "still reference it") {
-		t.Fatalf("err = %v, want 拒绝并列出引用方", err)
+		t.Fatalf("err = %v, want a refusal listing the referencing nodes", err)
 	}
 	if len(fk.updatedDiagram) != 0 {
-		t.Error("拒绝时不应落库")
+		t.Error("nothing should be stored on a refusal")
 	}
 }
 
@@ -302,12 +304,12 @@ func TestDeleteNodeRefusesEntryAndStart(t *testing.T) {
 		c, _ := edgeTestCtx(nodeTestDiagram)
 		_, err := (&deleteNodeTool{}).Execute(context.Background(), c, map[string]any{"flow": "demo", "node_id": tc.id})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("删 %s: err = %v, want 含 %q", tc.id, err, tc.want)
+			t.Errorf("deleting %s: err = %v, want it to contain %q", tc.id, err, tc.want)
 		}
 	}
 }
 
-// 删容器：整棵子树（含 entry）一起走。
+// Deleting a container: the whole subtree (entry included) goes with it.
 func TestDeleteContainerRemovesSubtree(t *testing.T) {
 	c, fk := edgeTestCtx(nodeTestDiagram)
 	out, err := (&deleteNodeTool{}).Execute(context.Background(), c, map[string]any{"flow": "demo", "node_id": "7"})
@@ -317,17 +319,18 @@ func TestDeleteContainerRemovesSubtree(t *testing.T) {
 	m := out.(map[string]any)
 	deleted, _ := m["deleted_nodes"].([]any)
 	if len(deleted) != 3 {
-		t.Fatalf("deleted_nodes = %v, want 3（7 + 9 + 8）", m["deleted_nodes"])
+		t.Fatalf("deleted_nodes = %v, want 3 (7 + 9 + 8)", m["deleted_nodes"])
 	}
 	nodes := storedNodes(t, fk)
 	for _, id := range []string{"7", "8", "9"} {
 		if _, ok := nodes[id]; ok {
-			t.Errorf("节点 %s 没删掉", id)
+			t.Errorf("node %s was not deleted", id)
 		}
 	}
 }
 
-// create_flow 的容器子链：自动建 entry、子节点带 parent_node、从 entry 接出。
+// create_flow's container sub-chains: the entry is created automatically, children carry parent_node, and the chain starts from the
+// entry.
 func TestCreateFlowContainerChildren(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-c"}
 	_, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
@@ -352,7 +355,7 @@ func TestCreateFlowContainerChildren(t *testing.T) {
 		Edges []flowEdge `json:"edges"`
 	}
 	if err := json.Unmarshal(fk.created.Diagram, &doc); err != nil {
-		t.Fatalf("diagram 解析失败: %v", err)
+		t.Fatalf("failed to parse the diagram: %v", err)
 	}
 
 	var entryID, bodyID string
@@ -361,17 +364,17 @@ func TestCreateFlowContainerChildren(t *testing.T) {
 		case n.Type == "entry":
 			entryID = n.ID
 			if n.ParentNode != "2" {
-				t.Errorf("entry.parent_node = %q, want 2（循环节点）", n.ParentNode)
+				t.Errorf("entry.parent_node = %q, want 2 (the loop node)", n.ParentNode)
 			}
 		case n.Type == "code":
 			bodyID = n.ID
 			if n.ParentNode != "2" {
-				t.Errorf("循环体 parent_node = %q, want 2", n.ParentNode)
+				t.Errorf("the loop body's parent_node = %q, want 2", n.ParentNode)
 			}
 		}
 	}
 	if entryID == "" || bodyID == "" {
-		t.Fatalf("没建出 entry 或循环体: %+v", doc.Nodes)
+		t.Fatalf("no entry or loop body was created: %+v", doc.Nodes)
 	}
 	found := false
 	for _, e := range doc.Edges {
@@ -380,11 +383,11 @@ func TestCreateFlowContainerChildren(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("入口没有接到循环体：%+v", doc.Edges)
+		t.Errorf("the entry is not connected to the loop body: %+v", doc.Edges)
 	}
 }
 
-// create_flow 里 call.target / wait.fork_node_id 也支持写 label（与 source_ref 同口径）。
+// In create_flow, call.target / wait.fork_node_id also accept a label (the same rule as source_ref).
 func TestCreateFlowResolvesTargetAndForkIDByLabel(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-r"}
 	_, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
@@ -413,7 +416,7 @@ func TestCreateFlowResolvesTargetAndForkIDByLabel(t *testing.T) {
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(fk.created.Diagram, &doc); err != nil {
-		t.Fatalf("diagram 解析失败: %v", err)
+		t.Fatalf("failed to parse the diagram: %v", err)
 	}
 	var fnID string
 	for _, n := range doc.Nodes {
@@ -426,12 +429,12 @@ func TestCreateFlowResolvesTargetAndForkIDByLabel(t *testing.T) {
 			continue
 		}
 		if got, _ := n.Data.Config["target"].(string); got != fnID {
-			t.Errorf("call.target = %q, want 函数节点 id %q", got, fnID)
+			t.Errorf("call.target = %q, want the function node id %q", got, fnID)
 		}
 	}
 }
 
-// ===== label 唯一性 =====
+// ===== Label uniqueness =====
 
 func nodeLabel(t *testing.T, fk *fakeFlows, id string) string {
 	t.Helper()
@@ -440,41 +443,41 @@ func nodeLabel(t *testing.T, fk *fakeFlows, id string) string {
 	return label
 }
 
-// 显式写了重名 label → 拒绝，不落库。
+// An explicitly written duplicate label -> refused, nothing stored.
 func TestCreateNodeRejectsDuplicateLabel(t *testing.T) {
-	c, fk := edgeTestCtx(edgeTestDiagram) // 节点 2 的 label 是「计算」
+	c, fk := edgeTestCtx(edgeTestDiagram) // node 2 already carries a fixture label
 	_, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{
 		"flow": "demo", "type": "code", "label": "计算",
 	})
 	if err == nil || !strings.Contains(err.Error(), "must be unique") {
-		t.Fatalf("err = %v, want label 重名被拒", err)
+		t.Fatalf("err = %v, want the duplicate label refused", err)
 	}
 	if len(fk.updatedDiagram) != 0 {
-		t.Error("重名时不应落库")
+		t.Error("nothing should be stored on a duplicate")
 	}
 }
 
-// 不写 label（自动命名）撞名 → 自动加后缀，不打断建图。
+// No label given (auto naming) but the name collides -> a suffix is appended, without interrupting the build.
 func TestCreateNodeAutoSuffixForDefaultLabel(t *testing.T) {
 	c, fk := edgeTestCtx(edgeTestDiagram)
 	labels := make([]string, 0, 2)
 	for i := 0; i < 2; i++ {
 		out, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{"flow": "demo", "type": "code"})
 		if err != nil {
-			t.Fatalf("第 %d 个 code 建失败: %v", i+1, err)
+			t.Fatalf("creating code node %d failed: %v", i+1, err)
 		}
 		node, _ := out.(map[string]any)["node"].(map[string]any)
 		labels = append(labels, nodeLabel(t, fk, node["id"].(string)))
 	}
 	if labels[0] != "Code" {
-		t.Errorf("第一个默认 label = %q, want Code", labels[0])
+		t.Errorf("the first default label = %q, want Code", labels[0])
 	}
 	if labels[0] == labels[1] {
-		t.Errorf("两个默认 label 都是 %q：应该自动加后缀", labels[0])
+		t.Errorf("both default labels are %q: a suffix should have been appended", labels[0])
 	}
 }
 
-// 容器 entry 也参与唯一性：第二个容器的 entry 不能还叫「入口」。
+// A container's entry takes part in uniqueness too: the second container's entry must not reuse the first entry's label.
 func TestCreateNodeContainerEntryLabelUnique(t *testing.T) {
 	c, fk := edgeTestCtx(edgeTestDiagram)
 	first, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{"flow": "demo", "type": "process"})
@@ -488,36 +491,36 @@ func TestCreateNodeContainerEntryLabelUnique(t *testing.T) {
 	e1 := first.(map[string]any)["entry"].(map[string]any)["id"].(string)
 	e2 := second.(map[string]any)["entry"].(map[string]any)["id"].(string)
 	if l1, l2 := nodeLabel(t, fk, e1), nodeLabel(t, fk, e2); l1 == l2 {
-		t.Errorf("两个 entry 的 label 都是 %q：应该加后缀", l1)
+		t.Errorf("both entries have the label %q: a suffix should have been appended", l1)
 	}
 }
 
 func TestUpdateNodeRenameLabelRules(t *testing.T) {
-	// 改成别人的 label → 拒绝
-	c, fk := edgeTestCtx(nodeTestDiagram) // 2=中间，5=上游
+	// Renaming to someone else's label -> refused
+	c, fk := edgeTestCtx(nodeTestDiagram) // nodes 2 and 5 both carry fixture labels
 	_, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{
 		"flow": "demo", "node_id": "2", "label": "上游",
 	})
 	if err == nil || !strings.Contains(err.Error(), "must be unique") {
-		t.Fatalf("err = %v, want 改名重名被拒", err)
+		t.Fatalf("err = %v, want the rename onto a duplicate refused", err)
 	}
 	if len(fk.updatedDiagram) != 0 {
-		t.Error("重名时不应落库")
+		t.Error("nothing should be stored on a duplicate")
 	}
 
-	// 改成自己原来的 label → 允许
+	// Renaming to its own current label -> allowed
 	c2, fk2 := edgeTestCtx(nodeTestDiagram)
 	if _, err := (&updateNodeTool{}).Execute(context.Background(), c2, map[string]any{
 		"flow": "demo", "node_id": "2", "label": "中间",
 	}); err != nil {
-		t.Fatalf("改成自己原来的 label 不应报错: %v", err)
+		t.Fatalf("renaming to its own current label should not fail: %v", err)
 	}
 	if got := nodeLabel(t, fk2, "2"); got != "中间" {
 		t.Errorf("label = %q, want 中间", got)
 	}
 }
 
-// create_flow 的 steps 里显式重名 → 报第几步。
+// An explicit duplicate inside create_flow's steps -> the error names the step number.
 func TestCreateFlowRejectsDuplicateLabels(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-dup"}
 	codeCfg := map[string]any{"code": map[string]any{"lang": "lua", "script": "return {}"}}
@@ -529,11 +532,11 @@ func TestCreateFlowRejectsDuplicateLabels(t *testing.T) {
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "collides with") {
-		t.Fatalf("err = %v, want 第 2 步 label 重名被拒", err)
+		t.Fatalf("err = %v, want step 2's duplicate label refused", err)
 	}
 }
 
-// create_flow 里不写 label（自动命名）撞名 → 自动加后缀。
+// No label given in create_flow (auto naming) but the name collides -> a suffix is appended automatically.
 func TestCreateFlowAutoSuffixForDefaultLabels(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-sfx"}
 	codeCfg := map[string]any{"code": map[string]any{"lang": "lua", "script": "return {}"}}
@@ -555,16 +558,16 @@ func TestCreateFlowAutoSuffixForDefaultLabels(t *testing.T) {
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(fk.created.Diagram, &doc); err != nil {
-		t.Fatalf("diagram 解析失败: %v", err)
+		t.Fatalf("failed to parse the diagram: %v", err)
 	}
 	seen := map[string]bool{}
 	for _, n := range doc.Nodes {
 		if n.Data.Label == "" {
-			t.Errorf("节点 %s 没有 label", n.Type)
+			t.Errorf("node %s has no label", n.Type)
 			continue
 		}
 		if seen[n.Data.Label] {
-			t.Errorf("label %q 重复", n.Data.Label)
+			t.Errorf("label %q is duplicated", n.Data.Label)
 		}
 		seen[n.Data.Label] = true
 	}

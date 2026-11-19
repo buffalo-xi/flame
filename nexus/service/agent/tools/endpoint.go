@@ -2,24 +2,24 @@ package tools
 
 import "context"
 
-// EndpointRunner 执行本租户本地端点工具（local__<端点名>），由 agent 包注入。
+// EndpointRunner runs this tenant's local endpoint tools (local__<endpoint name>); injected by package agent.
 //
-// 为什么不和 ExternalRunner 合并：mcp__ / rpc__ 是「连出去」，要解析连接记录与协议；
-// 本地端点是「发出去」的端点，进程内跑 flow，且必须带调用方的 user / session
-// 才能让 flow 落在同一个场地上。两者的身份透传需求不同，混在一起会让接口长成
-// 「一半参数对一半实现无意义」的形状。
+// Why it is not merged with ExternalRunner: mcp__ / rpc__ "connect out" and have to resolve connection records and
+// protocols, while a local endpoint is an exposed endpoint that runs a flow in-process and must carry the caller's
+// user / session so that the flow lands on the same ground. The two have different identity pass-through needs, and
+// merging them would give the interface the shape "half the parameters are meaningless to half the implementations".
 //
-// 与 ExternalRunner 一样：Has 只做前缀判定、不查库（授权闸在前面已经过了），
-// 端点不存在 / 已被删除由 Invoke 给明确错误。
+// Like ExternalRunner: Has only checks the prefix and does not query the database (the grant gate has already run), and a
+// missing / deleted endpoint yields an explicit error from Invoke.
 type EndpointRunner interface {
 	Has(name string) bool
 	Invoke(ctx context.Context, in LocalCall) (any, error)
 }
 
-// LocalCall 一次本地端点调用的入参。
+// LocalCall is the input of one local endpoint call.
 //
-// 身份字段全部来自 tools.Context（Schema / UserID / SessionID / RunID），
-// 目标是让 flow 复用调用方的租户与会话 —— 与 call_agent 透传 session_id 同口径。
+// The identity fields all come from tools.Context (Schema / UserID / SessionID / RunID), so that the flow reuses the
+// caller's tenant and session - the same rule as call_agent passing session_id through.
 type LocalCall struct {
 	Schema    string
 	AgentName string
@@ -27,21 +27,21 @@ type LocalCall struct {
 	UserID    string
 	SessionID string
 	RunID     string
-	// CallDepth 调用方 agent 的当前栈深度（顶层 0）。本地端点执行时以 +1 下传，
-	// 用来拦住 agent → flow → agent 的互相调用（平级工具调用不累加）。
+	// CallDepth is the caller agent's current stack depth (0 at the top). A local endpoint run passes it down as +1,
+	// which blocks agent -> flow -> agent mutual calls (peer tool calls do not accumulate).
 	CallDepth int
-	// CallChain 调用方当前的祖先链（不含本次目标）：本地端点执行时原样下传，
-	// 由端点侧追加「即将执行的实体」后再交给 agent / flow。
+	// CallChain is the caller's current ancestor chain (this target excluded): a local endpoint run passes it down
+	// unchanged, and the endpoint side appends "the entity about to execute" before handing it to agent / flow.
 	CallChain []string
-	ToolName  string // local__<端点名>
+	ToolName  string // local__<endpoint name>
 	Args      map[string]any
 	MaxOutput int
-	// DefinitionMode 调用方 agent 的读定义模式：调试中的 agent 调本地端点时，
-	// 被跑的 flow 也要跟随草稿（否则调试链上出现「一半草稿、一半线上」）。
+	// DefinitionMode is the caller agent's definition-reading mode: when a debugging agent calls a local endpoint, the flow
+	// it runs must follow the draft too (otherwise the debug chain ends up half draft, half live).
 	DefinitionMode DefinitionMode
 }
 
-// endpointRunner 取本上下文应使用的本地端点执行器（Context 显式注入优先，便于单测）。
+// endpointRunner picks the local endpoint runner this context should use (an explicit Context injection wins, handy for tests).
 func (c *Context) endpointRunner() EndpointRunner {
 	if c == nil {
 		return nil

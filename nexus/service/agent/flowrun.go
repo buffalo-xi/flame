@@ -8,12 +8,12 @@ import (
 	"flame/nexus/shared/auth"
 )
 
-// RunFlowTestFunc 进程内试运行一个工作流，由 flow/executors 注册。
+// RunFlowTestFunc runs a workflow in-process for a trial run; flow/executors registers it.
 //
-// 为什么又用注册点：executors 反向 import 本包（rpc 节点要直调 agent 端点，见
-// executors/rpc_target.go），本包不能再 import 回去 —— 否则成环。与
-// SetLocalEndpointRunner 同一套理由，区别只在「跑一个已对外开放端点」vs「跑一个按 id
-// 指定的流程」：后者不要求端点、不校验 exposed，供 run_flow 工具试跑。
+// Why another registration point: executors imports this package in reverse (the rpc node calls agent endpoints directly, see
+// executors/rpc_target.go), so this package cannot import it back without creating a cycle. The same reasoning as
+// SetLocalEndpointRunner; only the subject differs - "run an endpoint that is already exposed" vs "run a flow named by id", the latter
+// needing no endpoint and checking no exposed flag, which is what the run_flow trial run wants.
 type RunFlowTestFunc func(
 	ctx context.Context,
 	authInfo *auth.AuthInfo,
@@ -26,10 +26,11 @@ type RunFlowTestFunc func(
 
 var runFlowTest RunFlowTestFunc
 
-// SetFlowTestRunner 由 flow/executors 在 init 中调用，进程级生效。
-// 任何加载了 flow 的进程（main / websocket / rpc / mcp 四个入口都 import 该包）自动具备。
+// SetFlowTestRunner is called by flow/executors from init and takes effect process-wide.
+// Any process that loads flow (the main / websocket / rpc / mcp entries all import that package) gets it automatically.
 func SetFlowTestRunner(fn RunFlowTestFunc) { runFlowTest = fn }
 
-// errFlowTestUnavailable 执行通道没装配：报清楚原因，而不是让工具「成功返回空结果」。
+// errFlowTestUnavailable means the execution channel is not wired: state the reason clearly rather than letting the tool "succeed with an
+// empty result".
 var errFlowTestUnavailable = errors.New(
-	"试运行不可用：本进程未加载 flow 执行器（run_flow 依赖 /v1/code、沙箱与执行器注册）")
+	"trial run unavailable: the flow executor is not loaded in this process (run_flow needs /v1/code, the sandbox and the executor registration)")

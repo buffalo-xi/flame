@@ -13,26 +13,27 @@ import (
 	"flame/tools/sandbox"
 )
 
-// browserTool 沙箱内浏览器（CDP / Chromium）。
+// browserTool is the in-sandbox browser (CDP / Chromium).
 //
-// 与 shell 同为「session 级常驻进程」：同一个 session / run 内的多次调用复用
-// 同一个浏览器实例（cookie、登录态、标签页都保留），进程归 sandboxd 的
-// 长交互注册表管，工具侧只负责把一次操作翻译成一行 JSON。
+// Like shell it is a "session-level resident process": several calls within the same session / run reuse one browser instance
+// (cookies, login state and tabs all survive), the process is owned by sandboxd's long-interaction registry, and the tool side
+// only translates one action into one line of JSON.
 //
-// 观测通道是**无障碍树快照**，不是截图：工具结果只能回填文本
-// （见 agent_impl.go 的 marshalToolResult），截图落盘给人看，
-// 模型"看"页面必须靠 snapshot 返回的 role / name / ref。
+// The observation channel is an **accessibility-tree snapshot**, not a screenshot: a tool result can only carry text back
+// (see marshalToolResult in agent_impl.go), screenshots go to disk for humans, and for the model to "see" a page it must rely
+// on the role / name / ref returned by snapshot.
 type browserTool struct{}
 
 const (
 	browserToolID = "browser"
-	// browserArgvPlaceholder 只是满足协议「首次 open 必须带 argv」的要求 ——
-	// sandboxd 对 tool_id=browser 会用自己配置的 browserhost 路径覆盖它
-	// （沙箱内路径只有 sandboxd 知道，与 langs / codehost 同一个理由）。
+	// browserArgvPlaceholder only satisfies the protocol's "the first open must carry argv" -
+	// for tool_id=browser sandboxd overrides it with the browserhost path it is configured with
+	// (only sandboxd knows paths inside the sandbox, the same reason as langs / codehost).
 	browserArgvPlaceholder = "browserhost"
 )
 
-// browserReqSeq 请求 id 单调递增：响应按 id 匹配，用来丢弃上次超时后迟到的回包。
+// browserReqSeq is a monotonically increasing request id: responses are matched by id, so a reply that is late after the
+// previous timeout can be discarded.
 var browserReqSeq atomic.Int64
 
 func (t *browserTool) Meta() ToolMeta {
@@ -99,7 +100,7 @@ func (t *browserTool) Execute(ctx context.Context, c *Context, args map[string]a
 		return nil, errors.New("action is required")
 	}
 
-	// 会话身份与 shell 完全一致：SessionID 优先，RunID 兜底（临时进程）。
+	// Session identity exactly as in shell: SessionID first, RunID as the fallback (a temporary process).
 	sess := sandbox.InteractiveSession{Key: c.SessionID}
 	if sess.Key == "" {
 		sess.Key = c.RunID
@@ -107,16 +108,16 @@ func (t *browserTool) Execute(ctx context.Context, c *Context, args map[string]a
 	}
 
 	if action == "close" {
-		// 显式关闭：sandboxd 会杀 browserhost（它的 Chrome 子进程随之收掉）。
-		// 幂等 —— 浏览器没起过时也返回成功。
+		// Explicit close: sandboxd kills browserhost (its Chrome child process goes with it).
+		// Idempotent - it succeeds even when the browser was never started.
 		if err := client.Kill(ctx, sess, browserToolID); err != nil {
 			return nil, err
 		}
 		return map[string]any{"closed": true}, nil
 	}
 
-	// 有头是「创建浏览器时」的属性，不能在运行中切换。这里提前挡住，
-	// 免得模型以为窗口开着、实际一直是无头（反过来更糟）。
+	// Headed is a property of "creating the browser" and cannot be switched at run time. It is blocked here up front, so
+	// that the model does not believe a window is open while it stays headless (the reverse would be worse).
 	if action == "open" && argBool(args, "headed") {
 		if b := sandboxinfo.Get().Browser; b == nil || !b.HeadedAvailable {
 			reason := "this sandbox did not report headed support"
@@ -132,8 +133,8 @@ func (t *browserTool) Execute(ctx context.Context, c *Context, args map[string]a
 		return nil, err
 	}
 
-	// 挂载与 shell 一致：工作区（rw、cwd）+ 本 agent 定义域（ro）。
-	// 浏览器进程自己的 profile 由 sandboxd 指到 /tmp，不需要额外挂载。
+	// Mounts identical to shell: the workspace (rw, cwd) + this agent's definition domain (ro).
+	// The browser process's own profile is pointed at /tmp by sandboxd, so no extra mount is needed.
 	hostRoot := c.Workspace
 	if hostRoot == "" {
 		hostRoot = "."
@@ -174,10 +175,10 @@ func (t *browserTool) Execute(ctx context.Context, c *Context, args map[string]a
 	return out, nil
 }
 
-// ensureBrowserReady 浏览器工具的准入：sandboxd 必须明确说过「浏览器可用」。
+// ensureBrowserReady is the browser tool's admission check: sandboxd must have said explicitly that the browser is available.
 //
-// 与 ensureSandboxReady 同一条哲学 —— 不猜。端口没报、探测失败、镜像里没装，
-// 三种情况都必须让模型看到明确原因，而不是让它以为「这个网站打不开」。
+// The same philosophy as ensureSandboxReady - no guessing. A port that was never reported, a failed probe, an image without a
+// browser: all three must show the model an explicit reason rather than let it believe "this site cannot be opened".
 func ensureBrowserReady() error {
 	b := sandboxinfo.Get().Browser
 	if b == nil {
@@ -194,7 +195,7 @@ func ensureBrowserReady() error {
 	return nil
 }
 
-// buildBrowserRequest 把工具参数翻译成 browserhost 的一行请求。
+// buildBrowserRequest translates the tool arguments into one browserhost request line.
 func buildBrowserRequest(action string, args map[string]any) ([]byte, error) {
 	req := map[string]any{
 		"id": browserReqSeq.Add(1),

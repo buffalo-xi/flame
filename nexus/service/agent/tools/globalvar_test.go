@@ -6,36 +6,37 @@ import (
 	"testing"
 )
 
-// 全局变量清单属于管理面：分类必须落在 flow-admin，且执行层只放行超级智能体。
+// The global variable list belongs to the management surface: the category must be flow-admin and the execution layer must only
+// let the super agent through.
 func TestListGlobalVarsToolIsSupervisorOnly(t *testing.T) {
 	tool, ok := Get("list_global_vars")
 	if !ok {
-		t.Fatal("list_global_vars 未注册")
+		t.Fatal("list_global_vars is not registered")
 	}
 	m := tool.Meta()
 	if m.Category != CategoryFlowAdmin {
-		t.Errorf("分类 = %q, want %q", m.Category, CategoryFlowAdmin)
+		t.Errorf("category = %q, want %q", m.Category, CategoryFlowAdmin)
 	}
 	if !IsSupervisorOnlyTool("list_global_vars") {
-		t.Error("list_global_vars 应判定为仅超级智能体可用")
+		t.Error("list_global_vars should be classified as super-agent only")
 	}
 	if strings.TrimSpace(m.Description) == "" {
-		t.Error("描述不能为空：模型是靠它决定什么时候查的")
+		t.Error("the description must not be empty: the model relies on it to decide when to look things up")
 	}
 	if m.Parameters == nil {
-		t.Error("参数 schema 不能为空")
+		t.Error("the parameter schema must not be empty")
 	}
 }
 
-// 非超级智能体即便硬写出工具名，也必须在执行层被拒。
+// A non-super agent must be refused by the execution layer even if it writes the tool name by hand.
 func TestListGlobalVarsRejectedForNonSupervisor(t *testing.T) {
 	_, err := ExecuteTool(context.Background(), &Context{
 		Schema: "t0", AgentName: "poet", IsSupervisor: false,
 	}, "list_global_vars", map[string]any{})
 	if err == nil {
-		t.Fatal("非超级智能体不该能执行 list_global_vars")
+		t.Fatal("a non-super agent must not be able to run list_global_vars")
 	}
 	if !strings.Contains(err.Error(), "supervisor") {
-		t.Fatalf("错误信息应说明是权限问题，实际: %v", err)
+		t.Fatalf("the error should say it is a permission problem, got: %v", err)
 	}
 }

@@ -2,8 +2,8 @@ package core
 
 import "testing"
 
-// 会话 id 只从 params._meta 里取：它不是端点的业务参数。
-// 这一组钉住「什么算给了」「什么算没给」。
+// The session id only comes from params._meta: it is not a business argument of the endpoint.
+// This group pins "what counts as given" and "what counts as not given".
 func TestMetaSessionID(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -11,72 +11,73 @@ func TestMetaSessionID(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "正常",
+			name:   "normal",
 			params: map[string]any{"_meta": map[string]any{MetaSessionIDKey: " s-1 "}},
-			want:   "s-1", // 去掉首尾空白
+			want:   "s-1", // surrounding whitespace is trimmed
 		},
 		{
-			name:   "没有 _meta",
+			name:   "no _meta",
 			params: map[string]any{"name": "x"},
 			want:   "",
 		},
 		{
-			name:   "_meta 不是对象",
+			name:   "_meta is not an object",
 			params: map[string]any{"_meta": "oops"},
 			want:   "",
 		},
 		{
-			name:   "_meta 里没有这个键",
+			name:   "_meta lacks the key",
 			params: map[string]any{"_meta": map[string]any{"progressToken": "t"}},
 			want:   "",
 		},
 		{
-			name:   "类型不对（数字）当作没给",
+			name:   "wrong type (number) counts as not given",
 			params: map[string]any{"_meta": map[string]any{MetaSessionIDKey: 42}},
 			want:   "",
 		},
 		{
-			name:   "空串当作没给",
+			name:   "an empty string counts as not given",
 			params: map[string]any{"_meta": map[string]any{MetaSessionIDKey: "   "}},
 			want:   "",
 		},
 		{
-			// 旧位置（业务入参里）不算给了 —— 回落由调用方负责，这里只认 _meta
-			name:   "只在 arguments 里不算",
+			// The legacy location (inside business arguments) does not count - falling back is the caller's job, and this only reads _meta
+			name:   "in arguments only does not count",
 			params: map[string]any{"arguments": map[string]any{"session_id": "s-1"}},
 			want:   "",
 		},
-		{name: "params 不是对象", params: "oops", want: ""},
-		{name: "params 为 nil", params: nil, want: ""},
+		{name: "params is not an object", params: "oops", want: ""},
+		{name: "params is nil", params: nil, want: ""},
 	}
 	for _, c := range cases {
 		if got := MetaSessionID(c.params); got != c.want {
-			t.Errorf("%s: MetaSessionID = %q, 期望 %q", c.name, got, c.want)
+			t.Errorf("%s: MetaSessionID = %q, want %q", c.name, got, c.want)
 		}
 	}
 }
 
-// 剥离必须同时满足：结果里没有 session_id、原 map 不被改动、没有该键时不复制。
+// Stripping has to satisfy all three at once: no session_id in the result, the original map untouched, and no copy when the key is
+// absent.
 func TestStripSessionID(t *testing.T) {
 	orig := map[string]any{"q": "hi", "session_id": "s-1"}
 	clean := StripSessionID(orig)
 
 	if _, ok := clean["session_id"]; ok {
-		t.Fatalf("剥离后仍有 session_id: %v", clean)
+		t.Fatalf("session_id is still there after stripping: %v", clean)
 	}
 	if clean["q"] != "hi" {
-		t.Fatalf("业务参数丢了: %v", clean)
+		t.Fatalf("a business argument was lost: %v", clean)
 	}
 	if orig["session_id"] != "s-1" {
-		t.Fatalf("原 map 被改动: %v", orig)
+		t.Fatalf("the original map was modified: %v", orig)
 	}
 
-	// 没有该键：原样返回（不为绝大多数请求复制一遍 map）
+	// Without the key: returned as is (no map copy for the vast majority of requests)
 	plain := map[string]any{"q": "hi"}
 	if got := StripSessionID(plain); len(got) != 1 || got["q"] != "hi" {
-		t.Fatalf("无 session_id 时应原样返回: %v", got)
+		t.Fatalf("without session_id it should be returned as is: %v", got)
 	}
 	if StripSessionID(nil) != nil {
-		t.Fatal("nil 应返回 nil")
+		t.Fatal("nil should return nil")
 	}
 }

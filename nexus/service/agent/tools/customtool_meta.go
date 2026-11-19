@@ -10,18 +10,21 @@ import (
 	"flame/nexus/shared/capability"
 )
 
-// 自定义工具的元工具（仅超级智能体，CategoryCustomTool）。
+// The meta tools for custom tools (super agent only, CategoryCustomTool).
 //
-// 为什么需要这一层：超级智能体能改**已有**工具里的文件（gate.go 把 tools/{name} 当实体放行），
-// 但两件事它做不到 —— 一是建实体根（被文件闸明确拒绝，否则可以 mkdir 绕过脚本表造出
-// 「盘上有、库里没有」的孤儿），二是改 custom_tools 那一行（描述 / 参数 schema / 语言 /
-// 入口 / 超时 / 出网 / 配置）。没有元工具，超级智能体只能改别人建好的工具。
+// Why this layer is needed: the super agent can change files inside an **existing** tool (gate.go lets tools/{name} through as
+// an entity), but two things it cannot do - create an entity root (the file gate refuses that outright, otherwise mkdir would
+// produce orphans that "exist on disk but not in the database"), and change the custom_tools row (description / parameter
+// schema / language / entry / timeout / egress / config). Without meta tools the super agent could only edit tools someone else
+// created.
 //
-// 与 create_agent / create_shared_skill 的分工一致：**元工具建壳，内容交给文件工具**。
-// create 会写一份可跑的最小骨架（SkeletonForLang，管理端创建同源），随后超级智能体用
-// write_file 覆盖 tools/<name>/<entry> 即可；写文件前实体已存在且 status=1，闸门放行。
+// The division of labour matches create_agent / create_shared_skill: **the meta tool builds the shell, the file tools fill
+// it in**.
+// create writes a minimal runnable skeleton (SkeletonForLang, the same source as the admin-side creation), and the super agent
+// then overwrites tools/<name>/<entry> with write_file; by the time the file is written the entity exists with status=1, so the
+// gate lets it through.
 
-// CustomToolInput 新建自定义工具的入参（字段与表一一对应）。
+// CustomToolInput is the input for creating a custom tool (the fields map one to one onto the table).
 type CustomToolInput struct {
 	Name           string
 	DisplayName    string
@@ -37,13 +40,13 @@ type CustomToolInput struct {
 	Configs        map[string]any
 }
 
-// CustomToolUpdate 更新自定义工具的入参。
+// CustomToolUpdate is the input for updating a custom tool.
 //
-// 指针语义与 SkillInput 同款：nil = 不改；Parameters/Output/ConfigFields/Configs
-// 用 nil 判「不改」，非 nil 且为空表 = 清空。
+// The pointer semantics match SkillInput: nil = leave untouched; for Parameters/Output/ConfigFields/Configs nil means "leave
+// untouched" and a non-nil empty value means "clear".
 //
-// 没有 Name：改名会让 agent_tool_grants 里的 custom:<name> 静默失效，
-// 改名等价于「删了重建」，由调用方显式做两步。
+// There is no Name: renaming would silently break custom:<name> in agent_tool_grants, so a rename is equivalent to "delete and
+// recreate", which the caller does explicitly in two steps.
 type CustomToolUpdate struct {
 	DisplayName    *string
 	Description    *string
@@ -58,14 +61,14 @@ type CustomToolUpdate struct {
 	Configs        map[string]any
 }
 
-// CustomToolRefs 删除被拒时的引用方明细（空 = 没人引用）。
+// CustomToolRefs lists the referrers reported when a delete is refused (empty = nobody references it).
 type CustomToolRefs struct {
 	Agents []string
 	Skills []string
 	Groups []string
 }
 
-// Total 引用总数。
+// Total is the total number of references.
 func (r *CustomToolRefs) Total() int {
 	if r == nil {
 		return 0
@@ -73,23 +76,24 @@ func (r *CustomToolRefs) Total() int {
 	return len(r.Agents) + len(r.Skills) + len(r.Groups)
 }
 
-// CustomToolAdmin 自定义工具的增删改（元工具用；由 service/agent 注入）。
+// CustomToolAdmin creates, updates and deletes custom tools (for the meta tools; injected by service/agent).
 //
-// 与只读的 CustomToolSource 分开：那是执行热路径的视图（List/Get/Status），
-// 这里只有管理端语义，且只有超级智能体会走到。
+// It is separate from the read-only CustomToolSource: that one is the view on the execution hot path (List/Get/Status), while
+// this one carries admin-only semantics and is only ever reached by the super agent.
 type CustomToolAdmin interface {
 	Create(ctx context.Context, in CustomToolInput) (*CustomToolSpec, error)
 	Update(ctx context.Context, name string, in CustomToolUpdate) (*CustomToolSpec, error)
-	// Delete 删表行 + 删盘上目录。
+	// Delete removes the table row plus the directory on disk.
 	//
-	// force=false 时若仍被 agent 授权 / skill 依赖 / 自定义组引用则**拒绝**并把引用方
-	// 返回给调用方展示。拒绝而不是静默清理：删掉被引用的工具会让那些 agent 的工具目录
-	// 里突然少一个工具，属于无报错的功能消失。
+	// With force=false, if it is still granted to an agent / required by a skill / referenced by a custom group, the call is
+	// **refused** and the referrers are returned for the caller to show. Refusing rather than cleaning up silently: deleting a
+	// referenced tool makes a tool vanish from those agents' catalogs with no error at all.
 	//
-	// 引用行本身不清理（即使 force）：ref 指向不存在的工具时解析为空，保留它反而让
-	// 「误删后重建」直接恢复授权 —— 与 admin 的口径一致。
+	// The reference rows themselves are not cleaned up (not even with force): a ref pointing at a missing tool resolves to
+	// nothing, so keeping it means "recreate after a mistaken delete" restores the grants immediately - the same rule as the
+	// admin side.
 	Delete(ctx context.Context, name string, force bool) (*CustomToolRefs, error)
-	// ListAll 列出全部工具（含锁定 / 废弃态），供超级智能体自省。
+	// ListAll lists every tool (locked / deprecated included), for the super agent's self-inspection.
 	ListAll(ctx context.Context) ([]CustomToolSpec, error)
 }
 
@@ -209,8 +213,9 @@ func (t *createCustomToolTool) Execute(ctx context.Context, c *Context, args map
 	return map[string]any{
 		"tool": spec,
 		"next": []string{
-			// 路径必须带前导 "/"（= 从租户根算）。少了它会被当成工作区相对路径，
-			// 文件写进 users/{uid}/sessions|runs/... 而工具仍读 tools/<name>/ 下的骨架 —— 改了不生效。
+			// The path must carry the leading "/" (= counted from the tenant root). Without it the path is treated as
+			// workspace-relative, the file lands in users/{uid}/sessions|runs/... while the tool still reads the skeleton under
+			// tools/<name>/ - the change has no effect.
 			"write_file /tools/" + name + "/" + entryOrDefault(entry, in.Lang),
 			"grant_agent_tool ref=custom:" + name,
 		},
@@ -344,9 +349,9 @@ func (t *deleteCustomToolTool) Execute(ctx context.Context, c *Context, args map
 	}
 	force := argBool(args, "force")
 	refs, err := c.CustomToolsAdmin.Delete(ctx, name, force)
-	// 未 force 且仍被引用：服务层「拒绝就是返回 (refs, nil)」（它没删任何东西），
-	// 只有带 force 时才会既删成功又返回引用方，所以判据里必须带上 !force，
-	// 否则 force 删除会被误报成拒绝。
+	// Not forced and still referenced: at the service layer "refused" is reported as (refs, nil) (nothing was deleted), and
+	// only a forced call both deletes and returns the referrers, so the criterion must include !force - otherwise a forced
+	// delete would be misreported as a refusal.
 	if err == nil && !force && refs.Total() > 0 {
 		return nil, fmt.Errorf("custom tool %q is still referenced (agents=%v skills=%v groups=%v); pass force=true to delete it anyway",
 			name, refs.Agents, refs.Skills, refs.Groups)
@@ -360,7 +365,7 @@ func (t *deleteCustomToolTool) Execute(ctx context.Context, c *Context, args map
 	}
 	out := map[string]any{"name": name, "deleted": true}
 	if refs.Total() > 0 {
-		// 保留的引用行：提示重建同名工具可自动恢复授权。
+		// The reference rows that were kept: a hint that recreating a tool of the same name restores the grants automatically.
 		out["kept_refs"] = map[string]any{
 			"agents": refs.Agents, "skills": refs.Skills, "groups": refs.Groups,
 		}
@@ -396,17 +401,17 @@ func (t *listCustomToolsTool) Execute(ctx context.Context, c *Context, args map[
 	return map[string]any{"count": len(list), "tools": list}, nil
 }
 
-// ---- 共用校验 ----
+// ---- Shared validation ----
 
 const (
 	maxCustomToolTimeoutMS = 600_000
 	maxCustomToolOutput    = 1 << 20
 )
 
-// validateCustomToolName 校验短名：与 admin 的创建接口同一套规则。
+// validateCustomToolName validates the short name: the same rule set as the admin creation API.
 //
-// 双下划线与 custom__ 前缀都要拒：对外名是 custom__<name>，名字里再带下划线会把前缀
-// 切乱，让模型看到 custom__a__b 这种无法反解的工具名。
+// Both a double underscore and the custom__ prefix must be refused: the outward name is custom__<name>, so a further
+// underscore inside the name garbles the prefix and shows the model names like custom__a__b that cannot be split back.
 func validateCustomToolName(name string) error {
 	if name == "" {
 		return errors.New("name must not be empty")
@@ -423,13 +428,13 @@ func validateCustomToolName(name string) error {
 	return nil
 }
 
-// validateScriptEntry 入口文件必须是工具目录内的相对路径。
+// validateScriptEntry requires the entry file to be a relative path inside the tool directory.
 //
-// 与 run_skill_script 的越界检查同一条理由：entry 来自模型，一个 ../ 就能让沙箱
-// 去执行工具目录之外的文件。
+// The same reason as run_skill_script's escape check: entry comes from the model, and one ../ would let the sandbox execute a
+// file outside the tool directory.
 func validateScriptEntry(entry string) error {
 	if entry == "" {
-		return nil // 由服务层按语言补默认
+		return nil // the service layer fills in the default for the language
 	}
 	if strings.ContainsRune(entry, '\\') {
 		return fmt.Errorf("entry %q must be separated with /", entry)
@@ -444,14 +449,15 @@ func validateScriptEntry(entry string) error {
 	return nil
 }
 
-// requireCustomToolCaps 建工具前先做能力体检。
+// requireCustomToolCaps runs a capability health check before a tool is created.
 //
-// 为什么在创建时就拦：工具建好但租户没开 sandbox.exec，模型调用时才报「能力未开通」，
-// 那时已经授了权、写进 system prompt，排查成本远高于现在报错。
-// egress 额外要求 net.egress（它是跨通道的出口策略，不随 exec 自动获得）。
+// Why block at creation: if the tool is created but the tenant has no sandbox.exec, the "capability not enabled" error only
+// appears when the model calls it - by then it is already granted and written into the system prompt, so triage costs far more
+// than an error here.
+// egress additionally requires net.egress (it is a cross-channel egress policy and does not come with exec).
 func requireCustomToolCaps(c *Context, egress bool) error {
 	if c.Caps == nil {
-		return nil // 无租户语义的调用方（单测 / 内部），不按能力拦
+		return nil // a caller with no tenant semantics (unit tests / internal), nothing is gated by capability
 	}
 	if egress && !c.Caps[capability.Egress] {
 		return fmt.Errorf("egress=true requires the platform to grant %s (custom tools run on the exec channel, and egress is a separate grant)", capability.Egress)
@@ -462,10 +468,10 @@ func requireCustomToolCaps(c *Context, egress bool) error {
 	return nil
 }
 
-// argMapSlice 取 []map[string]any 形态的参数。
+// argMapSlice takes an argument in []map[string]any shape.
 //
-// 不能直接断言：JSON 解出来的数组是 []any，元素才是 map[string]any。
-// 返回 nil 表示「没传」；空数组会返回非 nil 的空表（= 清空）。
+// It cannot be asserted directly: a JSON-decoded array is []any and only the elements are map[string]any.
+// nil means "not passed"; an empty array returns a non-nil empty slice (= clear).
 func argMapSlice(args map[string]any, key string) []map[string]any {
 	raw, ok := args[key]
 	if !ok || raw == nil {
@@ -486,7 +492,7 @@ func argMapSlice(args map[string]any, key string) []map[string]any {
 	return nil
 }
 
-// entryOrDefault 仅用于给模型下一步提示，真正的默认值由服务层落。
+// entryOrDefault is only used to hint the model's next step; the real default is applied by the service layer.
 func entryOrDefault(entry, lang string) string {
 	if entry != "" {
 		return entry

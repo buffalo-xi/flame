@@ -14,7 +14,7 @@ import (
 	"flame/tools/xlog"
 )
 
-// 新格式：network 是按通道的对象，逐字段落地；语言列表叫 code_langs。
+// The new format: network is a per-channel object decoded field by field, and the language list is called code_langs.
 func TestNetworkInfoPerChannel(t *testing.T) {
 	var info Info
 	raw := `{"mode":"docker","network":{"exec":"on-request","code":"off"},"langs":["lua"],"code_langs":["lua"]}`
@@ -22,15 +22,15 @@ func TestNetworkInfoPerChannel(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if info.Network.Exec != NetworkOnRequest || info.Network.Code != NetworkOff {
-		t.Errorf("按通道策略解析错：%+v", info.Network)
+		t.Errorf("per-channel policy was decoded wrong: %+v", info.Network)
 	}
 	if len(info.CodeLangs) != 1 || len(info.LegacyCodeLangs) != 0 {
-		t.Errorf("code_langs 应落到新字段：%+v", info)
+		t.Errorf("code_langs should land in the new field: %+v", info)
 	}
 }
 
-// 2026-10 改名前的格式：第二条通道叫 script，语言列表叫 script_langs。
-// 两处都要归一，否则「sandboxd 先升 / nexus 先升」的那段时间整个沙箱变成「未知」。
+// The format from before the 2026-10 rename: the second channel is called script and the language list is script_langs.
+// Both have to be normalised, or during "sandboxd upgraded first / nexus upgraded first" the whole sandbox becomes "unknown".
 func TestNetworkInfoLegacyScriptField(t *testing.T) {
 	var info Info
 	raw := `{"mode":"docker","network":{"exec":"on-request","script":"off"},"langs":["lua"],"script_langs":["lua"]}`
@@ -38,15 +38,15 @@ func TestNetworkInfoLegacyScriptField(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if info.Network.Code != NetworkOff {
-		t.Errorf("旧字段 script 应归一到 Code，got %+v", info.Network)
+		t.Errorf("the legacy script field should be normalised into Code, got %+v", info.Network)
 	}
 	if len(info.LegacyCodeLangs) != 1 || len(info.CodeLangs) != 0 {
-		t.Errorf("旧字段 script_langs 应落到兼容字段：%+v", info)
+		t.Errorf("the legacy script_langs should land in the compatibility field: %+v", info)
 	}
 }
 
-// 旧版 sandboxd 报的是单个字符串：按 exec 档位理解，code 恒 off。
-// 不做这个兼容，升级顺序就被绑死了（sandboxd 先升 → nexus 整份快照降级为「未知」）。
+// An older sandboxd reports a single string: it is read as the exec tier, with code always off.
+// Without this compatibility the upgrade order would be frozen (sandboxd upgraded first -> nexus degrades the whole snapshot to "unknown").
 func TestNetworkInfoLegacyString(t *testing.T) {
 	var info Info
 	raw := `{"mode":"docker","network":"on","langs":["lua"]}`
@@ -54,68 +54,69 @@ func TestNetworkInfoLegacyString(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if info.Network.Exec != NetworkOn || info.Network.Code != NetworkOff {
-		t.Errorf("旧版字符串应映射到 exec、code=off，got %+v", info.Network)
+		t.Errorf("the legacy string should map to exec, with code=off, got %+v", info.Network)
 	}
 }
 
-// 三态必须分得开：nil（对端没报这一项，旧版本）≠ 空切片（对端说「一个都没有」）。
-// 依据是 encoding/json 把 `[]` 解成非 nil 空切片 —— 这条行为要是变了，这里会先红，
-// 而不是等到「沙箱没配双工语言却给编辑器兜底出三个语言」才发现。
+// The three states must stay distinguishable: nil (the peer did not report the field, an older version) is not the same as an empty slice
+// (the peer says "there are none").
+// The basis is encoding/json decoding `[]` into a non-nil empty slice - if that behaviour changed, this fails first, rather than surfacing
+// later as "the sandbox has no duplex language configured yet the editor offers three".
 func TestCodeLangsTriState(t *testing.T) {
 	old := Get()
 	oldConfigured := Configured()
 	t.Cleanup(func() {
 		Set(old)
 		if !oldConfigured {
-			// Set 会把 configured 置真，这里还原成「从未注入」—— 与 agent 的
-			// sandboxNotes 判据同源，别给别的测试留下脏状态。
+			// Set makes configured true, so restore "never injected" here - the same source as the agent's sandboxNotes criterion, and it
+			// must not leave dirty state behind for other tests.
 			configured.Store(false)
 		}
 	})
 
-	// 从未成功拉到（Mode 为空）：不可用，调用方该退回自己的兜底。
+	// Never fetched successfully (Mode empty): unusable, and the caller should fall back to its own default.
 	Set(Info{Err: "dial tcp 127.0.0.1:27081: connect: connection refused"})
 	if langs, ok := CodeLangs(); ok {
-		t.Errorf("从未拉到快照时不该给出语言列表, got %v", langs)
+		t.Errorf("no language list should be given without a snapshot, got %v", langs)
 	}
 
-	// 旧版 sandboxd：没有这个字段 → nil → 不可用（退回兜底，而不是当成「没有语言」）。
+	// An older sandboxd: no such field -> nil -> unusable (fall back, not "there are no languages").
 	var legacy Info
 	if err := json.Unmarshal([]byte(`{"mode":"docker","langs":["lua"]}`), &legacy); err != nil {
 		t.Fatalf("unmarshal legacy payload: %v", err)
 	}
 	if legacy.CodeLangs != nil {
-		t.Fatalf("字段缺失应解出 nil, got %v", legacy.CodeLangs)
+		t.Fatalf("a missing field should decode to nil, got %v", legacy.CodeLangs)
 	}
 	legacy.FetchedAt = time.Now()
 	Set(legacy)
 	if langs, ok := CodeLangs(); ok {
-		t.Errorf("字段缺失时不该当作「没有语言」, got %v", langs)
+		t.Errorf("a missing field must not be read as \"no languages\", got %v", langs)
 	}
 
-	// 明确空集：可用但为空（提示词要照实说「沙箱没配任何工作流脚本语言」）。
+	// An explicit empty set: usable but empty (the prompt has to say "the sandbox has no workflow script language configured").
 	var empty Info
 	if err := json.Unmarshal([]byte(`{"mode":"docker","code_langs":[]}`), &empty); err != nil {
 		t.Fatalf("unmarshal empty payload: %v", err)
 	}
 	if empty.CodeLangs == nil {
-		t.Fatal("JSON 的 [] 应解出非 nil 空切片 —— nil/空的分界就靠这条")
+		t.Fatal("JSON [] should decode to a non-nil empty slice - the nil/empty boundary rests on this")
 	}
 	empty.FetchedAt = time.Now()
 	Set(empty)
 	langs, ok := CodeLangs()
 	if !ok || len(langs) != 0 {
-		t.Errorf("空集应是 (空, true), got (%v, %v)", langs, ok)
+		t.Errorf("an empty set should be (empty, true), got (%v, %v)", langs, ok)
 	}
 
-	// 正常上报。
+	// A normal report.
 	Set(Info{Mode: "docker", CodeLangs: []string{"lua", "python"}, FetchedAt: time.Now()})
 	if langs, ok := CodeLangs(); !ok || len(langs) != 2 {
-		t.Errorf("正常上报应可用, got (%v, %v)", langs, ok)
+		t.Errorf("a normal report should be usable, got (%v, %v)", langs, ok)
 	}
 }
 
-// Ready 是沙箱工具的准入：从未拉到快照（Mode 空）时不提供服务。
+// Ready is the admission criterion for sandbox tools: with no snapshot ever fetched (Mode empty) it refuses service.
 func TestReady(t *testing.T) {
 	old := Get()
 	oldConfigured := Configured()
@@ -128,28 +129,27 @@ func TestReady(t *testing.T) {
 
 	Set(Info{})
 	if Ready() {
-		t.Error("从未拉到快照（Mode 空）时不该 Ready")
+		t.Error("with no snapshot ever fetched (Mode empty) it must not be Ready")
 	}
 	Set(Info{Err: "dial failed"})
 	if Ready() {
-		t.Error("只有错误、没有 Mode 时不该 Ready")
+		t.Error("with only an error and no Mode it must not be Ready")
 	}
 	Set(Info{Mode: "docker"})
 	if !Ready() {
-		t.Error("有 Mode 时应该 Ready")
+		t.Error("with a Mode it should be Ready")
 	}
 }
 
-// 冷启动：sandboxd 还没起来时不能按 interval 干等，否则 nexus 的就绪判定会带着 503
-// 卡满一个刷新周期。interval 在这里刻意给到小时级 —— 只有 firstRetry 在起作用，
-// 一旦这条行为回退，测试会超时而不是变慢。
+// Cold start: while sandboxd is not up yet it must not wait a full interval, or nexus's readiness check sits on a 503 for a whole refresh
+// cycle. interval is deliberately an hour here - only firstRetry is at work, so a regression makes the test time out rather than slow down.
 func TestStartRefresherRetriesFastUntilFirstSnapshot(t *testing.T) {
 	old := Get()
 	oldConfigured := Configured()
 	oldRetry := firstRetry
 	oldInfoLogger, oldErrorLogger := xlog.InfoLogger, xlog.ErrorLogger
-	// xlog 未 Init 时 logger 是 nil，刷新失败路径会打日志 —— 这里是单元测试，
-	// 丢掉即可（不去 Init 是为了不落盘、不起那条后台轮转协程）。
+	// Without xlog.Init the loggers are nil and the failure path would log - this is a unit test, so discard it (not calling Init avoids
+	// touching the disk and starting the rotation goroutine).
 	xlog.InfoLogger = log.New(io.Discard, "", 0)
 	xlog.ErrorLogger = log.New(io.Discard, "", 0)
 	t.Cleanup(func() {
@@ -162,7 +162,7 @@ func TestStartRefresherRetriesFastUntilFirstSnapshot(t *testing.T) {
 	})
 
 	firstRetry = 20 * time.Millisecond
-	Set(Info{}) // 从未拉到快照
+	Set(Info{}) // no snapshot ever fetched
 
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -183,25 +183,26 @@ func TestStartRefresherRetriesFastUntilFirstSnapshot(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if !Ready() {
-		t.Fatalf("前两次失败后应很快重试到成功, hits=%d", hits.Load())
+		t.Fatalf("it should retry fast enough to succeed after the first two failures, hits=%d", hits.Load())
 	}
-	// 成功后再无加急重试（下一次要等 interval），所以恰好三次。
+	// No expedited retry once it succeeded (the next one waits a full interval), so exactly three.
 	if got := hits.Load(); got != 3 {
-		t.Errorf("拿到快照后不该继续加急重试, hits=%d", got)
+		t.Errorf("it must not keep retrying fast after obtaining a snapshot, hits=%d", got)
 	}
-	// 这份 fixture 用的是旧版格式：network 是字符串、语言列表叫 script_langs。
-	// 顺带钉住两条兼容路径：字符串映射到 exec（code 记 off）、旧字段名回退仍可用。
+	// This fixture uses the legacy format: network is a string and the language list is script_langs.
+	// It pins both compatibility paths as a side effect: the string maps to exec (code recorded as off), and the legacy field name is still
+	// usable through the fallback.
 	if info := Get(); info.Network.Exec != NetworkOff || info.Network.Code != NetworkOff ||
 		len(info.LegacyCodeLangs) != 1 || len(info.CodeLangs) != 0 {
-		t.Errorf("快照内容应完整落地（旧版格式要能兼容）, got %+v", info)
+		t.Errorf("the snapshot should land completely (the legacy format must stay compatible), got %+v", info)
 	}
 	if langs, ok := CodeLangs(); !ok || len(langs) != 1 {
-		t.Errorf("旧字段 script_langs 应经回退可用, got (%v, %v)", langs, ok)
+		t.Errorf("the legacy script_langs field should be usable through the fallback, got (%v, %v)", langs, ok)
 	}
 }
 
-// OS 从 capabilities 的 `系统:` 行读取沙箱操作系统；不可信/缺失时返回空串，
-// 让调用方（默认 shell 选择）自己决定兜底，而不是凭空猜一个平台。
+// OS reads the sandbox OS from the `系统:` line of capabilities; untrusted or missing input returns an empty string, leaving the caller (the
+// default shell choice) to pick its own fallback rather than inventing a platform.
 func TestOS(t *testing.T) {
 	old := Get()
 	oldConfigured := Configured()
@@ -219,9 +220,9 @@ func TestOS(t *testing.T) {
 	}{
 		{"linux os-release", Environment{Text: "系统: Debian GNU/Linux 12\nPython 版本: 3.13"}, "linux"},
 		{"windows host", Environment{Text: "系统: windows/amd64"}, "windows"},
-		{"探测失败 → 未知", Environment{Text: "系统: windows/amd64", Error: "boom"}, ""},
-		{"没有系统行 → 未知", Environment{Text: "Python 版本: 3.13"}, ""},
-		{"空 → 未知", Environment{}, ""},
+		{"probe failed -> unknown", Environment{Text: "系统: windows/amd64", Error: "boom"}, ""},
+		{"no system line -> unknown", Environment{Text: "Python 版本: 3.13"}, ""},
+		{"empty -> unknown", Environment{}, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

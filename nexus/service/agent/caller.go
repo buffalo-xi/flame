@@ -14,23 +14,25 @@ import (
 	agents "flame/nexus/shared/repository/agents"
 )
 
-// 级联深度上限不再是常量：来自 platform.agent_configs（见 shared/agentconfig），
-// 由 newAgentImpl 快照后经 NewAgentCaller 注入。子 agent 创建时会自己 Resolve 一次
-// （同租户同配置），所以整棵调用树的结论一致。
+// The cascade depth cap is no longer a constant: it comes from platform.agent_configs (see shared/agentconfig), snapshotted by
+// newAgentImpl and injected through NewAgentCaller. A child agent resolves it once when created (same tenant, same config), so the whole
+// call tree reaches the same conclusion.
 
-// agentCaller 实现 tools.AgentCaller：同步调用另一个 agent 并返回其最终结果。
-// 每次调用按其定义起一个临时实例，跑完即回收（不常驻，无需生命周期管理）。
+// agentCaller implements tools.AgentCaller: it calls another agent synchronously and returns its final result.
+// Each call spins up a temporary instance from its definition and reclaims it when done (not resident, so it needs no lifecycle
+// management).
 type agentCaller struct {
 	schema     string
 	agentsRepo agents.Repository
 	rel        agentrelations.Repository
-	emit       func(core.Event) // 转发被调 agent 的事件到父级事件流（可为 nil）
-	maxDepth   int              // 级联调用最大深度（agentconfig，<=0 时兜底为 3）
+	emit       func(core.Event) // forwards the callee's events into the parent event stream (may be nil)
+	maxDepth   int              // maximum cascade depth (agentconfig; falls back to 3 when <= 0)
 }
 
-// NewAgentCaller 创建 AgentCaller（租户 schema 固定）。
-// emit 用于把被调 agent 的思考/工具调用/正文事件转发给父级，使其过程在主对话可见（可为 nil）。
-// maxDepth 来自 agentconfig（租户/系统两级）；传 <= 0 时兜底为 3 —— 绝不能变成「不限深度」。
+// NewAgentCaller creates an AgentCaller (with the tenant schema fixed).
+// emit forwards the callee's thinking / tool calls / content events to the parent so its process is visible in the main conversation (may
+// be nil).
+// maxDepth comes from agentconfig (tenant / system levels); passing <= 0 falls back to 3 - it must never become "unlimited depth".
 func NewAgentCaller(schema string, emit func(core.Event), maxDepth int) tools.AgentCaller {
 	if maxDepth <= 0 {
 		maxDepth = 3
@@ -44,7 +46,7 @@ func NewAgentCaller(schema string, emit func(core.Event), maxDepth int) tools.Ag
 	}
 }
 
-// Call 深度校验 → 查定义 → 授权校验 → 起临时实例 → 同步运行 → 返回结果。
+// Call: depth check -> load definition -> grant check -> start a temporary instance -> run synchronously -> return the result.
 func (c *agentCaller) Call(ctx context.Context, req tools.CallRequest) (string, error) {
 	if req.Depth >= c.maxDepth {
 		return "", fmt.Errorf("agent call depth exceeded (limit %d)", c.maxDepth)
@@ -57,15 +59,15 @@ func (c *agentCaller) Call(ctx context.Context, req tools.CallRequest) (string, 
 	if inst == nil {
 		return "", fmt.Errorf("agent %q not found", req.CalleeName)
 	}
-	// 废弃的 agent 不可被调用
+	// A deprecated agent cannot be called
 	if !models.IsRunnable(int(inst.Status)) {
 		return "", fmt.Errorf("agent %q is deprecated", req.CalleeName)
 	}
-	// supervisor 可以被其它 agent 调用：它的能力不该因调用者而打折，
-	// 且它恒读草稿（resolveDefinitionMode），被调起时仍是完整的管理面。
-	// 风险由授权兜住 —— 下面这条校验对 supervisor 同样生效，无授权行一律拒绝。
+	// The supervisor can be called by other agents: its capabilities must not be discounted by the caller, and it always reads the draft
+	// (resolveDefinitionMode), so it is still the full management surface when invoked. The risk is covered by grants - the check below
+	// applies to the supervisor too, and a missing grant row is always refused.
 
-	// 授权校验：所有 agent 一视同仁（无行 = 拒绝；无特权账号）
+	// Grant check: every agent is treated alike (no row = refused; no privileged account)
 	allowed, aerr := c.rel.Allowed(c.schema, req.CallerID, inst.ID)
 	if aerr != nil {
 		return "", aerr
@@ -74,21 +76,21 @@ func (c *agentCaller) Call(ctx context.Context, req tools.CallRequest) (string, 
 		return "", fmt.Errorf("agent %q is not allowed to call %q", req.CallerName, req.CalleeName)
 	}
 
-	// 循环检测：目标已在自己的祖先链里（f → a → f）就断，不必等深度上限跑满。
-	// 与 RPC 入站同一套判定（见 shared/callchain）：平级重复调用不在链上，不会被误伤。
+	// Cycle detection: stop when the target is already in its own ancestor chain (f -> a -> f) instead of waiting for the depth cap to be
+	// reached. The same test as RPC inbound (see shared/callchain): repeated sibling calls are not in the chain and are not affected.
 	self := callchain.Key(callchain.KindAgent, inst.ID)
 	if callchain.Contains(req.Chain, self) {
-		return "", fmt.Errorf("检测到循环调用：%s 已在本调用链中（%s）", self, callchain.Format(req.Chain))
+		return "", fmt.Errorf("cycle detected: %s is already in this call chain (%s)", self, callchain.Format(req.Chain))
 	}
 
-	// 被调 agent 的入参：arguments 作为其输入，并透传调用深度、userID 与会话
-	// （会话透传让子 agent 与父共用同一场地）
+	// Arguments for the callee: args is its input, and the call depth, userID and session are passed through
+	// (session pass-through puts the child agent and the parent in the same workspace)
 	sub := map[string]any{
 		"args":        req.Args,
 		"_call_depth": req.Depth + 1,
 		"_run_type":   "agent",
 	}
-	// 链：追加被调方自己后下传（子 agent 再从它继续往下走时，本层就成了祖先）
+	// Chain: append the callee itself before passing it down (when the child continues deeper, this level becomes an ancestor)
 	if chain := callchain.Append(req.Chain, self); len(chain) > 0 {
 		sub[callchain.ArgumentKey] = chain
 	}
@@ -98,8 +100,8 @@ func (c *agentCaller) Call(ctx context.Context, req tools.CallRequest) (string, 
 	if req.SessionID != "" {
 		sub["session_id"] = req.SessionID
 	}
-	// 读定义模式跟着父走：父正式 → 子读已发布版本；父调试 → 子读草稿。
-	// 不透传的话，调试时子 agent 跑的是线上版本，排查时极易被这一点骗。
+	// The definition mode follows the parent: a production parent -> the child reads the released version; a debugging parent -> the child
+	// reads the draft. Without passing it through, a child agent runs the live version while debugging, which easily misleads during triage.
 	if req.DefinitionMode.IsCurrent() {
 		SetReleaseMode(sub)
 	} else {
@@ -110,13 +112,13 @@ func (c *agentCaller) Call(ctx context.Context, req tools.CallRequest) (string, 
 	if err != nil {
 		return "", err
 	}
-	// 无 session 的子 agent 落在 runs/{run_id}/ 的一次性场地上，靠 Close() 回收
-	// （cleanupEphemeralWorkspace：先 KillInteractiveRun 再 DeletePrefix；有 session 时直接跳过，
-	// 不会动会话目录）。rpc / mcp / flow 三个入口都有 defer Close，只有这里漏了 ——
-	// 每次 call_agent 都留下一个目录，要等下次进程重启才被启动清扫带走。
+	// A session-less child agent lands in a one-shot workspace under runs/{run_id}/ and is reclaimed by Close()
+	// (cleanupEphemeralWorkspace: KillInteractiveRun first, then DeletePrefix; with a session it is skipped and the session directory is left
+	// alone). The rpc / mcp / flow entries all defer Close; only this one was missing - every call_agent left a directory behind until the
+	// next process restart swept it away.
 	defer a.Close()
 
-	// 边跑边把被调 agent 的事件转发给父级（标注来源 agent 与深度）
+	// Forward the callee's events to the parent while it runs (tagged with the source agent and depth)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -130,10 +132,10 @@ func (c *agentCaller) Call(ctx context.Context, req tools.CallRequest) (string, 
 		}
 	}()
 
-	// 父 ctx 透传：父被终止（用户停止 / 断连）时子实例立即退出，
-	// 而不是继续跑完再丢弃结果。
+	// Parent ctx pass-through: when the parent is stopped (user stop / disconnect) the child instance exits immediately instead of
+	// finishing the run and discarding the result.
 	streamErr := a.Stream(ctx)
-	a.CloseChans() // 关闭 eventCh → 上面的 goroutine 退出
+	a.CloseChans() // close eventCh -> the goroutine above exits
 	<-done
 	if streamErr != nil {
 		return "", streamErr
@@ -141,8 +143,8 @@ func (c *agentCaller) Call(ctx context.Context, req tools.CallRequest) (string, 
 	return a.GetResult(), nil
 }
 
-// Callable 列出 caller 可调用的 agent（出边有记录 ∩ 可运行 ∩ 非超级智能体），口径与 Call 同源。
-// 一次 JOIN 查询拿全（name / description / status），不逐目标二次查询。
+// Callable lists the agents the caller may call (an out-edge row ∩ runnable ∩ not the super agent), the same source as Call.
+// All of it comes from one JOIN query (name / description / status), with no second query per target.
 func (c *agentCaller) Callable(ctx context.Context, callerID string) ([]tools.AgentInfo, error) {
 	if callerID == "" {
 		return nil, nil
@@ -153,8 +155,8 @@ func (c *agentCaller) Callable(ctx context.Context, callerID string) ([]tools.Ag
 	}
 	out := make([]tools.AgentInfo, 0, len(list))
 	for _, m := range list {
-		// 只有废弃的不可被调用（见 IsRunnable）；supervisor 照常列出 ——
-		// 它能不能被调由授权关系决定，不靠身份硬拒。
+		// Only deprecated agents cannot be called (see IsRunnable); the supervisor is listed as usual - whether it can be called is decided
+		// by the grant relation, not by a hard identity refusal.
 		if !models.IsRunnable(m.Status) {
 			continue
 		}
@@ -165,11 +167,11 @@ func (c *agentCaller) Callable(ctx context.Context, callerID string) ([]tools.Ag
 	return out, nil
 }
 
-// getByName 按 name 精确查定义（ListAgents 的 Name 为模糊匹配，需再精确比对）。
+// getByName looks a definition up by exact name (ListAgents matches Name fuzzily, so an exact comparison is needed).
 //
-// Limit 必须取 -1（全部）：仓储按 name 升序返回，带 LIMIT 时精确匹配可能被排在窗外。
-// 例：writer / writer-1 … writer-9 时查 "writer-5"，前 5 条是 writer、writer-1…4，
-// 精确匹配被截掉 → 一个存在的被调方被报成「not found」。
+// Limit must be -1 (all): the repository returns rows sorted by name ascending, and with a LIMIT the exact match may be pushed out of the
+// window. Example: with writer / writer-1 ... writer-9, looking up "writer-5" returns writer, writer-1..4 first and the exact match is cut -
+// an existing callee is reported as "not found".
 func (c *agentCaller) getByName(name string) (*models.Agent, error) {
 	instances, _, err := c.agentsRepo.ListAgents(&auth.AuthInfo{Schema: c.schema},
 		&agents.ListAgentsRequest{Name: name, Page: 1, Limit: -1})

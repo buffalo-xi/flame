@@ -17,17 +17,17 @@ import (
 	"flame/tools/xlog"
 )
 
-// externalToolRunner 把「外部工具名」翻译成一次真实的远程调用。
+// externalToolRunner translates an "external tool name" into one real remote call.
 //
-// 归属：外部工具的执行依赖连接仓储与 MCP/RPC 客户端，这两样放进 tools 包会把
-// SDK 与表结构带进工具层；而 tools 包又不能反向 import 本包（会成环）。
-// 所以执行器实现在这里、接口定义在 tools（同 PluginRunner 的做法）。
+// Ownership: executing an external tool needs the connection repositories and the MCP/RPC clients, and putting those in the tools package
+// would drag the SDK and the table structure into the tool layer; the tools package cannot import this package back either (a cycle).
+// So the runner lives here and the interface is defined in tools (the same approach as PluginRunner).
 //
-// 只覆盖 mcp__ / rpc__：local__（本租户端点）要进程内跑 flow，走的是
-// localEndpointRunner（见 localendpoint.go），两者前缀不重叠、职责不重叠。
-// 连接目录按运行实例缓存（mcpConns / rpcConns）：一次循环里可能多次调外部工具，
-// 每次 List 全表是纯浪费；同一轮内连接配置不变，快照语义与「本轮工具目录在开跑时
-// 冻结」一致（授权闸用的是同一份目录快照）。
+// It only covers mcp__ / rpc__: local__ (an endpoint of this tenant) has to run a flow in-process and goes through localEndpointRunner
+// (see localendpoint.go); the prefixes do not overlap and neither do the responsibilities.
+// The connection catalog is cached per run instance (mcpConns / rpcConns): one loop may call external tools several times, and listing the
+// whole table every time is pure waste; connection config does not change within a round, so the snapshot semantics match "this round's tool
+// catalog is frozen when the run starts" (the grant gate uses the same catalog snapshot).
 type externalToolRunner struct {
 	mu       sync.Mutex
 	mcpConns []models.McpConnection
@@ -36,8 +36,8 @@ type externalToolRunner struct {
 
 var _ tools.ExternalRunner = (*externalToolRunner)(nil)
 
-// externalListLimit 列连接时的上限（远大于实际数量，避免分页默认值截断）。
-// 与 toolgrant.Catalog 的 listLimit 同口径。
+// externalListLimit is the cap when listing connections (far above the real count, so the pagination default cannot truncate it).
+// The same criterion as toolgrant.Catalog's listLimit.
 const externalListLimit = 1000
 
 func (*externalToolRunner) Has(name string) bool {
@@ -47,7 +47,7 @@ func (*externalToolRunner) Has(name string) bool {
 
 func (r *externalToolRunner) Invoke(ctx context.Context, schema, toolName string, args map[string]any, maxOutput int) (any, error) {
 	if schema == "" {
-		return nil, fmt.Errorf("工具 %s 属于外部连接，但缺少租户上下文", toolName)
+		return nil, fmt.Errorf("tool %s is an external connection, but the tenant context is missing", toolName)
 	}
 	authInfo := &auth.AuthInfo{Schema: schema}
 
@@ -55,21 +55,22 @@ func (r *externalToolRunner) Invoke(ctx context.Context, schema, toolName string
 	case strings.HasPrefix(toolName, tools.ExternalPrefixMCP):
 		conns, err := r.mcpConnections(authInfo)
 		if err != nil {
-			return nil, fmt.Errorf("查询 MCP 连接失败: %w", err)
+			return nil, fmt.Errorf("failed to query MCP connections: %w", err)
 		}
 		return invokeMcpTool(ctx, authInfo, conns, toolName, args, maxOutput)
 	case strings.HasPrefix(toolName, tools.ExternalPrefixRPC):
 		conns, err := r.rpcConnections(authInfo)
 		if err != nil {
-			return nil, fmt.Errorf("查询 RPC 连接失败: %w", err)
+			return nil, fmt.Errorf("failed to query RPC connections: %w", err)
 		}
 		return invokeRpcTool(ctx, authInfo, conns, toolName, args, maxOutput)
 	}
-	// Has 与这里的前缀判据必须一致：否则 Has 放行、Invoke 走空 —— 模型只会看到空结果。
-	return nil, fmt.Errorf("工具 %s 不是可执行的外部连接工具", toolName)
+	// The prefix criterion of Has and of this switch must agree: otherwise Has lets a name through while Invoke falls through empty - the
+	// model just sees an empty result.
+	return nil, fmt.Errorf("tool %s is not an executable external connection tool", toolName)
 }
 
-// mcpConnections 返回本次运行的 MCP 连接快照（首次调用查库，之后复用）。
+// mcpConnections returns this run's MCP connection snapshot (a database read on the first call, reused afterwards).
 func (r *externalToolRunner) mcpConnections(authInfo *auth.AuthInfo) ([]models.McpConnection, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -85,7 +86,7 @@ func (r *externalToolRunner) mcpConnections(authInfo *auth.AuthInfo) ([]models.M
 	return list, nil
 }
 
-// invokeMcpTool 解析 mcp__<连接>__<工具> 并调用。
+// invokeMcpTool parses mcp__<connection>__<tool> and calls it.
 func invokeMcpTool(ctx context.Context, authInfo *auth.AuthInfo, list []models.McpConnection, name string, args map[string]any, maxOutput int) (any, error) {
 	connNames := make([]string, 0, len(list))
 	byName := make(map[string]*models.McpConnection, len(list))
@@ -96,31 +97,31 @@ func invokeMcpTool(ctx context.Context, authInfo *auth.AuthInfo, list []models.M
 
 	connName, remoteTool, ok := splitExternalName(name, tools.ExternalPrefixMCP, connNames)
 	if !ok {
-		return nil, fmt.Errorf("工具 %s 找不到对应的 MCP 连接（连接可能已被删除或改名，请让管理员重新授权）", name)
+		return nil, fmt.Errorf("tool %s has no matching MCP connection (the connection may have been deleted or renamed; ask an administrator to grant it again)", name)
 	}
 	conn := byName[strings.ToLower(connName)]
 	if conn == nil {
-		return nil, fmt.Errorf("MCP 连接 %q 不存在", connName)
+		return nil, fmt.Errorf("MCP connection %q does not exist", connName)
 	}
 	if !conn.IsActive {
-		return nil, fmt.Errorf("MCP 连接 %q 未启用，请在「设置 → MCP 连接」中启用后重试", connName)
+		return nil, fmt.Errorf("MCP connection %q is not enabled; enable it under \"Settings -> MCP connections\" and retry", connName)
 	}
 
 	res, err := mcpclient.InvokeSync(ctx, conn, remoteTool, args)
 	if err != nil {
-		// 掐断（超时 / 终止）后必须丢掉池里的会话：stdio 会话是串行的，
-		// 被掐断的那次请求可能还挂在里面，留着会让后续同类调用一起超时。
-		// 只在异常路径生效，正常调用照旧复用子进程。
+		// After a cut-off (timeout / termination) the pooled session must be dropped: stdio sessions are serial, the cut request may still be
+		// stuck inside, and keeping it would make later calls of the same kind time out too. Only on the error path; normal calls keep
+		// reusing the child process.
 		if ctx.Err() != nil && strings.EqualFold(conn.Transport, "stdio") {
 			mcpclient.GetSessionPool().Invalidate(conn.ID)
 		}
-		return nil, fmt.Errorf("MCP 工具 %s 调用失败: %w", remoteTool, err)
+		return nil, fmt.Errorf("calling MCP tool %s failed: %w", remoteTool, err)
 	}
-	xlog.Info("外部工具调用 schema=%s conn=%s tool=%s is_error=%v", authInfo.Schema, connName, remoteTool, res.IsError)
+	xlog.Info("external tool call schema=%s conn=%s tool=%s is_error=%v", authInfo.Schema, connName, remoteTool, res.IsError)
 	return externalResult(res.Content, res.Structured, res.IsError, maxOutput), nil
 }
 
-// rpcConnections 返回本次运行的 RPC 连接快照（首次调用查库，之后复用）。
+// rpcConnections returns this run's RPC connection snapshot (a database read on the first call, reused afterwards).
 func (r *externalToolRunner) rpcConnections(authInfo *auth.AuthInfo) ([]models.RpcConnection, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -136,7 +137,7 @@ func (r *externalToolRunner) rpcConnections(authInfo *auth.AuthInfo) ([]models.R
 	return list, nil
 }
 
-// invokeRpcTool 解析 rpc__<连接>__<工具> 并调用。
+// invokeRpcTool parses rpc__<connection>__<tool> and calls it.
 func invokeRpcTool(ctx context.Context, authInfo *auth.AuthInfo, list []models.RpcConnection, name string, args map[string]any, maxOutput int) (any, error) {
 	connNames := make([]string, 0, len(list))
 	byName := make(map[string]*models.RpcConnection, len(list))
@@ -147,14 +148,14 @@ func invokeRpcTool(ctx context.Context, authInfo *auth.AuthInfo, list []models.R
 
 	connName, remoteTool, ok := splitExternalName(name, tools.ExternalPrefixRPC, connNames)
 	if !ok {
-		return nil, fmt.Errorf("工具 %s 找不到对应的 RPC 连接（连接可能已被删除或改名，请让管理员重新授权）", name)
+		return nil, fmt.Errorf("tool %s has no matching RPC connection (the connection may have been deleted or renamed; ask an administrator to grant it again)", name)
 	}
 	conn := byName[strings.ToLower(connName)]
 	if conn == nil {
-		return nil, fmt.Errorf("RPC 连接 %q 不存在", connName)
+		return nil, fmt.Errorf("RPC connection %q does not exist", connName)
 	}
 	if !conn.IsActive {
-		return nil, fmt.Errorf("RPC 连接 %q 未启用，请在「设置 → RPC 连接」中启用后重试", connName)
+		return nil, fmt.Errorf("RPC connection %q is not enabled; enable it under \"Settings -> RPC connections\" and retry", connName)
 	}
 
 	res, err := rpcclient.Invoke(ctx, conn, remoteTool, args)
@@ -162,18 +163,17 @@ func invokeRpcTool(ctx context.Context, authInfo *auth.AuthInfo, list []models.R
 		if ctx.Err() != nil && strings.EqualFold(conn.Transport, "stdio") {
 			rpcclient.GetSessionPool().Invalidate(conn.ID)
 		}
-		return nil, fmt.Errorf("RPC 工具 %s 调用失败: %w", remoteTool, err)
+		return nil, fmt.Errorf("calling RPC tool %s failed: %w", remoteTool, err)
 	}
-	xlog.Info("外部工具调用 schema=%s conn=%s tool=%s is_error=%v", authInfo.Schema, connName, remoteTool, res.IsError)
+	xlog.Info("external tool call schema=%s conn=%s tool=%s is_error=%v", authInfo.Schema, connName, remoteTool, res.IsError)
 	return externalResult(res.Content, res.Structured, res.IsError, maxOutput), nil
 }
 
-// splitExternalName 把 mcp__<连接>__<工具> 拆成连接名与远端工具名。
+// splitExternalName splits mcp__<connection>__<tool> into the connection name and the remote tool name.
 //
-// 不能按 "__" 盲切：连接名允许含下划线（见 toolgrant 的 namePattern），
-// 形如 fs__prod 的连接会让切分点落到名字内部。连接名在租户内唯一，
-// 所以取「最长的可匹配连接名」即正确切分点；大小写按不敏感比对处理，
-// 与目录侧（Catalog.toolsOfConnection 的 EqualFold）同口径。
+// It cannot blindly cut at "__": connection names may contain underscores (see toolgrant's namePattern), and a connection like fs__prod would
+// put the split point inside the name. Connection names are unique within a tenant, so "the longest matching connection name" is the correct
+// split point; comparison is case-insensitive, the same criterion as the catalog side (EqualFold in Catalog.toolsOfConnection).
 func splitExternalName(name, prefix string, connNames []string) (conn, tool string, ok bool) {
 	rest := strings.TrimPrefix(name, prefix)
 	if rest == name || rest == "" {
@@ -184,7 +184,7 @@ func splitExternalName(name, prefix string, connNames []string) (conn, tool stri
 			continue
 		}
 		head := cn + "__"
-		// len(rest) 必须严格大于 head：工具名至少一个字符。
+		// len(rest) must be strictly greater than head: a tool name has at least one character.
 		if len(rest) <= len(head) {
 			continue
 		}
@@ -201,13 +201,13 @@ func splitExternalName(name, prefix string, connNames []string) (conn, tool stri
 	return conn, tool, true
 }
 
-// externalResult 把远程结果整理成给模型的形状。
+// externalResult shapes a remote result for the model.
 //
-// is_error=true 仍然返回结果、不返回 Go error：与工作流 mcp/rpc 节点的口径一致
-// （业务错误不等于调用异常），模型看得到错误正文才有机会自我纠正；
-// 连接失败 / 未启用才上升为 error。
+// is_error=true still returns the result and no Go error: the same convention as the mcp/rpc nodes of a workflow (a business error is not a
+// call failure), and only by seeing the error body can the model correct itself; connection failures / disabled connections are raised as
+// errors.
 //
-// 截断：外部工具常直接吐整份文件或长列表，不设上限会一次吃掉整个上下文。
+// Truncation: external tools often dump a whole file or a long list, and without a cap it would eat the entire context in one go.
 func externalResult(content string, structured any, isError bool, maxOutput int) map[string]any {
 	out := map[string]any{
 		"content":  content,
@@ -223,7 +223,7 @@ func externalResult(content string, structured any, isError bool, maxOutput int)
 	return out
 }
 
-// clampText 按字节上限截断，且不切在 UTF-8 字符中间（半个汉字在 JSON 里是坏字符）。
+// clampText truncates by the byte limit without cutting in the middle of a UTF-8 character (half a Chinese character is invalid in JSON).
 func clampText(s string, limit int) (string, bool) {
 	if limit <= 0 || len(s) <= limit {
 		return s, false

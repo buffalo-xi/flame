@@ -11,18 +11,18 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// customToolSource 把「工具目录 + 策略表」的合并视图翻成 tools 包要的形状。
+// customToolSource translates the merged view of "tool catalog + policy table" into the shape the tools package wants.
 //
-// 为什么中间隔一层：tools 包只该知道「有哪些工具、怎么跑」，不该知道表结构、
-// 目录布局、状态语义。翻错了也只影响这一处。
+// Why the extra layer: the tools package should only know "which tools exist and how to run them", never the table structure,
+// the directory layout or the status semantics. A wrong translation affects only this one place.
 //
-// 从 2a 起，存在性以**目录**为准（customtoolstore 负责合并），表只提供
-// status / configs：盘上多一个合法工具目录，平台就能看见它。
+// Since 2a, existence follows the **catalog** (customtoolstore does the merge) and the table only supplies
+// status / configs: one more valid tool directory on disk is enough for the platform to see it.
 type customToolSource struct {
 	schema string
 	store  *customtoolstore.Store
-	// mode 本次运行读哪份定义：正式入口（MCP / RPC / 端点 / flow）读当前版本，
-	// 编辑页调试 / 超级智能体读草稿。缺省（零值）即草稿。
+	// mode picks which definition this run reads: a production entry (MCP / RPC / endpoint / flow) reads the current version,
+	// the editor's debug chat / the super agent read the draft. The zero value means draft.
 	mode tools.DefinitionMode
 }
 
@@ -35,9 +35,9 @@ func newCustomToolSource(schema string, mode tools.DefinitionMode) *customToolSo
 }
 
 func (s *customToolSource) List(ctx context.Context) ([]tools.CustomToolSpec, error) {
-	// 正式运行只列「有当前版本」的工具：清单来自版本里的 TOOL.json。
-	// 读草稿会让「新建未发布」的工具直接出现在线上（调用时才报未发布），
-	// 也会让「草稿删掉但版本还在」的工具消失 —— 与定义冻结相冲突。
+	// A production run only lists tools that **have a current version**: the list comes from TOOL.json inside the version.
+	// Reading the draft would surface "created but never released" tools in production (failing only when called), and would also
+	// hide "deleted from the draft but still in the version" tools - which contradicts the definition freeze.
 	var (
 		list []models.CustomTool
 		err  error
@@ -57,10 +57,11 @@ func (s *customToolSource) List(ctx context.Context) ([]tools.CustomToolSpec, er
 	return out, nil
 }
 
-// Get 按短名取。不存在或**非正常态**都返回 (nil, nil)：
-// 锁定 / 废弃的工具在目录里已经不可见，执行层若还放行就等于状态栏只是个装饰。
+// Get looks a tool up by short name. Missing or **not in the normal state** both return (nil, nil):
+// a locked / deprecated tool is already invisible in the catalog, and letting the execution layer through would make the status column
+// mere decoration.
 //
-// 正式运行读当前版本目录里的契约（与 ToolDir 同源）；没有正式版本 = 不存在。
+// A production run reads the contract from the current version directory (the same source as ToolDir); no released version = missing.
 func (s *customToolSource) Get(ctx context.Context, name string) (*tools.CustomToolSpec, error) {
 	var (
 		t   *models.CustomTool
@@ -84,7 +85,8 @@ func (s *customToolSource) Get(ctx context.Context, name string) (*tools.CustomT
 	return &spec, nil
 }
 
-// Status 文件闸用：只回状态，不构造 spec（锁定态也要能判，所以不能复用 Get）。
+// Status serves the file gate: it only reports the status without building a spec (the locked state must be answerable too, so Get
+// cannot be reused).
 func (s *customToolSource) Status(ctx context.Context, name string) (int, bool, error) {
 	return s.store.Status(name)
 }

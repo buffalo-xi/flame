@@ -11,14 +11,14 @@ import (
 
 // ===== update_flow_arguments =====
 //
-// 入口参数（flows.arguments）不是独立实体：只是 flows 行里的一个 JSON 字段，没有 id，
-// 也没有自己的表。增 / 改本质是同一个 upsert 动作，所以不按 create / update / delete
-// 三件套拆开 —— 一次「加 city 并把 required 补上」用三把工具要三次往返，中间态还会是
-// 「required 指向不存在的参数」。
+// Entry parameters (flows.arguments) are not a standalone entity: they are just one JSON field of the flows row, with no id
+// and no table of their own. Adding and changing are the same upsert underneath, so this is not split into a
+// create / update / delete trio - one "add city and mark it required" would cost three round trips with three tools, and the
+// intermediate state would be "required points at a parameter that does not exist".
 //
-// 为什么要这把工具：没有它，改参数只能 delete_flow + create_flow 重建，而重建会换掉
-// flows.id —— 服务凭证的白名单按目标实体 id 授权（svc_auth_binding_targets），旧行会
-// 静默失效；运行记录、版本历史、断点也一起清零。
+// Why this tool exists: without it, changing parameters would mean delete_flow + create_flow, and rebuilding replaces
+// flows.id - service credential allowlists are granted per target entity id (svc_auth_binding_targets), so the old rows would
+// silently stop matching; run records, version history and checkpoints would be wiped as well.
 
 type updateFlowArgumentsTool struct{}
 
@@ -71,11 +71,11 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 	setRaw, _ := args["set"].(map[string]any)
 	remove, _ := argStringSlice(args, "remove")
 	rawRequired, hasRequired := args["required"]
-	// required 单独给也是合法编辑：只调必填、不动声明
+	// Passing required alone is a valid edit too: adjust only the required list, leaving the declarations untouched
 	if len(setRaw) == 0 && len(remove) == 0 && !hasRequired {
 		return nil, errors.New("give at least one of set / remove / required; use read_flow to inspect the current state")
 	}
-	// 同一个名字既要改又要删，意图不自洽：拒掉而不是靠执行顺序决定结果。
+	// The same name in both set and remove is incoherent: refuse instead of letting the execution order decide.
 	for _, name := range remove {
 		if _, both := setRaw[name]; both {
 			return nil, fmt.Errorf("parameter %q is in both set and remove: change it or delete it in one call, not both", name)
@@ -90,7 +90,8 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 		return nil, fmt.Errorf("workflow %q does not exist: confirm the name with list_flows first", ref)
 	}
 
-	// 整份文档原样解码再改局部：人写的 description / default 等字段不能被一次编辑清洗掉。
+	// Decode the whole document as is and then change a part of it: hand-written fields such as description / default must
+	// not be washed away by one edit.
 	doc := map[string]any{}
 	if len(detail.Arguments) > 0 {
 		if err := json.Unmarshal(detail.Arguments, &doc); err != nil {
@@ -106,7 +107,7 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 	for _, name := range remove {
 		delete(props, name)
 	}
-	// set 逐条校验：只重写被点名的参数，其余保持原文
+	// Validate set entry by entry: only the named parameters are rewritten, the rest keep their original text
 	for name, spec := range setRaw {
 		clean, err := validateFlowArgProps(map[string]any{name: spec}, "")
 		if err != nil {
@@ -116,7 +117,8 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 	}
 	doc["properties"] = props
 
-	// required：传了就整体替换（先 read_flow 拿现状），没传就保持并摘掉被删项
+	// required: when passed it is replaced wholesale (read_flow first for the current state); when absent it is kept, with the
+	// removed entries dropped
 	if hasRequired && rawRequired != nil {
 		req, err := flowArgRequired(rawRequired, props, "")
 		if err != nil {

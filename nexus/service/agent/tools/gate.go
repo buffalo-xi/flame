@@ -10,51 +10,57 @@ import (
 	"flame/nexus/shared/paths"
 )
 
-// 根寻址闸门："以 / 开头的路径 = 从租户根算"（路径语法见 paths.SafePathEx）。
+// Root-addressing gate: "a path starting with / = counted from the tenant root" (path syntax in paths.SafePathEx).
 //
-// 语法对所有 agent 开放，**权限按身份分两档**（见 resolveRead / resolveWrite 的分流）：
+// The syntax is available to every agent, but **permission is graded by identity** (see the branching in resolveRead /
+// resolveWrite):
 //
-//	超级智能体 → 全租户（checkWrite；读不受限，仅写被闸）
-//	非超级智能体 → **读**：自己的定义目录 agents/{self}/**（含 AGENT.md）；
-//	          **写**：只有自己的私有 skill 目录 agents/{self}/skills/{skill}/**，
-//	          且要过两道状态闸（checkWriteOwn）。别人的定义与其它实体一律不可达。
+//	super agent     -> the whole tenant (checkWrite; reads are unrestricted, only writes are gated)
+//	non-super agent -> **read**: its own definition directory agents/{self}/** (AGENT.md included);
+//	                   **write**: only its own private skill directory agents/{self}/skills/{skill}/**,
+//	                   and it has to pass two status gates (checkWriteOwn). Other agents' definitions and all other entities
+//	                   are unreachable.
 //
-// 读写不对称是有意的：读自己的定义是「自省」（自述、诊断、对比本轮与上一轮的行为差异），
-// 不改任何东西；写自己的 AGENT.md 属于身份变更，必须由人或 supervisor 做出 —— 否则
-// 「这份草稿是谁产生的」无法回答，版本模型里「禁止自发布」的前提就没了。
+// The read/write asymmetry is intentional: reading your own definition is "introspection" (self-description, diagnosis,
+// comparing this run's behaviour with the previous one) and changes nothing; writing your own AGENT.md is an identity change
+// and must be made by a human or a supervisor - otherwise "who produced this draft" cannot be answered, and the premise of
+// "no self-release" in the version model is gone.
 //
-// 为什么给非超级智能体开这一格：私有 skill 是**单文件知识文档**的旧口径下，"改自己的技能"
-// 只能改 SKILL.md 正文（update_own_skill）；而超级智能体与管理端早就能管理整个技能目录
-// （附属文件 / 子目录）。开这一格是为了把三者口径对齐 —— 编辑态下的 agent 能以同一套
-// 文件工具管理自己技能的附属资源。
+// Why a non-super agent gets this slot: under the old "private skill = a single-file knowledge document" rule, "editing your
+// own skill" could only change the SKILL.md body (update_own_skill), while the super agent and the admin side have long been
+// able to manage a whole skill directory (attached files / subdirectories). This slot aligns the three - an agent in edit mode
+// can manage its own skill's attached resources with the same file tools.
 //
-// 判定单位是**实体目录**（= 一行 DB 记录）：
+// The unit of decision is the **entity directory** (= one database row):
 //
-//	agents/{agent}                  → agent 实体
-//	agents/{agent}/skills/{skill}   → skill 实体（归属 {agent}）
-//	skills/{skill}                  → 租户级 skill 实体
-//	users/{uid}                     → 用户域（本人或超级智能体）
+//	agents/{agent}                  -> the agent entity
+//	agents/{agent}/skills/{skill}   -> the skill entity (owned by {agent})
+//	skills/{skill}                  -> the tenant-level skill entity
+//	users/{uid}                     -> the user domain (the user themselves, or the super agent)
 //
-// 规则（对两档都成立）：
-//   - 实体目录**内部**的任意文件与子目录（含 AGENT.md / SKILL.md 正文，以及任何
-//     附属资源）→ 文件工具可写，过该实体的状态闸（models.IsModifiable）；写 agent
-//     私有 skill 时还要过**归属 agent** 的状态闸（非编辑态 → 整片冻结，超级智能体亦然）；
-//   - 实体**根目录本身**的写/删 → 拒绝，交给元工具（create_* / delete_*）；
-//   - 写一个**不存在的实体** → 拒绝，提示用 create_*（防止长出不登记的目录）。
+// Rules (both tiers):
+//   - any file or subdirectory **inside** an entity directory (the AGENT.md / SKILL.md body included, plus any attached
+//     resource) -> writable by the file tools, subject to that entity's status gate (models.IsModifiable); writing a private
+//     agent skill also has to pass the **owning agent**'s status gate (a non-editable agent freezes the whole area, the super
+//     agent included);
+//   - writing / deleting the entity's **root directory itself** -> refused, it belongs to the meta tools (create_* / delete_*);
+//   - writing a **non-existent entity** -> refused, pointing at create_* (this prevents directories growing that are not
+//     registered).
 //
-// 本文件不含规则：状态判据唯一真源是 shared/models 的纯谓词；这里只做
-// 「路径 → 实体」识别、「取实例」与调谓词。与业务层（manager.go / skills.go）
-// 的闸门不叠加 —— 经业务方法的写在那里判，直落 storage 的跨域写才在这里判。
+// This file holds no rules: the single source of truth for status decisions is the pure predicates in shared/models; here we
+// only recognise "path -> entity", fetch the instance and call the predicate. It does not stack on the business layer's gates
+// (manager.go / skills.go) - writes through business methods are judged there, and only cross-domain writes that go straight to
+// storage are judged here.
 
-// pathTarget 一条租户根相对路径解析出的实体。
+// pathTarget is the entity a tenant-root-relative path resolves to.
 type pathTarget struct {
 	kind   string // "user" | "agent" | "skill"
-	owner  string // skill 的归属 agent 名（租户级为 ""）；agent 时为 agent 名
-	name   string // 实体名：agent 名 / skill 名 / uid
-	isRoot bool   // 路径恰为实体根目录本身（而非其内部文件）
+	owner  string // the owning agent name of a skill ("" for tenant-level); for an agent, the agent name
+	name   string // entity name: agent name / skill name / uid
+	isRoot bool   // the path is exactly the entity's root directory (not a file inside it)
 }
 
-// resolveTarget 纯字符串解析（不碰 IO，便于单测）。
+// resolveTarget does pure string parsing (no IO, so it is unit-testable).
 func resolveTarget(tenantRel string) (pathTarget, error) {
 	seg := strings.Split(tenantRel, "/")
 	if len(seg) < 2 || seg[0] == "" || seg[1] == "" {
@@ -73,8 +79,8 @@ func resolveTarget(tenantRel string) (pathTarget, error) {
 	case paths.TenantSkillsSubdir:
 		return pathTarget{kind: "skill", owner: "", name: seg[1], isRoot: len(seg) == 2}, nil
 	case paths.ToolsSubdir:
-		// 租户级自定义工具：tools/{name}/**。它是「定义域」内容（代码在盘上），
-		// 实体 = {schema}.custom_tools 的一行，与 skills/{name} 同级。
+		// Tenant-level custom tool: tools/{name}/**. It is definition-domain content (the code lives on disk),
+		// and the entity is a row of {schema}.custom_tools, a peer of skills/{name}.
 		return pathTarget{kind: "custom_tool", name: seg[1], isRoot: len(seg) == 2}, nil
 	case paths.UsersSubdir:
 		return pathTarget{kind: "user", name: seg[1], isRoot: len(seg) == 2}, nil
@@ -83,8 +89,9 @@ func resolveTarget(tenantRel string) (pathTarget, error) {
 	}
 }
 
-// checkWrite 根寻址的写闸（supervisor 档）：身份（仅超级智能体）+ 非实体根 + 目标存在且可改。
-// 身份分流在调用点（resolveWrite）已做，这里保留一道做纵深防御。
+// checkWrite is the root-addressing write gate (supervisor tier): identity (super agent only) + not the entity root + the
+// target exists and is modifiable.
+// The identity branch already happened at the call site (resolveWrite); one is kept here as defence in depth.
 func checkWrite(ctx context.Context, c *Context, tenantRel string) error {
 	if !c.IsSupervisor {
 		return errors.New("only a supervisor may access paths outside the workspace")
@@ -93,13 +100,13 @@ func checkWrite(ctx context.Context, c *Context, tenantRel string) error {
 	if err != nil {
 		return err
 	}
-	// 实体根目录本身的写/删一律拒绝，交给元工具
+	// Writing / deleting the entity root directory itself is always refused; that belongs to the meta tools
 	if t.isRoot {
 		return fmt.Errorf("refusing to write the entity directory itself (%s); use the matching meta tool", tenantRel)
 	}
 	switch t.kind {
 	case "user":
-		// 用户域：本人或超级智能体（已在下方分支之外确认过身份）
+		// User domain: the user themselves or the super agent (identity was already confirmed outside this branch)
 		if t.name != c.UserID {
 			return fmt.Errorf("not allowed to access files of user %q", t.name)
 		}
@@ -135,9 +142,9 @@ func checkWrite(ctx context.Context, c *Context, tenantRel string) error {
 			if ai == nil {
 				return fmt.Errorf("agent %q not found", t.owner)
 			}
-			// 归属 agent 能否写它的私有 skill —— 与 checkWriteOwn 第 3 条是同一条判据
-			// （那里判「自己」，这里判「归属者」），超级智能体不得例外：否则同一判据在
-			// 非超级智能体档是冻结、在 supervisor 档却敞开。
+			// Whether the owning agent may write its private skill - the same criterion as item 3 of checkWriteOwn
+			// (there it judges "self", here "the owner"), and the super agent gets no exception: otherwise the same criterion
+			// would freeze for a non-super agent and stay open for a supervisor.
 			if !models.IsModifiable(ai.Status) {
 				return fmt.Errorf("agent %q is deprecated; its private skills are frozen", t.owner)
 			}
@@ -173,12 +180,12 @@ func checkWrite(ctx context.Context, c *Context, tenantRel string) error {
 	return fmt.Errorf("path not allowed: %s", tenantRel)
 }
 
-// checkReadOwn 根寻址的**读**闸：超级智能体不受限；非超级智能体可读自己的定义目录
-// （agents/{self}/**，含 AGENT.md 与私有 skill 的附属文件），其余一律拒绝。
+// checkReadOwn is the root-addressing **read** gate: the super agent is unrestricted; a non-super agent may read its own
+// definition directory (agents/{self}/**, AGENT.md and private skills' attached files included), everything else is refused.
 //
-// 为什么读放得比写宽：读自己的定义是自省；写自己的 AGENT.md 是身份变更（见
-// checkWriteOwn），两者不是一个量级。读不查 DB、不设状态闸 —— 废弃的实体
-// 也能读（D4）；路径不存在时交给 storage 报 not found。
+// Why reading is looser than writing: reading your own definition is introspection; writing your own AGENT.md is an identity
+// change (see checkWriteOwn), and the two are not the same order. Reading does not query the database and sets no status gate
+// - a deprecated entity can be read too (D4); when the path does not exist, storage reports not found.
 func checkReadOwn(c *Context, tenantRel string) error {
 	if c.IsSupervisor {
 		return nil
@@ -187,7 +194,7 @@ func checkReadOwn(c *Context, tenantRel string) error {
 	if err != nil {
 		return err
 	}
-	// 自己的定义目录：整棵可读（AGENT.md、私有 skill 正文与附属文件都在里面）
+	// Your own definition directory: the whole tree is readable (AGENT.md, private skill bodies and attached files are in it)
 	if t.kind == "agent" && t.name == c.AgentName {
 		return nil
 	}
@@ -198,30 +205,31 @@ func checkReadOwn(c *Context, tenantRel string) error {
 		"and only /agents/%s/skills/<skill>/... inside it is writable", tenantRel, c.AgentName, c.AgentName)
 }
 
-// checkWriteOwn 根寻址的**写**闸（非超级智能体档）：只放行自己的私有 skill 目录内部。
+// checkWriteOwn is the root-addressing **write** gate (non-super tier): it only allows inside your own private skill directory.
 //
-// 五道判据，缺一不可：
-//  1. 形态与归属：必须是 agents/{self}/skills/{skill}/<非空>；其余（别人的 agent /
-//     别人的 skill / 租户级 skills/ / users/）一律拒绝；
-//  2. 实体根目录本身不能直接写（同 D6：实体的建 / 改 / 删走元工具）；
-//  3. **自己是正常态** —— 废弃(3) 的 agent 不可运行、也不可改；
-//  4. skill 已登记且属于自己（FindForWrite 按「自身 agentID + 名」查）；
-//  5. skill 自身是正常态。
+// Five criteria, none optional:
+//  1. shape and ownership: must be agents/{self}/skills/{skill}/<non-empty>; everything else (another agent / another agent's
+//     skill / tenant-level skills/ / users/) is refused;
+//  2. the entity root directory itself cannot be written directly (same as D6: creating / changing / deleting an entity goes
+//     through the meta tools);
+//  3. **you are in the normal state** - a deprecated (3) agent can neither run nor be changed;
+//  4. the skill is registered and belongs to you (FindForWrite looks it up by "own agentID + name");
+//  5. the skill itself is in the normal state.
 func checkWriteOwn(ctx context.Context, c *Context, tenantRel string) error {
 	t, err := resolveTarget(tenantRel)
 	if err != nil {
 		return err
 	}
-	// 1) 形态 + 归属
+	// 1) shape + ownership
 	if t.kind != "skill" || t.owner != c.AgentName {
 		return fmt.Errorf("not allowed to write %q: you may only change your own private skill directory (/agents/%s/skills/<skill>/...)",
 			tenantRel, c.AgentName)
 	}
-	// 2) 实体根目录本身交给元工具
+	// 2) the entity root directory itself belongs to the meta tools
 	if t.isRoot {
 		return fmt.Errorf("refusing to write the skill directory itself (%s); use create_own_skill / update_own_skill / delete_own_skill", tenantRel)
 	}
-	// 3) 自己必须是正常态
+	// 3) you must be in the normal state
 	if c.Agents == nil {
 		return errors.New("agent manager not available")
 	}
@@ -235,8 +243,9 @@ func checkWriteOwn(ctx context.Context, c *Context, tenantRel string) error {
 	if !models.IsModifiable(self.Status) {
 		return fmt.Errorf("agent %q is deprecated; its private skills are frozen", c.AgentName)
 	}
-	// 4) skill 必须是自己登记的私有 skill。AgentID 缺失时 FindForWrite 会按「租户级」
-	//    查（FindByName 的 agentID=="" 即租户级），把共享 skill 误当私有 —— 先拦掉。
+	// 4) the skill must be a private skill registered to you. With AgentID missing, FindForWrite would look it up as
+	//    "tenant-level" (agentID=="" in FindByName means tenant-level) and mistake a shared skill for a private one - block that
+	//    first.
 	if c.AgentID == "" {
 		return errors.New("no agent context for private skill")
 	}
@@ -250,25 +259,28 @@ func checkWriteOwn(ctx context.Context, c *Context, tenantRel string) error {
 	if info == nil {
 		return fmt.Errorf("skill %q not found; use create_own_skill to register a new private skill", t.name)
 	}
-	// 5) skill 自身可改
+	// 5) the skill itself is modifiable
 	if !models.IsModifiable(info.Status) {
 		return fmt.Errorf("skill %q is locked or deprecated; switch it back to normal first", t.name)
 	}
 	return nil
 }
 
-// entityLikePath 识别「会话工作区里仿造实体目录」的路径形状 —— 即模仿租户根下的
-// agents/{name}/... 或 skills/{name}/...（skills 同时覆盖私有与租户级两种写法）。
+// entityLikePath recognises the path shape of a "fake entity directory" inside the session workspace - i.e. imitating
+// agents/{name}/... or skills/{name}/... under the tenant root (skills covers both the private and the tenant-level spelling).
 //
-// 为什么要单独拦：这类路径没有 "/" 前缀，SafePathEx 会把它当成工作区相对路径，
-// 对非超级智能体而言既不登记 DB 也不生效，只会在工作区留下假实体目录，并让模型误判
-// 「已创建」—— 是幻觉式成功的直接来源。（带 "/" 前缀的根寻址走 checkWrite /
-// checkWriteOwn，不受此限。）
+// Why it needs its own check: such a path has no "/" prefix, so SafePathEx treats it as a workspace-relative path; for a
+// non-super agent it is neither registered in the database nor effective, it only leaves a fake entity directory in the
+// workspace and makes the model believe "it was created" - a direct source of hallucinated success. (Root addressing with a
+// "/" prefix goes through checkWrite / checkWriteOwn and is not affected.)
 //
-// 返回给模型的正确指引；ok=false 表示不像实体，按普通工作区路径放行。
-// selfName 用来区分「自己的定义域（有正解：改用根寻址）」与「别人的定义域」。
-// 对别人的实体**不能**说「改用元工具」：create_agent / create_shared_skill 是 super
-// （仅超级智能体），非超级智能体恒不可达（toolgrant.Catalog 不产出 + registry.go 执行层硬闸）。
+// It returns the correct guidance for the model; ok=false means it does not look like an entity, so it passes as an ordinary
+// workspace path.
+// selfName separates "your own definition domain (which has a right answer: switch to root addressing)" from "someone else's
+// definition domain".
+// For someone else's entity we **must not** say "use the meta tools": create_agent / create_shared_skill are super (super
+// agent only), and a non-super agent can never reach them (toolgrant.Catalog does not produce them + the execution-layer hard
+// gate in registry.go).
 func entityLikePath(rel, selfName string) (hint string, ok bool) {
 	seg := strings.Split(rel, "/")
 	if len(seg) < 2 || seg[1] == "" {
@@ -287,9 +299,10 @@ func entityLikePath(rel, selfName string) (hint string, ok bool) {
 	return "", false
 }
 
-// parseRootAddr 只做路径规范化与「是否根寻址」的识别，**不含任何闸门**。
-// 刻意把解析与判权拆开：写侧若复用读侧，会先撞上读闸、报出读口径的错误文案
-// （读写白名单虽同形，闸门与措辞不同，见 checkReadOwn / checkWriteOwn）。
+// parseRootAddr only normalises the path and recognises "is this root addressing"; it contains **no gate at all**.
+// Parsing and authorising are split deliberately: if the write side reused the read side, it would hit the read gate first and
+// report an error worded for reads (the read and write allowlists have the same shape, but the gates and the wording differ -
+// see checkReadOwn / checkWriteOwn).
 func parseRootAddr(c *Context, p string) (sp, rel string, fromRoot bool, err error) {
 	rel, fromRoot, err = SafePathEx(p, true)
 	if err != nil {
@@ -301,22 +314,23 @@ func parseRootAddr(c *Context, p string) (sp, rel string, fromRoot bool, err err
 	return c.TenantPath(rel), rel, true, nil
 }
 
-// isVersionDomain 路径是否落在版本域（租户根下的 versions/）。
+// isVersionDomain reports whether a path falls in the version domain (versions/ under the tenant root).
 //
-// 版本域是「线上正在跑的那份定义」的历史快照：可能含已回滚掉的口令、策略与废弃技能
-// 正文，模型读到就是历史泄露；写进去更等于无声改线上。所以它对**所有身份**关闭
-// （包括超级智能体）。
+// The version domain is the historical snapshot of "the definition running in production": it may contain credentials,
+// policies and deprecated skill bodies that were rolled back, so a model reading it is a historical leak; writing into it is
+// worse still - it silently changes production. So it is closed to **every identity** (the super agent included).
 func isVersionDomain(tenantRel string) bool {
 	seg := strings.Split(tenantRel, "/")
 	return len(seg) > 0 && seg[0] == paths.VersionsSubdir
 }
 
-// resolveRead 把工具入参路径解析为存储键（读类）。
-// 根寻址按身份分流：超级智能体不受限（D4：读不受限）；非超级智能体可读自己的定义目录
-// （agents/{self}/**，含 AGENT.md 与私有 skill）。
+// resolveRead resolves a tool argument path into a storage key (read side).
+// Root addressing branches by identity: the super agent is unrestricted (D4: reads are unrestricted); a non-super agent may
+// read its own definition directory (agents/{self}/**, AGENT.md and private skills included).
 //
-// 例外：版本域对谁都不可达。它不在 checkReadOwn 的 switch 里 —— 超级智能体的读压根
-// 不过那一层（checkReadOwn 第一句就 return nil），所以这条必须挡在身份分流之前。
+// Exception: the version domain is unreachable for everyone. It is not in checkReadOwn's switch - the super agent's read never
+// goes through that layer at all (checkReadOwn returns nil on its first line), so this one must be blocked before the identity
+// branch.
 func resolveRead(c *Context, p string) (sp, rel string, fromRoot bool, err error) {
 	sp, rel, fromRoot, err = parseRootAddr(c, p)
 	if err != nil || !fromRoot {
@@ -332,12 +346,13 @@ func resolveRead(c *Context, p string) (sp, rel string, fromRoot bool, err error
 	return sp, rel, true, nil
 }
 
-// resolveWrite 同 resolveRead，但写类工具额外过闸：
-//  1. 根寻址（"/" 前缀）→ 超级智能体走 checkWrite（全租户 + 实体状态闸）；
-//     非超级智能体走 checkWriteOwn（仅自己的私有 skill 目录 + 自身与 skill 双重状态闸）；
-//  2. 工作区内仿造实体目录 → entityLikePath（仅非超级智能体）。严格度 B：只在目标**不存在**
-//     （即「正在新建假实体」）时拒绝；已存在的按普通工作区文件放行，
-//     既覆盖全部幻觉场景，又不误伤用户上传的同名目录。
+// resolveWrite is like resolveRead, but write-side tools pass extra gates:
+//  1. root addressing ("/" prefix) -> the super agent goes through checkWrite (the whole tenant + entity status gates);
+//     a non-super agent goes through checkWriteOwn (its own private skill directory only + the double status gate of itself and
+//     the skill);
+//  2. a fake entity directory inside the workspace -> entityLikePath (non-super agents only). Strictness B: refuse only when
+//     the target **does not exist** (i.e. "a fake entity is being created"); an existing one passes as an ordinary workspace
+//     file, which covers every hallucination scenario without breaking a user-uploaded directory of the same name.
 func resolveWrite(ctx context.Context, c *Context, p string) (sp, rel string, fromRoot bool, err error) {
 	sp, rel, fromRoot, err = parseRootAddr(c, p)
 	if err != nil {

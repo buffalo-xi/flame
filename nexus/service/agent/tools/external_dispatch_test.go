@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// stubExternalRunner 外部连接工具的执行通道替身（mcp__ / rpc__ 归它管）。
+// stubExternalRunner is a stand-in for the external-connection execution channel (it owns mcp__ / rpc__).
 type stubExternalRunner struct {
 	called    bool
 	schema    string
@@ -39,24 +39,25 @@ func TestExecuteToolDelegatesToExternal(t *testing.T) {
 		t.Fatalf("ExecuteTool = %v", err)
 	}
 	if !stub.called {
-		t.Fatal("外部工具执行器没被调用")
+		t.Fatal("the external runner was not invoked")
 	}
 	if stub.schema != "t0" || stub.tool != "mcp__fs__read_file" {
-		t.Errorf("透传不对：schema=%q tool=%q", stub.schema, stub.tool)
+		t.Errorf("forwarded values are wrong: schema=%q tool=%q", stub.schema, stub.tool)
 	}
 	if stub.args["path"] != "a.txt" {
-		t.Errorf("入参没透传：%v", stub.args)
+		t.Errorf("the arguments were not forwarded: %v", stub.args)
 	}
-	// 输出上限必须传下去：外部工具常直接吐整份文件，不截断会一次吃掉整个上下文。
+	// The output limit must be passed down: external tools often return a whole file, and without truncation that eats the entire
+	// context in one go.
 	if stub.maxOutput != DefaultMaxOutput {
 		t.Errorf("maxOutput = %d, want %d", stub.maxOutput, DefaultMaxOutput)
 	}
 	if _, ok := got.(map[string]any); !ok {
-		t.Fatalf("结果类型 = %T", got)
+		t.Fatalf("result type = %T", got)
 	}
 }
 
-// 未授权的外部工具名必须在查库/建连之前被挡掉（授权闸在分发之前）。
+// An unauthorized external tool name must be blocked before any lookup or connection is made (the grant gate runs before dispatch).
 func TestExecuteToolRejectsUnauthorizedExternalBeforeInvoke(t *testing.T) {
 	stub := &stubExternalRunner{}
 	c := &Context{
@@ -68,15 +69,15 @@ func TestExecuteToolRejectsUnauthorizedExternalBeforeInvoke(t *testing.T) {
 
 	_, err := ExecuteTool(context.Background(), c, "rpc__erp__create_order", map[string]any{})
 	if err == nil || !strings.Contains(err.Error(), "not granted") {
-		t.Fatalf("未授权调用应被授权闸拒绝，实际 %v", err)
+		t.Fatalf("an unauthorized call should be refused by the grant gate, got %v", err)
 	}
 	if stub.called {
-		t.Fatal("未授权调用不该触达外部执行器")
+		t.Fatal("an unauthorized call must not reach the external runner")
 	}
 }
 
-// 未注入 Endpoints 时 local__ 落到 not found：不能悄悄被当成 mcp/rpc 转出去
-// （注入后的正常路径见 endpoint_dispatch_test.go）。
+// Without Endpoints injected, local__ falls through to not found: it must not be quietly forwarded as mcp/rpc
+// (the normal path once injected is covered by endpoint_dispatch_test.go).
 func TestExecuteToolLocalEndpointIsNotDelegated(t *testing.T) {
 	stub := &stubExternalRunner{}
 	c := &Context{
@@ -88,18 +89,18 @@ func TestExecuteToolLocalEndpointIsNotDelegated(t *testing.T) {
 
 	_, err := ExecuteTool(context.Background(), c, "local__daily-report", nil)
 	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("期望 ErrToolNotFound，实际 %v", err)
+		t.Fatalf("want ErrToolNotFound, got %v", err)
 	}
 	if stub.called {
-		t.Fatal("local__ 不该被外部执行器接管")
+		t.Fatal("local__ must not be taken over by the external runner")
 	}
 }
 
-// 没有注入执行器时，外部名字仍是 not found（不能 panic、不能空成功）。
+// Without a runner injected, an external name is still not found (no panic, no empty success).
 func TestExecuteToolExternalWithoutRunner(t *testing.T) {
 	c := &Context{Schema: "t0", AgentName: "main", AllowedTools: map[string]bool{"mcp__fs__read_file": true}}
 	_, err := ExecuteTool(context.Background(), c, "mcp__fs__read_file", nil)
 	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("期望 ErrToolNotFound，实际 %v", err)
+		t.Fatalf("want ErrToolNotFound, got %v", err)
 	}
 }

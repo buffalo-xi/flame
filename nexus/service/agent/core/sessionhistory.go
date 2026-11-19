@@ -7,10 +7,10 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// RecordUserContent 取一条会话记录里的用户输入正文（input jsonb 存的是 {"content":"..."}）。
+// RecordUserContent extracts the user input body from one session record (input jsonb stores {"content":"..."}).
 //
-// 解析失败或缺字段时回退 "{}"（与改造前的行为一致）：历史回放宁可显示一个占位，
-// 也不要因为某条脏数据让整段上下文读不出来。
+// A parse failure or a missing field falls back to "{}" (the behaviour before the rework): a replay would rather show a placeholder than
+// fail to read a whole context because of one dirty record.
 func RecordUserContent(rec models.SessionRecord) string {
 	if len(rec.Input) == 0 {
 		return "{}"
@@ -25,11 +25,11 @@ func RecordUserContent(rec models.SessionRecord) string {
 	return "{}"
 }
 
-// RecordsToMessages 把会话记录转成 LLM 消息（user/assistant 交替）。
+// RecordsToMessages turns session records into LLM messages (user / assistant alternating).
 //
-// 一条记录 = 一轮运行（入参 + 最终结果），不是一条聊天消息，所以这里拆成两条。
-// 放在 core 而不是入口层：Web 对话与协议端点必须用同一份转换，否则同一个会话
-// 从两个入口读出来的历史会长得不一样。
+// One record = one run (input + final result), not one chat message, so it is split into two here.
+// It lives in core rather than at the entry layer because the web chat and the protocol endpoints must use the same conversion -
+// otherwise the history read from the two entry points of one session looks different.
 func RecordsToMessages(records []models.SessionRecord) []gateway.Message {
 	msgs := make([]gateway.Message, 0, len(records)*2)
 	for _, rec := range records {

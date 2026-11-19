@@ -15,8 +15,8 @@ import (
 	"flame/tools/sandbox"
 )
 
-// stubSkillsInjected 只实现 ListInjected —— resolveSkillScript 的可见性口径就卡在它身上。
-// 其余方法由嵌入接口兜底（被调用即 panic），避免用例悄悄依赖未桩行为。
+// stubSkillsInjected implements ListInjected only - that is where resolveSkillScript's visibility criterion sits.
+// The remaining methods fall back to the embedded interface (a call panics), so a case cannot quietly rely on unstubbed behaviour.
 type stubSkillsInjected struct {
 	SkillsManager
 	injected []SkillInfo
@@ -26,7 +26,7 @@ func (s stubSkillsInjected) ListInjected(context.Context) ([]SkillInfo, error) {
 	return s.injected, nil
 }
 
-// stubSandbox 捕获 Spec 不真跑进程；wait 决定 Wait 的返回。
+// stubSandbox captures the Spec without running a real process; wait decides what Wait returns.
 type stubSandbox struct {
 	sandbox.Sandbox
 	spec *sandbox.Spec
@@ -51,15 +51,15 @@ func (p stubProcess) Stdout() io.ReadCloser {
 
 func (p stubProcess) Wait() error { return p.wait }
 
-// newSkillRunCtx 造一个盘上真实存在的最小 Context：
-// SkillRoot / AgentRoot 落在临时目录里，Storage 的根与之对齐 —— 存储 key 与宿主路径
-// 必须指向同一个位置，否则「storage 说存在、os.Stat 说不存在」这类假阳性会被掩盖。
+// newSkillRunCtx builds the smallest Context that exists on disk:
+// SkillRoot / AgentRoot live in a temp directory and Storage's root aligns with it - a storage key and a host path must point at
+// the same place, otherwise false positives such as "storage says it exists, os.Stat says it does not" hide real bugs.
 func newSkillRunCtx(t *testing.T, injected []SkillInfo) *Context {
 	t.Helper()
-	// Execute 的准入（ensureSandboxReady）要求至少成功拉到过一次能力快照，
-	// 单测里没有 sandboxd，这里注入一份最小快照把准入放行。
-	// 注意这是进程级全局状态（sandboxinfo 无「恢复未配置」的公开 API）：
-	// 同包内不要再写断言 Ready() == false 的用例。
+	// Execute's admission (ensureSandboxReady) requires that a capability snapshot has been fetched successfully at least once,
+	// and unit tests have no sandboxd; injecting a minimal snapshot lets the admission through.
+	// Note that this is process-level global state (sandboxinfo has no public API to restore "unconfigured"):
+	// do not add cases in this package that assert Ready() == false.
 	sandboxinfo.Set(sandboxinfo.Info{Mode: "none"})
 
 	root := t.TempDir()
@@ -88,23 +88,24 @@ func mkSkillScript(t *testing.T, dir, rel string) {
 	}
 }
 
-// 工具必须登记在册且归入 exec 分类 —— 分类是能力闸与授权目录的唯一判据。
+// The tool must be registered and filed under the exec category - the category is the only criterion for the capability gate and
+// the grant catalog.
 //
-// 判据是通道而非「跑的是不是脚本文件」：run_skill_script 走 sb.Start → /v1/exec，
-// 与 exec 工具同一条单工通道（一次性进程、无池、无 script_max_sec 硬闸）；
-// sandbox.code 是 /v1/code 通道，只归工作流 code 节点（代码 / handler / 后处理）。
-// 两者都能执行任意代码，分类不是权限边界，只是按形态授权资源。
+// The criterion is the channel, not "is a script file being run": run_skill_script goes sb.Start -> /v1/exec, the same
+// single-worker channel as the exec tool (one-shot process, no pool, no script_max_sec hard limit);
+// sandbox.code is the /v1/code channel and belongs only to workflow code nodes (code / handler / post-processing).
+// Both can execute arbitrary code; the category is not a permission boundary, it only grants resources by shape.
 func TestRunSkillScriptRegisteredInExecCategory(t *testing.T) {
 	tool, ok := Get("run_skill_script")
 	if !ok {
-		t.Fatal("run_skill_script 未登记")
+		t.Fatal("run_skill_script is not registered")
 	}
 	if got := tool.Meta().Category; got != CategoryExec {
 		t.Errorf("Category = %q, want %q", got, CategoryExec)
 	}
 }
 
-// 租户级共享技能：目录在 skills/ 下，存储 key 与宿主路径都要对得上。
+// A tenant-level shared skill: the directory sits under skills/, and both the storage key and the host path must line up.
 func TestResolveSkillScriptTenantSkill(t *testing.T) {
 	c := newSkillRunCtx(t, []SkillInfo{{Name: "xlsx-report", Scope: SkillScopeTenant}})
 	dir := filepath.Join(c.SkillRoot, "xlsx-report")
@@ -123,16 +124,17 @@ func TestResolveSkillScriptTenantSkill(t *testing.T) {
 	if run.GuestScript != "/skill/scripts/main.py" {
 		t.Errorf("GuestScript = %q", run.GuestScript)
 	}
-	// .py 有语言定义 → 走语言路径（解释器入口交给 sandboxd 按 mode 解析）
+	// .py has a language definition -> the language path is used (the interpreter entry is resolved by sandboxd per mode)
 	if run.Lang != "python" {
 		t.Errorf("Lang = %q, want python", run.Lang)
 	}
 	if run.Interpreter != "" {
-		t.Errorf("语言路径下不该带直传解释器，Interpreter = %q", run.Interpreter)
+		t.Errorf("the language path must not carry a direct interpreter, Interpreter = %q", run.Interpreter)
 	}
 }
 
-// shell 没有语言定义（也不是双工语言），必须退回 argv 直传 —— 行为与改造前一致。
+// shell has no language definition (and is not a duplex language), so it must fall back to passing argv directly - the same
+// behaviour as before the change.
 func TestResolveSkillScriptShellPassthrough(t *testing.T) {
 	c := newSkillRunCtx(t, []SkillInfo{{Name: "sheller", Scope: SkillScopeTenant}})
 	dir := filepath.Join(c.SkillRoot, "sheller")
@@ -143,14 +145,15 @@ func TestResolveSkillScriptShellPassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	if run.Lang != "" {
-		t.Errorf("Lang = %q, want empty（.sh 无语言定义）", run.Lang)
+		t.Errorf("Lang = %q, want empty (.sh has no language definition)", run.Lang)
 	}
 	if run.Interpreter != "sh" {
 		t.Errorf("Interpreter = %q, want sh", run.Interpreter)
 	}
 }
 
-// 语言名 ≠ 命令名：.js 交出去的是 "js"，命令名 node 由 sandboxd 决定。
+// A language name is not a command name: for .js what is handed over is "js", while the command name node is decided by
+// sandboxd.
 func TestResolveSkillScriptJsLangNotCommand(t *testing.T) {
 	c := newSkillRunCtx(t, []SkillInfo{{Name: "front", Scope: SkillScopeTenant}})
 	dir := filepath.Join(c.SkillRoot, "front")
@@ -161,11 +164,11 @@ func TestResolveSkillScriptJsLangNotCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	if run.Lang != "js" {
-		t.Errorf("Lang = %q, want js（语言名，不是命令名 node）", run.Lang)
+		t.Errorf("Lang = %q, want js (the language name, not the command name node)", run.Lang)
 	}
 }
 
-// agent 私有技能：目录挂在 AgentRoot/skills 下（exec 的 /agent 挂载点之内）。
+// An agent's private skill: the directory hangs under AgentRoot/skills (inside exec's /agent mount).
 func TestResolveSkillScriptPrivateSkill(t *testing.T) {
 	c := newSkillRunCtx(t, []SkillInfo{{Name: "helper", Scope: SkillScopeAgent}})
 	dir := filepath.Join(c.AgentRoot, "skills", "helper")
@@ -183,7 +186,7 @@ func TestResolveSkillScriptPrivateSkill(t *testing.T) {
 	}
 }
 
-// 同名时私有覆盖共享（与运行时口径一致）。
+// On a name clash the private skill wins over the shared one (the same rule as at run time).
 func TestResolveSkillScriptPrefersPrivateOverShared(t *testing.T) {
 	c := newSkillRunCtx(t, []SkillInfo{
 		{Name: "dup", Scope: SkillScopeTenant},
@@ -197,11 +200,11 @@ func TestResolveSkillScriptPrefersPrivateOverShared(t *testing.T) {
 		t.Fatal(err)
 	}
 	if run.StorageKey != "tenants/t0/agents/poet/skills/dup" {
-		t.Errorf("StorageKey = %q，同名应取私有那条", run.StorageKey)
+		t.Errorf("StorageKey = %q; on a name clash the private one should be taken", run.StorageKey)
 	}
 }
 
-// 拒绝面：未注入 / 越权路径 / 绝对路径 / 不支持的扩展名 / 技能目录不存在。
+// The refusal surface: not injected / escaping path / absolute path / unsupported extension / skill directory missing.
 func TestResolveSkillScriptRejects(t *testing.T) {
 	ok := []SkillInfo{{Name: "xlsx-report", Scope: SkillScopeTenant}}
 	cases := []struct {
@@ -210,11 +213,11 @@ func TestResolveSkillScriptRejects(t *testing.T) {
 		script  string
 		created bool
 	}{
-		{"未注入的技能", "other", "", false},
-		{"越权路径", "xlsx-report", "../../etc/passwd.py", true},
-		{"绝对路径", "xlsx-report", "/etc/x.py", true},
-		{"不支持的扩展名", "xlsx-report", "scripts/main.rb", true},
-		{"技能目录不存在", "xlsx-report", "", false},
+		{"skill not injected", "other", "", false},
+		{"escaping path", "xlsx-report", "../../etc/passwd.py", true},
+		{"absolute path", "xlsx-report", "/etc/x.py", true},
+		{"unsupported extension", "xlsx-report", "scripts/main.rb", true},
+		{"skill directory missing", "xlsx-report", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -223,14 +226,15 @@ func TestResolveSkillScriptRejects(t *testing.T) {
 				mkSkillScript(t, filepath.Join(c.SkillRoot, "xlsx-report"), "scripts/main.py")
 			}
 			if _, err := resolveSkillScript(context.Background(), c, tc.skill, tc.script); err == nil {
-				t.Fatal("应拒绝")
+				t.Fatal("should be refused")
 			}
 		})
 	}
 }
 
-// 挂载与启动意图是切片 2 的核心契约：技能目录只读挂进 /skill、工作区可写挂进 /workspace
-// 且作为 cwd，args 原样透传，解释器入口不由本侧决定（见下方断言）。
+// Mounts and startup intent are the core contract of slice 2: the skill directory is mounted read-only at /skill, the workspace is
+// mounted writable at /workspace and used as cwd, args are forwarded verbatim, and the interpreter entry is not decided on this
+// side (see the assertions below).
 func TestRunSkillScriptSpecAndResult(t *testing.T) {
 	c := newSkillRunCtx(t, []SkillInfo{{Name: "xlsx-report", Scope: SkillScopeTenant}})
 	dir := filepath.Join(c.SkillRoot, "xlsx-report")
@@ -247,12 +251,12 @@ func TestRunSkillScriptSpecAndResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sb.spec == nil {
-		t.Fatal("sandbox Start 未被调用")
+		t.Fatal("sandbox Start was not called")
 	}
 
-	// 语言路径：本侧只报「语言 + 脚本 + 参数」，解释器入口（python / node / lua）
-	// 由 sandboxd 按当前 mode 解析 —— 一旦在这里拼出 argv，就等于硬编码了
-	// 「镜像里叫什么」这份只应存在于 sandboxd 的认知。
+	// Language path: this side reports only "language + script + arguments", and the interpreter entry (python / node / lua) is
+	// resolved by sandboxd per the current mode - assembling argv here would hardcode "what it is called inside the image", which
+	// is knowledge that should live only in sandboxd.
 	if sb.spec.Lang != "python" {
 		t.Errorf("Lang = %q, want python", sb.spec.Lang)
 	}
@@ -264,19 +268,19 @@ func TestRunSkillScriptSpecAndResult(t *testing.T) {
 		t.Errorf("Args = %v, want %v", sb.spec.Args, wantArgs)
 	}
 	if len(sb.spec.Argv) != 0 {
-		t.Errorf("Argv = %v，语言路径下必须为空（与 Lang 互斥）", sb.spec.Argv)
+		t.Errorf("Argv = %v, it must be empty on the language path (mutually exclusive with Lang)", sb.spec.Argv)
 	}
 	if sb.spec.Dir != "/workspace" {
 		t.Errorf("Dir = %q, want /workspace", sb.spec.Dir)
 	}
 	if len(sb.spec.Mounts) != 2 {
-		t.Fatalf("Mounts = %+v, 期望 2 条", sb.spec.Mounts)
+		t.Fatalf("Mounts = %+v, want 2 entries", sb.spec.Mounts)
 	}
 	if sb.spec.Mounts[0].Guest != "/workspace" || sb.spec.Mounts[0].ReadOnly {
-		t.Errorf("第 1 条应为可写的 /workspace: %+v", sb.spec.Mounts[0])
+		t.Errorf("entry 1 should be a writable /workspace: %+v", sb.spec.Mounts[0])
 	}
 	if sb.spec.Mounts[1].Guest != "/skill" || !sb.spec.Mounts[1].ReadOnly || sb.spec.Mounts[1].Host != dir {
-		t.Errorf("第 2 条应为只读的技能目录: %+v", sb.spec.Mounts[1])
+		t.Errorf("entry 2 should be the read-only skill directory: %+v", sb.spec.Mounts[1])
 	}
 
 	m := out.(map[string]any)
@@ -287,13 +291,13 @@ func TestRunSkillScriptSpecAndResult(t *testing.T) {
 		t.Errorf("stdout = %v, want hello", m["stdout"])
 	}
 	if m["skill"] != "xlsx-report" || m["script"] != "scripts/main.py" {
-		t.Errorf("回显不符：%+v", m)
+		t.Errorf("unexpected echo: %+v", m)
 	}
 }
 
-// .sh 没有语言定义（sandboxd 的顶层 langs 里没有它），必须退回 argv 直传路径：
-// 解释器由本侧给出、脚本路径在 /skill 下、args 追加在最后。
-// 这条路径同时是「改造前后行为一致」的回归位。
+// .sh has no language definition (it is absent from sandboxd's top-level langs), so the argv passthrough path must be used: the
+// interpreter comes from this side, the script path sits under /skill, and args are appended last.
+// This path doubles as the regression slot for "behaviour identical before and after the change".
 func TestRunSkillScriptShellPassthroughSpec(t *testing.T) {
 	c := newSkillRunCtx(t, []SkillInfo{{Name: "sheller", Scope: SkillScopeTenant}})
 	mkSkillScript(t, filepath.Join(c.SkillRoot, "sheller"), "scripts/main.sh")
@@ -310,7 +314,7 @@ func TestRunSkillScriptShellPassthroughSpec(t *testing.T) {
 	}
 
 	if sb.spec.Lang != "" {
-		t.Errorf("Lang = %q，.sh 无语言定义，应为空", sb.spec.Lang)
+		t.Errorf("Lang = %q; .sh has no language definition and it should be empty", sb.spec.Lang)
 	}
 	wantArgv := []string{"sh", "/skill/scripts/main.sh", "a", "b"}
 	if !reflect.DeepEqual(sb.spec.Argv, wantArgv) {
@@ -318,7 +322,7 @@ func TestRunSkillScriptShellPassthroughSpec(t *testing.T) {
 	}
 }
 
-// Wait 返回非 ExitError 时应原样上抛（不是吞掉当 exit 0）。
+// When Wait returns something other than an ExitError it must propagate unchanged (not be swallowed as exit 0).
 func TestRunSkillScriptPropagatesWaitError(t *testing.T) {
 	c := newSkillRunCtx(t, []SkillInfo{{Name: "xlsx-report", Scope: SkillScopeTenant}})
 	mkSkillScript(t, filepath.Join(c.SkillRoot, "xlsx-report"), "scripts/main.py")

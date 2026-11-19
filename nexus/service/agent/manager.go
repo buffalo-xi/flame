@@ -17,48 +17,48 @@ import (
 	"flame/tools/xsql"
 )
 
-// agentManager 实现 tools.AgentManager，包装 agents repository。
+// agentManager implements tools.AgentManager, wrapping the agents repository.
 type agentManager struct {
 	schema       string
-	agentID      string // 当前 agent uuid（创建新 agent 时作为创建者写入授权）
-	agentName    string // 当前 agent 名
-	isSupervisor bool   // 身份判据（agents.is_supervisor）：仅 supervisor 可做管理类动作
-	userID       string // 当前用户 uuid（写 created_by）
+	agentID      string // current agent uuid (written as the grant creator when a new agent is created)
+	agentName    string // current agent name
+	isSupervisor bool   // identity criterion (agents.is_supervisor): only the supervisor may perform management actions
+	userID       string // current user uuid (written to created_by)
 	repo         agents.Repository
-	flowRepo     flows.Repository // agent 名不能与工作流重名
-	store        storage.Storage  // 定义域目录重命名/删除走 storage（local / nfs / s3 通用）
+	flowRepo     flows.Repository // an agent name must not collide with a workflow
+	store        storage.Storage  // definition-domain rename / delete go through storage (local / nfs / s3 alike)
 }
 
-// NewAgentManager 创建 tools.AgentManager（租户 schema 与当前 agent 身份固定）。
+// NewAgentManager creates tools.AgentManager (tenant schema and current agent identity fixed).
 func NewAgentManager(schema, agentID, agentName, userID string, store storage.Storage, isSupervisor bool) tools.AgentManager {
 	return &agentManager{schema: schema, agentID: agentID, agentName: agentName, isSupervisor: isSupervisor, userID: userID,
 		repo: agents.NewRepository(), flowRepo: flows.NewPostgresRepository(), store: store}
 }
 
 func (m *agentManager) auth() *auth.AuthInfo {
-	// 带上 userID：仓储用 authInfo.ID 写 created_by/updated_by（空串会被转成 NULL）
+	// Carry userID: the repository uses authInfo.ID to write created_by/updated_by (an empty string becomes NULL)
 	return &auth.AuthInfo{Schema: m.schema, ID: m.userID}
 }
 
-// Create 创建 agent 实例（写库）。文件（AGENT.md）由元工具经 storage 写入。
-// config 列不在此写入：由仓储落默认 {}，留作将来扩展。
+// Create creates an agent instance (writes the database). The file (AGENT.md) is written by the meta tools through storage.
+// The config column is not written here: the repository stores the default {}, leaving room for future expansion.
 //
-// isSupervisor=true 表示「直接建成 supervisor」：仓储会按起步套件物化
-// core 工具组、两个开关与四份 authoring 技能（与创建后 SetSupervisor(true) 同结果）。
-// 非 supervisor 创建不了 supervisor —— 执行层已按分类拦过一次，这里再拦一次纵深防御。
+// isSupervisor=true means "create it directly as a supervisor": the repository materialises the core tool group, the two switches and the
+// four authoring skills from the starter pack (the same result as SetSupervisor(true) after creation).
+// A non-supervisor cannot create a supervisor - the execution layer already refuses by category, and this is defence in depth on top.
 func (m *agentManager) Create(ctx context.Context, name, description string, isSupervisor bool) (string, error) {
-	// 名称规则兜底：只允许字母数字横线，长度≤64
+	// Name rule backstop: letters, digits and hyphens only, 64 characters at most
 	if !tools.ValidName(name) {
-		return "", fmt.Errorf("invalid agent name %q (只允许字母数字横线，长度≤64)", name)
+		return "", fmt.Errorf("invalid agent name %q (letters, digits and hyphens only, 64 characters at most)", name)
 	}
 	if isSupervisor && !m.isSupervisor {
-		return "", fmt.Errorf("仅 supervisor 可创建 supervisor")
+		return "", fmt.Errorf("only a supervisor may create a supervisor")
 	}
-	// 先校验重名：不能与其它 agent、工作流重名（任何写库之前）
+	// Check for a name collision first: it must not clash with another agent or a workflow (before any database write)
 	if err := m.ensureNameFree(ctx, name, ""); err != nil {
 		return "", err
 	}
-	// 配额检查：租户内 agent 数量上限
+	// Quota check: the per-tenant agent cap
 	cnt, err := quota.CountAgents(m.schema)
 	if err != nil {
 		return "", err
@@ -73,13 +73,13 @@ func (m *agentManager) Create(ctx context.Context, name, description string, isS
 		Status:       xsql.Int(models.StatusNormal),
 		IsSupervisor: isSupervisor,
 	}
-	// 缺省授权：把新 agent 授权给创建者（谁建的谁能调）
+	// Default grant: grant the new agent to its creator (whoever built it can call it)
 	return m.repo.CreateAgent(m.auth(), inst, m.agentID)
 }
 
-// List 列出所有 agent 实例的简要信息。
+// List lists brief information for every agent instance.
 func (m *agentManager) List(_ context.Context) ([]tools.AgentInfo, error) {
-	// Limit: -1 = 取全部（不再受 1000 条隐含上限约束）
+	// Limit: -1 = take everything (no longer bound by the implicit 1000-row cap)
 	instances, _, err := m.repo.ListAgents(m.auth(), &agents.ListAgentsRequest{Page: 1, Limit: -1})
 	if err != nil {
 		return nil, err
@@ -99,7 +99,7 @@ func (m *agentManager) List(_ context.Context) ([]tools.AgentInfo, error) {
 	return out, nil
 }
 
-// Exists 判断 name 是否已存在（精确匹配）。
+// Exists reports whether name already exists (exact match).
 func (m *agentManager) Exists(ctx context.Context, name string) (bool, error) {
 	inst, err := m.getByName(ctx, name)
 	if err != nil {
@@ -108,7 +108,7 @@ func (m *agentManager) Exists(ctx context.Context, name string) (bool, error) {
 	return inst != nil, nil
 }
 
-// Get 按 name 精确取 agent 简要信息（含 id/status）；不存在返回 (nil, nil)。
+// Get takes an agent's brief information (with id/status) by exact name; returns (nil, nil) when missing.
 func (m *agentManager) Get(ctx context.Context, name string) (*tools.AgentInfo, error) {
 	inst, err := m.getByName(ctx, name)
 	if err != nil {
@@ -128,8 +128,9 @@ func (m *agentManager) Get(ctx context.Context, name string) (*tools.AgentInfo, 
 	}, nil
 }
 
-// ensureNameFree 校验 name 未被其它 agent / 工作流占用（excludeAgentID 非空时忽略自身）。
-// 调用方必须在任何写库 / 目录迁移之前调用，保证校验失败时数据库与工作区都不动。
+// ensureNameFree checks that name is not taken by another agent / workflow (a non-empty excludeAgentID ignores the agent itself).
+// The caller must invoke it before any database write / directory move, so a failed check leaves both the database and the workspace
+// untouched.
 func (m *agentManager) ensureNameFree(ctx context.Context, name, excludeAgentID string) error {
 	inst, err := m.getByName(ctx, name)
 	if err != nil {
@@ -148,12 +149,12 @@ func (m *agentManager) ensureNameFree(ctx context.Context, name, excludeAgentID 
 	return nil
 }
 
-// getByName 按 name 精确取实例（不存在返回 nil）。
-// 注意 ListAgents 的 Name 是 ILIKE 模糊匹配，需再精确比对；比对大小写不敏感。
+// getByName takes an instance by exact name (returns nil when missing).
+// Note that ListAgents' Name is an ILIKE fuzzy match, so an exact case-insensitive comparison is needed.
 //
-// Limit 必须取 -1（全部）：仓储按 name 升序返回，带 LIMIT 时精确匹配可能被排在
-// 窗外 —— 租户里有 writer / writer-1 … writer-9 时，查 "writer-5" 只拿到前 N 条，
-// 于是一个存在的 agent 被判定为「不存在」（同 flowsManager.find 的做法）。
+// Limit must be -1 (all): the repository returns rows sorted by name ascending, and with a LIMIT the exact match may be pushed out of the
+// window - with writer / writer-1 ... writer-9 in the tenant, looking up "writer-5" only gets the first N rows and an existing agent is
+// judged missing (the same approach as flowsManager.find).
 func (m *agentManager) getByName(_ context.Context, name string) (*models.Agent, error) {
 	instances, _, err := m.repo.ListAgents(m.auth(), &agents.ListAgentsRequest{Name: name, Page: 1, Limit: -1})
 	if err != nil {
@@ -167,7 +168,8 @@ func (m *agentManager) getByName(_ context.Context, name string) (*models.Agent,
 	return nil, nil
 }
 
-// Update 按 name 更新描述或改名（改名同步迁移定义域目录），返回最终名。
+// Update updates the description or renames an agent by name (a rename also moves the definition-domain directory) and returns the final
+// name.
 func (m *agentManager) Update(ctx context.Context, name, newName, description string) (string, error) {
 	inst, err := m.getByName(ctx, name)
 	if err != nil {
@@ -176,7 +178,7 @@ func (m *agentManager) Update(ctx context.Context, name, newName, description st
 	if inst == nil {
 		return "", fmt.Errorf("agent %q not found", name)
 	}
-	// 状态闸 + 保护闸（判定真源见包内 ensureAgent* 函数）
+	// Status gate + protection gate (the source of truth is the ensureAgent* functions in this package)
 	if err := ensureAgentMutable(inst); err != nil {
 		return "", err
 	}
@@ -187,9 +189,9 @@ func (m *agentManager) Update(ctx context.Context, name, newName, description st
 	finalName := inst.Name
 	if newName != "" && newName != inst.Name {
 		if !tools.ValidName(newName) {
-			return "", fmt.Errorf("invalid agent name %q (只允许字母数字横线)", newName)
+			return "", fmt.Errorf("invalid agent name %q (letters, digits and hyphens only)", newName)
 		}
-		// 先校验重名（其它 agent + 工作流），再写库 / 迁移工作区
+		// Check the name collision first (other agents + workflows), then write the database / move the workspace
 		if err := m.ensureNameFree(ctx, newName, inst.ID); err != nil {
 			return "", err
 		}
@@ -199,8 +201,9 @@ func (m *agentManager) Update(ctx context.Context, name, newName, description st
 	if description != "" {
 		inst.Description = xsql.String(description)
 	}
-	// 改名 → 迁移「草稿目录 + 版本域」，**先搬盘、再写库**（盘是内容，库是索引）。
-	// 版本目录按名字键：先写库后搬盘，一旦搬盘失败，正式调用会按新名拼出一个空版本目录。
+	// Rename -> move "draft directory + version domain", **disk first, then database** (the disk holds content, the database is the index).
+	// The version directory is keyed by name: writing the database first would, if the disk move failed, make a production call assemble an
+	// empty version directory under the new name.
 	renamed := finalName != name
 	if renamed {
 		if rerr := paths.MoveEntityStorage(m.store, m.schema, paths.VersionAgents, name, finalName); rerr != nil {
@@ -209,9 +212,9 @@ func (m *agentManager) Update(ctx context.Context, name, newName, description st
 	}
 	if err := m.repo.UpdateAgent(m.auth(), inst.ID, inst); err != nil {
 		if renamed {
-			// 库没改成 → 把盘搬回去，别留「盘新名、库旧名」的半套
+			// The database write failed -> move the disk back, so there is no half state of "new name on disk, old name in the database"
 			if rerr := paths.MoveEntityStorage(m.store, m.schema, paths.VersionAgents, finalName, name); rerr != nil {
-				xlog.Error("回滚定义域/版本目录失败 schema=%s %s→%s: %v", m.schema, finalName, name, rerr)
+				xlog.Error("failed to roll back the definition-domain / version directory schema=%s %s->%s: %v", m.schema, finalName, name, rerr)
 			}
 		}
 		return "", err
@@ -219,15 +222,15 @@ func (m *agentManager) Update(ctx context.Context, name, newName, description st
 	return finalName, nil
 }
 
-// SetUnrestricted 设置目标 agent（按 uuid）的「不限制工具」开关（agents.tools_unrestricted）。
+// SetUnrestricted sets the "unrestricted tools" switch (agents.tools_unrestricted) of the target agent (by uuid).
 //
-// 语义（见 toolgrant/resolve.go）：候选（已注入 skill 声明的工具依赖）非空时不再被 allow 收窄 ——
-// 它放宽的是 allow 的过滤作用，不是「无脑开全部工具」。
-// D5（修订）：超级智能体可以给自己设 —— 它即管理员；边界由 status 承担：废弃的 agent
-// （含超级智能体自己）不接受任何写入，而改 status 只有管理端能做，故不会自我解锁。
+// Semantics (see toolgrant/resolve.go): when the candidates (tool dependencies declared by injected skills) are non-empty they are no longer
+// narrowed by the allow list - it relaxes what the allow filter does, not "blindly enable every tool".
+// D5 (revised): the super agent may set it for itself - it is the administrator; the boundary comes from status: a deprecated agent (the super
+// agent included) accepts no write, and only the admin side can change status, so it cannot unlock itself.
 func (m *agentManager) SetUnrestricted(_ context.Context, agentID string, v bool) error {
 	if !m.isSupervisor {
-		return fmt.Errorf("仅超级智能体可修改 agent 的工具授权")
+		return fmt.Errorf("only the super agent may modify an agent's tool grants")
 	}
 	if agentID == "" {
 		return fmt.Errorf("target agent id is empty")
@@ -235,14 +238,15 @@ func (m *agentManager) SetUnrestricted(_ context.Context, agentID string, v bool
 	return m.repo.SetUnrestricted(m.auth(), agentID, v)
 }
 
-// SetSupervisor 设置目标 agent（按 uuid）的超级权限属性（agents.is_supervisor）。
+// SetSupervisor sets the super-privilege attribute (agents.is_supervisor) of the target agent (by uuid).
 //
-// 仅 supervisor 可改：非 supervisor 连管理类工具都调不到，这里是纵深防御。
-// 可以是自己 —— 降级自己时由仓储拦「最后一个 supervisor」，否则租户会永久失去管理面。
-// 目标须处于正常态（与 D5 一致：废弃不接受属性变更）。
+// Only the supervisor may change it: a non-supervisor cannot even reach the management tools, so this is defence in depth.
+// The target may be itself - demoting itself is stopped by the repository's "last supervisor" rule, or the tenant would lose its management
+// surface for good.
+// The target must be in the normal state (consistent with D5: a deprecated agent accepts no attribute change).
 func (m *agentManager) SetSupervisor(_ context.Context, agentID string, v bool) error {
 	if !m.isSupervisor {
-		return fmt.Errorf("仅 supervisor 可修改 agent 的超级权限属性")
+		return fmt.Errorf("only the supervisor may change an agent's super-privilege attribute")
 	}
 	if agentID == "" {
 		return fmt.Errorf("target agent id is empty")
@@ -260,7 +264,7 @@ func (m *agentManager) SetSupervisor(_ context.Context, agentID string, v bool) 
 	return m.repo.SetSupervisor(m.auth(), agentID, v)
 }
 
-// Delete 按 name 删除 agent（同时清理其定义域目录）。
+// Delete deletes an agent by name (and cleans up its definition-domain directory).
 func (m *agentManager) Delete(ctx context.Context, name string) error {
 	inst, err := m.getByName(ctx, name)
 	if err != nil {
@@ -269,25 +273,25 @@ func (m *agentManager) Delete(ctx context.Context, name string) error {
 	if inst == nil {
 		return fmt.Errorf("agent %q not found", name)
 	}
-	// 保护闸 + 状态闸
+	// Protection gate + status gate
 	if err := ensureAgentDeletable(inst); err != nil {
 		return err
 	}
-	// 删除数据：私有 skill 记录、授权关联与 agents 行由仓储在同一事务内完成
-	// （skills.agent_id 没有外键，级联只能由应用层保证）。
+	// Data removal: private skill rows, grant relations and the agents row are handled by the repository in one transaction
+	// (skills.agent_id has no foreign key, so the cascade can only be guaranteed by the application).
 	if err := m.repo.DeleteAgent(m.auth(), inst.ID); err != nil {
 		return err
 	}
-	// 定义域目录 + 版本域一起清（DB cascade 删不掉盘）。
-	// 删不掉只记日志：库是索引，盘上的残留由启动清扫兜底 —— 不能把一次已经
-	// 生效的删除报成失败（与 admin/agents 的删除口径一致）。
+	// Clean the definition-domain directory and the version domain together (a database cascade cannot delete the disk).
+	// A failure is only logged: the database is the index and leftovers on disk are swept at startup - a delete that already took effect must
+	// not be reported as failed (the same criterion as the admin/agents delete).
 	if err := paths.DeleteEntityStorage(m.store, m.schema, paths.VersionAgents, name); err != nil {
-		xlog.Error("清理定义域/版本目录失败 schema=%s name=%s: %v", m.schema, name, err)
+		xlog.Error("failed to clean the definition-domain / version directory schema=%s name=%s: %v", m.schema, name, err)
 	}
 	return nil
 }
 
-// ensureAgentMutable 状态闸：只有正常态允许改定义（唯一真源：models.IsModifiable）。
+// ensureAgentMutable is the status gate: only the normal state may change a definition (single source of truth: models.IsModifiable).
 func ensureAgentMutable(inst *models.Agent) error {
 	if !inst.IsModifiable() {
 		return fmt.Errorf("agent %q is deprecated; switch it back to normal first", inst.Name)
@@ -295,7 +299,7 @@ func ensureAgentMutable(inst *models.Agent) error {
 	return nil
 }
 
-// ensureAgentRenamable 保护闸：受保护 agent 不允许改名。
+// ensureAgentRenamable is the protection gate: a protected agent may not be renamed.
 func ensureAgentRenamable(inst *models.Agent, newName string) error {
 	if models.IsProtectedAgent(inst.Name) && newName != "" && newName != inst.Name {
 		return fmt.Errorf("protected agent %q cannot be renamed", inst.Name)
@@ -303,7 +307,7 @@ func ensureAgentRenamable(inst *models.Agent, newName string) error {
 	return nil
 }
 
-// ensureAgentDeletable 保护闸 + 状态闸。
+// ensureAgentDeletable is the protection gate plus the status gate.
 func ensureAgentDeletable(inst *models.Agent) error {
 	if models.IsProtectedAgent(inst.Name) {
 		return fmt.Errorf("protected agent %q cannot be deleted", inst.Name)

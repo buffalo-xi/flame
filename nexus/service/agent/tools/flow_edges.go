@@ -9,29 +9,31 @@ import (
 	"strings"
 )
 
-// ===== 边工具（create_edge / update_edge / delete_edge）=====
+// ===== Edge tools (create_edge / update_edge / delete_edge) =====
 //
-// 为什么单独一套：create_flow 只能建「主链 + 分支子链」，容器子节点、并发组、
-// 以及任何重接都碰不到；让模型直接写整个 diagram 又会在 20 多种节点的 config /
-// 坐标 / handle 上出错。这里只把「边」这一层暴露出来。
+// Why a separate set: create_flow can only build "the main chain + branch sub-chains" and never reaches container children,
+// concurrency groups or any rewiring; letting the model write the whole diagram again would make it trip over the config /
+// coordinates / handles of 20-odd node types. So only the "edge" layer is exposed here.
 //
-// 规则与前端画布严格同口径（Flow.vue 的 onConnect + 各 *Node.vue 的 Handle 声明）：
-// 工具放宽一条，画布下一次拖动就会把图改坏；收紧一条，画布能拖出来的结构就建不出来。
+// The rules are strictly the same as the frontend canvas (onConnect in Flow.vue plus the Handle declarations in each
+// *Node.vue): loosen one rule and the next drag on the canvas corrupts the graph; tighten one and structures the canvas can
+// draw become unreachable.
 
-// nodeHandleRule 某类节点允许的 handle 位置。
+// nodeHandleRule is the set of handle positions a node type allows.
 type nodeHandleRule struct {
-	in  []string // 入边（target_handle）
-	out []string // 出边（source_handle）
+	in  []string // incoming edges (target_handle)
+	out []string // outgoing edges (source_handle)
 }
 
 var (
-	// ioNode 单入单出的执行节点：入 left/top，出 right/bottom
+	// ioNode is a one-in one-out execution node: incoming left/top, outgoing right/bottom
 	ioNode = nodeHandleRule{in: []string{"left", "top"}, out: []string{"right", "bottom"}}
-	// containerNode 容器 / 分支：多一个右侧入、一个左侧出（子链从左边接回去时要用）
+	// containerNode is a container / branch type: one extra incoming on the right and one extra outgoing on the left (needed
+	// when a sub-chain joins back from the left)
 	containerNode = nodeHandleRule{in: []string{"left", "top", "right"}, out: []string{"left", "right", "bottom"}}
-	// sinkNode 终止节点：只有入边
+	// sinkNode is a terminal node: incoming edges only
 	sinkNode = nodeHandleRule{in: []string{"left", "top", "right", "bottom"}}
-	// sourceOnlyNode 起点 / 容器入口：只有出边
+	// sourceOnlyNode is a start / container entry: outgoing edges only
 	sourceOnlyNode = nodeHandleRule{out: []string{"left", "right", "bottom"}}
 )
 
@@ -42,36 +44,37 @@ var nodeHandleRules = map[string]nodeHandleRule{
 	"call": ioNode, "wait": ioNode, "fork": ioNode, "layout": ioNode, "knowledge": ioNode,
 	"loop": containerNode, "process": containerNode, "branch": containerNode, "intent": containerNode,
 	"exit": sinkNode, "break": sinkNode, "continue": sinkNode, "return": sinkNode,
-	// function 没有任何 handle（validateEdge 里显式拦）；comment 是纯注释，同样不连线
+	// function has no handle at all (blocked explicitly in validateEdge); comment is a pure annotation and is not wired either
 	"function": {}, "comment": {},
 }
 
-// branchChildOut branch / intent 的子分支（children[].id）只有左右两个出边
+// branchChildOut: the sub-branches of branch / intent (children[].id) only have the two horizontal outgoing handles
 var branchChildOut = []string{"left", "right"}
 
-// ===== 按位置推荐 handle =====
+// ===== Suggesting a handle by position =====
 //
-// 连线方向由「出边节点（source）相对入边节点（target）」的位置决定：同一行走左右端点，
-// 落差越大越偏向垂直端点。规则只做建议（画布上任何合法组合都能连），但照它连出来的
-// 线最短、最少交叉；模型自己拍脑袋给 handle 时，工具会拿这套结果回显提示。
+// The wiring direction follows where the source node sits relative to the target node: on the same row it uses the horizontal
+// ends, and the larger the vertical offset the more it leans to the vertical ends. The rule is only a suggestion (any legal
+// combination can be wired on the canvas), but following it gives the shortest lines with the fewest crossings; when the model
+// picks a handle out of thin air, the tool echoes this result back as a hint.
 //
-// 画布坐标 y 向下为正，阈值按节点高 32 / 主链行距约 140 取。
+// On the canvas y grows downward, and the thresholds are chosen for a node height of 32 and a main-chain row pitch of about 140.
 const (
-	// handleAlignTol 视为「同一行 / 同一列」的容差（一个节点高再加一点余量）
+	// handleAlignTol is the tolerance for "the same row / the same column" (one node height plus a little slack)
 	handleAlignTol = 40
-	// handleFarTol 超过这个落差就算「高/低很多」，改走垂直端点
+	// handleFarTol: beyond this offset it counts as "much higher / much lower" and switches to the vertical ends
 	handleFarTol = 200
 )
 
-// handleSuggest 按位置算出来的推荐连线（含一句方位说明）。
+// handleSuggest is a wiring suggested from the node positions (with a one-line explanation of the direction).
 type handleSuggest struct {
 	SourceHandle string
 	TargetHandle string
 	Reason       string
 }
 
-// handlePreferOrder 目标位置不可用时退而求其次的顺序：例如 start 没有 top 出边，
-// 推荐 top 会自然退到 left / bottom。
+// handlePreferOrder is the fallback order when the wanted position is unavailable: e.g. start has no top outgoing handle, so a
+// suggested top degrades naturally to left / bottom.
 var handlePreferOrder = map[string][]string{
 	"left":   {"left", "top", "right", "bottom"},
 	"right":  {"right", "top", "bottom", "left"},
@@ -79,15 +82,17 @@ var handlePreferOrder = map[string][]string{
 	"bottom": {"bottom", "right", "left", "top"},
 }
 
-// suggestHandlePositions 按相对位置算出两个端点位置（已按节点类型可用位置退化）。
-// create_edge 的建议与 create_flow 的 handle 回填共用这一份判定，避免两套规则。
+// suggestHandlePositions computes the two end positions from the relative position (already degraded to the positions the node
+// types actually offer).
+// The suggestion in create_edge and the handle backfill in create_flow share this single decision, so there are not two rule
+// sets.
 //
-//	基本同一行（|Δy| ≤ 40）   source 在左 → right→left；在右 → left→right
-//	正上下堆叠（|Δx| ≤ 40）   target 在下 → bottom→top；在上 → top→bottom
-//	高很多（Δy > 200）        bottom→top（垂直落下）
-//	低很多（Δy < -200）       source 在左 → top→left；在右 → top→right
-//	高得明显（Δy 40~200）     target 在右下方 → right→top；左下方 → left→top
-//	低得明显（Δy -40~-200）   target 在右上方 → right→left；左上方 → left→right
+//	roughly the same row (|Δy| ≤ 40)   source on the left -> right->left; on the right -> left->right
+//	stacked vertically (|Δx| ≤ 40)     target below -> bottom->top; above -> top->bottom
+//	much higher (Δy > 200)             bottom->top (dropping vertically)
+//	much lower (Δy < -200)             source on the left -> top->left; on the right -> top->right
+//	notably higher (Δy 40~200)         target at the lower right -> right->top; lower left -> left->top
+//	notably lower (Δy -40~-200)        target at the upper right -> right->left; upper left -> left->right
 func suggestHandlePositions(srcType string, srcX, srcY int, dstType string, dstX, dstY int) (srcPos, dstPos, reason string) {
 	dx := dstX - srcX
 	dy := dstY - srcY
@@ -137,7 +142,8 @@ func suggestHandlePositions(srcType string, srcX, srcY int, dstType string, dstX
 	wantSrc, wantDst := srcPos, dstPos
 	srcPos = pickHandle(nodeHandleRules[srcType].out, handlePreferOrder[wantSrc])
 	dstPos = pickHandle(nodeHandleRules[dstType].in, handlePreferOrder[wantDst])
-	// 该类型没有这个位置（例如所有节点的出边都没有 top）：说明退到了哪，别让调用方以为按建议连上了。
+	// The type does not offer that position (e.g. no node has a top outgoing handle): say where it fell back to, so the caller
+	// does not believe the suggestion was applied as is.
 	if srcPos != wantSrc {
 		reason += fmt.Sprintf("; %s has no %s outgoing handle, falling back to %s", srcType, wantSrc, srcPos)
 	}
@@ -147,7 +153,7 @@ func suggestHandlePositions(srcType string, srcX, srcY int, dstType string, dstX
 	return srcPos, dstPos, reason
 }
 
-// suggestHandles 按两个节点的相对位置推荐一对 handle（供 create_edge 回显）。
+// suggestHandles suggests a pair of handles from the two nodes' relative positions (echoed back by create_edge).
 func suggestHandles(src, dst *flowNodeMeta) handleSuggest {
 	out, in, reason := suggestHandlePositions(
 		src.Type, src.Position.X, src.Position.Y,
@@ -159,7 +165,7 @@ func suggestHandles(src, dst *flowNodeMeta) handleSuggest {
 	}
 }
 
-// handleLayoutAdvice 给模型看的位置→handle 规则（create_edge 描述与报错共用）。
+// handleLayoutAdvice is the position -> handle rule shown to the model (shared by the create_edge description and its errors).
 const handleLayoutAdvice = "**Pick the handle by position** (Δ = target coords - source coords, y growing downward): " +
 	"roughly the same row (|Δy| ≤ 40) → the source's right to the target's left (reverse when the target is to the left: left→right); " +
 	"notably higher (Δy 40~200, target at the lower right) → right→top (lower left uses left→top); " +
@@ -170,9 +176,9 @@ const handleLayoutAdvice = "**Pick the handle by position** (Δ = target coords 
 	"Note: **no node currently has a top outgoing edge**, and bottom incoming edges exist only on terminal nodes (exit / break / continue / return), " +
 	"so \"much lower / top→bottom\" can only fall back to a position the type supports; the tool writes the position it actually fell back to into suggested_edge.reason."
 
-// edgeRuleText 连边规则的唯一出处（create_edge 与 update_edge 共用同一份文案）。
-// 技能文档 references/edges.md 不再重复枚举这些规则，只放形状 / 示例 / 排查，
-// 避免「文档说一套、工具做一套」把模型带偏。
+// edgeRuleText is the single source of the wiring rules (create_edge and update_edge share the same copy).
+// The skill doc references/edges.md no longer enumerates these rules - it only carries shapes / examples / troubleshooting - so
+// that "the doc says one thing, the tool does another" cannot mislead the model.
 const edgeRuleText = "**Handle shape**: source_handle = source + handle owner + position, target_handle = target + target node id + position. " +
 	"The owner is normally the source node's own id; **sub-branch outgoing edges** of branch / intent use config.children[].id (positions left / right only), " +
 	"and only the default branch uses the node's own id. **Both handles are required and have no default**: a wrong position does not report \"cannot render\" — " +
@@ -187,7 +193,7 @@ const edgeRuleText = "**Handle shape**: source_handle = source + handle owner + 
 	"one outlet (source_handle) allows one edge only; a node allows one incoming edge only (connecting the same inlet twice is an error; connecting a different inlet displaces the old incoming edge and returns replaced_edge); no cycles." +
 	handleLayoutAdvice
 
-// flowEdge 落库形态的一条边（前端保存时也只写这五个键）。
+// flowEdge is one edge in its stored form (the frontend also writes only these five keys when saving).
 type flowEdge struct {
 	ID           string `json:"id"`
 	Source       string `json:"source"`
@@ -196,12 +202,12 @@ type flowEdge struct {
 	TargetHandle string `json:"target_handle"`
 }
 
-// flowNodeMeta 校验只需要节点的这几个字段；坐标 / 尺寸 / extent 等原样保留在 diagram 里。
+// flowNodeMeta: validation only needs these node fields; coordinates / sizes / extent stay untouched in the diagram.
 type flowNodeMeta struct {
 	ID         string `json:"id"`
 	Type       string `json:"type"`
 	ParentNode string `json:"parent_node"`
-	// Position 只用来给新节点算一个不重叠的落点（子节点是相对父节点的坐标）。
+	// Position is only used to place a new node somewhere non-overlapping (a child's coordinates are relative to its parent).
 	Position struct {
 		X int `json:"x"`
 		Y int `json:"y"`
@@ -228,10 +234,10 @@ func (n *flowNodeMeta) hasChild(id string) bool {
 	return false
 }
 
-// flowDoc 一份 diagram：nodes / edges 逐个原样保留，只重写真正改到的那几条。
+// flowDoc is one diagram: nodes / edges are kept as they are, one by one, and only the entries actually changed are rewritten.
 //
-// nodeRaw 是节点的原始 JSON —— 坐标、extent、前端私有字段都不解不重排，
-// 免得「工具只改了一条边，却把整张图的节点样式全洗了一遍」。
+// nodeRaw is a node's original JSON - coordinates, extent and frontend-private fields are never decoded or reordered, so that
+// "the tool changed one edge and washed away every node's styling in the whole graph" cannot happen.
 type flowDoc struct {
 	top     map[string]json.RawMessage
 	nodeRaw []json.RawMessage
@@ -284,8 +290,8 @@ func (d *flowDoc) marshal() (json.RawMessage, error) {
 	return json.Marshal(d.top)
 }
 
-// reloadNodes 重新解析节点元信息；节点被增删改之后必须调它，
-// 否则后续校验（parent 作用域、分支子分支）还在看旧快照。
+// reloadNodes re-parses the node metadata; it must be called after nodes are added, removed or changed, otherwise later checks
+// (parent scope, branch sub-branches) still look at the stale snapshot.
 func (d *flowDoc) reloadNodes() error {
 	d.nodes = make([]flowNodeMeta, len(d.nodeRaw))
 	for i := range d.nodeRaw {
@@ -326,7 +332,7 @@ func (d *flowDoc) removeNodeAt(i int) error {
 	return d.reloadNodes()
 }
 
-// newNodeID 与画布一致：5 位数字串，且避开节点 id / 分支子分支 id / 边 id。
+// newNodeID matches the canvas: a 5-digit string that avoids node ids / branch sub-branch ids / edge ids.
 func (d *flowDoc) newNodeID() string {
 	for i := 0; i < 1000; i++ {
 		id := fmt.Sprintf("%05d", rand.IntN(100000))
@@ -364,7 +370,8 @@ func (d *flowDoc) removeEdge(id string) bool {
 	return true
 }
 
-// idTaken 新边 id 不能与节点 id、分支子分支 id、边 id 撞车（与画布 generateUniqueId 同口径）。
+// idTaken: a new edge id must not collide with a node id, a branch sub-branch id or an edge id (the same rule as the canvas's
+// generateUniqueId).
 func (d *flowDoc) idTaken(id string) bool {
 	for i := range d.nodes {
 		if d.nodes[i].ID == id {
@@ -379,7 +386,7 @@ func (d *flowDoc) idTaken(id string) bool {
 	return d.edgeIndex(id) >= 0
 }
 
-// newEdgeID 画布生成的是 5 位数字串，这里保持一致，撞车就重摇。
+// newEdgeID: the canvas generates 5-digit strings, so this stays consistent, drawing again on a collision.
 func (d *flowDoc) newEdgeID() string {
 	for i := 0; i < 1000; i++ {
 		id := fmt.Sprintf("%05d", rand.IntN(100000))
@@ -390,8 +397,8 @@ func (d *flowDoc) newEdgeID() string {
 	return fmt.Sprintf("edge-%d", len(d.edges)+1)
 }
 
-// splitHandle 拆 source<owner><pos> / target<owner><pos>：位置固定在末尾，
-// 先剥位置、剩下的是 owner —— 这样 owner 里含 left/right 之类的词也不会拆错。
+// splitHandle splits source<owner><pos> / target<owner><pos>: the position is fixed at the end, so strip the position first and
+// what remains is the owner - that way an owner containing words like left/right is not split wrongly.
 func splitHandle(raw, prefix string) (owner, pos string, err error) {
 	if !strings.HasPrefix(raw, prefix) {
 		return "", "", fmt.Errorf("handle %q must start with %q (shape: %s<node id><left|right|top|bottom>)", raw, prefix, prefix)
@@ -417,8 +424,8 @@ func containsStr(list []string, want string) bool {
 	return false
 }
 
-// checkConnectable 节点这一侧能不能连线：function 一个 handle 都没有，
-// 终止节点没有出边、起点没有入边，其余按 nodeHandleRules 判断。
+// checkConnectable decides whether one side of a node can be wired: function has no handle at all, terminal nodes have no
+// outgoing handle and start nodes no incoming one, and the rest follows nodeHandleRules.
 func checkConnectable(n *flowNodeMeta, side string) error {
 	if n.Type == "function" {
 		return fmt.Errorf("node %q is a function node: it has no incoming and no outgoing handle and takes no edges", n.ID)
@@ -436,8 +443,8 @@ func checkConnectable(n *flowNodeMeta, side string) error {
 	return nil
 }
 
-// sourcePositions 解析 source_handle 的 owner：可能是节点自己（默认分支口），
-// 也可能是 branch / intent 的 children[].id（子分支出边）。
+// sourcePositions resolves the owner in source_handle: it may be the node itself (the default branch outlet) or a
+// children[].id of branch / intent (a sub-branch outlet).
 func (d *flowDoc) sourcePositions(n *flowNodeMeta, owner string) ([]string, error) {
 	if owner == n.ID {
 		return nodeHandleRules[n.Type].out, nil
@@ -450,13 +457,14 @@ func (d *flowDoc) sourcePositions(n *flowNodeMeta, owner string) ([]string, erro
 		owner, n.ID)
 }
 
-// edgeValidation 校验通过后的附加动作。
+// edgeValidation is the extra action to take once validation passes.
 type edgeValidation struct {
-	// replaced 目标节点上「入口位置不同」的旧入边：按画布语义，新边顶掉它
+	// replaced is an old incoming edge of the target node on a "different inlet position": per the canvas semantics the new
+	// edge displaces it
 	replaced *flowEdge
 }
 
-// validateEdge 按画布规则校验一条待落库的边；skipEdgeID 是 update 时排除的自身。
+// validateEdge validates one edge against the canvas rules; skipEdgeID is the edge itself, excluded on update.
 func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, error) {
 	src, ok := d.node(e.Source)
 	if !ok {
@@ -480,7 +488,7 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 			src.ID, src.ParentNode, dst.ID, dst.ParentNode)
 	}
 
-	// ---- 出边 handle ----
+	// ---- outgoing handle ----
 	if e.SourceHandle == "" {
 		sug := suggestHandles(src, dst)
 		return nil, fmt.Errorf("source_handle is required: shape source<source node id><left|right|bottom> (e.g. source46004right); "+
@@ -501,7 +509,7 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 			src.ID, src.Type, owner, strings.Join(allowed, "/"), pos)
 	}
 
-	// ---- 入边 handle ----
+	// ---- incoming handle ----
 	if e.TargetHandle == "" {
 		sug := suggestHandles(src, dst)
 		return nil, fmt.Errorf("target_handle is required: shape target<target node id><left|top|right|bottom> (e.g. target45063top) and cannot be omitted. "+
@@ -519,7 +527,7 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 		return nil, fmt.Errorf("node %q (%s) can only use %s as an incoming position, got %q", dst.ID, dst.Type, strings.Join(in, "/"), tPos)
 	}
 
-	// ---- 同一对节点最多一条边 ----
+	// ---- at most one edge per node pair ----
 	for i := range d.edges {
 		old := d.edges[i]
 		if old.ID == skipEdgeID {
@@ -530,7 +538,7 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 		}
 	}
 
-	// ---- 一个出口只能一条边 ----
+	// ---- one outlet takes exactly one edge ----
 	for i := range d.edges {
 		old := d.edges[i]
 		if old.ID == skipEdgeID {
@@ -541,8 +549,8 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 		}
 	}
 
-	// ---- 一个节点只能一条入边 ----
-	// 同一入口位置 → 硬拦；换成另一个入口位置 → 顶掉旧边（画布 onConnect 就是这个语义）。
+	// ---- one node takes exactly one incoming edge ----
+	// Same inlet position -> hard block; a different inlet position -> displace the old edge (exactly what the canvas onConnect does).
 	var replaced *flowEdge
 	for i := range d.edges {
 		old := d.edges[i]
@@ -557,7 +565,7 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 		replaced = &oldCopy
 	}
 
-	// ---- 不能成环（将要被删掉的边不参与判断）----
+	// ---- no cycles (edges about to be removed do not take part) ----
 	replacedID := ""
 	if replaced != nil {
 		replacedID = replaced.ID
@@ -569,7 +577,7 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 	return &edgeValidation{replaced: replaced}, nil
 }
 
-// wouldCycle 从 target 顺着出边能不能回到 source。
+// wouldCycle reports whether following outgoing edges from target can get back to source.
 func (d *flowDoc) wouldCycle(source, target, skipEdgeID, replacedID string) bool {
 	seen := make(map[string]bool, len(d.nodes))
 	var walk func(string) bool
@@ -595,7 +603,7 @@ func (d *flowDoc) wouldCycle(source, target, skipEdgeID, replacedID string) bool
 	return walk(target)
 }
 
-// ===== 工具的公共部分 =====
+// ===== Shared tool helpers =====
 
 func edgeView(e flowEdge) map[string]any {
 	return map[string]any{
@@ -607,7 +615,7 @@ func edgeView(e flowEdge) map[string]any {
 	}
 }
 
-// loadFlowDoc 定位工作流并解析 diagram（ref 同时当 id 与名称，由 manager 决定命中哪个）。
+// loadFlowDoc locates a workflow and parses its diagram (ref serves as both id and name; the manager decides which one hits).
 func loadFlowDoc(ctx context.Context, c *Context, ref string) (*flowDoc, *FlowDetail, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -630,7 +638,7 @@ func loadFlowDoc(ctx context.Context, c *Context, ref string) (*flowDoc, *FlowDe
 	return doc, detail, nil
 }
 
-// saveDiagram 把整份 diagram 写回（只走 diagram 一列，不动名称/限额/断点）。
+// saveDiagram writes the whole diagram back (it touches the diagram column only, never the name / limits / checkpoints).
 func saveDiagram(ctx context.Context, c *Context, detail *FlowDetail, doc *flowDoc) (*FlowInfo, error) {
 	raw, err := doc.marshal()
 	if err != nil {
@@ -639,7 +647,7 @@ func saveDiagram(ctx context.Context, c *Context, detail *FlowDetail, doc *flowD
 	return c.Flows.UpdateDiagram(ctx, detail.ID, detail.Name, raw)
 }
 
-// saveFlowDoc 落库并拼回执：回显边本身 + 剩余条数 + 被顶掉的旧边（如果有）。
+// saveFlowDoc persists and assembles the receipt: the edge itself + the remaining count + the displaced old edge, if any.
 func saveFlowDoc(ctx context.Context, c *Context, detail *FlowDetail, doc *flowDoc, e flowEdge, v *edgeValidation) (any, error) {
 	info, err := saveDiagram(ctx, c, detail, doc)
 	if err != nil {
@@ -658,7 +666,8 @@ func saveFlowDoc(ctx context.Context, c *Context, detail *FlowDetail, doc *flowD
 	return out, nil
 }
 
-// argStringSet 取字符串参数并区分「没传」与「传了空串」—— update 要靠它判断改了哪个字段。
+// argStringSet takes a string argument while distinguishing "not passed" from "passed empty" - update relies on it to decide
+// which field changed.
 func argStringSet(args map[string]any, key string) (string, bool) {
 	raw, ok := args[key]
 	if !ok || raw == nil {
@@ -723,7 +732,8 @@ func (t *createEdgeTool) Execute(ctx context.Context, c *Context, args map[strin
 	if err != nil {
 		return nil, err
 	}
-	// handle 与两个节点的相对位置不匹配：边已经落库（合法），但线会绕，回一条建议。
+	// The handles do not match the two nodes' relative positions: the edge is already stored (it is legal), but the line will
+	// loop, so return a suggestion.
 	if src, ok := doc.node(e.Source); ok {
 		if dst, ok := doc.node(e.Target); ok {
 			if sug := suggestHandles(src, dst); sug.SourceHandle != e.SourceHandle || sug.TargetHandle != e.TargetHandle {
@@ -832,7 +842,7 @@ func (t *updateEdgeTool) Execute(ctx context.Context, c *Context, args map[strin
 	if v.replaced != nil {
 		doc.removeEdge(v.replaced.ID)
 	}
-	// 删过边之后下标会变，按 id 重新定位
+	// Indices shift after an edge is removed, so locate it again by id
 	doc.edges[doc.edgeIndex(edgeID)] = cur
 	return saveFlowDoc(ctx, c, detail, doc, cur, v)
 }

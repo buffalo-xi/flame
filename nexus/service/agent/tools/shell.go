@@ -9,16 +9,16 @@ import (
 	"flame/tools/sandbox"
 )
 
-// shellTool 交互式 shell 会话：同一 session/run 内多次调用复用同一进程，
-// cd / export / 变量 / 后台任务等状态跨调用保留。
+// shellTool is an interactive shell session: several calls within the same session/run reuse one process, so state such as
+// cd / export / variables / background jobs survives across calls.
 //
-// 与 exec 的分工：exec 每条命令新起进程（无状态）；shell 复用长驻进程（有状态）。
+// The split with exec: exec starts a new process per command (stateless); shell reuses a long-lived process (stateful).
 type shellTool struct{}
 
 func (t *shellTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "shell",
-		Category: CategoryShell, // 独立成组：常驻进程与一次性命令的资源形态不同
+		Category: CategoryShell, // its own group: a resident process and a one-shot command have different resource shapes
 		Description: "Run commands in a persistent shell session: cwd, environment variables and background jobs survive across calls. " +
 			"Command syntax depends on the sandbox (see the sandbox facts in the system prompt): bash/ls on Linux, cmd/dir on Windows — pass the shell explicitly on the first call (bash/sh/cmd/powershell). " +
 			"Calls with a session reuse the process across conversations; calls without one reuse it for this task only and destroy it when the task ends. Close it with kill. " +
@@ -45,15 +45,16 @@ func (t *shellTool) Execute(ctx context.Context, c *Context, args map[string]any
 		return nil, errors.New("shell disabled: interactive sandbox not initialized")
 	}
 
-	// 会话身份：SessionID 优先，RunID 兜底（RunID 恒非空，见 agent_impl.go 的 Context 构造）。
-	// Key 贯穿 sandboxg 的粘性路由与 sandboxd 的进程复用。
+	// Session identity: SessionID first, RunID as the fallback (RunID is never empty; see the Context construction in
+	// agent_impl.go).
+	// Key runs through sandboxg's sticky routing and sandboxd's process reuse.
 	sess := sandbox.InteractiveSession{Key: c.SessionID}
 	if sess.Key == "" {
 		sess.Key = c.RunID
-		sess.Ephemeral = true // 无 session = 临时：短超时兜底 + run 结束显式销毁
+		sess.Ephemeral = true // no session = temporary: a short timeout as a backstop plus explicit destruction when the run ends
 	}
 
-	// kill：显式关闭会话
+	// kill: close the session explicitly
 	if argBool(args, "kill") {
 		if err := client.Kill(ctx, sess, "shell"); err != nil {
 			return nil, err
@@ -66,7 +67,7 @@ func (t *shellTool) Execute(ctx context.Context, c *Context, args map[string]any
 		return nil, errors.New("command is required")
 	}
 
-	// 宿主侧工作区必须存在（bind mount 前提）
+	// The host-side workspace must exist (a precondition for the bind mount)
 	hostRoot := c.Workspace
 	if hostRoot == "" {
 		hostRoot = "."
@@ -75,7 +76,7 @@ func (t *shellTool) Execute(ctx context.Context, c *Context, args map[string]any
 		return nil, err
 	}
 
-	// 挂载与 exec 完全一致：工作区（rw、cwd）+ 本 agent 定义域（ro）
+	// Mounts identical to exec: the workspace (rw, cwd) + this agent's definition domain (ro)
 	mounts := []sandbox.Mount{
 		{Host: hostRoot, Guest: workspaceGuestDir, ReadOnly: false},
 	}
@@ -101,17 +102,17 @@ func (t *shellTool) Execute(ctx context.Context, c *Context, args map[string]any
 		out["stderr"] = res.Stderr
 	}
 	if !res.Completed {
-		// 没读到哨兵：命令可能尚未结束（已按空闲超时返回部分输出）
+		// No sentinel was read: the command may not have finished (partial output already returned on idle timeout)
 		out["completed"] = false
 	}
 	return out, nil
 }
 
-// pickShellArgv 交互式 shell 的 argv（长驻，不带 -c；命令经 stdin 喂入）。
-// 与 exec 的 pickShell 不同：那个是 `sh -c "cmd"` 一次性。
+// pickShellArgv is the argv of an interactive shell (long-lived, no -c; the command is fed through stdin).
+// Unlike exec's pickShell, which is a one-shot `sh -c "cmd"`.
 //
-// shell 为空时按 capabilities 探测到的沙箱 OS 选默认值；OS 未知则报错 ——
-// 不拿 nexus 宿主的 runtime.GOOS 去猜。
+// An empty shell picks the default from the sandbox OS reported by capabilities; an unknown OS is an error -
+// we do not guess from the nexus host's runtime.GOOS.
 func pickShellArgv(shell string) ([]string, error) {
 	switch strings.ToLower(strings.TrimSpace(shell)) {
 	case "cmd":

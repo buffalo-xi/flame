@@ -15,35 +15,36 @@ import (
 	"flame/nexus/shared/repository/toolgrants"
 )
 
-// toolGrantManager 实现 tools.ToolGrantsManager：把「给某个 agent 一条工具授权」
-// 拆成三步 —— ref 校验（toolgrant.Catalog）、allow / required 自动分配、生效状态回显。
+// toolGrantManager implements tools.ToolGrantsManager: it splits "grant one tool to an agent" into three steps - ref validation
+// (toolgrant.Catalog), automatic allow / required assignment, and echoing the effective state.
 //
-// 依赖方向：toolgrant 包 import 了 tools 包（用它取内置工具与类别，见 catalog.go），
-// 所以校验与分配逻辑只能落在这一层，tools 包只暴露接口与只读视图
-// —— 与 skillManager.buildToolDeps 同一考虑。
+// Dependency direction: the toolgrant package imports the tools package (it uses it to fetch built-in tools and categories, see catalog.go),
+// so the validation and assignment logic can only live in this layer; the tools package exposes the interface and read-only views only - the
+// same consideration as skillManager.buildToolDeps.
 //
-// 口径与运行时**同源**：候选只来自「本轮已激活」的技能（agentImpl 用 Context.LoadedSkills 喂
-// Resolver），绑定关系在这里只用于回答「读完哪个技能它会亮」—— 生效判定不再由本层复算。
+// The criterion is **the same source as the runtime**: candidates come only from the skills "activated in this round" (agentImpl feeds
+// Context.LoadedSkills into the Resolver), and the binding relation is used here only to answer "after reading which skill will it light up" -
+// the effective verdict is not recomputed in this layer.
 type toolGrantManager struct {
 	schema       string
-	agentID      string // 当前 agent uuid（写 updated_by）
-	agentName    string // 当前 agent 名
-	isSupervisor bool   // 身份判据（agents.is_supervisor）
+	agentID      string // current agent uuid (written to updated_by)
+	agentName    string // current agent name
+	isSupervisor bool   // identity criterion (agents.is_supervisor)
 	userID       string
 	repo         toolgrants.Repository
 	skills       skills.Repository
-	// agentsRepo 反查目标 agent 身份（targetIsSupervisor 用）。单测注入桩，运行时用真仓库。
+	// agentsRepo resolves the target agent's identity (used by targetIsSupervisor). Tests inject a stub; the runtime uses the real repository.
 	agentsRepo agents.Repository
-	// mode 读定义的模式：决定「技能声明了哪些依赖」按哪一份算（见 skillDeps）。
+	// mode is the definition-reading mode: it decides which copy "the dependencies a skill declares" is taken from (see skillDeps).
 	mode tools.DefinitionMode
-	// meta 与 skillManager 共用的版本元数据读取器：管理面与运行面必须同源。
+	// meta is the version-metadata reader shared with skillManager: the admin side and the runtime side must share one source.
 	meta *skillMetaReader
 }
 
-// NewToolGrantManager 创建 tools.ToolGrantsManager（租户与当前 agent 身份固化）。
+// NewToolGrantManager creates tools.ToolGrantsManager (tenant and current agent identity fixed).
 //
-// mode 与 skillManager 传同一个值：正式运行下「技能声明了哪些依赖」取当前版本，
-// 否则 grant_agent_tool 会自动判出一个运行期永远不亮的 allow（草稿里有、版本里没有）。
+// mode must be the same value passed to skillManager: in a production run "the dependencies a skill declares" comes from the current version,
+// otherwise grant_agent_tool may judge an allow that never lights up at runtime (present in the draft, absent from the version).
 func NewToolGrantManager(schema, agentID, agentName, userID string, isSupervisor bool, mode tools.DefinitionMode) tools.ToolGrantsManager {
 	return &toolGrantManager{
 		schema:       schema,
@@ -59,8 +60,8 @@ func NewToolGrantManager(schema, agentID, agentName, userID string, isSupervisor
 	}
 }
 
-// agentRepo 归属 agent 仓库。惰性构造：测试里直接 new 的零值 manager 不会因为漏注入而 panic，
-// 需要桩的用例显式填 agentsRepo 即可。
+// agentRepo is the owning agent repository. Built lazily: a zero-value manager created directly in a test does not panic over a missing
+// injection, and a test that needs a stub simply fills in agentsRepo.
 func (m *toolGrantManager) agentRepo() agents.Repository {
 	if m.agentsRepo == nil {
 		m.agentsRepo = agents.NewRepository()
@@ -68,7 +69,7 @@ func (m *toolGrantManager) agentRepo() agents.Repository {
 	return m.agentsRepo
 }
 
-// metaReader 版本元数据读取器。惰性构造：测试里直接 new 的零值 manager 走草稿口径。
+// metaReader is the version-metadata reader. Built lazily: a zero-value manager created directly in a test falls back to the draft criterion.
 func (m *toolGrantManager) metaReader() *skillMetaReader {
 	if m.meta == nil {
 		m.meta = newSkillMetaReader(m.schema, m.agentID, m.agentName, agents.NewRepository(), m.mode)
@@ -76,8 +77,8 @@ func (m *toolGrantManager) metaReader() *skillMetaReader {
 	return m.meta
 }
 
-// skillDeps 取某 skill 声明的工具依赖，口径与运行面一致：
-// 正式运行读当前版本的快照（冻结的声明）；草稿 / 无版本信息才回落 skill_tool_grants。
+// skillDeps returns the tool dependencies a skill declares, with the same criterion as the runtime side: a production run reads the snapshot
+// of the current version (the frozen declaration); draft / no version information falls back to skill_tool_grants.
 func (m *toolGrantManager) skillDeps(s models.Skill) ([]string, error) {
 	if refs, ok := m.metaReader().depsOf(s); ok {
 		return refs, nil
@@ -93,29 +94,29 @@ func (m *toolGrantManager) skillDeps(s models.Skill) ([]string, error) {
 	return refs, nil
 }
 
-// injectedSkills 列出「注入给目标 agent」的 skill（私有 + 已绑定）。
-// 用途已收窄为「判断某条 allow 由哪个技能撑着」——不再等于「已生效」。
+// injectedSkills lists the skills injected into the target agent (private + bound).
+// Its use is narrowed to "which skill backs this allow row" - it no longer means "already effective".
 func (m *toolGrantManager) injectedSkills(agentID string) ([]models.Skill, error) {
 	return m.skills.ListInjected(m.schema, agentID)
 }
 
-// GrantAgentTool 给目标 agent 赋一条工具授权。
+// GrantAgentTool grants one tool to the target agent.
 //
-// kind 表示「这条授权怎么生效」，不是「有多严格」：
+// kind says "how this grant takes effect", not "how strict it is":
 //
-//	""       自动（默认）：有已注入 skill 声明该依赖 → allow，否则 required。
-//	         模型看不到 skill_tool_grants，猜错的代价是「写了 allow 却永不生效」，
-//	         所以不指定时仍由系统按 Resolver 同一套口径算。
-//	required 恒注入：即使有 skill 声明也钉成常驻 —— 用于「这个能力不许降级成按需」。
-//	allow    按需：必须有已注入 skill 声明它，否则拒绝写入（否则该行永不生效）。
-//	deny     显式拒绝：覆盖该 ref 原有的 required / allow 行（每个 ref 只留一行），
-//	         即使技能声明也会被减掉 —— 按需口径下的「刹车」。
+//	""       automatic (default): a bound skill declares the dependency -> allow, otherwise required.
+//	         The model cannot see skill_tool_grants, and a wrong guess costs "wrote an allow that never takes effect", so
+//	         when kind is omitted the system computes it with the Resolver's own criterion.
+//	required always injected: even when a skill declares it, it stays resident - for "this capability must not degrade to on-demand".
+//	allow    on demand: a bound skill must declare it, otherwise the write is refused (the row would never take effect).
+//	deny     explicit refusal: overrides the existing required / allow row of that ref (one row per ref), and is subtracted even when a
+//	         skill declares it - the "brake" in the on-demand model.
 //
-// targetIsSupervisor 目标 agent 是否带超权属性（可能不同于调用者）。
+// targetIsSupervisor reports whether the target agent carries the super-privilege attribute (possibly different from the caller).
 //
-// 目录视角必须按**目标**身份算：给普通 agent 授 super 工具只会造出一条执行不了的
-// 死 ref（执行层 IsSupervisorOnlyTool 会拒），露出来等于诱导一次必然失败的授权。
-// agentID 为空时回落到调用者身份；查不到按 false 处理（收紧默认）。
+// The catalog viewpoint must follow the **target** identity: granting a super tool to an ordinary agent only creates a dead ref that cannot be
+// executed (the execution layer's IsSupervisorOnlyTool refuses it), and showing it invites a grant that is bound to fail.
+// An empty agentID falls back to the caller's identity; an unresolvable target counts as false (the stricter default).
 func (m *toolGrantManager) targetIsSupervisor(agentID string) bool {
 	if agentID == "" {
 		return m.isSupervisor
@@ -128,12 +129,13 @@ func (m *toolGrantManager) targetIsSupervisor(agentID string) bool {
 }
 
 func (m *toolGrantManager) GrantAgentTool(_ context.Context, agentName, agentID, ref, kind string) (string, string, error) {
-	// 身份兜底：工具层已过 supervisor-only 分类的执行层硬闸，这里再判一次（与 BindAgentSkill 同风格）
+	// Identity backstop: the tool layer already passed the supervisor-only classification gate; checked once more here (same style as
+	// BindAgentSkill)
 	if !m.isSupervisor {
-		return "", "", errors.New("仅超级智能体可修改 agent 的工具授权")
+		return "", "", errors.New("only the super agent may modify an agent's tool grants")
 	}
 	ref = strings.TrimSpace(ref)
-	// agent 侧允许引用工具组（allowGroup=true），与管理端 SetAgentToolGrants 同口径
+	// The agent side may reference tool groups (allowGroup=true), the same criterion as the admin SetAgentToolGrants
 	if err := toolgrant.ValidateRef(ref, true); err != nil {
 		return "", "", fmt.Errorf("invalid tool ref %q: %w", ref, err)
 	}
@@ -141,10 +143,11 @@ func (m *toolGrantManager) GrantAgentTool(_ context.Context, agentName, agentID,
 	switch kind {
 	case "", models.GrantKindRequired, models.GrantKindAllow, models.GrantKindDeny:
 	default:
-		return "", "", fmt.Errorf("invalid grant kind %q：可选 required / allow / deny，或省略交给系统判定", kind)
+		return "", "", fmt.Errorf("invalid grant kind %q: expected required / allow / deny, or omit it and let the system decide", kind)
 	}
-	// 视角按目标身份：目标非 supervisor 时 builtin:super 整组不产出 → 「仅 supervisor 可用」的工具拒收，
-	// 避免造出「授权了也执行不了」的死 ref（执行层 IsSupervisorOnlyTool 会拒绝非 supervisor 执行）。
+	// The viewpoint follows the target identity: when the target is not a supervisor the whole builtin:super group produces nothing ->
+	// "supervisor only" tools are refused, avoiding a dead ref that cannot be executed (the execution layer's IsSupervisorOnlyTool refuses a
+	// non-supervisor execution).
 	cat := toolgrant.NewCatalog(m.schema, m.repo, m.targetIsSupervisor(agentID))
 	want, err := cat.ToolsOfRef(ref)
 	if err != nil {
@@ -159,7 +162,7 @@ func (m *toolGrantManager) GrantAgentTool(_ context.Context, agentName, agentID,
 		return "", "", err
 	}
 
-	// 显式指定时先取旧行：Upsert 按 ref 覆盖，调用方需要知道哪一行被替换了。
+	// With an explicit kind, read the old row first: Upsert overwrites by ref, and the caller needs to know which row was replaced.
 	oldKind := ""
 	if kind != "" {
 		if oldKind, err = m.currentKind(agentID, ref); err != nil {
@@ -175,11 +178,11 @@ func (m *toolGrantManager) GrantAgentTool(_ context.Context, agentName, agentID,
 			kind = models.GrantKindRequired
 		}
 	}
-	// 显式 allow 必须真的能被点亮：没有声明者就是一行永不生效的死授权。
+	// An explicit allow must really be able to light up: without a declaring skill it is a dead grant that never takes effect.
 	if !auto && kind == models.GrantKindAllow && declaring == "" {
 		return "", "", fmt.Errorf(
-			"写 allow 不会生效：目标 %q 目前没有任何已注入的 skill 声明 %q 的工具依赖；"+
-				"请改用 required（恒注入），或先给它的技能补上该依赖", agentName, ref)
+			"writing allow would have no effect: no skill injected into %q currently declares a tool dependency on %q; "+
+				"use required (always injected) instead, or add that dependency to its skill first", agentName, ref)
 	}
 
 	if err := m.repo.UpsertAgentGrant(m.schema, agentID, m.userID, models.AgentToolGrant{
@@ -193,7 +196,7 @@ func (m *toolGrantManager) GrantAgentTool(_ context.Context, agentName, agentID,
 	return kind, grantReason(kind, declaring, oldKind, auto), nil
 }
 
-// grantReason 生成「实际写了什么、为什么」的说明 —— 会原样回给模型。
+// grantReason explains "what was actually written and why" - it is returned to the model verbatim, so the copy stays in the user's language.
 func grantReason(kind, declaring, oldKind string, auto bool) string {
 	var b strings.Builder
 	switch kind {
@@ -222,11 +225,11 @@ func grantReason(kind, declaring, oldKind string, auto bool) string {
 	return b.String()
 }
 
-// declaringSkill 判断「目标已注入的 skill 里，有没有声明了 want 中任一工具依赖的」，
-// 返回该 skill 名（供「靠谁点亮」的说明用）。
+// declaringSkill checks whether any skill injected into the target declares a dependency on any tool in want, returning that skill's name
+// (for the "what lights it up" explanation).
 //
-// 匹配口径与 Resolver.Resolve 完全一致：两边都**展开成叶子工具 ref** 后求交，
-// 而不是比较 ref 字符串 —— 否则会出现「系统以为 allow 会生效、实际交集为空」。
+// The matching criterion is exactly that of Resolver.Resolve: both sides are **expanded into leaf tool refs** and intersected, rather than
+// comparing ref strings - otherwise "the system thinks the allow takes effect while the intersection is empty" happens.
 func (m *toolGrantManager) declaringSkill(cat *toolgrant.Catalog, agentID string, want []toolgrant.ToolInfo) (string, error) {
 	wantSet := map[string]bool{}
 	for _, t := range want {
@@ -248,7 +251,7 @@ func (m *toolGrantManager) declaringSkill(cat *toolgrant.Catalog, agentID string
 	return "", nil
 }
 
-// currentKind 取某 ref 现有的 grant_kind（不存在返回空串）。只用于回显「覆盖了哪一行」。
+// currentKind returns the existing grant_kind of a ref (an empty string when missing). Only used to echo "which row was overwritten".
 func (m *toolGrantManager) currentKind(agentID, ref string) (string, error) {
 	grants, err := m.repo.ListAgentGrants(m.schema, agentID)
 	if err != nil {
@@ -262,8 +265,8 @@ func (m *toolGrantManager) currentKind(agentID, ref string) (string, error) {
 	return "", nil
 }
 
-// skillDeclaring 判断某个 skill 声明的工具依赖是否与 wantSet（叶子工具 ref）有交集；
-// 有则返回该 skill 名（用于告知「靠谁点亮」），否则返回空串。
+// skillDeclaring checks whether a skill's declared tool dependencies intersect wantSet (leaf tool refs); it returns the skill's name when they
+// do (to tell "what lights it up") and "" otherwise.
 func (m *toolGrantManager) skillDeclaring(cat *toolgrant.Catalog, s models.Skill, wantSet map[string]bool) (string, error) {
 	deps, err := m.skillDeps(s)
 	if err != nil {
@@ -283,19 +286,19 @@ func (m *toolGrantManager) skillDeclaring(cat *toolgrant.Catalog, s models.Skill
 	return "", nil
 }
 
-// RevokeAgentTool 移除某 agent 的一条授权（按 ref，幂等），返回删除行数与被删行的 kind。
+// RevokeAgentTool removes one grant of an agent (by ref, idempotent) and returns the number of deleted rows plus the kind of the deleted row.
 //
-// 回显 kind 是为了审计：同一个 ref 只有一行，但那一行可能是 required / allow / deny，
-// 「收回了什么」和「收回了一条 allow」在语义上差很远。
+// The kind is echoed for auditing: one ref has one row, but that row may be required / allow / deny, and "what was revoked" differs a lot in
+// meaning from "an allow was revoked".
 func (m *toolGrantManager) RevokeAgentTool(_ context.Context, agentID, ref string) (int64, string, error) {
 	if !m.isSupervisor {
-		return 0, "", errors.New("仅超级智能体可修改 agent 的工具授权")
+		return 0, "", errors.New("only the super agent may modify an agent's tool grants")
 	}
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return 0, "", errors.New("tool ref is empty")
 	}
-	// 不校验 ref 是否仍然存在：源已消失（连接 / 端点被删）的悬空授权必须还能收回
+	// The ref's existence is not validated: a dangling grant whose source is gone (deleted connection / endpoint) must still be revocable
 	oldKind, err := m.currentKind(agentID, ref)
 	if err != nil {
 		return 0, "", err
@@ -307,16 +310,16 @@ func (m *toolGrantManager) RevokeAgentTool(_ context.Context, agentID, ref strin
 	return removed, oldKind, nil
 }
 
-// ListAgentGrants 列出目标 agent 的授权项及其当前生效状态（供 read_agent 展示现状）。
+// ListAgentGrants lists the target agent's grants and their current effective state (read_agent shows the current picture with it).
 //
-// 三档口径，以「run 起点」为准：
+// Three verdicts, all anchored at "the start of the run":
 //
-//	required → 恒生效；
-//	allow    → 绑定/私有 skill 声明了它，但**尚未激活**（pending）：模型 use_skill 之后才亮；
-//	allow    → 没有任何 skill 声明它：永不生效（空转），给补救建议。
+//	required -> always effective;
+//	allow    -> a bound/private skill declares it but it is **not activated yet** (pending): it lights up after the model calls use_skill;
+//	allow    -> no skill declares it: never effective (spinning), with a remedy suggested.
 //
-// 绑定关系只用于回答「读完哪个技能它会亮」，不再等于「已生效」——
-// 生效时点是 use_skill，本函数无法预知，故一律标 pending 而不是 effective。
+// The binding relation only answers "after reading which skill will it light up", no longer "already effective" - the effective moment is
+// use_skill, which this function cannot foresee, so everything is marked pending rather than effective.
 func (m *toolGrantManager) ListAgentGrants(_ context.Context, agentName, agentID string) ([]tools.AgentGrantView, error) {
 	grants, err := m.repo.ListAgentGrants(m.schema, agentID)
 	if err != nil {
@@ -353,12 +356,13 @@ func (m *toolGrantManager) ListAgentGrants(_ context.Context, agentName, agentID
 	return grantViews(grants, expand, declaring), nil
 }
 
-// grantViews 纯计算：授权项 → 只读视图（不碰仓库，便于单测）。
+// grantViews is pure computation: grants -> read-only views (no repository access, so it is easy to unit test).
 //
-//	required → 恒生效（与激活无关）；
-//	deny     → 显式拒绝：技能声明也不注入（对 required 无效；同一 ref 只留一行，管理端禁止并存）；
-//	allow + 有 skill 声明它 → pending：未生效，use_skill 激活该技能后才亮（via_skill 指向它）；
-//	allow + 没人声明       → 空转：永不生效，给 note 与补救建议。
+//	required -> always effective (independent of activation);
+//	deny     -> explicit refusal: nothing is injected even when a skill declares it (no effect on required; one row per ref, the admin side
+//	            forbids both at once);
+//	allow + a skill declares it -> pending: not yet effective, it lights up after use_skill activates that skill (via_skill points at it);
+//	allow + nobody declares it  -> spinning: never effective, a note and a remedy are given.
 func grantViews(grants []models.AgentToolGrant,
 	expand func(ref string) []string, declaring func(expanded []string) string) []tools.AgentGrantView {
 	out := make([]tools.AgentGrantView, 0, len(grants))
@@ -368,7 +372,8 @@ func grantViews(grants []models.AgentToolGrant,
 		case g.GrantKind == models.GrantKindRequired:
 			v.Effective = true
 		case g.GrantKind == models.GrantKindDeny:
-			// deny 只减候选：不能标成 pending / 空转，否则会把「明确禁止」说成「等着生效」。
+			// deny only subtracts from the candidates: it must not be marked pending / spinning, or "explicitly forbidden" would read as
+			// "waiting to take effect".
 			v.Note = "显式拒绝：即使某个技能声明该依赖也不会注入"
 		case declaring != nil:
 			if name := declaring(expand(g.Ref)); name != "" {

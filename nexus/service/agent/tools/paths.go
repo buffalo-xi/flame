@@ -5,89 +5,94 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// 目录约定的真源在 nexus/shared/paths，原因：
-//   - 平台侧开通租户时也要按同一约定寻址 tenants/<schema>/{agents,skills,...}，
-//     而平台侧不允许 import nexus/service/**
-//   - 控制台管理端（nexus/admin/*）本来就在用这些函数（SafePath/AgentsKey/ValidName），
-//     属于"管理端反向依赖 service 层"，一并扶正
+// The single source of truth for the directory conventions is nexus/shared/paths, because:
+//   - the platform side also addresses tenants/<schema>/{agents,skills,...} by the same convention when provisioning a
+//     tenant, and the platform side may not import nexus/service/**
+//   - the console admin side (nexus/admin/*) already uses these functions (SafePath/AgentsKey/ValidName), which was "the
+//     admin side depending backwards on the service layer" and is now regularised
 //
-// 本文件保留同名符号做转发，现有调用点（本包内 file.go/exec.go/meta.go/tool.go 与
-// admin/agents、admin/skills、admin/flows、service/agent/*）零改动。
+// This file keeps same-named symbols as forwarding wrappers, so existing call sites (file.go/exec.go/meta.go/tool.go in this
+// package plus admin/agents, admin/skills, admin/flows, service/agent/*) need not change.
 
-// 目录名常量：转发自 paths，供本包内使用（如 Context.StoragePath 的越界断言）。
-// 需要其它子目录名时按需再加，避免留下指代不清的死常量。
+// Directory-name constants: forwarded from paths for use inside this package (e.g. the escape assertion in
+// Context.StoragePath).
+// Add more subdirectory names only when needed, to avoid leaving dead constants with an unclear meaning.
 const (
 	tenantsSubdir = paths.TenantsSubdir
-	// skillEntryFile skill 入口文件名（转发自 paths，见其注释）。
+	// skillEntryFile is the skill entry file name (forwarded from paths, see its comment).
 	skillEntryFile = paths.SkillEntryFile
-	// agentEntryFile agent 入口文件名（转发自 paths，见其注释）。
+	// agentEntryFile is the agent entry file name (forwarded from paths, see its comment).
 	agentEntryFile = paths.AgentEntryFile
-	// agentSkillsSubdir agent 私有技能目录名（转发自 paths）。
+	// agentSkillsSubdir is the agent private-skill directory name (forwarded from paths).
 	agentSkillsSubdir = paths.AgentSkillsSubdir
 )
 
-// ValidName 校验 agent/skill 名字合法。
+// ValidName validates an agent / skill name.
 func ValidName(name string) bool { return paths.ValidName(name) }
 
-// AgentsKey 返回 agent 定义域相对存储根的逻辑路径（/ 分隔，供 Storage 调用）。
+// AgentsKey returns the logical path of an agent's definition domain relative to the storage root (slash-separated, for
+// Storage calls).
 func AgentsKey(schema, name string) string { return paths.AgentsKey(schema, name) }
 
-// ResolveAgentDir 返回 agent 定义域本地绝对路径：{root}/tenants/{schema}/agents/{name}。
+// ResolveAgentDir returns an agent's definition-domain absolute local path:
+// {root}/tenants/{schema}/agents/{name}.
 func ResolveAgentDir(rootDir, schema, name string) string {
 	return paths.ResolveAgentDir(rootDir, schema, name)
 }
 
-// SkillsKey 返回租户级共享 skill 根目录相对存储根的逻辑路径（/ 分隔，供 Storage 调用）。
+// SkillsKey returns the logical path of the tenant-level shared skill root relative to the storage root (slash-separated,
+// for Storage calls).
 func SkillsKey(schema string) string { return paths.SkillsKey(schema) }
 
-// SkillPath 返回某个租户级 skill 的 SKILL.md 相对存储根的路径。
+// SkillPath returns the path of a tenant-level skill's SKILL.md relative to the storage root.
 func SkillPath(schema, name string) string { return paths.SkillPath(schema, name) }
 
-// AgentSkillPath 返回某个 agent 私有 skill 的 SKILL.md 相对存储根的路径。
+// AgentSkillPath returns the path of an agent's private skill's SKILL.md relative to the storage root.
 func AgentSkillPath(schema, agentName, name string) string {
 	return paths.AgentSkillPath(schema, agentName, name)
 }
 
-// ResolveSkillsDir 返回租户级共享 skill 根目录的本地绝对路径。
+// ResolveSkillsDir returns the absolute local path of the tenant-level shared skill root.
 func ResolveSkillsDir(rootDir, schema string) string {
 	return paths.ResolveSkillsDir(rootDir, schema)
 }
 
-// AgentVersionKey 第 n 版 agent 的版本目录（tenants/<schema>/versions/agents/<name>/v<n>）。
+// AgentVersionKey is the version directory of the n-th agent version (tenants/<schema>/versions/agents/<name>/v<n>).
 func AgentVersionKey(schema, name string, n int) string {
 	return paths.VersionKey(schema, paths.VersionAgents, name, n)
 }
 
-// SkillVersionKey 第 n 版租户级技能的版本目录。
+// SkillVersionKey is the version directory of the n-th tenant-level skill version.
 func SkillVersionKey(schema, name string, n int) string {
 	return paths.VersionKey(schema, paths.VersionSkills, name, n)
 }
 
-// ToolVersionKey 第 n 版自定义工具的版本目录。
+// ToolVersionKey is the version directory of the n-th custom tool version.
 func ToolVersionKey(schema, name string, n int) string {
 	return paths.VersionKey(schema, paths.VersionTools, name, n)
 }
 
-// RenameAgentDir 改名时同步重命名 agent 定义域目录（源不存在则跳过）。
-// 走 storage 抽象，local / nfs / s3 通用。
+// RenameAgentDir renames an agent's definition-domain directory along with a rename (skipped when the source is missing).
+// It goes through the storage abstraction, so local / nfs / s3 all work.
 func RenameAgentDir(st storage.Storage, schema, oldName, newName string) error {
 	return paths.RenameAgentDir(st, schema, oldName, newName)
 }
 
-// RemoveAgentDir 删除某个 agent 的定义域目录（不存在则跳过）。
-// 走 storage 抽象，local / nfs / s3 通用。
+// RemoveAgentDir deletes an agent's definition-domain directory (skipped when missing).
+// It goes through the storage abstraction, so local / nfs / s3 all work.
 func RemoveAgentDir(st storage.Storage, schema, name string) error {
 	return paths.RemoveAgentDir(st, schema, name)
 }
 
-// SafePath 校验并规范化相对工作目录的路径（导出版本，供跨包使用）。
+// SafePath validates and normalises a path relative to the working directory (an exported version for cross-package use).
 func SafePath(p string) (string, error) { return paths.SafePath(p) }
 
-// SafePathEx 校验并规范化路径；allowRootAddr 为 true 时允许 "/" 前缀（从租户根算）。
-// 本函数只管语法，能访问租户根下的哪些路径由 gate.go 的闸门决定。
+// SafePathEx validates and normalises a path; when allowRootAddr is true a leading "/" is allowed (addressing from the tenant
+// root).
+// This function only handles syntax; which paths under the tenant root are reachable is decided by the gate in gate.go.
 func SafePathEx(p string, allowRootAddr bool) (string, bool, error) {
 	return paths.SafePathEx(p, allowRootAddr)
 }
 
-// safePath 包内简写（file.go / exec.go 使用）。
+// safePath is the in-package shorthand (used by file.go / exec.go).
 func safePath(p string) (string, error) { return paths.SafePath(p) }

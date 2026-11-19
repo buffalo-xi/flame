@@ -10,30 +10,30 @@ import (
 	"flame/nexus/shared/runledger"
 )
 
-// 终止原因：用 context.Cause 传递，让上层能给出人话，而不是一句 "context canceled"。
+// Stop reasons: carried through context.Cause so the upper layer can say something human instead of "context canceled".
 var (
-	// ErrRunStopped 用户 / 管理端主动终止。
+	// ErrRunStopped means the user / admin stopped it deliberately.
 	ErrRunStopped = errors.New("run stopped by user")
-	// ErrClientGone 客户端断开（SSE 连接关闭 / 页面关闭）。
+	// ErrClientGone means the client disconnected (SSE connection closed / page closed).
 	ErrClientGone = errors.New("client disconnected")
 )
 
-// runHandle 一次在跑的运行的取消句柄。
+// runHandle is the cancel handle of one running run.
 type runHandle struct {
 	cancel    context.CancelCauseFunc
 	sessionID string
-	// cancelled 已触发取消。用来让「停止」幂等：重复调用返回 0，
-	// 而不是每次都把同一批运行再数一遍。
+	// cancelled means cancellation has been triggered. It makes "stop" idempotent: repeated calls return 0 instead of counting the
+	// same batch of runs again.
 	cancelled atomic.Bool
 }
 
-// runRegistry 进程内台账：run_id → 句柄；session_id → run_id 集合（副索引）。
+// runRegistry is the in-process ledger: run_id -> handle; session_id -> set of run_ids (secondary index).
 //
-// 为什么需要这张表：Stream 以前从 context.Background() 起步，整条链路
-// （LLM 流、工具执行）没有任何取消点。用户关页面或想强行停下时只能等模型
-// 自己跑完 —— 期间 exec / browser 还在继续占用沙箱资源。
+// Why this table exists: Stream used to start from context.Background(), so the whole chain (LLM stream, tool execution) had no
+// cancellation point. When a user closed the page or wanted to force a stop, all it could do was wait for the model to finish on its own -
+// while exec / browser kept holding sandbox resources.
 //
-// 主键取 run_id（每次调用唯一）；副索引取 session_id，因为 UI 只知道会话。
+// The primary key is run_id (unique per call); the secondary index is session_id, because the UI only knows the session.
 var runRegistry = struct {
 	mu     sync.Mutex
 	byRun  map[string]*runHandle
@@ -43,7 +43,7 @@ var runRegistry = struct {
 	bySess: make(map[string]map[string]struct{}),
 }
 
-// registerRun 登记一次运行，返回幂等的注销函数（Stream 结束时 defer 调用）。
+// registerRun registers a run and returns an idempotent unregister function (deferred by Stream when it ends).
 func registerRun(entry runledger.Entry, cancel context.CancelCauseFunc) func() {
 	if entry.RunID == "" || cancel == nil {
 		return func() {}
@@ -63,12 +63,12 @@ func registerRun(entry runledger.Entry, cancel context.CancelCauseFunc) func() {
 	}
 	runRegistry.mu.Unlock()
 
-	// 跨实例台账：写一条「在跑」并纳入心跳（runledger 内部按租户合并）。
-	// best-effort：Redis 不可用时只记内存，不影响运行本身。
+	// Cross-instance ledger: write a "running" record and join the heartbeat (runledger merges per tenant internally).
+	// Best effort: without Redis only memory is kept, which does not affect the run itself.
 	unregisterLedger := runledger.Register(entry)
 
-	// 停止可能早于登记：客户端断开与 Stream 启动之间有一个窗口，那时的 StopRunCause
-	// 找不到句柄。命中待取消就立刻取消，并标成已取消（后续重复停止照旧返回 false）。
+	// A stop may precede the registration: there is a window between the client disconnecting and Stream starting, and a StopRunCause in
+	// it finds no handle. A matching pending stop cancels immediately and is marked cancelled (later repeats still return false).
 	if cause := takePendingStop(runID, sessionID); cause != nil {
 		h.cancelled.Store(true)
 		cancel(cause)
@@ -98,14 +98,15 @@ func unregisterRun(runID, sessionID string) {
 	}
 }
 
-// pendingStopTTL 待取消登记的最长存活时间。
+// pendingStopTTL is the longest lifetime of a pending stop record.
 //
-// 停止可能早于登记（客户端断开与 Stream 启动之间有一个窗口），所以要能「先记下来，
-// 等它登记时立刻取消」。但必须过期：否则很久以后的一次停止会把同一会话里新起的
-// 那一轮当成立即要停的那一轮杀掉。
+// A stop may precede the registration (there is a window between the client disconnecting and Stream starting), so it has to be
+// "noted down first and cancelled the moment it registers". But it must expire: otherwise a stop much later would kill a new round in the
+// same session as if it were the one to stop immediately.
 const pendingStopTTL = 10 * time.Second
 
-// pendingStop 一条尚未命中的停止请求。runID 为空 = 会话级（对该会话之后登记的那条生效）。
+// pendingStop is a stop request that has not matched yet. An empty runID = session level (applies to the run registered next in that
+// session).
 type pendingStop struct {
 	runID     string
 	sessionID string
@@ -118,10 +119,10 @@ var pendingStops = struct {
 	all []pendingStop
 }{}
 
-// rememberPendingStop 记下一条暂时没命中的停止请求，交给 registerRun 消费。
+// rememberPendingStop notes a stop request that matched nothing yet, for registerRun to consume.
 //
-// 只存内存、只活一个 TTL：它补的是「登记与停止的先后顺序」这个窗口，不是跨进程通知
-// —— 多实例下另一台机器上的运行，这里永远等不到它登记。
+// Memory only, alive for one TTL: it bridges the window of "registration vs stop ordering", not cross-process notification - with several
+// instances, a run on another machine will never register here.
 func rememberPendingStop(runID, sessionID string, cause error) {
 	if sessionID == "" {
 		return
@@ -134,7 +135,7 @@ func rememberPendingStop(runID, sessionID string, cause error) {
 		pendingStop{runID: runID, sessionID: sessionID, cause: cause, at: now})
 }
 
-// takePendingStop 取走与这次登记匹配的待取消请求（消费即删：一次停止只生效一次）。
+// takePendingStop takes away the pending stop matching this registration (consumed on take: one stop takes effect once).
 func takePendingStop(runID, sessionID string) error {
 	if sessionID == "" {
 		return nil
@@ -147,7 +148,7 @@ func takePendingStop(runID, sessionID string) error {
 		if p.sessionID != sessionID {
 			continue
 		}
-		// 按 run 停的必须精确对上；按会话停的（runID 为空）对新登记的这条就生效。
+		// A run-level stop must match exactly; a session-level one (empty runID) applies to the newly registered run.
 		if p.runID != "" && p.runID != runID {
 			continue
 		}
@@ -157,7 +158,7 @@ func takePendingStop(runID, sessionID string) error {
 	return nil
 }
 
-// prunePendingStops 丢掉过期的登记（调用方持锁）。
+// prunePendingStops drops expired records (the caller holds the lock).
 func prunePendingStops(all []pendingStop, now time.Time) []pendingStop {
 	kept := all[:0]
 	for _, p := range all {
@@ -168,12 +169,12 @@ func prunePendingStops(all []pendingStop, now time.Time) []pendingStop {
 	return kept
 }
 
-// StopRunCause 终止一次运行并指定原因（如客户端断开）。
+// StopRunCause stops a run with an explicit reason (a client disconnect, say).
 //
-// sessionID 必填：它既是「停哪批运行」的锚点，也是归属校验的唯一依据。
-// 空 sessionID 一律拒绝 —— 台账是进程级、跨 agent 的，只凭 run_id 就能停掉
-// 别人的运行；这个口子不在单个调用方那里守，而是守在这里，任何入口都绕不过去。
-// 返回 false 表示没有匹配的在跑实例（已结束 / id 不对 / 会话不匹配 / 没给会话）。
+// sessionID is required: it is the anchor for "which runs to stop" and the only basis for the ownership check.
+// An empty sessionID is always refused - the ledger is process-wide and cross-agent, so a run_id alone would be enough to stop someone
+// else's run; this hole is not guarded in each caller but right here, where no entry can bypass it.
+// Returning false means there is no matching running instance (already finished / wrong id / session mismatch / no session given).
 func StopRunCause(runID, sessionID string, cause error) bool {
 	if runID == "" || sessionID == "" {
 		return false
@@ -185,14 +186,14 @@ func StopRunCause(runID, sessionID string, cause error) bool {
 	h := runRegistry.byRun[runID]
 	ok := h != nil && h.sessionID == sessionID
 	if ok && h.cancelled.Swap(true) {
-		ok = false // 已经停过：幂等
+		ok = false // already stopped: idempotent
 	}
 	missing := h == nil
 	runRegistry.mu.Unlock()
 	if !ok {
-		// 这条 run 还没登记（Stream 刚起步）就记下来，等它登记时立刻取消。
-		// 只记「查不到这条 run」：会话不匹配是明确的越权请求，不该留下待取消；
-		// 已结束的 run 也不会复用同一个 run_id，记下来只会随 TTL 自然过期。
+		// This run is not registered yet (Stream just started), so note it down and cancel as soon as it registers.
+		// Only "this run was not found" is noted: a session mismatch is a clear authorization failure and must not leave a pending stop;
+		// a finished run never reuses its run_id either, so a record would only expire with the TTL.
 		if missing {
 			rememberPendingStop(runID, sessionID, cause)
 		}
@@ -202,11 +203,11 @@ func StopRunCause(runID, sessionID string, cause error) bool {
 	return true
 }
 
-// StopRunByID 按 run_id 精确终止，不再要求会话。
+// StopRunByID stops a run exactly by run_id, without requiring the session.
 //
-// 只给管理端的「运行列表 → 终止」用：那条 run 是先从本租户台账里查出来的，归属已经由
-// 台账把关。无会话的运行（RPC / MCP 单轮）没有 session_id 可传，用 StopRunCause 会永远
-// 停不掉，所以单开这一个入口，而不是把「会话必填」的校验放宽给所有人。
+// Only for the admin side's "run list -> stop": that run was read from this tenant's ledger first, so ownership is already cleared there.
+// A session-less run (a single RPC / MCP round) has no session_id to pass and could never be stopped through StopRunCause, hence this
+// separate entry rather than relaxing the "session is required" check for everyone.
 func StopRunByID(runID string) bool {
 	if runID == "" {
 		return false
@@ -215,7 +216,7 @@ func StopRunByID(runID string) bool {
 	h := runRegistry.byRun[runID]
 	ok := h != nil
 	if ok && h.cancelled.Swap(true) {
-		ok = false // 已经停过：幂等
+		ok = false // already stopped: idempotent
 	}
 	runRegistry.mu.Unlock()
 	if !ok {
@@ -225,8 +226,8 @@ func StopRunByID(runID string) bool {
 	return true
 }
 
-// StopSession 终止某会话下所有在跑的运行，返回终止数量。
-// 同一会话可能同时有多条运行（子 agent、并发请求），逐个取消。
+// StopSession stops every running run under a session and returns how many were stopped.
+// One session may have several runs at once (child agents, concurrent requests), so they are cancelled one by one.
 func StopSession(sessionID string) int {
 	if sessionID == "" {
 		return 0
@@ -236,7 +237,7 @@ func StopSession(sessionID string) int {
 	for id := range runRegistry.bySess[sessionID] {
 		h := runRegistry.byRun[id]
 		if h == nil || h.cancelled.Swap(true) {
-			continue // 已停过的跳过，保证重复调用返回 0
+			continue // skip the ones already stopped, so repeated calls return 0
 		}
 		handles = append(handles, h)
 	}
@@ -248,17 +249,17 @@ func StopSession(sessionID string) int {
 	return len(handles)
 }
 
-// RunningCount 当前在跑的数量（观测与测试用）。
+// RunningCount is the number of runs in flight (for observability and tests).
 func RunningCount() int {
 	runRegistry.mu.Lock()
 	defer runRegistry.mu.Unlock()
 	return len(runRegistry.byRun)
 }
 
-// handleRunStopSignal 处理来自 Redis 的跨实例停止信号。
+// handleRunStopSignal handles a cross-instance stop signal from Redis.
 //
-// 每个实例都会收到同一条信号，只有持有这条 run 的实例能命中；其余实例的台账里
-// 没有它（StopRunCause 返回 false），直接忽略即可 —— 不需要「谁在哪台」的路由。
+// Every instance receives the same signal, and only the instance holding that run matches it; the others simply lack it in their ledger
+// (StopRunCause returns false) and ignore it - no "who is on which machine" routing needed.
 func handleRunStopSignal(sig runledger.StopSignal) {
 	if sig.Kind != "" && sig.Kind != runledger.KindAgent {
 		return
@@ -267,7 +268,7 @@ func handleRunStopSignal(sig runledger.StopSignal) {
 		StopRunCause(sig.RunID, sig.SessionID, ErrRunStopped)
 		return
 	}
-	// 会话级停止：run_id 为空时按会话停（多实例下各实例各停自己那部分）
+	// Session-level stop: an empty run_id stops by session (with several instances, each stops its own part)
 	if sig.SessionID != "" {
 		StopSession(sig.SessionID)
 	}
@@ -277,7 +278,8 @@ func init() {
 	runledger.SubscribeStop(handleRunStopSignal)
 }
 
-// cancelMessage 把终止原因翻成给用户看的一句话。
+// cancelMessage turns a stop reason into a sentence for the user.
+// The strings stay in Chinese on purpose: they are shown to the user, not diagnostics.
 func cancelMessage(cause error) string {
 	switch {
 	case errors.Is(cause, ErrRunStopped):

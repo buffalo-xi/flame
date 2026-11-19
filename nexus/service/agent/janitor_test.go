@@ -11,7 +11,7 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// withTempStorage 把包级 agentStorage 临时指向一个本地临时目录。
+// withTempStorage points the package-level agentStorage at a local temporary directory for the test.
 func withTempStorage(t *testing.T) (root string, restore func()) {
 	t.Helper()
 	root = t.TempDir()
@@ -20,7 +20,7 @@ func withTempStorage(t *testing.T) (root string, restore func()) {
 	return root, func() { agentStorage = old }
 }
 
-// mkRunDir 在 root 下建一个 run 场地并写一个产物文件。
+// mkRunDir creates a run workspace under root and writes one artifact file into it.
 func mkRunDir(t *testing.T, root, relDir string) {
 	t.Helper()
 	abs := filepath.Join(root, filepath.FromSlash(relDir))
@@ -32,7 +32,7 @@ func mkRunDir(t *testing.T, root, relDir string) {
 	}
 }
 
-// ageDir 把一个目录及其内的文件一起改到指定时间之前。
+// ageDir moves a directory and the files inside it to before the given time.
 func ageDir(t *testing.T, root, relDir string, at time.Time) {
 	t.Helper()
 	abs := filepath.Join(root, filepath.FromSlash(relDir))
@@ -44,8 +44,8 @@ func ageDir(t *testing.T, root, relDir string, at time.Time) {
 	}
 }
 
-// TestCleanupExpiredRuns 是 janitor 的核心回归：只删超过 runsTTL 的场地，
-// 活跃场地（可能是别的实例正在跑的）必须原样保留。
+// TestCleanupExpiredRuns is the core regression of the janitor: only workspaces older than runsTTL are deleted,
+// and an active workspace (possibly being used by another instance) must be left untouched.
 func TestCleanupExpiredRuns(t *testing.T) {
 	root, restore := withTempStorage(t)
 	defer restore()
@@ -56,21 +56,21 @@ func TestCleanupExpiredRuns(t *testing.T) {
 	mkRunDir(t, root, oldRun)
 	mkRunDir(t, root, newRun)
 
-	// old-run 整体挪到 TTL 之外（目录与内文件都改，覆盖两种时间判据）。
+	// Move old-run entirely beyond the TTL (both the directory and the file inside it, covering both time criteria).
 	ageDir(t, root, oldRun, time.Now().Add(-runsTTL-time.Minute))
 
 	cleanupExpiredRuns(context.Background(), runsDir)
 
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(oldRun))); !os.IsNotExist(err) {
-		t.Errorf("超过 %s 的场地应被删除，实际 stat 结果: %v", runsTTL, err)
+		t.Errorf("a workspace older than %s should be deleted, stat result: %v", runsTTL, err)
 	}
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(newRun))); err != nil {
-		t.Errorf("活跃场地不应被删除: %v", err)
+		t.Errorf("an active workspace must not be deleted: %v", err)
 	}
 }
 
-// TestCleanupExpiredRunsEmptyDir 空场地也要能收：没有子文件可参考时，
-// 退回到目录自身的时间（本地盘 / NFS 有该属性）。
+// TestCleanupExpiredRunsEmptyDir also has to reclaim an empty workspace: with no child file to consult,
+// it falls back to the directory's own time (local disk / NFS have that attribute).
 func TestCleanupExpiredRunsEmptyDir(t *testing.T) {
 	root, restore := withTempStorage(t)
 	defer restore()
@@ -87,11 +87,11 @@ func TestCleanupExpiredRunsEmptyDir(t *testing.T) {
 
 	cleanupExpiredRuns(context.Background(), runsDir)
 	if _, err := os.Stat(abs); !os.IsNotExist(err) {
-		t.Errorf("空但过期的场地应被删除，实际: %v", err)
+		t.Errorf("an empty but expired workspace should be deleted, got: %v", err)
 	}
 }
 
-// TestCleanupExpiredRunsMissingDir 目录不存在时静默返回（全新部署的正常形态）。
+// TestCleanupExpiredRunsMissingDir returns silently when the directory does not exist (the normal shape of a fresh deployment).
 func TestCleanupExpiredRunsMissingDir(t *testing.T) {
 	_, restore := withTempStorage(t)
 	defer restore()

@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// TestValidProgressToken 规范约束：progressToken 必须是 string 或 integer。
-// 其他形态（含 1.5 这种「浮点但非整数」）一律视为未提供 —— 当作没订阅，
-// 而不是带着一个非法 token 去推送。
+// TestValidProgressToken applies the spec's constraint: progressToken must be a string or an integer.
+// Any other shape (1.5 included - a float that is not an integer) counts as not provided: treat it as unsubscribed rather than pushing
+// with an illegal token.
 func TestValidProgressToken(t *testing.T) {
 	cases := []struct {
 		name string
@@ -15,16 +15,16 @@ func TestValidProgressToken(t *testing.T) {
 		want bool
 	}{
 		{"string", "tok-1", true},
-		{"整数 float64（JSON 解码后的常态）", float64(7), true},
+		{"integer float64 (the norm after JSON decoding)", float64(7), true},
 		{"int", 7, true},
 		{"int64", int64(7), true},
 		{"json.Number", json.Number("7"), true},
-		{"空串", "", false},
-		{"非整数", 1.5, false},
+		{"empty string", "", false},
+		{"non-integer", 1.5, false},
 		{"bool", true, false},
 		{"nil", nil, false},
-		{"对象", map[string]any{"a": 1}, false},
-		{"数组", []any{1}, false},
+		{"object", map[string]any{"a": 1}, false},
+		{"array", []any{1}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -35,46 +35,46 @@ func TestValidProgressToken(t *testing.T) {
 	}
 }
 
-// TestProgressPumpEnabled 没有 token 就是「没订阅」：调用方据此走同步路径。
+// TestProgressPumpEnabled: no token means "not subscribed", and the caller takes the synchronous path on that basis.
 func TestProgressPumpEnabled(t *testing.T) {
 	if NewProgressPump(nil).Enabled() {
-		t.Fatal("无 token 时不该 Enabled")
+		t.Fatal("without a token it must not be Enabled")
 	}
 	var nilPump *ProgressPump
 	if nilPump.Enabled() {
-		t.Fatal("nil pump 不该 Enabled（且不应 panic）")
+		t.Fatal("a nil pump must not be Enabled (and must not panic)")
 	}
 	if !NewProgressPump("tok").Enabled() {
-		t.Fatal("有 token 时应 Enabled")
+		t.Fatal("with a token it should be Enabled")
 	}
 }
 
-// TestStripLegacyStream 废弃的 arguments.stream 必须被剥掉：
-// 既不再影响判定（判定只看 progressToken），也不该作为业务变量流进 flow / agent。
-// 返回值用于「要不要记日志」，所以两种情形要分得开。
+// TestStripLegacyStream: the deprecated arguments.stream has to be stripped - it no longer affects the decision (which only looks at
+// progressToken) and must not flow into a flow / agent as a business variable.
+// The return value drives "should this be logged", so the two cases have to be distinguishable.
 func TestStripLegacyStream(t *testing.T) {
 	input := map[string]any{"stream": true, "city": "sh"}
 	if !StripLegacyStream(input) {
-		t.Fatal("存在 stream 时应返回 true")
+		t.Fatal("it should return true when stream is present")
 	}
 	if _, existed := input["stream"]; existed {
-		t.Fatal("stream 应被剥掉")
+		t.Fatal("stream should have been stripped")
 	}
 	if input["city"] != "sh" {
-		t.Fatal("其它业务参数不该被动过")
+		t.Fatal("other business arguments must not be touched")
 	}
 
-	// 没有这个键：无操作，且不能凭空塞一个
+	// Without the key: a no-op, and nothing may be invented
 	clean := map[string]any{"city": "sh"}
 	if StripLegacyStream(clean) {
-		t.Fatal("不存在 stream 时应返回 false")
+		t.Fatal("it should return false when stream is absent")
 	}
 	if len(clean) != 1 {
-		t.Fatalf("无 stream 时不该改动 map: %v", clean)
+		t.Fatalf("the map must not change without stream: %v", clean)
 	}
 }
 
-// TestProgressPumpNext 序号严格从 1 递增：规范要求 progress 每次 MUST 递增。
+// TestProgressPumpNext: the sequence strictly increments from 1, because the spec requires progress to increase on every frame.
 func TestProgressPumpNext(t *testing.T) {
 	p := NewProgressPump("tok")
 	for want := 1.0; want <= 3; want++ {

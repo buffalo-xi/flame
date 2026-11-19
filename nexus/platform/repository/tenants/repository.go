@@ -1,8 +1,8 @@
-// Package tenants 租户注册表（platform.tenants）的数据访问 —— 平台侧 CRUD。
+// Package tenants is the data access layer for the tenant registry (platform.tenants) - platform-side CRUD.
 //
-// 注意：租户侧热路径上的白名单读取在 shared/tenants（带 TTL 缓存），两处共用同一张表。
-// 平台侧任何写操作之后必须调用 shared/tenants.Invalidate(schema)，
-// 否则"停用租户"最多要等一个 TTL 周期才生效。
+// Note: the allow-list read on the tenant-side hot path lives in shared/tenants (with a TTL cache); both use the same table.
+// Any platform-side write must call shared/tenants.Invalidate(schema) afterwards, otherwise "suspend a tenant" can take a
+// whole TTL to take effect.
 package tenants
 
 import (
@@ -15,13 +15,13 @@ import (
 	"flame/nexus/shared/db"
 )
 
-// Tenant platform.tenants 一行。
+// Tenant is one platform.tenants row.
 type Tenant struct {
 	Schema      string
 	DisplayName string
 	Status      string
 	Plan        string
-	OwnerUserID string // 负责人（platform.users.id）；空表示无（管理员代管）
+	OwnerUserID string // owner (platform.users.id); empty means none (admin-managed)
 	Remark      string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -40,7 +40,7 @@ func scan(s scanner, t *Tenant) error {
 	return s.Scan(&t.Schema, &t.DisplayName, &t.Status, &t.Plan, &t.OwnerUserID, &t.Remark, &t.CreatedAt, &t.UpdatedAt)
 }
 
-// Get 按 schema 取租户；不存在返回 (nil, nil)。
+// Get fetches a tenant by schema; a missing one returns (nil, nil).
 func Get(schema string) (*Tenant, error) {
 	var t Tenant
 	err := scan(db.DB.QueryRow(
@@ -54,14 +54,14 @@ func Get(schema string) (*Tenant, error) {
 	return &t, nil
 }
 
-// Exists schema 是否已注册（含已停用/软删）。
+// Exists reports whether the schema is registered (including suspended / soft-deleted ones).
 func Exists(schema string) (bool, error) {
 	t, err := Get(schema)
 	return t != nil, err
 }
 
-// filter 构造筛选条件（WHERE 子句 + 参数）。
-// List 与 Count 必须用同一套条件，抽出来避免两处漂移。
+// filter builds the WHERE clause and its arguments.
+// List and Count must use the same conditions, so they are extracted here to keep the two from drifting.
 func filter(status, q string) (string, []any) {
 	where := []string{"1=1"}
 	args := []any{}
@@ -76,8 +76,8 @@ func filter(status, q string) (string, []any) {
 	return strings.Join(where, " AND "), args
 }
 
-// List 列出租户。status 为空表示不过滤；q 匹配 schema_name / display_name（不区分大小写）。
-// limit <= 0 表示不分页（返回全部）；否则按 LIMIT/OFFSET 取一页，offset 从 0 起。
+// List lists tenants. An empty status means no filter; q matches schema_name / display_name (case-insensitive).
+// limit <= 0 means no paging (return everything); otherwise one page is taken with LIMIT/OFFSET, offset starting at 0.
 func List(status, q string, limit, offset int) ([]Tenant, error) {
 	cond, args := filter(status, q)
 	sqlStr := `SELECT ` + columns + ` FROM ` + tableName() + ` WHERE ` + cond + ` ORDER BY schema_name`
@@ -88,7 +88,7 @@ func List(status, q string, limit, offset int) ([]Tenant, error) {
 	return query(sqlStr, args...)
 }
 
-// Count 统计满足条件的租户数（与 List 同条件）——分页的 total 用它，而不是 len(items)。
+// Count counts the tenants matching the conditions (the same ones as List) - the paged total uses it rather than len(items).
 func Count(status, q string) (int, error) {
 	cond, args := filter(status, q)
 	var n int
@@ -96,7 +96,7 @@ func Count(status, q string) (int, error) {
 	return n, err
 }
 
-// ListByOwner 列出某用户名下的租户（用户身份进管理台时用）。
+// ListByOwner lists the tenants under one user's name (used when a user identity enters the console).
 func ListByOwner(ownerUserID string) ([]Tenant, error) {
 	return query(
 		`SELECT `+columns+` FROM `+tableName()+
@@ -104,7 +104,7 @@ func ListByOwner(ownerUserID string) ([]Tenant, error) {
 		strings.TrimSpace(ownerUserID))
 }
 
-// CountByOwner 统计某用户名下的租户数（停用该用户前提示用）。
+// CountByOwner counts the tenants under one user's name (used to warn before disabling that user).
 func CountByOwner(ownerUserID string) (int, error) {
 	var n int
 	err := db.DB.QueryRow(
@@ -113,7 +113,7 @@ func CountByOwner(ownerUserID string) (int, error) {
 	return n, err
 }
 
-// Create 写入注册表行（schema 本身由 provision 负责创建，见 nexus/platform/provision）。
+// Create writes the registry row (the schema itself is created by provision, see nexus/platform/provision).
 func Create(t *Tenant, createdBy string) error {
 	_, err := db.DB.Exec(
 		`INSERT INTO `+tableName()+`
@@ -123,7 +123,7 @@ func Create(t *Tenant, createdBy string) error {
 	return err
 }
 
-// Update 改显示名 / 备注 / 负责人（ownerUserID 传空串表示清空负责人）。
+// Update changes the display name / remark / owner (an empty ownerUserID clears the owner).
 func Update(schema, displayName, remark, ownerUserID string) error {
 	_, err := db.DB.Exec(
 		`UPDATE `+tableName()+`
@@ -133,7 +133,7 @@ func Update(schema, displayName, remark, ownerUserID string) error {
 	return err
 }
 
-// SetStatus 改租户状态（active / suspended / deleted / pending）。
+// SetStatus changes the tenant status (active / suspended / deleted / pending).
 func SetStatus(schema, status string) error {
 	_, err := db.DB.Exec(
 		`UPDATE `+tableName()+` SET status=$2, updated_at=NOW() WHERE schema_name=$1`,
@@ -141,36 +141,37 @@ func SetStatus(schema, status string) error {
 	return err
 }
 
-// SetQuota 覆盖某租户的配额行（platform.quota_configs）。
-// 调用方写完需自行 quota.Invalidate(schema)（本包不引 shared/quota，避免与配额语义耦合）。
+// SetQuota overwrites a tenant's quota row (platform.quota_configs).
+// The caller must call quota.Invalidate(schema) afterwards (this package does not import shared/quota, to avoid coupling to the
+// quota semantics).
 func SetQuota(schema string, maxAgents, maxSkills, maxFlows *int,
 	maxSessionStorageBytes *int64, maxUserSessions *int) error {
 	return setQuotaRow(schema, maxAgents, maxSkills, maxFlows, maxSessionStorageBytes, maxUserSessions)
 }
 
-// SetSystemQuota 覆盖**系统行**（tenant_id = ”）：租户未单独配置时的默认上限。
-// 调用方写完需自行 quota.InvalidateAll()（系统行一变，每个租户缓存的那一格都过时了）。
+// SetSystemQuota overwrites the **system row** (tenant_id = ''): the default ceiling when a tenant has no config of its own.
+// The caller must call quota.InvalidateAll() afterwards (once the system row changes, every tenant's cached cell is stale).
 func SetSystemQuota(maxAgents, maxSkills, maxFlows *int,
 	maxSessionStorageBytes *int64, maxUserSessions *int) error {
 	return setQuotaRow("", maxAgents, maxSkills, maxFlows, maxSessionStorageBytes, maxUserSessions)
 }
 
-// QuotaRow quota_configs 的原始一行：nil = NULL = 未设置（**不做**系统行回退）。
+// QuotaRow is the raw quota_configs row: nil = NULL = unset (**no** system-row fallback is applied here).
 type QuotaRow struct {
 	MaxAgents *int
 	MaxSkills *int
 	MaxFlows  *int
 
-	// MaxSessionStorageBytes 单会话空间上限（字节）；nil = 回退系统行。
+	// MaxSessionStorageBytes is the per-session storage ceiling in bytes; nil = fall back to the system row.
 	MaxSessionStorageBytes *int64
-	// MaxUserSessions 单用户会话数上限；nil = 回退系统行。
+	// MaxUserSessions is the per-user session ceiling; nil = fall back to the system row.
 	MaxUserSessions *int
 }
 
-// GetQuotaRow 读原始配额行；无该行时返回零值结构（全 nil）。
+// GetQuotaRow reads the raw quota row; when the row is absent it returns a zero value (all nil).
 //
-// 管理界面必须看原始值，才能区分"未设置"与"显式设成某个数"；
-// 需要"最终生效值"请走 shared/quota.Resolve（它会做 tenant -> sys -> fallback 回退）。
+// The console must see the raw values to tell "unset" from "explicitly set to some number";
+// for the "final effective value" go through shared/quota.Resolve (it falls back tenant -> sys -> fallback).
 func GetQuotaRow(tenantID string) (*QuotaRow, error) {
 	var agents, skills, flows sql.NullInt32
 	var sessBytes sql.NullInt64
@@ -194,10 +195,11 @@ func GetQuotaRow(tenantID string) (*QuotaRow, error) {
 	}, nil
 }
 
-// setQuotaRow 覆盖 quota_configs 的某一行（tenantID 传空串即系统行）。
+// setQuotaRow overwrites one quota_configs row (an empty tenantID means the system row).
 //
-// 语义沿用既有约定：NULL = 未设置（回退系统行）、-1 = 不限制、正数 = 上限。
-// 用「事务内先删后插」而不是 UPSERT：不依赖该表上唯一的约束名/形态。
+// Semantics follow the existing convention: NULL = unset (fall back to the system row), -1 = unlimited, a positive number = ceiling.
+// It uses "delete then insert inside a transaction" rather than UPSERT, so it does not depend on the unique constraint's name or
+// shape.
 func setQuotaRow(tenantID string, maxAgents, maxSkills, maxFlows *int,
 	maxSessionStorageBytes *int64, maxUserSessions *int) error {
 	tx, err := db.DB.Begin()
@@ -226,7 +228,7 @@ func quotaTable() string {
 	return config.Cfg.Database.PlatformSchema + ".quota_configs"
 }
 
-// nullInt sql.NullInt32 → *int（Invalid → nil）
+// nullInt converts sql.NullInt32 -> *int (Invalid -> nil).
 func nullInt(v sql.NullInt32) *int {
 	if !v.Valid {
 		return nil
@@ -235,7 +237,7 @@ func nullInt(v sql.NullInt32) *int {
 	return &n
 }
 
-// quotaArg nil → NULL（未设置），否则写入原值（-1 表示不限制）。
+// quotaArg maps nil -> NULL (unset), otherwise writes the value as is (-1 means unlimited).
 func quotaArg(v *int) any {
 	if v == nil {
 		return nil
@@ -243,7 +245,7 @@ func quotaArg(v *int) any {
 	return *v
 }
 
-// nullInt64 sql.NullInt64 → *int64（Invalid → nil）
+// nullInt64 converts sql.NullInt64 -> *int64 (Invalid -> nil).
 func nullInt64(v sql.NullInt64) *int64 {
 	if !v.Valid {
 		return nil
@@ -252,7 +254,7 @@ func nullInt64(v sql.NullInt64) *int64 {
 	return &n
 }
 
-// quotaArg64 同 quotaArg，用于 bigint 列（会话空间上限）。
+// quotaArg64 is quotaArg for bigint columns (the session storage ceiling).
 func quotaArg64(v *int64) any {
 	if v == nil {
 		return nil

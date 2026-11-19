@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// stubSkillDepMgr 记录参数解析与转发（name / skill_id 两种定位）。
+// stubSkillDepMgr records argument parsing and forwarding (both name and skill_id targeting).
 type stubSkillDepMgr struct {
 	SkillsManager
 	gotRef SkillRef
@@ -37,10 +37,10 @@ func TestGrantSkillToolForwardsNameAndRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !mgr.called || mgr.gotRef.Name != "data-crunching" || mgr.gotDep != "builtin:exec" {
-		t.Errorf("转发不符：ref=%+v dep=%q", mgr.gotRef, mgr.gotDep)
+		t.Errorf("forwarded values differ: ref=%+v dep=%q", mgr.gotRef, mgr.gotDep)
 	}
 	if ch, ok := out.(*SkillDepChange); !ok || !ch.Added || len(ch.ToolDeps) != 1 {
-		t.Errorf("应原样返回变更与完整依赖：%#v", out)
+		t.Errorf("the change and the full dependency list should be returned as is: %#v", out)
 	}
 }
 
@@ -56,19 +56,19 @@ func TestRevokeSkillToolAcceptsSkillID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if mgr.gotRef.ID != "sid-1" || mgr.gotRef.Name != "" {
-		t.Errorf("按 id 定位应只传 id：%+v", mgr.gotRef)
+		t.Errorf("targeting by id should pass the id only: %+v", mgr.gotRef)
 	}
 }
 
-// 既没有合法 name 也没有 skill_id → 拒绝，且不触达 manager（避免拿空名去查库）。
+// Neither a valid name nor a skill_id -> refused, and the manager is never reached (so no empty name is used for a lookup).
 func TestSkillDepRequiresNameOrID(t *testing.T) {
 	mgr := &stubSkillDepMgr{}
 	c := &Context{Skills: mgr}
 
 	if _, err := (&grantSkillToolTool{}).Execute(context.Background(), c, map[string]any{"ref": "builtin:file"}); err == nil {
-		t.Fatal("缺 name / skill_id 应被拒绝")
+		t.Fatal("missing name / skill_id should be refused")
 	}
 	if mgr.called {
-		t.Error("被拒绝的调用不应触达 manager")
+		t.Error("a refused call must not reach the manager")
 	}
 }
