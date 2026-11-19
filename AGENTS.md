@@ -50,6 +50,17 @@ tenant's language:
 This rule constrains only **the body text written into files**; it does not affect reply language — replies still follow the
 user, see `responseLanguageRule` in `nexus/service/agent/agent_impl.go`.
 
+## Commit messages must be English
+
+Commit subjects and bodies are **English**, in Conventional Commits form: `type(scope): subject`, where `type` is `feat` /
+`fix` / `docs` / `chore` / `refactor` / `test` and `scope` is optional (`feat(desktop): bilingual UI for platform views`).
+Imperative mood, lower case after the colon, no trailing period. The terminology red lines above still apply inside commit
+messages: `list` / `delist`, `expose` / `retract`, `release` / `deploy` / `rollback` / `apply`, `revoke` — never `publish`
+or `hide`.
+
+Scope of the rule: the **commit message** only. Go source comments and internal error strings stay Chinese (see above), and
+history is not rewritten — commits made before this rule keep their original language.
+
 ## Module map
 
 Four Go modules wired together with `replace`, no `go.work`:
