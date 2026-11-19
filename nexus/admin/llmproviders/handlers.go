@@ -15,10 +15,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 全局Repository实例
+// Package-level repository instance.
 var repo = repository.NewRepository()
 
-// GetLLMProvider 根据ID获取LLM服务商
+// GetLLMProvider returns a provider by id.
 func GetLLMProvider(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -41,7 +41,7 @@ func GetLLMProvider(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", llmProvider, "")
 }
 
-// CreateLLMProvider 创建LLM服务商
+// CreateLLMProvider creates a provider.
 func CreateLLMProvider(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -83,7 +83,7 @@ func CreateLLMProvider(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", llmProvider, "")
 }
 
-// UpdateLLMProvider 更新LLM服务商
+// UpdateLLMProvider updates a provider.
 func UpdateLLMProvider(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -130,10 +130,10 @@ func UpdateLLMProvider(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
-// DeleteLLMProvider 删除LLM服务商。
-// 顺序：先取该服务商下的模型 → 逐个网关注销（网络调用，失败即返回，DB 不动）
+// DeleteLLMProvider deletes a provider.
+// Order: load the provider's models -> deregister each at the gateway (a network call; on failure return at once, DB untouched)
 //
-//	→ 事务内解开 agent 引用、删模型、删服务商。
+//	-> then in one transaction: unlink the agent references, delete the models, delete the provider.
 func DeleteLLMProvider(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -144,7 +144,7 @@ func DeleteLLMProvider(c *gin.Context) {
 	id := c.Param("id")
 	schema := authInfo.(*auth.AuthInfo).Schema
 
-	// 0. 取出该服务商下的所有模型（含 gateway_id）
+	// 0. Load every model of the provider (with gateway_id).
 	type providerModel struct {
 		id        string
 		gatewayID sql.NullString
@@ -167,8 +167,8 @@ func DeleteLLMProvider(c *gin.Context) {
 	}
 	rows.Close()
 
-	// 1. 网关注销（在事务外）：任一条失败即返回，DB 保持原样，保证两端一致。
-	//    Deprovision 幂等，网关本来就没有该记录时也算成功。
+	// 1. Deregister at the gateway (outside the transaction): any failure returns early and leaves the DB as it was, keeping both sides consistent.
+	//    Deprovision is idempotent, so a record the gateway never had also counts as success.
 	for _, pm := range providerModels {
 		if !pm.gatewayID.Valid || pm.gatewayID.String == "" {
 			continue
@@ -184,7 +184,7 @@ func DeleteLLMProvider(c *gin.Context) {
 		}
 	}
 
-	// 2. 事务：解开 agent 引用 → 删模型 → 删服务商
+	// 2. Transaction: unlink the agent references -> delete the models -> delete the provider.
 	tx, err := db.DB.Begin()
 	if err != nil {
 		xhttp.ErrJSON(c, "Failed to begin transaction", nil, "")
@@ -196,7 +196,7 @@ func DeleteLLMProvider(c *gin.Context) {
 		}
 	}()
 
-	// agents.llm_model_id 无外键，必须显式清，否则删完模型会留下悬空引用
+	// agents.llm_model_id has no foreign key, so it must be cleared explicitly or deleting the model leaves a dangling reference.
 	for _, pm := range providerModels {
 		if _, err := tx.Exec(
 			fmt.Sprintf(`UPDATE %s.agents SET llm_model_id = NULL WHERE llm_model_id = $1`, schema), pm.id); err != nil {
@@ -236,7 +236,7 @@ func DeleteLLMProvider(c *gin.Context) {
 	xhttp.OkJSON(c, "LLM provider deleted successfully", id, "")
 }
 
-// ListLLMProviders 获取LLM服务商列表
+// ListLLMProviders lists providers.
 func ListLLMProviders(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -244,7 +244,7 @@ func ListLLMProviders(c *gin.Context) {
 		return
 	}
 
-	// 解析请求参数
+	// Decode the request parameters.
 	var req repository.ListLLMProvidersRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
@@ -257,7 +257,7 @@ func ListLLMProviders(c *gin.Context) {
 		return
 	}
 
-	// 构建响应
+	// Build the response.
 	response := gin.H{
 		"items": llmProviders,
 		"total": total,
