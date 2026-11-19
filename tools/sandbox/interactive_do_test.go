@@ -12,12 +12,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Do 是浏览器的「一问一答」通道：发一行 JSON、读回一行。
+// Do is the browser's request/response channel: send one JSON line, read one line back.
 //
-// 这里守两件事：
-//  1. open 帧带的是 tool_id=browser（sandboxd 据此换 argv / 资源上限）；
-//  2. 上一次调用迟到的响应（id 不匹配）必须被丢弃 —— 否则模型会拿到
-//     上一页的快照，对着已经翻篇的页面点 ref。
+// It guards two things:
+//  1. the open frame carries tool_id=browser (sandboxd swaps argv / limits on it);
+//  2. a late response from an earlier call (id mismatch) must be dropped - otherwise the model gets
+//     the previous page's snapshot and clicks a ref on a page that has already moved on.
 func TestInteractiveDoMatchesID(t *testing.T) {
 	var gotOpen *Frame
 	srv := newMockInteractive(t, func(f *Frame) { gotOpen = f }, func(string) string {
@@ -39,25 +39,25 @@ func TestInteractiveDoMatchesID(t *testing.T) {
 	}
 
 	if gotOpen == nil {
-		t.Fatal("没收到 open 帧")
+		t.Fatal("no open frame received")
 	}
 	if gotOpen.ToolID != "browser" {
 		t.Errorf("tool_id = %q, want browser", gotOpen.ToolID)
 	}
 	if gotOpen.SessionID != "s1" || !gotOpen.Ephemeral {
-		t.Errorf("open 帧 = %+v", gotOpen)
+		t.Errorf("open frame = %+v", gotOpen)
 	}
 
 	if strings.Contains(string(line), "STALE") {
-		t.Fatalf("迟到的响应没被丢弃: %s", line)
+		t.Fatalf("a late response was not dropped: %s", line)
 	}
 	if !strings.Contains(string(line), `Sign in`) {
-		t.Fatalf("拿到的不是这次请求的响应: %s", line)
+		t.Fatalf("the response does not belong to this request: %s", line)
 	}
 }
 
-// 服务端不回话时必须按 ctx 超时返回，不能挂死 —— 工具调用有 60s 硬上限，
-// 挂死会把整个 agent 回合拖住。
+// When the server does not answer, the call must return on the ctx timeout instead of hanging - tool
+// calls have a hard 60s cap, and hanging would stall the whole agent turn.
 func TestInteractiveDoTimeout(t *testing.T) {
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +71,7 @@ func TestInteractiveDoTimeout(t *testing.T) {
 			return
 		}
 		_ = c.SendFrame(&Frame{Type: FrameReady})
-		time.Sleep(2 * time.Second) // 故意不回
+		time.Sleep(2 * time.Second) // deliberately no reply
 	}))
 	defer srv.Close()
 
@@ -91,6 +91,6 @@ func TestInteractiveDoTimeout(t *testing.T) {
 		t.Errorf("err = %v, want ctx deadline", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Errorf("超时没生效，耗时 %v", elapsed)
+		t.Errorf("the timeout did not fire, took %v", elapsed)
 	}
 }

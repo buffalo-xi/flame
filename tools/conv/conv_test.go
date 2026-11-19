@@ -89,7 +89,7 @@ func TestToString(t *testing.T) {
 		{int64(42), "42"},
 		{uint8(7), "7"},
 		{1.5, "1.5"},
-		{[]int{1}, ""}, // 不支持的类型返回空串
+		{[]int{1}, ""}, // an unsupported type returns an empty string
 	}
 	for _, c := range cases {
 		if got := ToString(c.in); got != c.want {

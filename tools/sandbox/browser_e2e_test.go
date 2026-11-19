@@ -12,12 +12,12 @@ import (
 	"time"
 )
 
-// 端到端：nexus 的 Do → sandboxd /v1/interactive（tool_id=browser，
-// argv 由 sandboxd 换成配置里的 browserhost）→ 隔离单元里的 Chromium。
+// End to end: nexus Do -> sandboxd /v1/interactive (tool_id=browser,
+// argv replaced by sandboxd with the configured browserhost) -> Chromium in the isolation unit.
 //
-// 门控：SANDBOXD_TEST_BROWSER_URL=ws://127.0.0.1:27081/v1/interactive
-// （可选 SANDBOXD_TEST_TOKEN）。用 mode=none 时才有意义 —— 页面起在测试进程的
-// 回环端口上，容器里的浏览器够不到。
+// Gate: SANDBOXD_TEST_BROWSER_URL=ws://127.0.0.1:27081/v1/interactive
+// (SANDBOXD_TEST_TOKEN optional). Only meaningful with mode=none: the page is served on the test
+// process's loopback port, which a browser inside a container cannot reach.
 func TestBrowserE2E(t *testing.T) {
 	ep := os.Getenv("SANDBOXD_TEST_BROWSER_URL")
 	if ep == "" {
@@ -29,8 +29,8 @@ func TestBrowserE2E(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// 挂载点必须落在 sandboxd 的 allowed_mount_roots 之内，所以工作区由环境变量给，
-	// 不能随手用系统临时目录（生产配置只放行 storage 根）。
+	// The mount point has to sit under sandboxd's allowed_mount_roots, so the workspace comes from an
+	// environment variable and must not be the system temp dir (production only allows the storage root).
 	ws := os.Getenv("BROWSER_TEST_WORKSPACE")
 	if ws == "" {
 		t.Skip("set BROWSER_TEST_WORKSPACE to a dir under sandboxd's allowed_mount_roots")
@@ -60,13 +60,13 @@ func TestBrowserE2E(t *testing.T) {
 	}
 	snap, _ := res["snapshot"].(string)
 	if !strings.Contains(snap, `[button] "Go"`) {
-		t.Fatalf("snapshot 里没有按钮:\n%s", snap)
+		t.Fatalf("no button in the snapshot:\n%s", snap)
 	}
 
-	// 从快照里取按钮的 ref，再点它 —— 这一步验证的是「模型的工作流」真的能跑通。
+	// Take the button's ref from the snapshot and click it - this proves the model's workflow really runs.
 	ref := refFor(snap, "Go")
 	if ref == "" {
-		t.Fatalf("快照里找不到 ref:\n%s", snap)
+		t.Fatalf("no ref in the snapshot:\n%s", snap)
 	}
 	line, err = c.Do(ctx, sess, "browser", []string{"browserhost"},
 		mustJSON(t, map[string]any{"id": 2, "op": "click", "ref": ref}), mounts, "/workspace")
@@ -77,7 +77,7 @@ func TestBrowserE2E(t *testing.T) {
 		t.Fatalf("click not ok: %s", line)
 	}
 
-	// 浏览器与 shell 同属长交互注册表：kill 之后同一 session 再调应重新拉起。
+	// The browser shares the interactive registry with the shell: after a kill the same session starts again.
 	if err := c.Kill(ctx, sess, "browser"); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
@@ -101,7 +101,7 @@ func decode(t *testing.T, line []byte) map[string]any {
 	return out
 }
 
-// refFor 从快照里找出名字匹配的元素 ref（形如 `- e3 [button] "Go"`）。
+// refFor finds the ref of the element whose name matches (e.g. `- e3 [button] "Go"`).
 func refFor(snapshot, name string) string {
 	for _, line := range strings.Split(snapshot, "\n") {
 		if !strings.Contains(line, `"`+name+`"`) {
