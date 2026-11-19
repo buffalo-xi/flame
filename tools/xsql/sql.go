@@ -6,33 +6,36 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
-// String 自定义字符串类型：数据库NULL值自动转为空串
+// String is a custom string type that turns a database NULL into an empty string.
 type String string
 
-// Scan 实现sql.Scanner接口，处理数据库NULL值
-// 这是核心方法，会在Scan()读取数据库值时自动调用
+// Scan implements sql.Scanner and handles database NULL values.
+// This is the core method: it is called automatically when Scan() reads a value from the database.
 func (e *String) Scan(value interface{}) error {
-	// 如果数据库值为NULL，直接赋值为空串
+	// A NULL database value becomes an empty string.
 	if value == nil {
 		*e = String("")
 		return nil
 	}
 
-	// 尝试将数据库值转换为字符串
-	str, ok := value.(string)
-	if !ok {
-		return fmt.Errorf("无法将%T类型的值转换为字符串", value)
+	// Try to convert the database value to a string.
+	// PostgreSQL usually returns text as string, MySQL as []byte.
+	switch v := value.(type) {
+	case string:
+		*e = String(v)
+	case []byte:
+		*e = String(v)
+	default:
+		return fmt.Errorf("xsql: cannot convert %T to string", value)
 	}
-
-	// 非NULL值直接赋值
-	*e = String(str)
 	return nil
 }
 
-// Value 实现driver.Valuer接口，可以调整为写入空值null
+// Value implements driver.Valuer; it can be adjusted to write a NULL instead.
 func (e String) Value() (driver.Value, error) {
 	if string(e) == "" {
 		return "", nil
@@ -40,34 +43,70 @@ func (e String) Value() (driver.Value, error) {
 	return string(e), nil
 }
 
-// Time 自定义时间类型：数据库NULL值自动转为零值时间
-// 零值时间：time.Time{}
-// 对应 0001-01-01 00:00:00 +0000 UTC
-// 特点：IsZero() 返回 true
-// 注意：JSON序列化时会显示为 "0001-01-01T00:00:00Z"
+// Time is a custom time type that turns a database NULL into the zero time.
+// Zero time: time.Time{}, i.e. 0001-01-01 00:00:00 +0000 UTC.
+// IsZero() returns true for it.
+// Note: JSON serialisation renders it as null, the same shape as the NULL written by Value.
+//
+// Besides time.Time it also accepts the textual forms the MySQL driver returns
+// when parseTime is disabled. Such values are parsed in UTC, because the
+// driver's location is not visible here.
 type Time time.Time
 
-// Scan 实现sql.Scanner接口，处理数据库NULL值
-// 这是核心方法，会在Scan()读取数据库值时自动调用
+// timeLayouts lists the textual timestamp formats accepted by Scan and UnmarshalJSON.
+var timeLayouts = []string{
+	"2006-01-02 15:04:05.999999999",
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04:05.999999999",
+	"2006-01-02T15:04:05",
+	time.RFC3339Nano,
+	"2006-01-02",
+}
+
+// parseTime parses the textual timestamp forms accepted by this package.
+func parseTime(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	for _, layout := range timeLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("xsql: cannot parse %q as time", s)
+}
+
+// Scan implements sql.Scanner and handles database NULL values.
+// This is the core method: it is called automatically when Scan() reads a value from the database.
 func (e *Time) Scan(value interface{}) error {
-	// 如果数据库值为NULL，直接赋值为零值时间
+	// A NULL database value becomes the zero time.
 	if value == nil {
 		*e = Time(time.Time{})
 		return nil
 	}
 
-	// 尝试将数据库值转换为时间
-	t, ok := value.(time.Time)
-	if !ok {
-		return fmt.Errorf("无法将%T类型的值转换为时间", value)
+	// Try to convert the database value to a time.
+	// PostgreSQL returns time.Time, MySQL returns []byte unless parseTime is enabled.
+	switch v := value.(type) {
+	case time.Time:
+		*e = Time(v)
+	case string:
+		t, err := parseTime(v)
+		if err != nil {
+			return err
+		}
+		*e = Time(t)
+	case []byte:
+		t, err := parseTime(string(v))
+		if err != nil {
+			return err
+		}
+		*e = Time(t)
+	default:
+		return fmt.Errorf("xsql: cannot convert %T to time.Time", value)
 	}
-
-	// 非NULL值直接赋值
-	*e = Time(t)
 	return nil
 }
 
-// Value 实现driver.Valuer接口，可以调整为写入空值null
+// Value implements driver.Valuer; it can be adjusted to write a NULL instead.
 func (e Time) Value() (driver.Value, error) {
 	t := time.Time(e)
 	if t.IsZero() {
@@ -76,55 +115,109 @@ func (e Time) Value() (driver.Value, error) {
 	return t, nil
 }
 
-// IsZero 检查是否为零值时间
+// IsZero reports whether this is the zero time.
 func (e Time) IsZero() bool {
 	return time.Time(e).IsZero()
 }
 
-// String 实现fmt.Stringer接口
+// String implements fmt.Stringer.
 func (e Time) String() string {
 	return time.Time(e).String()
 }
 
-// MarshalJSON 实现json.Marshaler接口，确保时间能够正确序列化
+// MarshalJSON implements json.Marshaler so the time serialises correctly.
+// The zero time is rendered as null, matching the NULL written by Value.
 func (e Time) MarshalJSON() ([]byte, error) {
+	if e.IsZero() {
+		return []byte("null"), nil
+	}
 	return time.Time(e).MarshalJSON()
 }
 
-// Bool 自定义布尔类型：数据库NULL值自动转为false
+// UnmarshalJSON implements json.Unmarshaler.
+// null or an empty string becomes the zero time.
+func (e *Time) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*e = Time(time.Time{})
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("xsql: cannot unmarshal %s into time: %w", data, err)
+	}
+	if s == "" {
+		*e = Time(time.Time{})
+		return nil
+	}
+
+	t, err := parseTime(s)
+	if err != nil {
+		return err
+	}
+	*e = Time(t)
+	return nil
+}
+
+// Bool is a custom boolean type that turns a database NULL into false.
 type Bool bool
 
-// Scan 实现sql.Scanner接口，处理数据库NULL值
-// 这是核心方法，会在Scan()读取数据库值时自动调用
+// Scan implements sql.Scanner and handles database NULL values.
+// This is the core method: it is called automatically when Scan() reads a value from the database.
 func (e *Bool) Scan(value interface{}) error {
-	// 如果数据库值为NULL，直接赋值为false
+	// A NULL database value becomes false.
 	if value == nil {
 		*e = Bool(false)
 		return nil
 	}
 
-	// 尝试将数据库值转换为布尔值
-	b, ok := value.(bool)
-	if !ok {
-		return fmt.Errorf("无法将%T类型的值转换为布尔值", value)
+	// Try to convert the database value to a boolean.
+	// PostgreSQL returns bool, MySQL returns []byte / int64 for tinyint(1).
+	switch v := value.(type) {
+	case bool:
+		*e = Bool(v)
+	case int64:
+		*e = Bool(v != 0)
+	case string:
+		b, err := parseBool(v)
+		if err != nil {
+			return err
+		}
+		*e = Bool(b)
+	case []byte:
+		b, err := parseBool(string(v))
+		if err != nil {
+			return err
+		}
+		*e = Bool(b)
+	default:
+		return fmt.Errorf("xsql: cannot convert %T to bool", value)
 	}
-
-	// 非NULL值直接赋值
-	*e = Bool(b)
 	return nil
 }
 
-// Value 实现driver.Valuer接口，可以调整为写入空值null
+// parseBool accepts the textual boolean literals the SQL drivers may return.
+func parseBool(s string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "t", "true", "on", "yes":
+		return true, nil
+	case "0", "f", "false", "off", "no":
+		return false, nil
+	}
+	return false, fmt.Errorf("xsql: invalid bool literal %q", s)
+}
+
+// Value implements driver.Valuer; it can be adjusted to write a NULL instead.
 func (e Bool) Value() (driver.Value, error) {
 	return bool(e), nil
 }
 
-// Bool 返回布尔值
+// Bool returns the boolean value.
 func (e Bool) Bool() bool {
 	return bool(e)
 }
 
-// MarshalJSON 实现json.Marshaler接口，确保布尔值能够正确序列化
+// MarshalJSON implements json.Marshaler so the boolean serialises correctly.
 func (e Bool) MarshalJSON() ([]byte, error) {
 	if bool(e) {
 		return []byte("true"), nil
@@ -132,84 +225,112 @@ func (e Bool) MarshalJSON() ([]byte, error) {
 	return []byte("false"), nil
 }
 
-// Int64 自定义int64类型：数据库NULL值自动转为0
+// Int64 is a custom int64 type that turns a database NULL into 0.
 type Int64 int64
 
-// Scan 实现sql.Scanner接口，处理数据库NULL值
+// Scan implements sql.Scanner and handles database NULL values.
 func (e *Int64) Scan(value interface{}) error {
-	// 如果数据库值为NULL，直接赋值为0
+	// A NULL database value becomes 0.
 	if value == nil {
 		*e = Int64(0)
 		return nil
 	}
 
-	// 尝试将数据库值转换为int64
-	i, ok := value.(int64)
-	if !ok {
-		return fmt.Errorf("无法将%T类型的值转换为int64", value)
+	// Try to convert the database value to an int64.
+	// MySQL returns DECIMAL and some integer columns as []byte.
+	switch v := value.(type) {
+	case int64:
+		*e = Int64(v)
+	case int:
+		*e = Int64(v)
+	case string:
+		i, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			return fmt.Errorf("xsql: cannot convert %q to int64: %w", v, err)
+		}
+		*e = Int64(i)
+	case []byte:
+		i, err := strconv.ParseInt(strings.TrimSpace(string(v)), 10, 64)
+		if err != nil {
+			return fmt.Errorf("xsql: cannot convert %q to int64: %w", string(v), err)
+		}
+		*e = Int64(i)
+	default:
+		return fmt.Errorf("xsql: cannot convert %T to int64", value)
 	}
-
-	// 非NULL值直接赋值
-	*e = Int64(i)
 	return nil
 }
 
-// Value 实现driver.Valuer接口，可以调整为写入空值null
+// Value implements driver.Valuer; it can be adjusted to write a NULL instead.
 func (e Int64) Value() (driver.Value, error) {
 	return int64(e), nil
 }
 
-// Int64 返回int64值
+// Int64 returns the int64 value.
 func (e Int64) Int64() int64 {
 	return int64(e)
 }
 
-// Float64 自定义float64类型：数据库NULL值自动转为0
+// Float64 is a custom float64 type that turns a database NULL into 0.
 type Float64 float64
 
-// Scan 实现sql.Scanner接口，处理数据库NULL值
+// Scan implements sql.Scanner and handles database NULL values.
 func (e *Float64) Scan(value interface{}) error {
-	// 如果数据库值为NULL，直接赋值为0
+	// A NULL database value becomes 0.
 	if value == nil {
 		*e = Float64(0)
 		return nil
 	}
 
-	// 尝试将数据库值转换为float64
-	f, ok := value.(float64)
-	if !ok {
-		return fmt.Errorf("无法将%T类型的值转换为float64", value)
+	// Try to convert the database value to a float64.
+	// MySQL returns DECIMAL as []byte.
+	switch v := value.(type) {
+	case float64:
+		*e = Float64(v)
+	case int64:
+		*e = Float64(v)
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return fmt.Errorf("xsql: cannot convert %q to float64: %w", v, err)
+		}
+		*e = Float64(f)
+	case []byte:
+		f, err := strconv.ParseFloat(strings.TrimSpace(string(v)), 64)
+		if err != nil {
+			return fmt.Errorf("xsql: cannot convert %q to float64: %w", string(v), err)
+		}
+		*e = Float64(f)
+	default:
+		return fmt.Errorf("xsql: cannot convert %T to float64", value)
 	}
-
-	// 非NULL值直接赋值
-	*e = Float64(f)
 	return nil
 }
 
-// Value 实现driver.Valuer接口，可以调整为写入空值null
+// Value implements driver.Valuer; it can be adjusted to write a NULL instead.
 func (e Float64) Value() (driver.Value, error) {
 	return float64(e), nil
 }
 
-// Float64 返回float64值
+// Float64 returns the float64 value.
 func (e Float64) Float64() float64 {
 	return float64(e)
 }
 
-// UUID 自定义UUID类型：数据库NULL值自动转为空串
+// UUID is a custom UUID type that turns a database NULL into an empty string.
 type UUID string
 
-// Scan 实现sql.Scanner接口，处理数据库NULL值
+// Scan implements sql.Scanner and handles database NULL values.
 func (e *UUID) Scan(value interface{}) error {
-	// 如果数据库值为NULL，直接赋值为空串
+	// A NULL database value becomes an empty string.
 	if value == nil {
 		*e = UUID("")
 		return nil
 	}
 
-	// 尝试将数据库值转换为字符串
-	// PostgreSQL通常返回[]byte类型的UUID
-	// MySQL通常返回string类型的UUID
+	// Try to convert the database value to a string.
+	// PostgreSQL usually returns a UUID as []byte.
+	// MySQL usually returns a UUID as string.
 	switch v := value.(type) {
 	case string:
 		*e = UUID(v)
@@ -218,11 +339,11 @@ func (e *UUID) Scan(value interface{}) error {
 		*e = UUID(string(v))
 		return nil
 	default:
-		return fmt.Errorf("无法将%T类型的值转换为UUID", value)
+		return fmt.Errorf("xsql: cannot convert %T to uuid", value)
 	}
 }
 
-// Value 实现driver.Valuer接口，可以调整为写入空值null
+// Value implements driver.Valuer; it can be adjusted to write a NULL instead.
 func (e UUID) Value() (driver.Value, error) {
 	if string(e) == "" {
 		return nil, nil
@@ -230,23 +351,23 @@ func (e UUID) Value() (driver.Value, error) {
 	return string(e), nil
 }
 
-// String 返回字符串值
+// String returns the string value.
 func (e UUID) String() string {
 	return string(e)
 }
 
-// Int 自定义整数类型：数据库NULL值自动转为0
+// Int is a custom integer type that turns a database NULL into 0.
 type Int int
 
-// Scan 实现sql.Scanner接口，处理数据库NULL值
+// Scan implements sql.Scanner and handles database NULL values.
 func (e *Int) Scan(value interface{}) error {
-	// 如果数据库值为NULL，直接赋值为0
+	// A NULL database value becomes 0.
 	if value == nil {
 		*e = Int(0)
 		return nil
 	}
 
-	// 尝试将数据库值转换为整数
+	// Try to convert the database value to an integer.
 	switch v := value.(type) {
 	case int:
 		*e = Int(v)
@@ -255,96 +376,32 @@ func (e *Int) Scan(value interface{}) error {
 		*e = Int(v)
 		return nil
 	case []byte:
-		// 大多数 SQL 驱动将整数作为 []byte 返回
+		// Most SQL drivers return integers as []byte.
 		i, err := strconv.Atoi(string(v))
 		if err != nil {
-			return fmt.Errorf("无法将%T类型的值转换为整数: %v", value, err)
+			return fmt.Errorf("xsql: cannot convert %T to int: %v", value, err)
 		}
 		*e = Int(i)
 		return nil
 	default:
-		return fmt.Errorf("无法将%T类型的值转换为整数", value)
+		return fmt.Errorf("xsql: cannot convert %T to int", value)
 	}
 }
 
-// Value 实现driver.Valuer接口，可以调整为写入空值null
+// Value implements driver.Valuer; it can be adjusted to write a NULL instead.
 func (e Int) Value() (driver.Value, error) {
 	return int64(e), nil
 }
 
-// Int 返回整数值
+// Int returns the integer value.
 func (e Int) Int() int {
 	return int(e)
 }
 
-// JSONB 自定义JSONB类型：数据库NULL值自动转为空JSON
-//type JSON []byte
-//
-//// Scan 实现sql.Scanner接口，处理数据库NULL值
-//func (e *JSON) Scan(value interface{}) error {
-//	// 如果数据库值为NULL，直接赋值为空字符串
-//	if value == nil {
-//		*e = JSON("null")
-//		return nil
-//	}
-//
-//	// 尝试将数据库值转换为字符串
-//	switch v := value.(type) {
-//	case []byte:
-//		*e = JSON(v)
-//		return nil
-//	case string:
-//		*e = JSON(v)
-//		return nil
-//	default:
-//		return fmt.Errorf("无法将%T类型的值转换为JSON", value)
-//	}
-//}
-//
-//// Value 实现driver.Valuer接口，可以调整为写入空值null
-//func (e JSON) Value() (driver.Value, error) {
-//	if string(e) == "" || string(e) == "null" {
-//		return nil, nil
-//	}
-//	return string(e), nil
-//}
-//
-//// MarshalJSON 实现json.Marshaler接口，确保JSONB能够正确序列化
-//func (e *JSON) MarshalJSON() ([]byte, error) {
-//	// 空值 / 空字符串 → 返回 null（合法JSON）
-//	if e == nil || len(*e) == 0 || string(*e) == "" {
-//		return []byte("null"), nil
-//	}
-//
-//	// 内容是 "null" 字符串 → 转成 null
-//	s := string(*e)
-//	if s == "null" {
-//		return []byte("null"), nil
-//	}
-//
-//	return *e, nil
-//}
-//
-//// UnmarshalJSON 实现json.Unmarshaler接口，确保JSON能够正确反序列化
-//func (e *JSON) UnmarshalJSON(data []byte) error {
-//	if len(data) == 0 || string(data) == "" {
-//		*e = JSON("")
-//		return nil
-//	}
-//	// 否则，直接使用原始数据
-//	*e = JSON(data)
-//	return nil
-//}
-//
-//// String 返回字符串值
-//func (e JSON) String() string {
-//	return string(e)
-//}
-
-// JSON 自定义jsonb类型
+// JSON is a custom jsonb type.
 type JSON []byte
 
-// MarshalJSON 【输出给前端】
+// MarshalJSON serialises for the frontend.
 func (j JSON) MarshalJSON() ([]byte, error) {
 	if len(j) == 0 {
 		return []byte("null"), nil
@@ -352,7 +409,7 @@ func (j JSON) MarshalJSON() ([]byte, error) {
 	return j, nil
 }
 
-// UnmarshalJSON 【接收前端数据】
+// UnmarshalJSON deserialises data coming from the frontend.
 func (j *JSON) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return errors.New("xsql.JSON: unmarshal on nil pointer")
@@ -361,7 +418,7 @@ func (j *JSON) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Value 【存入数据库】
+// Value writes the value into the database.
 func (j JSON) Value() (driver.Value, error) {
 	if len(j) == 0 {
 		return nil, nil
@@ -369,7 +426,7 @@ func (j JSON) Value() (driver.Value, error) {
 	return []byte(j), nil
 }
 
-// Scan 【从数据库 jsonb 读取】
+// Scan reads a jsonb column from the database.
 func (j *JSON) Scan(src any) error {
 	if src == nil {
 		*j = JSON("null")
@@ -390,16 +447,16 @@ func (j *JSON) Scan(src any) error {
 	return nil
 }
 
-// JSONB 自定义JSONB类型：专门支持PostgreSQL的jsonb列类型
-// 特性：
-// 1. 数据库NULL值自动转为nil
-// 2. 支持JSON序列化/反序列化
-// 3. 支持与Go类型的相互转换
+// JSONB is a custom JSONB type dedicated to PostgreSQL's jsonb columns.
+// Properties:
+// 1. a database NULL becomes nil
+// 2. JSON serialisation / deserialisation is supported
+// 3. conversion to and from Go types is supported
 type JSONB struct {
 	Data interface{}
 }
 
-// Scan 实现sql.Scanner接口，从数据库读取jsonb数据
+// Scan implements sql.Scanner and reads jsonb data from the database.
 func (j *JSONB) Scan(value interface{}) error {
 	if value == nil {
 		j.Data = nil
@@ -409,18 +466,18 @@ func (j *JSONB) Scan(value interface{}) error {
 	var bytes []byte
 	switch v := value.(type) {
 	case []byte:
-		// PostgreSQL的jsonb类型返回[]byte
-		// 重要：必须复制数据，避免引用问题
+		// PostgreSQL's jsonb type comes back as []byte.
+		// Important: the data must be copied, otherwise the reference is shared.
 		bytes = make([]byte, len(v))
 		copy(bytes, v)
 	case string:
-		// 某些驱动可能返回string
+		// Some drivers may return a string.
 		bytes = []byte(v)
 	default:
-		return fmt.Errorf("无法将%T类型的值转换为JSONB", value)
+		return fmt.Errorf("xsql: cannot convert %T to jsonb", value)
 	}
 
-	// 如果是空数据，设置为nil
+	// Empty data means nil.
 	if len(bytes) == 0 {
 		j.Data = nil
 		return nil
@@ -428,87 +485,51 @@ func (j *JSONB) Scan(value interface{}) error {
 
 	s := string(bytes)
 
-	// 如果是null字符串或空对象，设置为nil
+	// A "null" string or an empty object means nil.
 	if s == "null" || s == "{}" {
 		j.Data = nil
 		return nil
 	}
 
-	// 尝试解析JSON，确保数据是有效的
+	// Try to parse the JSON to make sure the data is valid.
 	var raw json.RawMessage
 	if err := json.Unmarshal(bytes, &raw); err == nil {
-		// 解析成功，直接保存
+		// Parsing succeeded: keep it as is.
 		j.Data = raw
 		return nil
 	}
-	// 如果还是失败，保存原始字节
+	// Parsing failed: store nil.
 	j.Data = nil
 	return nil
 }
 
-// Value 实现driver.Valuer接口，将数据写入数据库
+// Value implements driver.Valuer and writes the data into the database.
+// It writes exactly the bytes MarshalJSON produces, so whatever the API can
+// read back is also what is stored - scalars included.
 func (j JSONB) Value() (driver.Value, error) {
 	if j.Data == nil {
 		return nil, nil
 	}
 
-	// 获取原始数据字节
-	var rawData []byte
-	switch v := j.Data.(type) {
-	case []byte:
-		rawData = v
-	case json.RawMessage:
-		rawData = []byte(v)
-	case string:
-		rawData = []byte(v)
-	default:
-		// 其他类型直接序列化
-		b, err := json.Marshal(j.Data)
-		if err != nil {
-			return nil, err
-		}
-		rawData = b
+	data, err := j.MarshalJSON()
+	if err != nil {
+		return nil, err
 	}
 
-	// 空数据处理
-	if len(rawData) == 0 || string(rawData) == "null" {
+	// null and an empty object both mean "no data", matching Scan.
+	if string(data) == "null" || string(data) == "{}" {
 		return nil, nil
 	}
-
-	// 先尝试解析JSON，检查结果类型
-	var parsed interface{}
-	if err := json.Unmarshal(rawData, &parsed); err == nil {
-		switch parsed.(type) {
-		case map[string]interface{}, []interface{}:
-			// 已经是JSON对象或数组，直接返回
-			return rawData, nil
-		case string:
-			// 解析结果是字符串，检查是否是JSON字符串
-			strVal := parsed.(string)
-			if len(strVal) > 0 && (strVal[0] == '{' || strVal[0] == '[') {
-				// 尝试解析内部的JSON
-				var innerParsed interface{}
-				if err2 := json.Unmarshal([]byte(strVal), &innerParsed); err2 == nil {
-					// 成功，返回内部的JSON字节
-					return []byte(strVal), nil
-				}
-			}
-			return nil, nil
-		default:
-			// 其他类型（数字、布尔等），直接返回
-			return nil, nil
-		}
-	}
-	return nil, nil
+	return data, nil
 }
 
-// MarshalJSON 实现json.Marshaler接口，输出给前端
+// MarshalJSON implements json.Marshaler and produces the frontend payload.
 func (j JSONB) MarshalJSON() ([]byte, error) {
 	if j.Data == nil {
 		return []byte("null"), nil
 	}
 
-	// 获取原始数据
+	// Get the raw data.
 	var raw []byte
 	switch v := j.Data.(type) {
 	case []byte:
@@ -518,37 +539,37 @@ func (j JSONB) MarshalJSON() ([]byte, error) {
 	case json.RawMessage:
 		raw = []byte(v)
 	default:
-		// 其他类型需要序列化
+		// Anything else must be serialised.
 		return json.Marshal(j.Data)
 	}
 
-	// 如果是空数据或null，返回null
+	// Empty data or null becomes null.
 	if len(raw) == 0 || string(raw) == "null" {
 		return []byte("null"), nil
 	}
 
-	// 先尝试解析JSON，确保返回有效的JSON
+	// Parse the JSON first, to make sure valid JSON goes out.
 	var parsed interface{}
 	if err := json.Unmarshal(raw, &parsed); err == nil {
-		// 解析成功，根据类型处理
+		// Parsed: handle by type.
 		switch parsed.(type) {
 		case map[string]interface{}, []interface{}:
-			// 已经是JSON对象或数组，直接返回
+			// Already a JSON object or array: return it as is.
 			return raw, nil
 		case string:
-			// 解析结果是字符串，检查是否是JSON字符串
+			// The result is a string; check whether it is a JSON string.
 			strVal := parsed.(string)
 			if len(strVal) > 0 && (strVal[0] == '{' || strVal[0] == '[') {
-				// 尝试解析内部的JSON
+				// Try to parse the JSON inside.
 				var innerParsed interface{}
 				if err2 := json.Unmarshal([]byte(strVal), &innerParsed); err2 == nil {
 					return []byte(strVal), nil
 				}
 			}
-			// 返回字符串
+			// Return the string.
 			return json.Marshal(strVal)
 		default:
-			// 其他类型，直接序列化
+			// Anything else is serialised directly.
 			return json.Marshal(parsed)
 		}
 	} else {
@@ -556,23 +577,23 @@ func (j JSONB) MarshalJSON() ([]byte, error) {
 	}
 }
 
-// UnmarshalJSON 实现json.Unmarshaler接口，接收前端数据
+// UnmarshalJSON implements json.Unmarshaler and accepts frontend data.
 func (j *JSONB) UnmarshalJSON(data []byte) error {
 	if len(data) == 0 || string(data) == "null" {
 		j.Data = nil
 		return nil
 	}
-	// 保存原始JSON数据
+	// Keep the raw JSON data.
 	j.Data = json.RawMessage(data)
 	return nil
 }
 
-// IsNil 检查是否为空
+// IsNil reports whether the value is empty.
 func (j JSONB) IsNil() bool {
 	return j.Data == nil
 }
 
-// String 返回JSON字符串表示
+// String returns the JSON string representation.
 func (j JSONB) String() string {
 	if j.Data == nil {
 		return "null"
@@ -590,7 +611,7 @@ func (j JSONB) String() string {
 	}
 }
 
-// Unmarshal 解析JSON到目标类型
+// Unmarshal parses the JSON into the target value.
 func (j JSONB) Unmarshal(v interface{}) error {
 	if j.Data == nil {
 		return nil
