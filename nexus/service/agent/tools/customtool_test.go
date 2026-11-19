@@ -28,10 +28,10 @@ func TestValidateScriptOutput(t *testing.T) {
 		wantErr string
 	}{
 		{"合法", map[string]any{"rows": []any{}, "total": float64(3), "ok": true}, ""},
-		{"缺少必填", map[string]any{"total": float64(1)}, "缺少字段"},
-		{"类型不符", map[string]any{"rows": []any{}, "total": "3"}, "类型不符"},
+		{"缺少必填", map[string]any{"total": float64(1)}, "missing fields"},
+		{"类型不符", map[string]any{"rows": []any{}, "total": "3"}, "wrong type"},
 		{"多返回字段放行", map[string]any{"rows": []any{}, "extra": "x"}, ""},
-		{"整体不是对象", []any{1, 2}, "必须是 JSON 对象"},
+		{"整体不是对象", []any{1, 2}, "must be a JSON object"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,7 +103,7 @@ func TestCustomToolRequiresExecCapability(t *testing.T) {
 	// 开通 exec 后应越过能力闸，停在下一道检查（根目录未初始化）
 	c.Caps = map[string]bool{capability.Exec: true}
 	_, err = executeCustomTool(context.Background(), c, CustomToolPrefix+"demo", nil)
-	if err == nil || !strings.Contains(err.Error(), "根目录未初始化") {
+	if err == nil || !strings.Contains(err.Error(), "root is not initialized") {
 		t.Fatalf("越过能力闸后应停在根目录检查，got %v", err)
 	}
 

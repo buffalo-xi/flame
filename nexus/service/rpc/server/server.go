@@ -361,7 +361,8 @@ func runFlow(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, fl
 	Instance, err := repo.GetCurrentFlowVersion(authInfo, flowId)
 	if err != nil {
 		if errors.Is(err, flows.ErrNoReleasedVersion) {
-			writeRPCError(w, reqID, errCodeInvalidParams,
+			writeRPCErrorCode(w, reqID, errCodeInvalidParams, "flow.not_released",
+				map[string]string{"name": flowId},
 				"flow %s 尚未发布正式版本，请先在编辑页发布后再调用", flowId)
 			return
 		}
@@ -372,7 +373,8 @@ func runFlow(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, fl
 	// 废弃的 flow 不可运行：status 在实体行、版本快照里没有，外部入口必须自己判一次，
 	// 不能只靠「切废弃时收回端点」这个 best-effort 动作（失败只记日志）。
 	if !models.IsRunnable(int(Instance.Status)) {
-		writeRPCError(w, reqID, errCodeInvalidParams, "flow %s 已废弃，不可调用", Instance.Name)
+		writeRPCErrorCode(w, reqID, errCodeInvalidParams, "flow.deprecated",
+			map[string]string{"name": Instance.Name}, "flow %s 已废弃，不可调用", Instance.Name)
 		return
 	}
 

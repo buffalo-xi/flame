@@ -128,7 +128,7 @@ func GetAsset(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		xhttp.ErrJSON(c, "资产不存在", nil, "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
 		return
 	}
 
@@ -175,7 +175,7 @@ func ReviewAsset(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		xhttp.ErrJSON(c, "资产不存在", nil, "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
 		return
 	}
 
@@ -183,24 +183,28 @@ func ReviewAsset(c *gin.Context) {
 	switch strings.TrimSpace(req.Action) {
 	case "approve":
 		if a.Status != sharedassets.StatusPending {
-			xhttp.ErrJSON(c, "只有待审的资产可以通过（当前："+a.Status+"）", nil, "")
+			xhttp.ErrCode(c, "asset.invalid_status", gin.H{"id": a.ID, "status": a.Status},
+				"只有待审的资产可以通过（当前："+a.Status+"）", "")
 			return
 		}
 		next = sharedassets.StatusListed
 	case "reject":
 		if a.Status != sharedassets.StatusPending {
-			xhttp.ErrJSON(c, "只有待审的资产可以驳回（当前："+a.Status+"）", nil, "")
+			xhttp.ErrCode(c, "asset.invalid_status", gin.H{"id": a.ID, "status": a.Status},
+				"只有待审的资产可以驳回（当前："+a.Status+"）", "")
 			return
 		}
 		next = sharedassets.StatusRejected
 	case "delist":
 		if a.Status != sharedassets.StatusListed {
-			xhttp.ErrJSON(c, "只有已通过的资产可以下架（当前："+a.Status+"）", nil, "")
+			xhttp.ErrCode(c, "asset.invalid_status", gin.H{"id": a.ID, "status": a.Status},
+				"只有已通过的资产可以下架（当前："+a.Status+"）", "")
 			return
 		}
 		next = sharedassets.StatusDelisted
 	default:
-		xhttp.ErrJSON(c, "未知动作（只支持 approve / reject / delist）", nil, "")
+		xhttp.ErrCode(c, "asset.invalid_action", gin.H{"action": strings.TrimSpace(req.Action)},
+			"未知动作（只支持 approve / reject / delist）", "")
 		return
 	}
 
@@ -224,7 +228,7 @@ func GetAssetVisibility(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		xhttp.ErrJSON(c, "资产不存在", nil, "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
 		return
 	}
 	schemas, serr := sharedassets.VisibleSchemas(a.ID)
@@ -250,7 +254,8 @@ func SetAssetVisibility(c *gin.Context) {
 	}
 	vis := strings.TrimSpace(req.Visibility)
 	if vis != sharedassets.VisibilityAll && vis != sharedassets.VisibilityAllowlist {
-		xhttp.ErrJSON(c, "visibility 只能是 all 或 allowlist", nil, "")
+		xhttp.ErrCode(c, "asset.invalid_visibility", gin.H{"visibility": vis},
+			"visibility 只能是 all 或 allowlist", "")
 		return
 	}
 
@@ -260,7 +265,7 @@ func SetAssetVisibility(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		xhttp.ErrJSON(c, "资产不存在", nil, "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
 		return
 	}
 
@@ -276,7 +281,7 @@ func SetAssetVisibility(c *gin.Context) {
 			return
 		}
 		if t == nil {
-			xhttp.ErrJSON(c, "租户不存在："+s, nil, "")
+			xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": s}, "租户不存在："+s, "")
 			return
 		}
 	}
@@ -354,18 +359,19 @@ func DeleteAsset(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		xhttp.ErrJSON(c, "资产不存在", nil, "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
 		return
 	}
 	switch a.Status {
 	case sharedassets.StatusListed, sharedassets.StatusDelisted:
 	default:
-		xhttp.ErrJSON(c, "只有已上架或已下架的资产可以删除（当前状态："+a.Status+"）", nil, "")
+		xhttp.ErrCode(c, "asset.invalid_status", gin.H{"id": a.ID, "status": a.Status},
+			"只有已上架或已下架的资产可以删除（当前状态："+a.Status+"）", "")
 		return
 	}
 
 	if derr := sharedassets.Delete(a.ID); derr != nil {
-		xhttp.ErrJSON(c, "删除失败: "+derr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "删除失败: "+derr.Error(), "")
 		return
 	}
 

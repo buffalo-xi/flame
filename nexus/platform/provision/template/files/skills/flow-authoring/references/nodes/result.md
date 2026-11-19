@@ -1,8 +1,8 @@
-# `result` 节点
+# The `result` node
 
-向外发一次「结果」（对话正文 / 最终答复）。脚本渲染出什么就发什么。
+Emits one "result" outwards (conversation text / the final answer). Whatever the script renders is what is sent.
 
-## config 形状
+## config shape
 
 ```json
 {
@@ -16,28 +16,28 @@
 }
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `code` | ✅ | — | 复用脚本节点结构 `{lang, script, timeout}`；**`lang` 通常是 `template`**（纯渲染，走沙箱外） |
-| `code.script` | ✅ | — | 结果文本；空 / 缺失 → `script` 错误 |
-| `inputs` | — | — | 模板来源 |
-| `stream` | — | `false` | **是 bool 不是对象**；`true` = 逐条作为流式结果外发，`false` = 只累积、run 结束一次性给 |
+| `code` | ✅ | — | reuses the script node structure `{lang, script, timeout}`; **`lang` is usually `template`** (pure rendering, outside the sandbox) |
+| `code.script` | ✅ | — | the result text; empty / missing → `script` error |
+| `inputs` | — | — | template source |
+| `stream` | — | `false` | **a bool, not an object**; `true` = send each one as a streaming result, `false` = accumulate only and deliver once when the run ends |
 
-**不要写 `config.outputs`**：前端保存时会把它剥掉（节点输出 `output` 由执行器自动写）。
+**Do not write `config.outputs`**: the front end strips it on save (the node's `output` is written automatically by the executor).
 
-## 输出变量
+## Output variables
 
-`output`(string)：本次结果文本（不对外声明，需要的话用 `assign` 接）。
+`output`(string): this result's text (not declared outwards; use `assign` to capture it if needed).
 
-## 出边
+## Outgoing edges
 
-普通节点：执行完沿**第一条出边**继续（一般连到下一个 `result` 或直接结束）。
+An ordinary node: continues along **its first outgoing edge** when done (usually to the next `result` or straight to the end).
 
-## 常见错误
+## Common errors
 
-- `result code not found` —— 少写 `code` 子对象。
-- 结果里出现 `<no value>` —— `inputs` 没声明或模板名字写错。
+- `result code not found` — the `code` sub-object is missing.
+- `<no value>` in the result — `inputs` does not declare it, or the template name is misspelled.
 
-源码：`service/flow/executors/result.go`
+Source: `service/flow/executors/result.go`

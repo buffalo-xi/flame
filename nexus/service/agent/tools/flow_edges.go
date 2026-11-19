@@ -102,35 +102,35 @@ func suggestHandlePositions(srcType string, srcX, srcY int, dstType string, dstX
 	switch {
 	case ady <= handleAlignTol:
 		if dx >= 0 {
-			srcPos, dstPos, reason = "right", "left", "同一行、目标在右侧"
+			srcPos, dstPos, reason = "right", "left", "same row, target on the right"
 		} else {
-			srcPos, dstPos, reason = "left", "right", "同一行、目标在左侧"
+			srcPos, dstPos, reason = "left", "right", "same row, target on the left"
 		}
 	case adx <= handleAlignTol:
 		if dy > 0 {
-			srcPos, dstPos, reason = "bottom", "top", "正下方堆叠"
+			srcPos, dstPos, reason = "bottom", "top", "stacked right below"
 		} else {
-			srcPos, dstPos, reason = "top", "bottom", "正上方堆叠"
+			srcPos, dstPos, reason = "top", "bottom", "stacked right above"
 		}
 	case dy > handleFarTol:
-		srcPos, dstPos, reason = "bottom", "top", "目标远在下方"
+		srcPos, dstPos, reason = "bottom", "top", "target far below"
 	case dy < -handleFarTol:
 		if dx > 0 {
-			srcPos, dstPos, reason = "top", "left", "目标远在上方"
+			srcPos, dstPos, reason = "top", "left", "target far above"
 		} else {
-			srcPos, dstPos, reason = "top", "right", "目标远在上方、偏左"
+			srcPos, dstPos, reason = "top", "right", "target far above and to the left"
 		}
 	case dy > 0:
 		if dx > 0 {
-			srcPos, dstPos, reason = "right", "top", "目标在右下方"
+			srcPos, dstPos, reason = "right", "top", "target at the lower right"
 		} else {
-			srcPos, dstPos, reason = "left", "top", "目标在左下方"
+			srcPos, dstPos, reason = "left", "top", "target at the lower left"
 		}
 	default:
 		if dx > 0 {
-			srcPos, dstPos, reason = "right", "left", "目标在右上方"
+			srcPos, dstPos, reason = "right", "left", "target at the upper right"
 		} else {
-			srcPos, dstPos, reason = "left", "right", "目标在左上方"
+			srcPos, dstPos, reason = "left", "right", "target at the upper left"
 		}
 	}
 
@@ -139,10 +139,10 @@ func suggestHandlePositions(srcType string, srcX, srcY int, dstType string, dstX
 	dstPos = pickHandle(nodeHandleRules[dstType].in, handlePreferOrder[wantDst])
 	// 该类型没有这个位置（例如所有节点的出边都没有 top）：说明退到了哪，别让调用方以为按建议连上了。
 	if srcPos != wantSrc {
-		reason += fmt.Sprintf("；%s 没有 %s 出边，退到 %s", srcType, wantSrc, srcPos)
+		reason += fmt.Sprintf("; %s has no %s outgoing handle, falling back to %s", srcType, wantSrc, srcPos)
 	}
 	if dstPos != wantDst {
-		reason += fmt.Sprintf("；%s 没有 %s 入边，退到 %s", dstType, wantDst, dstPos)
+		reason += fmt.Sprintf("; %s has no %s incoming handle, falling back to %s", dstType, wantDst, dstPos)
 	}
 	return srcPos, dstPos, reason
 }
@@ -160,31 +160,31 @@ func suggestHandles(src, dst *flowNodeMeta) handleSuggest {
 }
 
 // handleLayoutAdvice 给模型看的位置→handle 规则（create_edge 描述与报错共用）。
-const handleLayoutAdvice = "**handle 按位置选**（Δ = 目标坐标 - 发出坐标，y 向下为正）：" +
-	"基本同一行（|Δy| ≤ 40）→ 发出节点的 right 连目标的 left（目标在左就反过来：left→right）；" +
-	"高得明显（Δy 40~200，目标在右下方）→ right→top（目标在左下方用 left→top）；" +
-	"高很多（Δy > 200，目标在正下方远处）→ bottom→top；" +
-	"低得明显（Δy -200~-40，目标在右上方）→ right→left（目标在左上方用 left→right）；" +
-	"低很多（Δy < -200，目标在正上方远处）→ top→left（目标偏左用 top→right）；" +
-	"正上下堆叠（|Δx| ≤ 40）→ 下→上用 bottom→top、上→下用 top→bottom。" +
-	"注意：目前**所有节点都没有 top 出边**、bottom 入边只有终止节点（exit / break / continue / return）有，" +
-	"所以「低很多 / 上→下」只能退到该类型支持的位置；工具会把实际退到的位置写进 suggested_edge.reason。"
+const handleLayoutAdvice = "**Pick the handle by position** (Δ = target coords - source coords, y growing downward): " +
+	"roughly the same row (|Δy| ≤ 40) → the source's right to the target's left (reverse when the target is to the left: left→right); " +
+	"notably higher (Δy 40~200, target at the lower right) → right→top (lower left uses left→top); " +
+	"much higher (Δy > 200, target far below) → bottom→top; " +
+	"notably lower (Δy -200~-40, target at the upper right) → right→left (upper left uses left→right); " +
+	"much lower (Δy < -200, target far above) → top→left (target to the left uses top→right); " +
+	"stacked directly (|Δx| ≤ 40) → bottom→top downward, top→bottom upward. " +
+	"Note: **no node currently has a top outgoing edge**, and bottom incoming edges exist only on terminal nodes (exit / break / continue / return), " +
+	"so \"much lower / top→bottom\" can only fall back to a position the type supports; the tool writes the position it actually fell back to into suggested_edge.reason."
 
 // edgeRuleText 连边规则的唯一出处（create_edge 与 update_edge 共用同一份文案）。
 // 技能文档 references/edges.md 不再重复枚举这些规则，只放形状 / 示例 / 排查，
 // 避免「文档说一套、工具做一套」把模型带偏。
-const edgeRuleText = "**handle 形状**：source_handle = source + handle owner + 位置，target_handle = target + 到达节点 id + 位置。" +
-	"owner 一般是发出节点自己的 id；branch / intent 的**子分支出边**用 config.children[].id（位置只有 left / right），" +
-	"默认分支才用节点自己的 id。**两个 handle 都必填、没有缺省值**：位置写错不会报「渲染不出来」，" +
-	"而是运行期按 handle 找路时静默走不通，所以这里宁可硬拦。" +
-	"**各类型可用位置**（入边 / 出边）：" +
-	"llm / code / http / mcp / rpc / assign / memory / result / progress / call / wait / fork / layout / knowledge → left|top / right|bottom；" +
-	"start / entry → 无 / left|right|bottom；" +
-	"loop / process / branch / intent → left|top|right / left|right|bottom；" +
-	"exit / break / continue / return → left|top|right|bottom / 无；" +
-	"function / comment → 不能连线（出现在任一端直接拒绝）。" +
-	"**硬拦项**：不能自连；两个节点必须同一个 parent（不同容器的子节点不能互连）；同一对节点最多一条边；" +
-	"一个出口（source_handle）只能一条边；一个节点只能一条入边（同一入口重复连报错，换入口则旧入边被顶掉并回 replaced_edge）；不能成环。" +
+const edgeRuleText = "**Handle shape**: source_handle = source + handle owner + position, target_handle = target + target node id + position. " +
+	"The owner is normally the source node's own id; **sub-branch outgoing edges** of branch / intent use config.children[].id (positions left / right only), " +
+	"and only the default branch uses the node's own id. **Both handles are required and have no default**: a wrong position does not report \"cannot render\" — " +
+	"it silently fails to route at run time when following handles, so it is blocked hard here." +
+	"**Positions available per type** (incoming / outgoing): " +
+	"llm / code / http / mcp / rpc / assign / memory / result / progress / call / wait / fork / layout / knowledge → left|top / right|bottom; " +
+	"start / entry → none / left|right|bottom; " +
+	"loop / process / branch / intent → left|top|right / left|right|bottom; " +
+	"exit / break / continue / return → left|top|right|bottom / none; " +
+	"function / comment → cannot be connected (rejected as soon as either end is one of them). " +
+	"**Hard rules**: no self-loops; both nodes must share the same parent (children of different containers cannot be connected); at most one edge per node pair; " +
+	"one outlet (source_handle) allows one edge only; a node allows one incoming edge only (connecting the same inlet twice is an error; connecting a different inlet displaces the old incoming edge and returns replaced_edge); no cycles." +
 	handleLayoutAdvice
 
 // flowEdge 落库形态的一条边（前端保存时也只写这五个键）。
@@ -241,16 +241,16 @@ type flowDoc struct {
 
 func parseFlowDoc(raw []byte) (*flowDoc, error) {
 	if len(raw) == 0 {
-		return nil, errors.New("这个工作流还没有 diagram（没在画布保存过）：先用 create_flow 建，或在画布上保存一次")
+		return nil, errors.New("this workflow has no diagram yet (never saved from the canvas): create it with create_flow, or save once on the canvas")
 	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
-		return nil, fmt.Errorf("diagram 不是合法的 JSON 对象: %w", err)
+		return nil, fmt.Errorf("diagram is not a valid JSON object: %w", err)
 	}
 	d := &flowDoc{top: top}
 	if nraw := top["nodes"]; len(nraw) > 0 {
 		if err := json.Unmarshal(nraw, &d.nodeRaw); err != nil {
-			return nil, fmt.Errorf("diagram.nodes 解析失败: %w", err)
+			return nil, fmt.Errorf("failed to parse diagram.nodes: %w", err)
 		}
 	}
 	if err := d.reloadNodes(); err != nil {
@@ -258,7 +258,7 @@ func parseFlowDoc(raw []byte) (*flowDoc, error) {
 	}
 	if eraw := top["edges"]; len(eraw) > 0 {
 		if err := json.Unmarshal(eraw, &d.edges); err != nil {
-			return nil, fmt.Errorf("diagram.edges 解析失败: %w", err)
+			return nil, fmt.Errorf("failed to parse diagram.edges: %w", err)
 		}
 	}
 	return d, nil
@@ -290,7 +290,7 @@ func (d *flowDoc) reloadNodes() error {
 	d.nodes = make([]flowNodeMeta, len(d.nodeRaw))
 	for i := range d.nodeRaw {
 		if err := json.Unmarshal(d.nodeRaw[i], &d.nodes[i]); err != nil {
-			return fmt.Errorf("diagram.nodes[%d] 解析失败: %w", i, err)
+			return fmt.Errorf("failed to parse diagram.nodes[%d]: %w", i, err)
 		}
 	}
 	return nil
@@ -312,7 +312,7 @@ func (d *flowDoc) addNode(raw json.RawMessage) error {
 
 func (d *flowDoc) setNodeRaw(i int, raw json.RawMessage) error {
 	if i < 0 || i >= len(d.nodeRaw) {
-		return fmt.Errorf("节点下标越界: %d", i)
+		return fmt.Errorf("node index out of range: %d", i)
 	}
 	d.nodeRaw[i] = raw
 	return d.reloadNodes()
@@ -320,7 +320,7 @@ func (d *flowDoc) setNodeRaw(i int, raw json.RawMessage) error {
 
 func (d *flowDoc) removeNodeAt(i int) error {
 	if i < 0 || i >= len(d.nodeRaw) {
-		return fmt.Errorf("节点下标越界: %d", i)
+		return fmt.Errorf("node index out of range: %d", i)
 	}
 	d.nodeRaw = append(d.nodeRaw[:i], d.nodeRaw[i+1:]...)
 	return d.reloadNodes()
@@ -394,7 +394,7 @@ func (d *flowDoc) newEdgeID() string {
 // 先剥位置、剩下的是 owner —— 这样 owner 里含 left/right 之类的词也不会拆错。
 func splitHandle(raw, prefix string) (owner, pos string, err error) {
 	if !strings.HasPrefix(raw, prefix) {
-		return "", "", fmt.Errorf("handle %q 必须以 %q 开头（形如 %s<节点id><left|right|top|bottom>）", raw, prefix, prefix)
+		return "", "", fmt.Errorf("handle %q must start with %q (shape: %s<node id><left|right|top|bottom>)", raw, prefix, prefix)
 	}
 	body := strings.TrimPrefix(raw, prefix)
 	for _, p := range []string{"left", "right", "top", "bottom"} {
@@ -405,7 +405,7 @@ func splitHandle(raw, prefix string) (owner, pos string, err error) {
 			break
 		}
 	}
-	return "", "", fmt.Errorf("handle %q 缺少位置后缀（%s<节点id>left|right|top|bottom）", raw, prefix)
+	return "", "", fmt.Errorf("handle %q has no position suffix (%s<node id>left|right|top|bottom)", raw, prefix)
 }
 
 func containsStr(list []string, want string) bool {
@@ -421,17 +421,17 @@ func containsStr(list []string, want string) bool {
 // 终止节点没有出边、起点没有入边，其余按 nodeHandleRules 判断。
 func checkConnectable(n *flowNodeMeta, side string) error {
 	if n.Type == "function" {
-		return fmt.Errorf("节点 %q 是 function（函数）节点：没有任何入边也没有出边，不能参与连线", n.ID)
+		return fmt.Errorf("node %q is a function node: it has no incoming and no outgoing handle and takes no edges", n.ID)
 	}
 	rule, ok := nodeHandleRules[n.Type]
 	if !ok {
-		return fmt.Errorf("节点 %q 的类型 %q 不认识（能连线的类型见节点总览），不能连线", n.ID, n.Type)
+		return fmt.Errorf("node %q has unknown type %q (see the node overview for wireable types) and cannot be wired", n.ID, n.Type)
 	}
 	if side == "source" && len(rule.out) == 0 {
-		return fmt.Errorf("节点 %q（%s）没有出边，不能作为边的起点", n.ID, n.Type)
+		return fmt.Errorf("node %q (%s) has no outgoing handle and cannot be the source of an edge", n.ID, n.Type)
 	}
 	if side == "target" && len(rule.in) == 0 {
-		return fmt.Errorf("节点 %q（%s）没有入边，不能作为边的终点", n.ID, n.Type)
+		return fmt.Errorf("node %q (%s) has no incoming handle and cannot be the target of an edge", n.ID, n.Type)
 	}
 	return nil
 }
@@ -445,8 +445,8 @@ func (d *flowDoc) sourcePositions(n *flowNodeMeta, owner string) ([]string, erro
 	if n.hasChild(owner) {
 		return branchChildOut, nil
 	}
-	return nil, fmt.Errorf("source_handle 里的 owner %q 既不是节点 %q 自己，也不是它的分支子节点 id；"+
-		"分支子分支的写法是 source<config.children[].id>left|right，默认分支才是 source<节点自己的id>left|right|bottom",
+	return nil, fmt.Errorf("the owner %q in source_handle is neither node %q itself nor one of its sub-branch child ids; "+
+		"a sub-branch is written source<config.children[].id>left|right, while the default branch is source<the node own id>left|right|bottom",
 		owner, n.ID)
 }
 
@@ -460,14 +460,14 @@ type edgeValidation struct {
 func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, error) {
 	src, ok := d.node(e.Source)
 	if !ok {
-		return nil, fmt.Errorf("source 节点 %q 不存在：id 从 read_flow 的 diagram.nodes[].id 里取，不要自己编", e.Source)
+		return nil, fmt.Errorf("source node %q does not exist: take the id from diagram.nodes[].id in read_flow and never invent one", e.Source)
 	}
 	dst, ok := d.node(e.Target)
 	if !ok {
-		return nil, fmt.Errorf("target 节点 %q 不存在：id 从 read_flow 的 diagram.nodes[].id 里取", e.Target)
+		return nil, fmt.Errorf("target node %q does not exist: take the id from diagram.nodes[].id in read_flow", e.Target)
 	}
 	if e.Source == e.Target {
-		return nil, fmt.Errorf("不能把节点 %q 连到它自己", e.Source)
+		return nil, fmt.Errorf("cannot connect node %q to itself", e.Source)
 	}
 	if err := checkConnectable(src, "source"); err != nil {
 		return nil, err
@@ -476,16 +476,16 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 		return nil, err
 	}
 	if src.ParentNode != dst.ParentNode {
-		return nil, fmt.Errorf("不能跨父节点连接：%q 的 parent_node=%q，%q 的是 %q（子节点只能连同一个容器内的节点）",
+		return nil, fmt.Errorf("cannot connect across parents: parent_node of %q is %q, of %q is %q (a child node can only connect to nodes in the same container)",
 			src.ID, src.ParentNode, dst.ID, dst.ParentNode)
 	}
 
 	// ---- 出边 handle ----
 	if e.SourceHandle == "" {
 		sug := suggestHandles(src, dst)
-		return nil, fmt.Errorf("source_handle 必填：形如 source<发出节点id><left|right|bottom>（例 source46004right）；"+
-			"branch / intent 的子分支是 source<children[].id>left|right。"+
-			"按两个节点的位置（%s）建议 source_handle=%s、target_handle=%s",
+		return nil, fmt.Errorf("source_handle is required: shape source<source node id><left|right|bottom> (e.g. source46004right); "+
+			"sub-branches of branch / intent use source<children[].id>left|right. "+
+			"based on the positions of the two nodes (%s), source_handle=%s and target_handle=%s are suggested",
 			sug.Reason, sug.SourceHandle, sug.TargetHandle)
 	}
 	owner, pos, err := splitHandle(e.SourceHandle, "source")
@@ -497,15 +497,15 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 		return nil, err
 	}
 	if !containsStr(allowed, pos) {
-		return nil, fmt.Errorf("节点 %q（%s，owner=%q）的出边位置只能是 %s，收到 %q",
+		return nil, fmt.Errorf("node %q (%s, owner=%q) can only use %s as an outgoing position, got %q",
 			src.ID, src.Type, owner, strings.Join(allowed, "/"), pos)
 	}
 
 	// ---- 入边 handle ----
 	if e.TargetHandle == "" {
 		sug := suggestHandles(src, dst)
-		return nil, fmt.Errorf("target_handle 必填：形如 target<目标节点id><left|top|right|bottom>（例 target45063top），不能省。"+
-			"按两个节点的位置（%s）建议 source_handle=%s、target_handle=%s",
+		return nil, fmt.Errorf("target_handle is required: shape target<target node id><left|top|right|bottom> (e.g. target45063top) and cannot be omitted. "+
+			"based on the positions of the two nodes (%s), source_handle=%s and target_handle=%s are suggested",
 			sug.Reason, sug.SourceHandle, sug.TargetHandle)
 	}
 	tOwner, tPos, err := splitHandle(e.TargetHandle, "target")
@@ -513,10 +513,10 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 		return nil, err
 	}
 	if tOwner != dst.ID {
-		return nil, fmt.Errorf("target_handle 的 owner 必须是目标节点 %q；收到 %q（分支子分支只有出边，没有入边）", dst.ID, tOwner)
+		return nil, fmt.Errorf("the owner in target_handle must be the target node %q, got %q (a sub-branch has only an outgoing handle, no incoming one)", dst.ID, tOwner)
 	}
 	if in := nodeHandleRules[dst.Type].in; !containsStr(in, tPos) {
-		return nil, fmt.Errorf("节点 %q（%s）的入边位置只能是 %s，收到 %q", dst.ID, dst.Type, strings.Join(in, "/"), tPos)
+		return nil, fmt.Errorf("node %q (%s) can only use %s as an incoming position, got %q", dst.ID, dst.Type, strings.Join(in, "/"), tPos)
 	}
 
 	// ---- 同一对节点最多一条边 ----
@@ -526,7 +526,7 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 			continue
 		}
 		if old.Source == e.Source && old.Target == e.Target {
-			return nil, fmt.Errorf("节点 %q → %q 之间已经有边（id=%s）：两个节点之间最多一条边", e.Source, e.Target, old.ID)
+			return nil, fmt.Errorf("nodes %q → %q already have an edge (id=%s): at most one edge between two nodes", e.Source, e.Target, old.ID)
 		}
 	}
 
@@ -537,7 +537,7 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 			continue
 		}
 		if old.Source == e.Source && old.SourceHandle == e.SourceHandle {
-			return nil, fmt.Errorf("节点 %q 的出口 %s 已经有边（id=%s）：一个出口只能连一条边", e.Source, e.SourceHandle, old.ID)
+			return nil, fmt.Errorf("outlet %s of node %q already has an edge (id=%s): one outlet takes exactly one edge", e.Source, e.SourceHandle, old.ID)
 		}
 	}
 
@@ -550,8 +550,8 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 			continue
 		}
 		if old.TargetHandle == e.TargetHandle {
-			return nil, fmt.Errorf("节点 %q 的入口 %s 已经有边（id=%s）：一个节点只能有一条入边，"+
-				"同一入口不能重复连；要换来源请用 update_edge，或换成另一个入口位置", e.Target, e.TargetHandle, old.ID)
+			return nil, fmt.Errorf("inlet %s of node %q already has an edge (id=%s): a node takes exactly one incoming edge, "+
+				"an inlet cannot be wired twice; use update_edge to change the source, or pick another inlet position", e.Target, e.TargetHandle, old.ID)
 		}
 		oldCopy := old
 		replaced = &oldCopy
@@ -563,8 +563,8 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 		replacedID = replaced.ID
 	}
 	if d.wouldCycle(e.Source, e.Target, skipEdgeID, replacedID) {
-		return nil, fmt.Errorf("会形成环（%q → %q 之后能绕回 %q）：流程图必须是有向无环图；"+
-			"要重复执行请用 loop 节点，不要用回边", e.Source, e.Target, e.Source)
+		return nil, fmt.Errorf("this creates a cycle (%q → %q can still reach back to %q): a flow graph must be a DAG; "+
+			"use a loop node for repetition instead of a back edge", e.Source, e.Target, e.Source)
 	}
 	return &edgeValidation{replaced: replaced}, nil
 }
@@ -611,7 +611,7 @@ func edgeView(e flowEdge) map[string]any {
 func loadFlowDoc(ctx context.Context, c *Context, ref string) (*flowDoc, *FlowDetail, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return nil, nil, errors.New("flow 不能为空（工作流 id 或名称）")
+		return nil, nil, errors.New("flow must not be empty (workflow id or name)")
 	}
 	if c.Flows == nil {
 		return nil, nil, errors.New("flow manager not available")
@@ -621,7 +621,7 @@ func loadFlowDoc(ctx context.Context, c *Context, ref string) (*flowDoc, *FlowDe
 		return nil, nil, err
 	}
 	if detail == nil {
-		return nil, nil, fmt.Errorf("工作流 %q 不存在；先用 list_flows 确认名字", ref)
+		return nil, nil, fmt.Errorf("workflow %q does not exist: confirm the name with list_flows first", ref)
 	}
 	doc, err := parseFlowDoc(detail.Diagram)
 	if err != nil {
@@ -653,7 +653,7 @@ func saveFlowDoc(ctx context.Context, c *Context, detail *FlowDetail, doc *flowD
 	}
 	if v != nil && v.replaced != nil {
 		out["replaced_edge"] = edgeView(*v.replaced)
-		out["note"] = "目标节点的入口位置不同：旧入边已被新边顶掉（一个节点只能有一条入边）"
+		out["note"] = "the target node has a different inlet position: the old incoming edge was replaced (a node takes exactly one incoming edge)"
 	}
 	return out, nil
 }
@@ -676,20 +676,20 @@ func (t *createEdgeTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "create_edge",
 		Category: CategoryFlowAdmin,
-		Description: "在一个**已有**的工作流上连一条边（只改 edges，不建节点、不改 config）。" +
-			"source_handle 形如 source<发出节点id><位置>（例 source46004right），" +
-			"target_handle 形如 target<目标节点id><位置>（例 target45063top）。" +
+		Description: "Connect an edge on an **existing** workflow (only touches edges — creates no node and changes no config). " +
+			"source_handle looks like source<source node id><position> (e.g. source46004right), " +
+			"target_handle looks like target<target node id><position> (e.g. target45063top). " +
 			edgeRuleText +
-			"返回落库后的 edge 与剩余 edge_count；发生顶替时回 replaced_edge。" +
-			"缺 handle 时按位置把该填的值直接写进报错；handle 与位置明显不匹配时额外回 suggested_edge（reason + 建议的两个 handle），照它改能少绕线。",
+			"The result returns the stored edge and the remaining edge_count; when an edge was displaced it returns replaced_edge. " +
+			"When a handle is missing, the error states exactly which value that position needs; when the handle obviously mismatches the position it also returns suggested_edge (reason + the two suggested handles) — following it avoids routing detours.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"flow":          map[string]any{"type": "string", "description": flowRefHint},
-				"source":        map[string]any{"type": "string", "description": "边的发出节点 id（read_flow 的 diagram.nodes[].id）"},
-				"target":        map[string]any{"type": "string", "description": "边的到达节点 id"},
-				"source_handle": map[string]any{"type": "string", "description": "发出节点的出口，形如 source<节点id><left|right|bottom>，必填"},
-				"target_handle": map[string]any{"type": "string", "description": "到达节点的入口，形如 target<节点id><left|top|right|bottom>，必填"},
+				"source":        map[string]any{"type": "string", "description": "Edge source node id (diagram.nodes[].id from read_flow)"},
+				"target":        map[string]any{"type": "string", "description": "Edge target node id"},
+				"source_handle": map[string]any{"type": "string", "description": "Outlet of the source node, shaped source<node id><left|right|bottom>; required"},
+				"target_handle": map[string]any{"type": "string", "description": "Inlet of the target node, shaped target<node id><left|top|right|bottom>; required"},
 			},
 			"required": []any{"flow", "source", "target", "source_handle", "target_handle"},
 		},
@@ -708,7 +708,7 @@ func (t *createEdgeTool) Execute(ctx context.Context, c *Context, args map[strin
 		TargetHandle: strings.TrimSpace(argString(args, "target_handle")),
 	}
 	if e.Source == "" || e.Target == "" {
-		return nil, errors.New("source / target 都不能为空（节点 id，从 read_flow 的 diagram.nodes[].id 里取）")
+		return nil, errors.New("source / target must not be empty (node ids, taken from diagram.nodes[].id in read_flow)")
 	}
 	v, err := doc.validateEdge(e, "")
 	if err != nil {
@@ -733,9 +733,9 @@ func (t *createEdgeTool) Execute(ctx context.Context, c *Context, args map[strin
 						"source_handle": sug.SourceHandle,
 						"target_handle": sug.TargetHandle,
 					}
-					m["handle_hint"] = "当前 handle 与两个节点的位置不太匹配（线会绕）：" + sug.Reason +
-						"，建议 source_handle=" + sug.SourceHandle + "、target_handle=" + sug.TargetHandle +
-						"（可用 update_edge 改）"
+					m["handle_hint"] = "the current handles do not match the positions of the two nodes (the line will loop): " + sug.Reason +
+						"; suggested source_handle=" + sug.SourceHandle + ", target_handle=" + sug.TargetHandle +
+						" (change them with update_edge)"
 				}
 			}
 		}
@@ -751,20 +751,20 @@ func (t *updateEdgeTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "update_edge",
 		Category: CategoryFlowAdmin,
-		Description: "改一条已存在的边（按 edge_id，从 read_flow 的 diagram.edges[].id 取）：" +
-			"可改 source / target / source_handle / target_handle，至少给一个。" +
-			"改了 source 必须同时给 source_handle，改了 target 必须同时给 target_handle —— handle 里嵌的是节点 id。" +
-			"校验规则与 create_edge 完全相同：" + edgeRuleText +
-			"返回更新后的 edge 与 edge_count；换入口顶掉旧入边时回 replaced_edge。",
+		Description: "Change an existing edge (by edge_id, from diagram.edges[].id in read_flow): " +
+			"you may change source / target / source_handle / target_handle, at least one of them. " +
+			"Changing source requires source_handle as well, and changing target requires target_handle as well — the handle embeds the node id. " +
+			"The validation rules are exactly those of create_edge: " + edgeRuleText +
+			"The result returns the updated edge and edge_count; when a new inlet displaces an old incoming edge it returns replaced_edge.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"flow":          map[string]any{"type": "string", "description": flowRefHint},
-				"edge_id":       map[string]any{"type": "string", "description": "要改的边 id（read_flow 的 diagram.edges[].id）"},
-				"source":        map[string]any{"type": "string", "description": "可选：新的发出节点 id"},
-				"target":        map[string]any{"type": "string", "description": "可选：新的到达节点 id"},
-				"source_handle": map[string]any{"type": "string", "description": "可选：新的出口，形如 source<节点id><left|right|bottom>"},
-				"target_handle": map[string]any{"type": "string", "description": "可选：新的入口，形如 target<节点id><left|top|right|bottom>"},
+				"edge_id":       map[string]any{"type": "string", "description": "Edge id to change (diagram.edges[].id from read_flow)"},
+				"source":        map[string]any{"type": "string", "description": "Optional: new source node id"},
+				"target":        map[string]any{"type": "string", "description": "Optional: new target node id"},
+				"source_handle": map[string]any{"type": "string", "description": "Optional: new outlet, shaped source<node id><left|right|bottom>"},
+				"target_handle": map[string]any{"type": "string", "description": "Optional: new inlet, shaped target<node id><left|top|right|bottom>"},
 			},
 			"required": []any{"flow", "edge_id"},
 		},
@@ -778,50 +778,50 @@ func (t *updateEdgeTool) Execute(ctx context.Context, c *Context, args map[strin
 	}
 	edgeID := strings.TrimSpace(argString(args, "edge_id"))
 	if edgeID == "" {
-		return nil, errors.New("edge_id 不能为空（read_flow 的 diagram.edges[].id）")
+		return nil, errors.New("edge_id must not be empty (diagram.edges[].id from read_flow)")
 	}
 	idx := doc.edgeIndex(edgeID)
 	if idx < 0 {
-		return nil, fmt.Errorf("找不到 edge_id=%q 的边；先 read_flow 核对 diagram.edges，不要拿节点 id 当边 id", edgeID)
+		return nil, fmt.Errorf("no edge with edge_id=%q: check diagram.edges with read_flow first, and do not pass a node id as an edge id", edgeID)
 	}
 	cur := doc.edges[idx]
 
 	changed := false
 	if s, ok := argStringSet(args, "source"); ok {
 		if s == "" {
-			return nil, errors.New("source 不能是空串")
+			return nil, errors.New("source must not be an empty string")
 		}
 		cur.Source, changed = s, true
 	}
 	if s, ok := argStringSet(args, "target"); ok {
 		if s == "" {
-			return nil, errors.New("target 不能是空串")
+			return nil, errors.New("target must not be an empty string")
 		}
 		cur.Target, changed = s, true
 	}
 	if s, ok := argStringSet(args, "source_handle"); ok {
 		if s == "" {
-			return nil, errors.New("source_handle 不能是空串（它必填）")
+			return nil, errors.New("source_handle must not be an empty string (it is required)")
 		}
 		cur.SourceHandle, changed = s, true
 	}
 	if s, ok := argStringSet(args, "target_handle"); ok {
 		if s == "" {
-			return nil, errors.New("target_handle 不能是空串（它必填）")
+			return nil, errors.New("target_handle must not be an empty string (it is required)")
 		}
 		cur.TargetHandle, changed = s, true
 	}
 	if !changed {
-		return nil, errors.New("没有要改的字段：source / target / source_handle / target_handle 至少给一个")
+		return nil, errors.New("nothing to change: give at least one of source / target / source_handle / target_handle")
 	}
 	if _, ok := argStringSet(args, "source"); ok {
 		if _, hasHandle := argStringSet(args, "source_handle"); !hasHandle {
-			return nil, errors.New("改了 source 就要一起给 source_handle：handle 里嵌的是发出节点的 id")
+			return nil, errors.New("changing source requires source_handle too: the handle embeds the source node id")
 		}
 	}
 	if _, ok := argStringSet(args, "target"); ok {
 		if _, hasHandle := argStringSet(args, "target_handle"); !hasHandle {
-			return nil, errors.New("改了 target 就要一起给 target_handle：handle 里嵌的是到达节点的 id")
+			return nil, errors.New("changing target requires target_handle too: the handle embeds the target node id")
 		}
 	}
 
@@ -845,13 +845,13 @@ func (t *deleteEdgeTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "delete_edge",
 		Category: CategoryFlowAdmin,
-		Description: "删除一条已存在的边（按 edge_id，从 read_flow 的 diagram.edges[].id 取），" +
-			"返回被删的 edge 与剩余 edge_count；删错时照着返回体重建即可。",
+		Description: "Delete an existing edge (by edge_id, from diagram.edges[].id in read_flow); " +
+			"returns the deleted edge and the remaining edge_count — if you deleted the wrong one, rebuild it from the returned body.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"flow":    map[string]any{"type": "string", "description": flowRefHint},
-				"edge_id": map[string]any{"type": "string", "description": "要删的边 id（read_flow 的 diagram.edges[].id）"},
+				"edge_id": map[string]any{"type": "string", "description": "Edge id to delete (diagram.edges[].id from read_flow)"},
 			},
 			"required": []any{"flow", "edge_id"},
 		},
@@ -865,11 +865,11 @@ func (t *deleteEdgeTool) Execute(ctx context.Context, c *Context, args map[strin
 	}
 	edgeID := strings.TrimSpace(argString(args, "edge_id"))
 	if edgeID == "" {
-		return nil, errors.New("edge_id 不能为空（read_flow 的 diagram.edges[].id）")
+		return nil, errors.New("edge_id must not be empty (diagram.edges[].id from read_flow)")
 	}
 	idx := doc.edgeIndex(edgeID)
 	if idx < 0 {
-		return nil, fmt.Errorf("找不到 edge_id=%q 的边；先 read_flow 核对 diagram.edges", edgeID)
+		return nil, fmt.Errorf("no edge with edge_id=%q: check diagram.edges with read_flow first", edgeID)
 	}
 	deleted := doc.edges[idx]
 	doc.removeEdge(edgeID)

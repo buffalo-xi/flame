@@ -125,7 +125,7 @@ func TestRunCustomToolSpecNonJSONKeepsDiagnostics(t *testing.T) {
 	sb.out = "debug line\n"
 
 	res, err := RunCustomToolSpec(context.Background(), run, nil)
-	if err == nil || !strings.Contains(err.Error(), "不是合法 JSON") {
+	if err == nil || !strings.Contains(err.Error(), "non-JSON to stdout") {
 		t.Fatalf("应报 stdout 不是 JSON，实际 %v", err)
 	}
 	if res == nil || !strings.Contains(res.Stdout, "debug line") {
@@ -145,7 +145,7 @@ func TestRunCustomToolSpecNonZeroExit(t *testing.T) {
 	sb.errText = "参数 principal 必填：本金金额（元）\n"
 
 	res, err := RunCustomToolSpec(context.Background(), run, nil)
-	if err == nil || !strings.Contains(err.Error(), "退出码 2") {
+	if err == nil || !strings.Contains(err.Error(), "exited with code 2") {
 		t.Fatalf("应报退出码 2，实际 %v", err)
 	}
 	if !strings.Contains(err.Error(), "参数 principal 必填") {
@@ -163,7 +163,7 @@ func TestRunCustomToolSpecTruncated(t *testing.T) {
 	sb.out = `{"long":"value"}`
 
 	res, err := RunCustomToolSpec(context.Background(), run, nil)
-	if err == nil || !strings.Contains(err.Error(), "上限") {
+	if err == nil || !strings.Contains(err.Error(), "byte limit") {
 		t.Fatalf("应报超出上限，实际 %v", err)
 	}
 	if res == nil || !res.Truncated {
@@ -215,7 +215,7 @@ func TestRunCustomToolSpecMissingToolDir(t *testing.T) {
 	run.ToolsRoot = t.TempDir() // 空目录：没有 demo/
 
 	_, err := RunCustomToolSpec(context.Background(), run, nil)
-	if err == nil || !strings.Contains(err.Error(), "不可达") {
+	if err == nil || !strings.Contains(err.Error(), "not reachable on the host") {
 		t.Fatalf("应报目录不可达，实际 %v", err)
 	}
 }

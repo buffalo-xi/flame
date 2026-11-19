@@ -26,12 +26,12 @@ import (
 func GetListingPolicy(c *gin.Context) {
 	def, err := listingpolicy.Default()
 	if err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("查询上架策略失败", "listing_policy.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询上架策略失败", "listing_policy.sql", err), "")
 		return
 	}
 	overrides, err := listingpolicy.ListOverrides()
 	if err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("查询上架策略失败", "listing_policy.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询上架策略失败", "listing_policy.sql", err), "")
 		return
 	}
 	items := make([]gin.H, 0, len(overrides))
@@ -58,11 +58,11 @@ func SetListingDefault(c *gin.Context) {
 		RequireReview *bool `json:"require_review"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.RequireReview == nil {
-		xhttp.ErrJSON(c, "参数不合法: body 需要 {\"require_review\": true|false}", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: body 需要 {\"require_review\": true|false}", "")
 		return
 	}
 	if err := listingpolicy.SetDefault(*req.RequireReview, info.ID); err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("保存上架策略失败", "listing_policy.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("保存上架策略失败", "listing_policy.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"require_review": *req.RequireReview}, "")
@@ -79,24 +79,24 @@ func SetListingOverride(c *gin.Context) {
 	}
 	schema := strings.TrimSpace(c.Param("schema"))
 	if schema == "" {
-		xhttp.ErrJSON(c, "缺少租户 schema", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "缺少租户 schema", "")
 		return
 	}
 	var req struct {
 		RequireReview *bool `json:"require_review"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "参数不合法: body 需要 {\"require_review\": true|false|null}", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: body 需要 {\"require_review\": true|false|null}", "")
 		return
 	}
 	if err := listingpolicy.SetOverride(schema, req.RequireReview, info.ID); err != nil {
 		// 外键指向 platform.tenants：租户不存在时给出可读的话，别把约束名甩给用户
 		var pe *pq.Error
 		if errors.As(err, &pe) && pe.Code == "23503" {
-			xhttp.ErrJSON(c, "租户不存在："+schema, nil, "")
+			xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "租户不存在："+schema, "")
 			return
 		}
-		xhttp.ErrJSON(c, schemaErrMsg("保存上架策略失败", "listing_policy.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("保存上架策略失败", "listing_policy.sql", err), "")
 		return
 	}
 	var out any

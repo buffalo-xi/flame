@@ -1,6 +1,6 @@
-# `on_error`：按错误码重试 / 跳过 / 脚本兜底
+# `on_error`: retry / skip / fallback script by error code
 
-`config.on_error` 是四块可选配置，**匹配依据是错误码**（`codes` 必须写，不写等于没开）：
+`config.on_error` has four optional blocks, and **matching is by error code** (`codes` is mandatory; without it nothing is enabled):
 
 ```json
 {
@@ -9,86 +9,88 @@
     "skip":    {"codes": ["not_found"], "patterns": []},
     "handler": {"codes": ["other"], "patterns": ["%rate limit%"], "lang": "lua",
                 "script": "return 'skip'", "inputs": {}},
-    "post":    {"set_outputs": {"text": "暂时不可用"},
-                "handler": {"lang": "lua", "script": "return { text = '兜底' }", "inputs": {}}}
+    "post":    {"set_outputs": {"text": "temporarily unavailable"},
+                "handler": {"lang": "lua", "script": "return { text = 'fallback' }", "inputs": {}}}
   }
 }
 ```
 
-## 匹配顺序
+## Matching order
 
-`retry` → `skip` → `handler` → 都没命中就失败。
+`retry` → `skip` → `handler` → if none matches, the node fails.
 
 ## retry
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `codes` | ✅ | — | 错误码列表；**空数组 = 不重试**。可用码见下 |
-| `patterns` | — | — | 仅在 `codes` 含 `other` 时生效：按消息匹配，`%x%` 包含、`x%` 前缀、`%x` 后缀，无 `%` 也是包含 |
-| `max` | — | `0` | 重试次数（不含首次）；`<=0` 不重试 |
-| `delay_ms` | — | `0` | **固定**间隔毫秒，没有退避 |
+| `codes` | ✅ | — | list of error codes; **an empty array means no retry**. Available codes below |
+| `patterns` | — | — | only effective when `codes` contains `other`: match the message, `%x%` contains, `x%` prefix, `%x` suffix, no `%` also means contains |
+| `max` | — | `0` | number of retries (excluding the first attempt); `<=0` means no retry |
+| `delay_ms` | — | `0` | **fixed** interval in milliseconds, no backoff |
 
 ## skip
 
-| 键 | 说明 |
+| Key | Meaning |
 |---|---|
-| `codes` / `patterns` | 命中后节点记 `skipped`（按成功继续），错误码可查；下游拿到的是**空输出** |
+| `codes` / `patterns` | on a match the node is recorded as `skipped` (continues as success), the error code stays inspectable; downstream receives **empty outputs** |
 
-「查询失败也要往下走」用它；需要补默认值就配 `post.set_outputs`。
+Use it for "even if the lookup fails, keep going"; add `post.set_outputs` when a default value is needed.
 
 ## handler
 
-| 键 | 说明 |
+| Key | Meaning |
 |---|---|
-| `codes` / `patterns` | 命中才跑脚本 |
-| `lang` | 缺省 `lua`；**不支持 `template`** |
-| `script` | 入参：`error_code` / `error_message` / `error_node_id` / `error_node_type` / `retry_count` + `inputs` |
-| `inputs` | 额外变量声明 |
+| `codes` / `patterns` | the script runs only on a match |
+| `lang` | default `lua`; **`template` is not supported** |
+| `script` | inputs: `error_code` / `error_message` / `error_node_id` / `error_node_type` / `retry_count` + `inputs` |
+| `inputs` | extra variable declarations |
 
-脚本返回：
+The script returns:
 
-- 字符串 `"skip"`（兼容旧写法）或 `{action: "skip"}` → 按跳过处理；
-- map 里带 `error_code` / `error_message` → **改写**错误码与文案后仍然失败；
-- 其它 → 仍然失败。
+- the string `"skip"` (legacy form) or `{action: "skip"}` → treated as skipped;
+- a map carrying `error_code` / `error_message` → the code and text are **rewritten** and the node still fails;
+- anything else → the node still fails.
 
-## post（兜底，只在特定节点生效）
+## post (fallback, only effective on certain nodes)
 
-| 键 | 说明 |
+| Key | Meaning |
 |---|---|
-| `set_outputs` | 静态输出，直接写进节点输出变量 |
-| `handler` | 兜底脚本 `{lang, script, inputs}`，return 的 map 覆盖输出变量 |
+| `set_outputs` | static outputs, written straight into the node's output variables |
+| `handler` | fallback script `{lang, script, inputs}`; the returned map overwrites the output variables |
 
-- 只在**最终失败 / 跳过**时执行（`handler` 脚本自己报错的那条路径不执行）。
-- **只有 `http` / `llm` / `code` / `mcp` / `rpc` / `call` 支持 post**；其余节点即使写了也会被忽略
-  （执行器声明 `HasPost=false`，runner 直接把 `post` 置空）。
-- 前端 `on_error` 面板也只给这几类节点 + `wait`（wait 仅跳过）。
+- runs only on **final failure / skip** (not on the path where the `handler` script itself errors).
+- **only `http` / `llm` / `code` / `mcp` / `rpc` / `call` support post**; on other nodes it is ignored even if written (the
+  executor declares `HasPost=false` and the runner blanks `post`).
+- the front-end `on_error` panel also offers it only for those node types plus `wait` (wait allows skip only).
 
-## 三个硬规则（不是建议，是代码行为）
+## Three hard rules (code behaviour, not advice)
 
-1. **`config` / `internal` / 取消 / 控制信号一律绕过 `on_error`**：配置类错误重试也没用，
-   直接修配置；`break` / `continue` / `return` / `exit` 是控制流，不是错误。
-2. **节点的 `nr.Status` 必须是 `failed` 才会进 `on_error`**：`branch` / `intent` 的子链错误
-   按容器语义原样上抛（本节点状态不是 failed），所以**不会触发它们自己的 on_error**。
-   `process` / `loop` / `function` 则相反：子链错误会让容器本身 `failed`，容器的 on_error 会生效（虽然前端没面板）。
-3. **错误码只在节点声明的范围内有效**：声明外的码会被降级成 `other`，你的 `codes` 里写那个码就不匹配了。
-   降级时错误文案后面会附上原始码（`… (原始错误码 var)`），照着它改 `codes` 就行。
-4. **节点没声明支持的动作会被直接忽略**：`retry` / `skip` / `handler` 和 `post` 一样，必须在该节点的能力
-   声明里，否则配置被丢弃并记一条警告。比如 `intent` 只声明了 `retry`，给它配 `skip` 不生效；
-   `branch` / `fork` / `assign` 不支持任何动作，`wait` 只支持 `skip`。
+1. **`config` / `internal` / cancellation / control signals always bypass `on_error`**: retrying a configuration error is
+   useless, fix the configuration; `break` / `continue` / `return` / `exit` are control flow, not errors.
+2. **A node enters `on_error` only when its `nr.Status` is `failed`**: errors in a `branch` / `intent` sub-chain propagate
+   unchanged per container semantics (that node's status is not failed), so they **do not trigger its own on_error**.
+   `process` / `loop` / `function` are the opposite: a sub-chain error marks the container itself `failed`, so the container's
+   on_error applies (even though the front end has no panel for it).
+3. **An error code is only valid within the node's declared set**: an undeclared code is downgraded to `other`, so writing that
+   code in `codes` no longer matches. On downgrade the message is suffixed with the original code (`… (original error code var)`);
+   copy it into `codes`.
+4. **Actions a node does not declare support for are simply ignored**: like `post`, `retry` / `skip` / `handler` must be within
+   that node's capability declaration, or the configuration is dropped with a warning. For example `intent` declares only
+   `retry`, so configuring `skip` on it does nothing; `branch` / `fork` / `assign` support no action, and `wait` supports `skip` only.
 
-## 重试留下的记录
+## What retries leave behind
 
-每次尝试都是一条独立记录（首次 + 每次重试）。`skip` / `handler` / `post` 都作用在**最后一次尝试**上：
-节点最终的 `status`、`error_code`，以及 `post.set_outputs` 写进去的输出，都落在最后那条记录里。
+Every attempt is a separate record (the first attempt plus each retry). `skip` / `handler` / `post` apply to **the last
+attempt**: the node's final `status`, `error_code`, and the outputs written by `post.set_outputs`, all land in that last record.
 
-- 所以「重试都失败、但配了 skip」时节点是 `skipped` 而不是 `failed`；
-- handler 脚本里的 `error_code` / `retry_count` 也是最后一次的值，不是第一次的。
+- so with "all retries failed but skip is configured" the node is `skipped`, not `failed`;
+- the `error_code` / `retry_count` seen by a handler script are also from the last attempt, not the first.
 
-## 错误码
+## Error codes
 
-`timeout` / `busy`（沙箱并发额度耗尽，脚本没跑）/ `cancel` / `config` / `script` / `capability`（平台未开通）/
-`auth` / `not_found` / `connection`（网络或沙箱 worker 连不上，**可重试**）/ `var` /
-`internal`（平台侧故障，**不走 on_error**）/ `other`。
+`timeout` / `busy` (sandbox concurrency quota exhausted, the script never ran) / `cancel` / `config` / `script` /
+`capability` (not enabled on the platform) / `auth` / `not_found` / `connection` (network or sandbox worker unreachable,
+**retryable**) / `var` / `internal` (platform-side failure, **bypasses on_error**) / `other`.
 
-源码：`service/flow/executors/runner.go`（`parseOnErrorConfig` / `applyOnError` / `shouldBypassOnError`）、
-`service/flow/core/nodeResult.go`（错误码常量）
+Source: `service/flow/executors/runner.go` (`parseOnErrorConfig` / `applyOnError` / `shouldBypassOnError`),
+`service/flow/core/nodeResult.go` (error code constants).

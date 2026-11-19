@@ -1,8 +1,8 @@
-# `memory` 节点
+# The `memory` node
 
-读当前会话的记忆消息，作为后续 prompt 的历史。
+Reads the current session's memory messages, to be used as history in a later prompt.
 
-## config 形状
+## config shape
 
 ```json
 {
@@ -12,26 +12,27 @@
 }
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `outputs` | — | 自动补齐 | 固定输出 `messages`(array[object]) |
-| `limit` | — | 未设 → 取 `ResolveMaxSessionRecords()` | 取最近 N 条；`<=0` 视为未设 |
-| `window` | — | `{enabled:false, unit:"hour", value:24}` | 时间窗；`enabled=true` 且 `value>0` 才生效；`unit`：`second` / `minute` / `hour` / `day` |
+| `outputs` | — | filled in automatically | fixed output `messages`(array[object]) |
+| `limit` | — | unset → `ResolveMaxSessionRecords()` | take the most recent N; `<=0` counts as unset |
+| `window` | — | `{enabled:false, unit:"hour", value:24}` | time window; effective only when `enabled=true` and `value>0`; `unit`: `second` / `minute` / `hour` / `day` |
 
-**不读** `inputs` / `locals`。没有 `session_id` 或 `limit` 无效时 → 输出**空数组**且节点成功。
+It **does not read** `inputs` / `locals`. With no `session_id`, or an invalid `limit`, it outputs **an empty array** and the node
+succeeds.
 
-## 输出变量
+## Output variables
 
-`messages`：`[{role, content, timestamp}]`，旧 → 新；一条会话记录会拆成 user / assistant 两条。
+`messages`: `[{role, content, timestamp}]`, oldest → newest; one conversation record is split into a user and an assistant entry.
 
-## 出边
+## Outgoing edges
 
-普通节点：执行完沿**第一条出边**继续。
+An ordinary node: continues along **its first outgoing edge** when done.
 
-## 常见错误
+## Common errors
 
-- 拿到空数组但不是报错 —— 多半是没有会话上下文（无状态调用），或 `limit` / `window` 配成了 0。
+- Getting an empty array without an error — usually there is no session context (a stateless call), or `limit` / `window` is 0.
 
-源码：`service/flow/executors/memory.go`
+Source: `service/flow/executors/memory.go`

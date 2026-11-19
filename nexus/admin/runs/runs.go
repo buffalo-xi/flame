@@ -30,7 +30,7 @@ func ListRunning(c *gin.Context) {
 
 	kind := c.Query("kind")
 	if kind != "" && kind != runledger.KindAgent && kind != runledger.KindFlow {
-		xhttp.ErrJSON(c, "kind 只能是 agent 或 flow", nil, "")
+		xhttp.ErrCode(c, "run.invalid_kind", nil, "kind 只能是 agent 或 flow", "")
 		return
 	}
 
@@ -135,7 +135,7 @@ func StopRun(c *gin.Context) {
 
 	var req stopRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "请求格式错误: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "请求格式错误: "+err.Error(), "")
 		return
 	}
 	kind := req.Kind
@@ -143,16 +143,16 @@ func StopRun(c *gin.Context) {
 		kind = runledger.KindAgent
 	}
 	if kind != runledger.KindAgent && kind != runledger.KindFlow {
-		xhttp.ErrJSON(c, "kind 只能是 agent 或 flow", nil, "")
+		xhttp.ErrCode(c, "run.invalid_kind", nil, "kind 只能是 agent 或 flow", "")
 		return
 	}
 	if req.RunID == "" && req.SessionID == "" {
-		xhttp.ErrJSON(c, "run_id 或 session_id 至少给一个", nil, "")
+		xhttp.ErrCode(c, "run.target_required", nil, "run_id 或 session_id 至少给一个", "")
 		return
 	}
 	if kind == runledger.KindFlow && req.RunID == "" {
 		// 工作流没有「按会话停」的语义（一个会话可能同时跑多条流程）
-		xhttp.ErrJSON(c, "工作流只能按 run_id 终止", nil, "")
+		xhttp.ErrCode(c, "run.flow_stop_needs_run_id", nil, "工作流只能按 run_id 终止", "")
 		return
 	}
 
@@ -229,7 +229,7 @@ func ownerOf(schema, runID string) (instance string, local, known bool, err erro
 func authInfo(c *gin.Context) (*auth.AuthInfo, bool) {
 	value, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return nil, false
 	}
 	return value.(*auth.AuthInfo), true

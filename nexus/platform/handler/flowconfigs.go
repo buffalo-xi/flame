@@ -59,7 +59,7 @@ func mustTenant(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	if t == nil {
-		xhttp.ErrJSON(c, "租户不存在", nil, "")
+		xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "租户不存在", "")
 		return "", false
 	}
 	return schema, true

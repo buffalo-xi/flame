@@ -1,8 +1,8 @@
-# `intent` 节点
+# The `intent` node
 
-让模型在几条出边里**选一条**（单选，没有阈值）。
+Lets the model **pick one** of several outgoing edges (single choice, no thresholds).
 
-## config 形状
+## config shape
 
 ```json
 {
@@ -12,12 +12,12 @@
   },
   "llm": {
     "gateway_model": "",
-    "system_prompt": "你是意图分类器，请根据对话历史和用户输入判断用户意图。\n\n对话历史：\n{{json .input.messages}}\n\n用户输入：\n{{.input.input}}",
+    "system_prompt": "You are an intent classifier. Decide the user's intent from the conversation history and the user input.\n\nHistory:\n{{json .input.messages}}\n\nUser input:\n{{.input.input}}",
     "params": {}
   },
   "children": [
-    {"id": "a1b2c", "label": "查订单", "description": "用户想查询订单状态或物流"},
-    {"id": "d3e4f", "label": "退款", "description": "用户想退款或投诉"}
+    {"id": "a1b2c", "label": "check order", "description": "The user wants to check an order's status or shipment"},
+    {"id": "d3e4f", "label": "refund", "description": "The user wants a refund or wants to complain"}
   ],
   "outputs": {
     "intent": {"type": "string"},
@@ -26,73 +26,78 @@
 }
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `children` | ✅ | — | 候选意图；每项 `{id, label, description}` |
-| `children[].description` | 建议 | — | 意图描述，拼进分类 prompt；空则只有 label 可参考 |
-| `llm.system_prompt` | 建议 | — | 分类提示词；`{{ .input.* }}` 取 `inputs` |
-| `llm.gateway_model` | — | 空 = 租户缺省模型 | |
+| `children` | ✅ | — | candidate intents; each `{id, label, description}` |
+| `children[].description` | recommended | — | intent description, spliced into the classification prompt; when empty only the label is available |
+| `llm.system_prompt` | recommended | — | the classification prompt; `{{ .input.* }}` reads `inputs` |
+| `llm.gateway_model` | — | empty = tenant default model | |
 | `llm.params` | — | `{}` | `max_tokens` / `temperature` / `top_p` / `extra_params` |
-| `inputs` | 建议 | — | 供 prompt 使用；`input.messages` / `input.input` 是前端默认两个 |
-| `outputs` | — | 自动补齐 | 固定 `intent` / `index` |
+| `inputs` | recommended | — | used by the prompt; `input.messages` / `input.input` are the front end's two defaults |
+| `outputs` | — | filled in automatically | always `intent` / `index` |
 
-**`llm.messages` 不读**：`intent` 自己拼 messages，只认 `system_prompt`。
-**没有阈值/置信度配置**：模型选不出就返回 -1，走默认分支。
+**`llm.messages` is not read**: `intent` assembles messages itself and only honours `system_prompt`.
+**No threshold or confidence setting**: if the model cannot decide it returns -1, which takes the default branch.
 
-## 输出变量
+## Output variables
 
-固定：`intent`(string) = 命中分支的 `label`，未命中为 `""`；`index`(number) = 命中下标，未命中 `-1`。
+Fixed: `intent`(string) = the matched branch's `label`, `""` when nothing matched; `index`(number) = the matched index, `-1`
+when nothing matched.
 
-## 出边怎么连
+## How outgoing edges are wired
 
-与 `branch` 相同：命中分支 `source<childId>left|right`，默认分支 `source<nodeId>left|right|bottom`。
-未命中且没有默认出边 → 节点成功但什么都不做。
+Same as `branch`: a matched branch uses `source<childId>left|right`, the default branch
+`source<nodeId>left|right|bottom`. No match and no default outgoing edge → the node succeeds and does nothing.
 
-## 用 `create_flow` 建（`branches`）
+## Building with `create_flow` (`branches`)
 
-和 `branch` 一模一样的写法：`key` = `children[].id`（`default` 是可选兜底），每条子链生成一条
-`source<childId>right` 出边；`key: "default"` 用 `source<节点自己的id>right`。
+Exactly the same form as `branch`: `key` = `children[].id` (`default` is the optional fallback), each sub-chain generates one
+`source<childId>right` outgoing edge; `key: "default"` uses `source<the node's own id>right`.
 
-**`branches` 只建边，不会回填 `children`** —— 候选意图仍然要自己写在 `config.children` 里
-（执行器只读 `config["children"]`，没有它直接报「意图节点没有配置任何分支」）。
-工具会用 `config.children[].id` 校验 `branches[].key`，对不上当场拒绝创建。
+**`branches` only builds edges and never fills in `children`** — the candidate intents still have to be written in
+`config.children` (the executor reads `config["children"]` only; without it, it reports "the intent node has no branches
+configured"). The tool validates `branches[].key` against `config.children[].id` and rejects creation on a mismatch.
 
 ```json
 {
-  "type": "intent", "label": "识别用户意图",
+  "type": "intent", "label": "detect the user's intent",
   "config": {
     "llm": {"system_prompt": "..."},
     "inputs": {"input": {"type": "string", "source_type": "argument", "source_key": "input"}},
     "children": [
-      {"id": "a1", "label": "查订单", "description": "查询订单状态或物流"},
-      {"id": "b2", "label": "退款",   "description": "申请退款或投诉"}
+      {"id": "a1", "label": "check order", "description": "Check an order's status or shipment"},
+      {"id": "b2", "label": "refund",      "description": "Request a refund or complain"}
     ]
   },
   "branches": [
-    {"key": "a1", "steps": [{"type": "code", "label": "查单", "config": {"code": {"lang": "lua", "script": "..."}}}]},
-    {"key": "b2", "steps": [{"type": "code", "label": "退款", "config": {"code": {"lang": "lua", "script": "..."}}}]},
-    {"key": "default", "steps": [{"type": "result", "label": "没听懂", "config": {"code": {"lang": "template", "script": "请问您想做什么？"}}}]}
+    {"key": "a1", "steps": [{"type": "code", "label": "lookup", "config": {"code": {"lang": "lua", "script": "..."}}}]},
+    {"key": "b2", "steps": [{"type": "code", "label": "refund",  "config": {"code": {"lang": "lua", "script": "..."}}}]},
+    {"key": "default", "steps": [{"type": "result", "label": "not understood", "config": {"code": {"lang": "template", "script": "What would you like to do?"}}}]}
   ]
 }
 ```
 
-- **必须是所在链的最后一步**：分支节点执行完只走默认边，后续步骤要写进各子链。
-- `children` 有、`branches` 漏掉的候选只给 `warnings`（命中后跳过），不阻断创建。
+- **It must be the last step in its chain**: after a branch node runs, only the default edge is taken, so subsequent steps must
+  be written into each sub-chain.
+- Candidates present in `children` but missing from `branches` only produce `warnings` (skipped when matched); creation is not
+  blocked.
 
-## 提示词与全局变量
+## Prompts and global variables
 
-`llm.system_prompt` 与 `llm` 节点同一套规则：全局变量经 `config.inputs` 的
-`{"source_type": "global", "source_key": "NAME"}` 进入，prompt 里写 `{{ .input.xxx }}`；
-**没有** `{{ .global_vars.X }}`（已下线，载入即报错）。
+`llm.system_prompt` follows the same rules as the `llm` node: global variables enter through `config.inputs` with
+`{"source_type": "global", "source_key": "NAME"}` and are written as `{{ .input.xxx }}` in the prompt;
+**there is no** `{{ .global_vars.X }}` (removed — the flow fails at load time).
 
-引用 `secret` 类全局变量不阻断，但会记告警 —— 值会进模型上下文与运行记录。
+Referencing a `secret` global variable is not blocked but is logged as a warning — the value enters the model context and run
+records.
 
-## 常见错误
+## Common errors
 
-- `意图节点没有配置任何分支` —— `config.children` 空（`branches` 不会替你补）。
-- 永远走默认分支 —— `children[].description` 太笼统，或 `system_prompt` 里没给出编号/选择规则。
-- 分类结果解析失败 —— 模型没按 JSON 回；执行器会兜底找文本里的 `{"index":n}`、纯数字、首个 `{...}`。
+- `the intent node has no branches configured` — `config.children` is empty (`branches` does not fill it in).
+- Always taking the default branch — `children[].description` is too vague, or `system_prompt` gives no numbering or selection rule.
+- Failing to parse the classification — the model did not answer in JSON; the executor falls back to finding `{"index":n}`,
+  a bare number, or the first `{...}` in the text.
 
-源码：`service/flow/executors/intent.go`
+Source: `service/flow/executors/intent.go`

@@ -222,7 +222,7 @@ func TestCreateFlowPartialPositionsFallBack(t *testing.T) {
 		t.Errorf("应退回自动排版，甲落点 = %v，want (300,50)", pos["2"])
 	}
 	joined := strings.Join(warnings, "\n")
-	if !strings.Contains(joined, "没给 position") {
+	if !strings.Contains(joined, "have no position") {
 		t.Errorf("缺坐标要回 warning，实际 warnings = %v", warnings)
 	}
 }
@@ -238,7 +238,7 @@ func TestCreateFlowWarnsOverlap(t *testing.T) {
 	if pos["2"] != [2]int{400, 200} || pos["3"] != [2]int{400, 200} {
 		t.Errorf("重叠的坐标也不该被偷偷改掉：%v", pos)
 	}
-	if !strings.Contains(strings.Join(warnings, "\n"), "重叠") {
+	if !strings.Contains(strings.Join(warnings, "\n"), "overlap") {
 		t.Errorf("重叠要回 warning，实际 warnings = %v", warnings)
 	}
 }
@@ -335,7 +335,7 @@ func TestCreateFlowStripsContainerConcurrency(t *testing.T) {
 		}
 	}
 	joined := strings.Join(warningsOf(out), "\n")
-	if !strings.Contains(joined, "concurrency 已忽略") {
+	if !strings.Contains(joined, "config.concurrency ignored") {
 		t.Errorf("摘掉 concurrency 要回 warning，实际 = %v", joined)
 	}
 }
@@ -380,7 +380,7 @@ func TestCreateFlowConcurrencyDefaultOff(t *testing.T) {
 	if _, ok := createdConfig(t, fk, "code")["concurrency"]; ok {
 		t.Errorf("默认应关闭并发，config 不该带 concurrency：%v", createdConfig(t, fk, "code"))
 	}
-	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "并发默认关闭") {
+	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "concurrency is off by default") {
 		t.Errorf("摘掉 concurrency 要回显「并发默认关闭」：%v", warningsOf(out))
 	}
 }
@@ -417,7 +417,7 @@ func TestCreateFlowConcurrencyMonoKeepsOnlyMono(t *testing.T) {
 	if cc["mode"] != "mono" {
 		t.Errorf("mono 模式下单体并发应保留，实际 %v", createdConfig(t, fk, "code"))
 	}
-	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "只开单体并发") {
+	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "only single-node concurrency is on") {
 		t.Errorf("应回显「只开单体并发」：%v", warningsOf(out))
 	}
 }
@@ -454,7 +454,7 @@ func TestCreateFlowConcurrencyGroupKeepsOnlyFork(t *testing.T) {
 	if cc["mode"] != "fork" || cc["fork_node_id"] != "9" {
 		t.Errorf("group 模式下并发组成员应保留，实际 %v", createdConfig(t, fk, "http"))
 	}
-	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "并发组") {
+	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "a concurrency group is on") {
 		t.Errorf("应回显「并发组」：%v", warningsOf(out))
 	}
 }
@@ -487,7 +487,7 @@ func TestUpdateNodeConcurrencyOffStrips(t *testing.T) {
 	if _, ok := cfg["concurrency"]; ok {
 		t.Errorf("concurrency=off 应摘掉并发：%v", cfg)
 	}
-	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "并发默认关闭") {
+	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "concurrency is off by default") {
 		t.Errorf("应回显摘除原因：%v", warningsOf(out))
 	}
 }

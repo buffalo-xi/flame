@@ -353,11 +353,12 @@ func ListPluginOverview(c *gin.Context) {
 func mustPlugin(c *gin.Context) (string, bool) {
 	name := strings.TrimSpace(c.Param("name"))
 	if name == "" {
-		xhttp.ErrJSON(c, "插件名为空", nil, "")
+		xhttp.ErrCode(c, "plugin.name_required", nil, "插件名为空", "")
 		return "", false
 	}
 	if _, ok := plugininfo.Find(name); !ok {
-		xhttp.ErrJSON(c, fmt.Sprintf("插件 %s 不在磁盘清单里（先放进 plugins/tools/%s/ 再刷新）", name, name), nil, "")
+		xhttp.ErrCode(c, "plugin.not_found", gin.H{"name": name},
+			fmt.Sprintf("插件 %s 不在磁盘清单里（先放进 plugins/tools/%s/ 再刷新）", name, name), "")
 		return "", false
 	}
 	return name, true

@@ -36,12 +36,13 @@ func Export(c *gin.Context) {
 
 	kind := assetpack.Kind(strings.TrimSpace(c.Query("kind")))
 	if !kind.Valid() {
-		xhttp.ErrJSON(c, "未知的资产类型（kind 只支持 skill / custom_tool / agent / workflow）", nil, "")
+		xhttp.ErrCode(c, "asset.invalid_kind", map[string]any{"kind": string(kind)},
+			"未知的资产类型（kind 只支持 skill / custom_tool / agent / workflow）", "")
 		return
 	}
 	ref := strings.TrimSpace(c.Query("ref"))
 	if ref == "" {
-		xhttp.ErrJSON(c, "缺少 ref（skill / agent / workflow 用 id，custom_tool 用名字）", nil, "")
+		xhttp.ErrCode(c, "asset.ref_required", nil, "缺少 ref（skill / agent / workflow 用 id，custom_tool 用名字）", "")
 		return
 	}
 
@@ -116,7 +117,7 @@ func Export(c *gin.Context) {
 	// 先在内存里拼完再发：合计上限 128 MiB，这点内存换「出错能干干净净报错」
 	var buf bytes.Buffer
 	if werr := assetpack.WritePackage(ctx, st, tmpDir, pkg, &buf); werr != nil {
-		xhttp.ErrJSON(c, "打包失败: "+werr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "打包失败: "+werr.Error(), "")
 		return
 	}
 

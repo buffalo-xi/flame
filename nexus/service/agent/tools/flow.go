@@ -105,9 +105,9 @@ type FlowInput struct {
 //   - 示例只给名字，不给 UUID。模型有强模仿倾向，示例里出现 uuid 会让它学着编 id，
 //     而编出来的 id 形态合法、只能靠「查不到」兜底，是最难自愈的一类错误；
 //   - 明确说「不要自己编 id」，把「id 必须来自 list_flows」这条压成一句可执行的话。
-const flowRefHint = "工作流名称，例如 daily-sales-report。" +
-	"也接受 list_flows 返回的 id（两者等价，UUID 形态按 id 查、否则按名称查）；" +
-	"不要自己编 id —— 只从 list_flows 的结果里复制"
+const flowRefHint = "Workflow name, e.g. daily-sales-report. " +
+	"The id returned by list_flows is accepted too (the two are equivalent: a UUID-shaped value is looked up by id, anything else by name); " +
+	"never invent an id — copy it from list_flows' output"
 
 // FlowRunResult 一次试运行的结果（run_flow 的返回体）。
 //
@@ -248,18 +248,18 @@ var flowStepTypes = map[string]bool{
 func flowStepHint(typ, id string, idx int) string {
 	switch typ {
 	case "branch", "intent":
-		return fmt.Sprintf("步骤 %d（%s，id=%s）没有 branches：它只有主链那一条出边，执行器按 source<子分支 id> 找不到路，"+
-			"每个条件都会被跳过（默认分支也不会走）。要条件路由请给这一步写 branches：每个 key 对应 "+
-			"config.children[].id，值是它自己的步骤链；无条件兜底用 key=\"default\"", idx+1, typ, id)
+		return fmt.Sprintf("step %d (%s, id=%s) has no branches: it only has the main-chain outgoing edge, and the executor cannot route by source<sub-branch id>, "+
+			"so every condition is skipped (the default branch is not taken either). For conditional routing, write branches on this step: each key maps to "+
+			"config.children[].id and its value is that branch's own step chain; use key=\"default\" for the unconditional fallback", idx+1, typ, id)
 	case "loop", "process", "function":
-		return fmt.Sprintf("步骤 %d（%s，id=%s）是容器节点，线性图里没有子节点 —— 运行时空转；"+
-			"嵌套节点只能在前端画布拖进容器（含 entry）", idx+1, typ, id)
+		return fmt.Sprintf("step %d (%s, id=%s) is a container node and a linear graph has no children — it spins empty at run time; "+
+			"nested nodes can only be dragged into the container (entry included) on the front-end canvas", idx+1, typ, id)
 	case "wait":
-		return fmt.Sprintf("步骤 %d（wait，id=%s）要等一个 fork 组，而线性图没有并发组成员；"+
-			"wait 的 config.fork_node_id 与各成员的 config.concurrency 需要手工指定", idx+1, id)
+		return fmt.Sprintf("step %d (wait, id=%s) waits on a fork group, but a linear graph has no group members; "+
+			"wait's config.fork_node_id and each member's config.concurrency have to be set explicitly", idx+1, id)
 	case "break", "continue", "return", "exit":
-		return fmt.Sprintf("步骤 %d（%s，id=%s）是控制信号，放在主链上会在这一步行直接结束/跳转后续流程，"+
-			"确认这是你要的效果", idx+1, typ, id)
+		return fmt.Sprintf("step %d (%s, id=%s) is a control signal: on the main chain it ends or jumps the rest of the flow right at this step — "+
+			"confirm this is the effect you want", idx+1, typ, id)
 	}
 	return ""
 }
@@ -307,7 +307,7 @@ type diagramBuild struct {
 // 返回值里的 Warnings 是结构缺口提示（例如容器没有子节点），不阻断创建。
 func buildFlowDiagram(steps []FlowStep, concurrency string) (*diagramBuild, error) {
 	if len(steps) == 0 {
-		return nil, errors.New("steps 不能为空：工作流至少要有一步")
+		return nil, errors.New("steps must not be empty: a workflow needs at least one step")
 	}
 	b := &diagramBuilder{concurrency: concurrency}
 	b.addStart()
@@ -356,11 +356,11 @@ var concurrencyTypes = map[string]bool{"code": true, "http": true, "call": true}
 var concurrencyParamSchema = map[string]any{
 	"type": "string",
 	"enum": []any{"off", "mono", "group"},
-	"description": "可选：并发形态，**默认不传 = 关闭**，只有用户明确要求并发时才传。" +
-		"mono = 单体并发（该节点内部并发处理多份数据，config 写 {\"mode\":\"mono\"}）；" +
-		"group = 并发组并发（该节点加入 fork 组，config 写 " +
-		"{\"mode\":\"fork\",\"fork_node_id\":\"<fork 节点 id>\"}）。" +
-		"不传时 config.concurrency 会被摘掉并回 warning。",
+	"description": "Optional: concurrency shape, **omit for off**, pass it only when the user explicitly asks for concurrency. " +
+		"mono = single-node concurrency (this node processes several items concurrently; config becomes {\"mode\":\"mono\"}); " +
+		"group = concurrency group (this node joins a fork group; config becomes " +
+		"{\"mode\":\"fork\",\"fork_node_id\":\"<fork node id>\"}). " +
+		"When omitted, config.concurrency is stripped and a warning is returned.",
 }
 
 // parseConcurrencyPolicy 解析并发参数：off（默认）/ mono / group。
@@ -374,8 +374,8 @@ func parseConcurrencyPolicy(args map[string]any) (string, error) {
 	case "group", "fork", "fork-group", "fork_group":
 		return concurrencyGroup, nil
 	}
-	return "", fmt.Errorf("concurrency 只支持 off / mono / group，收到 %q"+
-		"（off = 默认关闭，mono = 单体并发，group = 并发组并发）", raw)
+	return "", fmt.Errorf("concurrency supports off / mono / group only, got %q"+
+		" (off = off by default, mono = single-node concurrency, group = concurrency group)", raw)
 }
 
 // concurrencyShape 并发形态在 config 里的写法（回显用）。
@@ -384,7 +384,7 @@ func concurrencyShape(policy string) string {
 	case concurrencyMono:
 		return "{\"mode\":\"mono\"}"
 	case concurrencyGroup:
-		return "{\"mode\":\"fork\",\"fork_node_id\":\"<fork 节点 id>\"}"
+		return "{\"mode\":\"fork\",\"fork_node_id\":\"<fork node id>\"}"
 	}
 	return ""
 }
@@ -401,8 +401,8 @@ func applyConcurrencyPolicy(cfg map[string]any, typ, policy, where string) strin
 	if !ok || raw == nil {
 		// 声明了并发形态却没写字段：不提示的话就是「以为开了、其实串行」。
 		if policy != concurrencyOff && concurrencyTypes[typ] {
-			return fmt.Sprintf("%s（%s）没有 config.concurrency：已声明并发形态 %s，"+
-				"要在节点 config 里写 %s", where, typ, policy, concurrencyShape(policy))
+			return fmt.Sprintf("%s (%s) has no config.concurrency: concurrency shape %s was declared, "+
+				"so write %s into the node config", where, typ, policy, concurrencyShape(policy))
 		}
 		return ""
 	}
@@ -417,8 +417,8 @@ func applyConcurrencyPolicy(cfg map[string]any, typ, policy, where string) strin
 
 	if containerTypes[typ] {
 		delete(cfg, "concurrency")
-		return fmt.Sprintf("%s（%s）的 config.concurrency 已忽略：循环 / 流程容器默认串行，"+
-			"并发要配在组内的成员节点上", where, typ)
+		return fmt.Sprintf("%s (%s): config.concurrency ignored — loop / process containers are serial by default, "+
+			"concurrency belongs on the member nodes inside the group", where, typ)
 	}
 	switch policy {
 	case concurrencyMono:
@@ -426,20 +426,20 @@ func applyConcurrencyPolicy(cfg map[string]any, typ, policy, where string) strin
 			return ""
 		}
 		delete(cfg, "concurrency")
-		return fmt.Sprintf("%s（%s）的 config.concurrency 已忽略：这次只开单体并发"+
-			"（{\"mode\":\"mono\"}）；要并发组请显式声明 concurrency=group", where, typ)
+		return fmt.Sprintf("%s (%s): config.concurrency ignored — only single-node concurrency is on this time "+
+			"({\"mode\":\"mono\"}); declare concurrency=group explicitly for a concurrency group", where, typ)
 	case concurrencyGroup:
 		if mode == "fork" && forkID != "" {
 			return ""
 		}
 		delete(cfg, "concurrency")
-		return fmt.Sprintf("%s（%s）的 config.concurrency 已忽略：这次开的是并发组"+
-			"（{\"mode\":\"fork\",\"fork_node_id\":\"<fork 节点>\"}）；单体并发请显式声明 concurrency=mono",
+		return fmt.Sprintf("%s (%s): config.concurrency ignored — a concurrency group is on this time "+
+			"({\"mode\":\"fork\",\"fork_node_id\":\"<fork node>\"}); declare concurrency=mono explicitly for single-node concurrency",
 			where, typ)
 	default:
 		delete(cfg, "concurrency")
-		return fmt.Sprintf("%s（%s）的 config.concurrency 已忽略：并发默认关闭，"+
-			"用户明确要求并发时才生成（单体并发 concurrency=mono、并发组 concurrency=group）", where, typ)
+		return fmt.Sprintf("%s (%s): config.concurrency ignored — concurrency is off by default and is only generated "+
+			"when the user explicitly asks for it (single-node concurrency=mono, concurrency group=group)", where, typ)
 	}
 }
 
@@ -465,7 +465,7 @@ func (b *diagramBuilder) addStart() {
 		ID:       "1",
 		Type:     "start",
 		Position: map[string]int{"x": 0, "y": 0},
-		Data:     map[string]any{"label": "开始"},
+		Data:     map[string]any{"label": "Start"},
 	})
 }
 
@@ -583,21 +583,21 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 	for i, st := range steps {
 		typ := strings.ToLower(strings.TrimSpace(st.Type))
 		if !flowStepTypes[typ] {
-			return "", fmt.Errorf("不支持的步骤类型 %q。"+
-				"可用：llm / code / http / mcp / rpc / branch / intent / loop / process / function / call / "+
-				"assign / memory / wait / fork / result / progress / break / continue / return / exit / layout；"+
-				"start 由工具自动生成，entry 由前端生成，knowledge 无执行器且不可创建，"+
-				"comment 只能 create_node 建（纯注释、不连线），layout 可建且 runner 会跳过并直通", st.Type)
+			return "", fmt.Errorf("unsupported step type %q. "+
+				"Available: llm / code / http / mcp / rpc / branch / intent / loop / process / function / call / "+
+				"assign / memory / wait / fork / result / progress / break / continue / return / exit / layout; "+
+				"start is generated by the tool, entry is generated by the front end, knowledge has no executor and cannot be created, "+
+				"comment can only be created with create_node (pure annotation, no wiring), layout can be created and the runner skips it (pass-through)", st.Type)
 		}
 		if len(st.Branches) > 0 {
 			switch typ {
 			case "branch", "intent":
 			default:
-				return "", fmt.Errorf("第 %d 步（%s）不支持 branches：只有 branch / intent 有子分支", i+1, typ)
+				return "", fmt.Errorf("step %d (%s) does not support branches: only branch / intent have sub-branches", i+1, typ)
 			}
 			if i != len(steps)-1 {
-				return "", fmt.Errorf("第 %d 步（%s）声明了 branches，必须是所在链的最后一步："+
-					"分支之后的步骤请写进 branches[].steps（branch 执行完只走 default 边）", i+1, typ)
+				return "", fmt.Errorf("step %d (%s) declares branches and must be the last step of its chain: "+
+					"put the steps after the branch into branches[].steps (a branch only takes its default edge once it runs)", i+1, typ)
 			}
 		}
 		// config 形状校验：类型写错直接拒绝，缺必填键只回 warning
@@ -610,7 +610,7 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 
 		// 并发默认关闭：按调用方声明的策略处理这一节点的 concurrency，
 		// 没声明（off）就一律摘掉并回显；容器无论什么策略都不带这一项。
-		if w := applyConcurrencyPolicy(st.Config, typ, b.concurrency, fmt.Sprintf("步骤 %d", i+1)); w != "" {
+		if w := applyConcurrencyPolicy(st.Config, typ, b.concurrency, fmt.Sprintf("step %d", i+1)); w != "" {
 			b.warnings = append(b.warnings, w)
 		}
 
@@ -619,8 +619,8 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 			label = b.uniqueLabel(typ)
 		} else if owner := b.labelOwner(label); owner != "" {
 			return "", fmt.Errorf(
-				"第 %d 步的 label %q 与节点 %s 重名：全流程节点 label 必须唯一"+
-					"（source_ref / call.target / fork_node_id 都能按 label 写，重名会指错节点）",
+				"step %d's label %q collides with node %s: node labels must be unique across the flow "+
+					"(source_ref / call.target / fork_node_id can all be written as labels, and a duplicate points at the wrong node)",
 				i+1, label, owner)
 		}
 		id := b.addNodeIn(typ, label, st.Config, depth, parentID)
@@ -637,7 +637,7 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 			switch typ {
 			case "loop", "process", "function":
 			default:
-				return "", fmt.Errorf("第 %d 步（%s）不支持 children：只有 loop / process / function 能装子节点", i+1, typ)
+				return "", fmt.Errorf("step %d (%s) does not support children: only loop / process / function can hold child nodes", i+1, typ)
 			}
 			if err := b.emitContainerChildren(id, st.Children, depth); err != nil {
 				return "", err
@@ -665,7 +665,7 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 // 执行器从 parent_node==容器 id 的 entry 节点起步（executors.findEntryNode），没有它就
 // 「成功但什么都没跑」—— 所以 entry 必须由工具补，不能指望调用方记得。
 func (b *diagramBuilder) emitContainerChildren(containerID string, children []FlowStep, depth int) error {
-	entryID := b.addNodeIn("entry", b.uniqueLabel("入口"), nil, depth+1, containerID)
+	entryID := b.addNodeIn("entry", b.uniqueLabel("Entry"), nil, depth+1, containerID)
 	if _, err := b.emitChain(children, entryID, "", depth+1, containerID); err != nil {
 		return err
 	}
@@ -700,7 +700,7 @@ func (b *diagramBuilder) emitBranchChains(typ, nodeID string, st FlowStep, depth
 	for _, br := range st.Branches {
 		key := strings.TrimSpace(br.Key)
 		if !valid[key] {
-			return fmt.Errorf("分支（%s，id=%s）的 branches 里 key=%q 既不是 config.children 里的 id，也不是 default；可用：%s",
+			return fmt.Errorf("branches on %s (id=%s): key=%q is neither an id from config.children nor default; available: %s",
 				typ, nodeID, br.Key, strings.Join(append(childIDs, "default"), " / "))
 		}
 		declared[key] = true
@@ -718,8 +718,8 @@ func (b *diagramBuilder) emitBranchChains(typ, nodeID string, st FlowStep, depth
 	for _, id := range childIDs {
 		if !declared[id] {
 			b.warnings = append(b.warnings, fmt.Sprintf(
-				"分支（id=%s）的子分支 %q 没有出边：条件命中后会被跳过；"+
-					"要么在 branches 里补 steps，要么从 config.children 里删掉", nodeID, id))
+				"branch (id=%s): sub-branch %q has no outgoing edge, so it is skipped once its condition is met; "+
+					"either add steps under branches or remove it from config.children", nodeID, id))
 		}
 	}
 	return nil
@@ -848,8 +848,8 @@ func (b *diagramBuilder) applyModelPositions() bool {
 	}
 	if len(missing) > 0 {
 		b.warnings = append(b.warnings, fmt.Sprintf(
-			"有 %d 个顶层节点没给 position（%s）：坐标要全给或全不给，"+
-				"半套坐标和自动排版混在一起会互相压住，本次已改用自动排版", len(missing), strings.Join(missing, "、")))
+			"%d top-level nodes have no position (%s): coordinates must be given for all of them or none — "+
+				"a partial set mixed with auto layout overlaps itself, so auto layout is used this time", len(missing), strings.Join(missing, ", ")))
 		return false
 	}
 
@@ -920,7 +920,7 @@ func (b *diagramBuilder) warnOverlaps() {
 			a, c := boxes[i], boxes[j]
 			if a.x < c.x+c.w && c.x < a.x+a.w && a.y < c.y+c.h && c.y < a.y+a.h {
 				b.warnings = append(b.warnings, fmt.Sprintf(
-					"节点 %s 与 %s 的位置重叠：用 update_node 的 position 挪开（建议 x 间距 ≥ 80、y 间距 ≥ 40）",
+					"nodes %s and %s overlap: move one with update_node's position (x gap ≥ 80, y gap ≥ 40 suggested)",
 					a.id, c.id))
 			}
 		}
@@ -1162,7 +1162,7 @@ func (b *diagramBuilder) labelOwner(label string) string {
 func (b *diagramBuilder) uniqueLabel(base string) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
-		base = "节点"
+		base = "Node"
 	}
 	if b.labelOwner(base) == "" {
 		return base
@@ -1219,12 +1219,12 @@ func (b *diagramBuilder) warnCalls() {
 		}
 		if b.hasBranches {
 			b.warnings = append(b.warnings, fmt.Sprintf(
-				"call（id=%s）的 target 要指向本流程某个 function 节点；本图含分支 / 容器子链，节点 id 不等于步序推算，"+
-					"请先 read_flow 回读真实 id", n.ID))
+				"call (id=%s): target must point at a function node in this flow; this diagram contains branches / container sub-chains, so node ids cannot be derived from the step index — "+
+					"call read_flow first to get the real ids", n.ID))
 			continue
 		}
 		b.warnings = append(b.warnings, fmt.Sprintf(
-			"call（id=%s）的 target 必须是同一个 flow 内某个 function 节点的 id（第 k 步的节点 id 为 k+1）", n.ID))
+			"call (id=%s): target must be the id of a function node in the same flow (the node id of step k is k+1)", n.ID))
 	}
 }
 
@@ -1245,13 +1245,13 @@ func validateStepConfig(typ string, cfg map[string]any) ([]string, error) {
 			continue
 		}
 		if _, ok := v.(map[string]any); !ok {
-			return nil, fmt.Errorf("步骤 %s 的 config.%s 必须是对象", typ, key)
+			return nil, fmt.Errorf("step %s: config.%s must be an object", typ, key)
 		}
 	}
 	// children 只出现在 branch / intent
 	if v, exists := cfg["children"]; exists {
 		if _, ok := v.([]any); !ok {
-			return nil, fmt.Errorf("步骤 %s 的 config.children 必须是数组", typ)
+			return nil, fmt.Errorf("step %s: config.children must be an array", typ)
 		}
 	}
 	// loop.type 决定后续读取哪个字段，写错等于必然运行时报错
@@ -1261,7 +1261,7 @@ func validateStepConfig(typ string, cfg map[string]any) ([]string, error) {
 			switch s {
 			case "count", "each", "while", "do_while":
 			default:
-				return nil, fmt.Errorf("步骤 %s 的 config.loop.type 只能是 count / each / while / do_while，收到 %v", typ, raw)
+				return nil, fmt.Errorf("step %s: config.loop.type must be count / each / while / do_while, got %v", typ, raw)
 			}
 		}
 	}
@@ -1271,35 +1271,35 @@ func validateStepConfig(typ string, cfg map[string]any) ([]string, error) {
 	case "code":
 		code, _ := cfg["code"].(map[string]any)
 		if script, ok := code["script"].(string); !ok || strings.TrimSpace(script) == "" {
-			warnings = append(warnings, "code 步骤缺少 code.script，运行时会报 script not found")
+			warnings = append(warnings, "code step has no code.script and fails with script not found at run time")
 		}
 		if _, ok := cfg["outputs"].(map[string]any); !ok {
-			warnings = append(warnings, "code 步骤没有 config.outputs：脚本 return 的变量会因未声明被拒")
+			warnings = append(warnings, "code step has no config.outputs: variables returned by the script are rejected as undeclared")
 		}
 	case "http":
 		httpCfg, _ := cfg["http"].(map[string]any)
 		if url, _ := httpCfg["url"].(string); strings.TrimSpace(url) == "" {
-			warnings = append(warnings, "http 步骤缺少 http.url，运行时无法发出请求")
+			warnings = append(warnings, "http step has no http.url and cannot send the request at run time")
 		}
 	case "llm":
 		if _, ok := cfg["llm"].(map[string]any); !ok {
-			warnings = append(warnings, "llm 步骤缺少 config.llm（模型与消息），运行时会直接报配置错误")
+			warnings = append(warnings, "llm step has no config.llm (model and messages) and fails with a config error at run time")
 		}
 	case "loop":
 		if _, ok := cfg["loop"].(map[string]any); !ok {
-			warnings = append(warnings, "loop 步骤缺少 config.loop，运行时会报 loop config not found")
+			warnings = append(warnings, "loop step has no config.loop and fails with loop config not found at run time")
 		}
 	case "branch", "intent":
 		if children, ok := cfg["children"].([]any); !ok || len(children) == 0 {
-			warnings = append(warnings, typ+" 步骤的 config.children 为空：运行时没有可走的分支")
+			warnings = append(warnings, typ+" step has empty config.children: there is no branch to take at run time")
 		}
 	case "call":
 		if target, _ := cfg["target"].(string); strings.TrimSpace(target) == "" {
-			warnings = append(warnings, "call 步骤缺少 config.target（必须是同一流程内某个 function 节点的 id）")
+			warnings = append(warnings, "call step has no config.target (must be the id of a function node in the same flow)")
 		}
 	case "wait":
 		if forkID, _ := cfg["fork_node_id"].(string); strings.TrimSpace(forkID) == "" {
-			warnings = append(warnings, "wait 步骤缺少 config.fork_node_id（要等的并发组）")
+			warnings = append(warnings, "wait step has no config.fork_node_id (the concurrency group to wait on)")
 		}
 	}
 
@@ -1314,8 +1314,8 @@ func validateStepConfig(typ string, cfg map[string]any) ([]string, error) {
 				continue
 			}
 			warnings = append(warnings, fmt.Sprintf(
-				"步骤 %s 的 %s=%s 不在沙箱当前的工作流脚本语言（%s）里，运行时会报 unsupported_lang",
-				typ, lf.path, lf.lang, strings.Join(langs, "、")))
+				"step %s has %s=%s, which is not among the sandbox's current workflow script languages (%s); it will fail with unsupported_lang at run time",
+				typ, lf.path, lf.lang, strings.Join(langs, ", ")))
 		}
 	}
 	return warnings, nil
@@ -1379,15 +1379,15 @@ func parseStepList(raw any, path string) ([]FlowStep, error) {
 	list, ok := raw.([]any)
 	if !ok || len(list) == 0 {
 		if path == "steps" {
-			return nil, errors.New("steps 必须是非空数组")
+			return nil, errors.New("steps must be a non-empty array")
 		}
-		return nil, fmt.Errorf("%s 必须是非空数组", path)
+		return nil, fmt.Errorf("%s must be a non-empty array", path)
 	}
 	steps := make([]FlowStep, 0, len(list))
 	for i, it := range list {
 		m, ok := it.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("%s[%d] 不是对象", path, i)
+			return nil, fmt.Errorf("%s[%d] is not an object", path, i)
 		}
 		st := FlowStep{
 			Type:  argString(m, "type"),
@@ -1396,10 +1396,10 @@ func parseStepList(raw any, path string) ([]FlowStep, error) {
 		if cfg, ok := m["config"].(map[string]any); ok {
 			st.Config = cfg
 		} else if m["config"] != nil {
-			return nil, fmt.Errorf("%s[%d].config 必须是对象", path, i)
+			return nil, fmt.Errorf("%s[%d].config must be an object", path, i)
 		}
 		if strings.TrimSpace(st.Type) == "" {
-			return nil, fmt.Errorf("%s[%d].type 不能为空", path, i)
+			return nil, fmt.Errorf("%s[%d].type must not be empty", path, i)
 		}
 		if rawPos, exists := m["position"]; exists && rawPos != nil {
 			pos, err := parseStepPosition(rawPos, fmt.Sprintf("%s[%d].position", path, i))
@@ -1431,12 +1431,12 @@ func parseStepList(raw any, path string) ([]FlowStep, error) {
 func parseStepPosition(raw any, path string) (map[string]int, error) {
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("%s 必须是 {x, y} 对象", path)
+		return nil, fmt.Errorf("%s must be an {x, y} object", path)
 	}
 	x, okX := positionAxis(m["x"])
 	y, okY := positionAxis(m["y"])
 	if !okX || !okY {
-		return nil, fmt.Errorf("%s 的 x / y 必须是数字（px，画布坐标）", path)
+		return nil, fmt.Errorf("%s: x / y must be numbers (px, canvas coordinates)", path)
 	}
 	return map[string]int{"x": x, "y": y}, nil
 }
@@ -1467,21 +1467,21 @@ func positionAxis(v any) (int, bool) {
 func parseFlowBranches(raw any, path string) ([]FlowBranch, error) {
 	list, ok := raw.([]any)
 	if !ok || len(list) == 0 {
-		return nil, fmt.Errorf("%s 必须是 [{key, steps}] 形式的非空数组", path)
+		return nil, fmt.Errorf("%s must be a non-empty array of {key, steps}", path)
 	}
 	branches := make([]FlowBranch, 0, len(list))
 	seen := make(map[string]bool, len(list))
 	for i, it := range list {
 		m, ok := it.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("%s[%d] 不是对象", path, i)
+			return nil, fmt.Errorf("%s[%d] is not an object", path, i)
 		}
 		key := strings.TrimSpace(argString(m, "key"))
 		if key == "" {
-			return nil, fmt.Errorf("%s[%d].key 不能为空：填 config.children[].id，或 default", path, i)
+			return nil, fmt.Errorf("%s[%d].key must not be empty: use a config.children[].id or default", path, i)
 		}
 		if seen[key] {
-			return nil, fmt.Errorf("%s 里分支 %q 重复声明（每个子分支只能有一条链）", path, key)
+			return nil, fmt.Errorf("%s declares branch %q twice (each sub-branch takes exactly one chain)", path, key)
 		}
 		seen[key] = true
 		steps, err := parseStepList(m["steps"], fmt.Sprintf("%s[%d].steps", path, i))
@@ -1511,7 +1511,7 @@ func parseFlowEndpoints(args map[string]any) ([]string, error) {
 		switch p {
 		case "mcp", "rpc":
 		default:
-			return nil, fmt.Errorf("external_protocols 只支持 mcp / rpc，收到 %q", p)
+			return nil, fmt.Errorf("external_protocols supports mcp / rpc only, got %q", p)
 		}
 		if seen[p] {
 			continue
@@ -1546,14 +1546,14 @@ func parseFlowArguments(raw any) (json.RawMessage, []string, error) {
 	}
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return nil, nil, errors.New(`arguments 必须是对象，形如 {"properties":{"city":{"type":"string"}},"required":["city"]}`)
+		return nil, nil, errors.New(`arguments must be an object, e.g. {"properties":{"city":{"type":"string"}},"required":["city"]}`)
 	}
 
 	propsRaw := m
 	if v, has := m["properties"]; has {
 		pm, ok := v.(map[string]any)
 		if !ok {
-			return nil, nil, errors.New("arguments.properties 必须是对象（键是参数名）")
+			return nil, nil, errors.New("arguments.properties must be an object (keys are parameter names)")
 		}
 		propsRaw = pm
 	} else {
@@ -1563,7 +1563,7 @@ func parseFlowArguments(raw any) (json.RawMessage, []string, error) {
 			switch k {
 			case "required":
 			case "type", "description":
-				return nil, nil, errors.New(`arguments 写了 type / description 却没有 properties：请写成 {"type":"object","properties":{...}}`)
+				return nil, nil, errors.New(`arguments has type / description but no properties: write {"type":"object","properties":{...}}`)
 			default:
 				propsRaw[k] = v
 			}
@@ -1594,7 +1594,7 @@ func parseFlowArguments(raw any) (json.RawMessage, []string, error) {
 	}
 	buf, err := json.Marshal(doc)
 	if err != nil {
-		return nil, nil, fmt.Errorf("序列化 arguments 失败: %w", err)
+		return nil, nil, fmt.Errorf("failed to serialize arguments: %w", err)
 	}
 	return json.RawMessage(buf), names, nil
 }
@@ -1604,18 +1604,18 @@ func validateFlowArgProps(props map[string]any, prefix string) (map[string]any, 
 	out := make(map[string]any, len(props))
 	for name, raw := range props {
 		if !flowArgNameRe.MatchString(name) {
-			return nil, fmt.Errorf("参数名 %q 不合法：只能用字母、数字、下划线，且不能以数字开头（它会变成模板块里的变量名）", prefix+name)
+			return nil, fmt.Errorf("invalid parameter name %q: letters, digits and underscores only, and it must not start with a digit (it becomes a variable name in template blocks)", prefix+name)
 		}
 		spec, ok := raw.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf(`参数 %q 必须是对象，形如 {"type":"string","description":"..."}`, prefix+name)
+			return nil, fmt.Errorf(`parameter %q must be an object, e.g. {"type":"string","description":"..."}`, prefix+name)
 		}
 		typ := strings.TrimSpace(argString(spec, "type"))
 		if typ == "" {
-			return nil, fmt.Errorf("参数 %q 缺少 type（string / number / boolean / object / array）", prefix+name)
+			return nil, fmt.Errorf("parameter %q has no type (string / number / boolean / object / array)", prefix+name)
 		}
 		if !flowArgTypes[typ] {
-			return nil, fmt.Errorf("参数 %q 的 type=%q 不支持：只能是 string / number / boolean / object / array", prefix+name, typ)
+			return nil, fmt.Errorf("parameter %q has unsupported type=%q: only string / number / boolean / object / array", prefix+name, typ)
 		}
 		clean := map[string]any{"type": typ}
 		for _, k := range []string{"description", "default"} {
@@ -1629,7 +1629,7 @@ func validateFlowArgProps(props map[string]any, prefix string) (map[string]any, 
 			if v, ok := spec["properties"]; ok {
 				pm, ok := v.(map[string]any)
 				if !ok {
-					return nil, fmt.Errorf("参数 %q 的 properties 必须是对象", prefix+name)
+					return nil, fmt.Errorf("parameter %q: properties must be an object", prefix+name)
 				}
 				subRaw = pm
 			}
@@ -1648,11 +1648,11 @@ func validateFlowArgProps(props map[string]any, prefix string) (map[string]any, 
 		case "array":
 			items, ok := spec["items"].(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf(`参数 %q 是 array，必须写 items，形如 {"type":"array","items":{"type":"string"}}`, prefix+name)
+				return nil, fmt.Errorf(`parameter %q is an array and needs items, e.g. {"type":"array","items":{"type":"string"}}`, prefix+name)
 			}
 			it := strings.TrimSpace(argString(items, "type"))
 			if !flowArgTypes[it] || it == "array" {
-				return nil, fmt.Errorf("参数 %q 的 items.type 只能是 string / number / boolean / object（数组套数组请用 object 包一层）", prefix+name)
+				return nil, fmt.Errorf("parameter %q: items.type must be string / number / boolean / object (wrap nested arrays in an object)", prefix+name)
 			}
 			cleanItems := map[string]any{"type": it}
 			if it == "object" {
@@ -1660,7 +1660,7 @@ func validateFlowArgProps(props map[string]any, prefix string) (map[string]any, 
 				if v, ok := items["properties"]; ok {
 					pm, ok := v.(map[string]any)
 					if !ok {
-						return nil, fmt.Errorf("参数 %q 的 items.properties 必须是对象", prefix+name)
+						return nil, fmt.Errorf("parameter %q: items.properties must be an object", prefix+name)
 					}
 					subRaw = pm
 				}
@@ -1691,21 +1691,21 @@ func flowArgRequired(raw any, props map[string]any, prefix string) ([]string, er
 	}
 	where := "arguments"
 	if prefix != "" {
-		where = "参数 " + strings.TrimSuffix(prefix, ".")
+		where = "parameter " + strings.TrimSuffix(prefix, ".")
 	}
 	list, ok := raw.([]any)
 	if !ok {
-		return nil, fmt.Errorf("%s 的 required 必须是字符串数组", where)
+		return nil, fmt.Errorf("%s: required must be an array of strings", where)
 	}
 	seen := make(map[string]bool, len(list))
 	out := make([]string, 0, len(list))
 	for _, item := range list {
 		name, ok := item.(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("%s 的 required 里有一项不是参数名：%v", where, item)
+			return nil, fmt.Errorf("%s: one required entry is not a parameter name: %v", where, item)
 		}
 		if _, exists := props[name]; !exists {
-			return nil, fmt.Errorf("%s 的 required 写了 %q，但 properties 里没有这个参数", where, name)
+			return nil, fmt.Errorf("%s: required lists %q but properties has no such parameter", where, name)
 		}
 		if seen[name] {
 			continue
@@ -1733,48 +1733,48 @@ func (t *createFlowTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "create_flow",
 		Category: CategoryFlowAdmin,
-		Description: "创建一个工作流：把步骤列表组装成「开始 → 主链」，branch / intent 再用 branches 拉出自己的子链。" +
-			"steps 里可以用执行器注册的全部节点类型（llm / code / http / mcp / rpc / branch / intent / loop / process / " +
-			"function / call / assign / memory / wait / fork / result / progress / break / continue / return / exit / layout）。" +
-			"其中 layout 是纯视觉节点（32px 圆点）：runner 会跳过它并沿第一条出边继续，适合当折行拐点或分组锚点。" +
-			"**条件路由**：给 branch / intent 这一步写 branches —— 每个 key 对应 config.children[].id（无条件兜底用 key=\"default\"），" +
-			"值是它自己的步骤链，工具会生成 source<子分支 id> 的出边；声明了 branches 的步骤必须是所在链的最后一步。" +
-			"**容器内部**：给 loop / process / function 这一步写 children（结构同 steps，可再嵌套），" +
-			"工具会自动建 entry 并把子链接上去；不写就是空容器（运行期空转）。" +
-			"**并发默认关闭**：默认不要在任何节点上写 config.concurrency（工具会摘掉并回 warning）。" +
-			"只有用户明确要求并发时才用 concurrency 参数声明形态：mono = 单体并发（一个节点内部并发处理多份数据），" +
-			"group = 并发组并发（多个节点同时跑、wait 汇合，配 fork + wait）；用户没说形态但要求并发时按任务判断，" +
-			"多个节点要同时跑才算 group。" +
-			"wait 的并发组成员（config.concurrency）与 config.fork_node_id 仍要自己给，缺口会写进返回的 warnings。" +
-			"每一步的 config 原样写进节点的 data.config（形状与前端节点表单一致；不确定时先给最小配置，建好后在前端校准）；" +
-			"config.inputs 里的 source_ref、call 的 config.target、wait 的 config.fork_node_id 都可以写节点 label，工具会换成真实 id。" +
-			"返回里的 nodes 是建好的节点清单（id / type / label），用来核对 source_ref 与分支走向。" +
-			"**布局**：可以给每一步 position 自己排版（顶层节点必须全给，工具只做重叠检测并回 warnings）；" +
-			"不给就由工具自动排版（主链横向、分支纵向）。建完还能用 update_node 的 position 微调单个节点。" +
-			"**入口参数**：arguments 声明工作流的入参（JSON Schema），对外开放后它就是端点对外的 input_schema，" +
-			"也是 run_flow 的 inputs 键。用户没提入参时不要凭空调参数。" +
-			"端点是工作流对外的入口（mcp / rpc），但**默认不对外开放**：" +
-			"不传 external_protocols 就只是内部流程；对外开放是有副作用的动作，只在用户明确要求时做。",
+		Description: "Create a workflow: assemble a list of steps into \"start → main chain\", then branch / intent pull out their own sub-chains with branches. " +
+			"steps may use every node type in the executor registry (llm / code / http / mcp / rpc / branch / intent / loop / process / " +
+			"function / call / assign / memory / wait / fork / result / progress / break / continue / return / exit / layout). " +
+			"layout is a purely visual node (a 32px dot): the runner skips it and continues along its first outgoing edge, which makes it a good wrap point or grouping anchor. " +
+			"**Conditional routing**: write branches on the branch / intent step — each key maps to a config.children[].id (use key=\"default\" for the unconditional fallback), " +
+			"its value is that branch's own step chain, and the tool generates a source<sub-branch id> outgoing edge; a step that declares branches must be the last step of its chain. " +
+			"**Inside containers**: write children on the loop / process / function step (same shape as steps, may nest further) — " +
+			"the tool creates the entry automatically and links the sub-chain to it; without children it is an empty container (which spins empty at run time). " +
+			"**Concurrency is off by default**: do not write config.concurrency on any node (the tool strips it and returns a warning). " +
+			"Only when the user explicitly asks for concurrency, declare the shape with the concurrency parameter: mono = single-node concurrency (one node processes several items concurrently), " +
+			"group = concurrency group (several nodes run at once and a wait joins them; pair with fork + wait); if the user asks for concurrency without naming a shape, judge by the task — " +
+			"it is group only when several nodes must run at the same time. " +
+			"wait's concurrency-group membership (config.concurrency) and config.fork_node_id still have to be supplied; any gap is reported in the returned warnings. " +
+			"Each step's config is written verbatim into the node's data.config (the shape matches the front-end node form; when unsure, give the minimal config and calibrate in the UI afterwards); " +
+			"source_ref in config.inputs, config.target on call and config.fork_node_id on wait may all be node labels — the tool replaces them with real ids. " +
+			"nodes in the result is the list of created nodes (id / type / label), for checking source_ref and branch routing. " +
+			"**Layout**: you may give each step a position to lay it out yourself (top-level nodes must all be given; the tool only detects overlaps and reports warnings); " +
+			"otherwise it lays out automatically (main chain horizontal, branches vertical). After creating, update_node's position can fine-tune a single node. " +
+			"**Entry arguments**: arguments declares the workflow's input parameters (JSON Schema); once exposed it is the endpoint's input_schema, " +
+			"and it is also the run_flow inputs keys. Do not invent parameters the user never mentioned. " +
+			"Endpoints are the workflow's external entry points (mcp / rpc), but they are **not exposed by default**: " +
+			"without external_protocols it stays an internal flow; exposing it has side effects, so do it only when the user explicitly asks.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":        map[string]any{"type": "string", "description": "工作流名：字母、数字与横线（不以横线开头，≤64）。它会作为对外工具名 local__<name>，所以不能用中文；中文用途写 description"},
-				"description": map[string]any{"type": "string", "description": "一句话说明这个流程干什么（必填：列表里靠它区分用途，前端编辑器也要求非空）"},
+				"name":        map[string]any{"type": "string", "description": "Workflow name: letters, digits and hyphens (must not start with a hyphen, ≤64). It becomes the external tool name local__<name>, so no non-ASCII; put the human-readable purpose in description"},
+				"description": map[string]any{"type": "string", "description": "One sentence on what this flow does (required: the list tells flows apart by it, and the editor refuses an empty one)"},
 				"arguments": map[string]any{
 					"type": "object",
-					"description": "入口参数声明（可选，写进 flows.arguments）：对外开放后它就是端点的 input_schema，" +
-						"也是 run_flow 的 inputs 键。形状与前端「入口参数」编辑器一致：" +
-						`{"type":"object","properties":{"city":{"type":"string","description":"城市名"}},"required":["city"]}。` +
-						"type 只支持 string / number / boolean / object / array（array 必须带 items.type；object 可再带 properties / required）。" +
-						`也接受省掉外壳的简写：{"city":{"type":"string"}}。` +
-						"参数名只能用字母、数字、下划线（会变成模板块里的变量名），不要用点号。",
+					"description": "Entry parameter declaration (optional; written to flows.arguments): once exposed it is the endpoint's input_schema, " +
+						"and also the run_flow inputs keys. The shape matches the front-end \"Entry parameters\" editor: " +
+						`{"type":"object","properties":{"city":{"type":"string","description":"city name"}},"required":["city"]}. ` +
+						"type supports string / number / boolean / object / array only (array must carry items.type; object may also carry properties / required). " +
+						`The shell-less shorthand is accepted too: {"city":{"type":"string"}}. ` +
+						"Parameter names may only use letters, digits and underscores (they become template variables) — no dots.",
 				},
 				"steps": map[string]any{
 					"type": "array",
-					"description": "按执行顺序排列的步骤，至少一步。主链之外的结构：branch / intent 用 branches 声明子链，" +
-						"loop / process / function 的子节点仍需到画布补，返回里的 warnings 会指出哪些步骤需要补。" +
-						"每一步可以带 position 自己排版（顶层全给），不给就由工具自动排版；" +
-						"需要控制折行或分组时，在链里插一个 type=layout 的步骤当拐点（运行期直通，不改变执行顺序）",
+					"description": "Steps in execution order, at least one. Structures beyond the main chain: branch / intent declare sub-chains with branches, " +
+						"while loop / process / function children still have to be completed on the canvas — the returned warnings say which steps need it. " +
+						"Each step may carry a position to lay it out yourself (give all top-level positions); otherwise the tool lays out automatically. " +
+						"When you need to control wrapping or grouping, insert a type=layout step in the chain as the wrap point (it passes through at run time and does not change execution order)",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -1784,43 +1784,43 @@ func (t *createFlowTool) Meta() ToolMeta {
 								"assign", "memory", "wait", "fork", "result", "progress",
 								"break", "continue", "return", "exit", "layout",
 							}},
-							"label": map[string]any{"type": "string", "description": "节点标题（画布上显示的短名）；可被 config.inputs 的 source_ref 直接引用"},
+							"label": map[string]any{"type": "string", "description": "Node title (the short name shown on the canvas); it can be referenced directly by source_ref in config.inputs"},
 							"position": map[string]any{
 								"type": "object",
-								"description": "可选：你为这一步排的画布坐标 {x, y}（px）。**顶层节点要全给或全不给**：" +
-									"全给就完全按你的坐标摆（工具只做重叠检测并回 warnings），少给一个就整体退回自动排版。" +
-									"容器内部节点不用给（相对父容器，工具自己排）。" +
-									"排版审美：x / y 取 20 的倍数；主链同一行（y 相同）从左往右，" +
-									"叶子节点实际宽只有 100–160，**相邻节点 x 步长取 200**（branch 与容器宽 300，" +
-									"其后步长取 380；**开了并发的节点约 280×64**）—— 别为保险把步长拉到 300 以上，" +
-									"画布会空得很难看；分支排在分支节点右下方、每条分支一行、行间 ≥ 72；" +
-									"一行总宽超过 1500 就在分支/容器处换行 —— 想控制折行位置就在该处插一个 " +
-									"type=layout 的步骤当拐点（32px 圆点、运行期直通），把后续节点摆到下一行；" +
-									"连线尽量避免交叉",
+								"description": "Optional: canvas coordinates {x, y} (px) you lay out for this step. **Top-level nodes must be given for all or none**: " +
+									"give all and the tool follows your coordinates exactly (it only detects overlaps and reports warnings); miss one and everything falls back to auto layout. " +
+									"Nodes inside a container need none (they are relative to the parent container and the tool lays them out itself). " +
+									"Layout aesthetics: use multiples of 20 for x / y; keep the main chain on one row (same y) running left to right; " +
+									"a leaf node is only 100–160 wide, so **use an x step of 200 between neighbours** (branch and containers are 300 wide, " +
+									"so use 380 after them; **a node with concurrency on is about 280×64**) — do not stretch the step past 300 just to be safe, " +
+									"the canvas ends up looking empty; place branches to the lower right of the branch node, one row per branch, with ≥ 72 between rows; " +
+									"when a row would exceed 1500 wide, wrap at the branch / container — to control where it wraps, insert a " +
+									"type=layout step there as the wrap point (a 32px dot that passes through at run time) and put the following nodes on the next row; " +
+									"avoid crossing edges",
 								"properties": map[string]any{
-									"x": map[string]any{"type": "number", "description": "画布 x（px）"},
-									"y": map[string]any{"type": "number", "description": "画布 y（px）"},
+									"x": map[string]any{"type": "number", "description": "Canvas x (px)"},
+									"y": map[string]any{"type": "number", "description": "Canvas y (px)"},
 								},
 								"required": []any{"x", "y"},
 							},
 							"config": map[string]any{
 								"type":        "object",
-								"description": "节点配置，原样写入 data.config（形状与前端该类型的节点表单一致）",
+								"description": "Node config, written verbatim into data.config (the shape matches the front-end form for that node type)",
 							},
 							"branches": map[string]any{
 								"type": "array",
-								"description": "仅 branch / intent 可用，且该步骤必须是所在链的最后一步：为每个子分支声明一条自己的步骤链。" +
-									"会生成 source<key> 的出边，执行器靠它分流",
+								"description": "branch / intent only, and the step must be the last one in its chain: declare one step chain per sub-branch. " +
+									"Generates a source<key> outgoing edge, which is what the executor branches on",
 								"items": map[string]any{
 									"type": "object",
 									"properties": map[string]any{
 										"key": map[string]any{
 											"type":        "string",
-											"description": "对应 config.children[].id；无条件兜底分支用 \"default\"",
+											"description": "Maps to config.children[].id; use \"default\" for the unconditional fallback branch",
 										},
 										"steps": map[string]any{
 											"type":        "array",
-											"description": "该子分支的步骤链（结构与外层 steps 相同，可再嵌 branch）",
+											"description": "That sub-branch's step chain (same shape as the outer steps; may nest further branch steps)",
 											"items":       map[string]any{"type": "object"},
 										},
 									},
@@ -1829,8 +1829,8 @@ func (t *createFlowTool) Meta() ToolMeta {
 							},
 							"children": map[string]any{
 								"type": "array",
-								"description": "仅 loop / process / function 可用：容器内部的步骤链（结构同外层 steps，可再嵌）。" +
-									"工具会自动建 entry 并把首节点接上去；不写就是空容器（运行期空转）",
+								"description": "loop / process / function only: the step chain inside the container (same shape as the outer steps; may nest). " +
+									"The tool creates the entry automatically and connects the first node; without children it is an empty container (spins empty at run time)",
 								"items": map[string]any{"type": "object"},
 							},
 						},
@@ -1840,21 +1840,21 @@ func (t *createFlowTool) Meta() ToolMeta {
 				"external_protocols": map[string]any{
 					"type":  "array",
 					"items": map[string]any{"type": "string", "enum": []any{"mcp", "rpc"}},
-					"description": "**默认不传 = 不对外开放**（建完只是租户内部的流程，别为了「看起来完整」顺手加上）。" +
-						"只有用户明确要求「对外开放 / 给别人调 / 挂成 MCP 或 RPC 端点」时才传，并且只写他点名的那几种协议；" +
-						"用户只是在描述功能（如「能查天气」「能输出 HTML」「要能访问百度」）不算对外授权，" +
-						"拿不准就先不传并问清：哪个流程、mcp 还是 rpc、端点名、谁能调。",
+					"description": "**Omit by default = not exposed** (the flow stays internal to the tenant; do not add it just to look complete). " +
+						"Pass it only when the user explicitly asks to expose it / let others call it / mount it as an MCP or RPC endpoint, and list only the protocols they named; " +
+						"a user merely describing a capability (e.g. \"can look up weather\", \"can output HTML\", \"needs to reach baidu\") is not an exposure request — " +
+						"if unsure, leave it out and ask: which flow, mcp or rpc, endpoint name, who may call it.",
 				},
 				"concurrency": map[string]any{
 					"type": "string",
 					"enum": []any{"off", "mono", "group"},
-					"description": "并发生效范围，**默认 off，不要主动传**：只有用户明确要求「并发执行」时才开，" +
-						"并按用户的要求二选一 —— mono（单体并发：一个节点内部并发处理多份数据，不组队）、" +
-						"group（并发组并发：多个节点同时跑、由 wait 汇合，需要 fork + wait）。" +
-						"用户只说「并发」没指明形态时，按任务判断：并发的是同一件事的多份输入 → mono；" +
-						"是几段互不依赖的活儿同时跑 → group。" +
-						"off 时所有节点上的 config.concurrency 都会被摘掉并回 warning；" +
-						"mono 只保留 {\"mode\":\"mono\"}；group 只保留 {\"mode\":\"fork\",\"fork_node_id\":\"<id>\"}。",
+					"description": "Concurrency scope, **default off, do not pass it proactively**: turn it on only when the user explicitly asks for concurrent execution, " +
+						"and pick one of the two shapes according to what they asked — mono (single-node concurrency: one node processes several items concurrently, no teaming), " +
+						"group (concurrency group: several nodes run at once and a wait joins them; needs fork + wait). " +
+						"If the user just says \"concurrent\" without a shape, judge by the task: several inputs of the same job → mono; " +
+						"several independent jobs running at the same time → group. " +
+						"With off, config.concurrency on every node is stripped and a warning is returned; " +
+						"mono keeps only {\"mode\":\"mono\"}; group keeps only {\"mode\":\"fork\",\"fork_node_id\":\"<id>\"}.",
 				},
 			},
 			"required": []any{"name", "description", "steps"},
@@ -1870,7 +1870,7 @@ func (t *createFlowTool) Execute(ctx context.Context, c *Context, args map[strin
 	// 描述必填：管理端「更新工作流」会拒绝空描述，建一个改不动的流程等于埋雷。
 	description := strings.TrimSpace(argString(args, "description"))
 	if description == "" {
-		return nil, errors.New("description 不能为空：列表里靠它区分用途，前端编辑器也要求非空")
+		return nil, errors.New("description must not be empty: the list uses it to tell flows apart, and the front-end editor requires it")
 	}
 	arguments, argNames, err := parseFlowArguments(args["arguments"])
 	if err != nil {
@@ -1884,7 +1884,7 @@ func (t *createFlowTool) Execute(ctx context.Context, c *Context, args map[strin
 		return nil, err
 	}
 	if exists {
-		return nil, fmt.Errorf("工作流 %q 已存在，换个名字或用 read_flow 查看它", name)
+		return nil, fmt.Errorf("workflow %q already exists: pick another name or inspect it with read_flow", name)
 	}
 
 	steps, err := parseFlowSteps(args["steps"])
@@ -1959,7 +1959,7 @@ func (t *listFlowsTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "list_flows",
 		Category:    CategoryFlowAdmin,
-		Description: "列出本租户的工作流（id / 名称 / 描述 / 状态 / 已对外开放端点）。",
+		Description: "List this tenant's workflows (id / name / description / status / exposed endpoints).",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 	}
 }
@@ -1982,7 +1982,7 @@ func (t *listFlowsTool) Execute(ctx context.Context, c *Context, args map[string
 			"flows":     list[:maxListFlows],
 			"total":     total,
 			"truncated": true,
-			"note":      fmt.Sprintf("共 %d 个工作流，这里只列前 %d 个；要找的没列出来时用 read_flow 按名字直接取", total, maxListFlows),
+			"note":      fmt.Sprintf("%d workflows in total and only the first %d are listed here; if the one you need is missing, fetch it directly by name with read_flow", total, maxListFlows),
 		}, nil
 	}
 	return map[string]any{"flows": list, "total": total}, nil
@@ -1996,8 +1996,8 @@ func (t *readFlowTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "read_flow",
 		Category: CategoryFlowAdmin,
-		Description: "读取一个工作流：名称、描述、状态、已对外开放端点、入口参数声明（arguments），以及完整 diagram（节点的 type 与 config）。" +
-			"改流程前先用它看现状，避免凭印象重写。",
+		Description: "Read one workflow: name, description, status, exposed endpoints, the entry parameter declaration (arguments) and the full diagram (each node's type and config). " +
+			"Call it before changing a flow so you work from the current state instead of rewriting from memory.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -2011,7 +2011,7 @@ func (t *readFlowTool) Meta() ToolMeta {
 func (t *readFlowTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	ref := strings.TrimSpace(argString(args, "flow"))
 	if ref == "" {
-		return nil, errors.New("flow 不能为空（工作流 id 或名称）")
+		return nil, errors.New("flow must not be empty (workflow id or name)")
 	}
 	if c.Flows == nil {
 		return nil, errors.New("flow manager not available")
@@ -2022,7 +2022,7 @@ func (t *readFlowTool) Execute(ctx context.Context, c *Context, args map[string]
 	}
 	// nil = 不存在：给个明确的错，别让模型把 null 当成「这个流程是空的」。
 	if detail == nil {
-		return nil, fmt.Errorf("工作流 %q 不存在；先用 list_flows 确认名字", ref)
+		return nil, fmt.Errorf("workflow %q does not exist: confirm the name with list_flows first", ref)
 	}
 	return detail, nil
 }
@@ -2035,9 +2035,9 @@ func (t *deleteFlowTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "delete_flow",
 		Category: CategoryFlowAdmin,
-		Description: "删除一个工作流（只删定义；已对外开放端点随之失效。运行记录不级联删除）。" +
-			"返回被删掉那一个的 flow_id 与 flow_name —— 名称在「改名 / 删后同名重建」时可能指向别的定义，" +
-			"所以破坏性操作要按返回的 id + 名称核对一遍。",
+		Description: "Delete a workflow (definition only; its exposed endpoints stop working with it. Run records are not cascade-deleted). " +
+			"The result returns the flow_id and flow_name of the one that was deleted — a name may point at a different definition after a rename or a delete-then-recreate, " +
+			"so verify destructive operations against the returned id + name.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -2051,7 +2051,7 @@ func (t *deleteFlowTool) Meta() ToolMeta {
 func (t *deleteFlowTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	ref := strings.TrimSpace(argString(args, "flow"))
 	if ref == "" {
-		return nil, errors.New("flow 不能为空（工作流 id 或名称）")
+		return nil, errors.New("flow must not be empty (workflow id or name)")
 	}
 	if c.Flows == nil {
 		return nil, errors.New("flow manager not available")
@@ -2061,7 +2061,7 @@ func (t *deleteFlowTool) Execute(ctx context.Context, c *Context, args map[strin
 		return nil, err
 	}
 	if deleted == nil {
-		return nil, fmt.Errorf("工作流 %q 不存在；先用 list_flows 确认名字", ref)
+		return nil, fmt.Errorf("workflow %q does not exist: confirm the name with list_flows first", ref)
 	}
 	// 回显真实的 id 与名称：名称可能因「改名 / 删后同名重建」指向另一份定义，
 	// 破坏性操作要让调用方看得到「删掉的到底是哪一个」。
@@ -2078,11 +2078,11 @@ func (t *deleteFlowTool) Execute(ctx context.Context, c *Context, args map[strin
 // 中文名建得出来、却对外开放不出可用的端点。
 func validateFlowName(name string) error {
 	if name == "" {
-		return errors.New("工作流名不能为空")
+		return errors.New("workflow name cannot be empty")
 	}
 	if !ValidName(name) {
-		return fmt.Errorf("工作流名 %q 不合法：只能用字母、数字与横线（不能以横线开头，≤64）；"+
-			"它会作为对外工具名 local__<name>，中文说明请写进 description", name)
+		return fmt.Errorf("workflow name %q is invalid: letters, digits and hyphens only (must not start with a hyphen, ≤64); "+
+			"it becomes the external tool name local__<name>, so put the human-readable purpose in description", name)
 	}
 	return nil
 }
@@ -2094,27 +2094,27 @@ func (t *runFlowTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "run_flow",
 		Category: CategoryFlowAdmin,
-		Description: "试运行一个**已保存**的工作流，返回整体状态（success / failed / cancelled）、最终输出，" +
-			"以及每个执行过的节点的成败、错误码与耗时 —— 失败时靠节点列表定位停在哪一步、为什么。" +
-			"这是**真实执行**：http / rpc / mcp 会真的发请求，llm 会真的计费，code / handler 会真的跑脚本，" +
-			"只在需要验证流程跑得通时用。" +
-			"整次调用受工具超时约束（缺省 60 秒）：长流程会在超时点被取消，返回 cancelled 与已执行到的节点。" +
-			"不回节点输出变量（可能很大）：要看数据去运行记录页或 read_flow。",
+		Description: "Test-run a **saved** workflow and return the overall status (success / failed / cancelled), the final output, " +
+			"and each executed node's outcome, error code and duration — when it fails, use the node list to see where it stopped and why. " +
+			"This is a **real execution**: http / rpc / mcp really send requests, llm really bills, code / handler really run scripts, " +
+			"so use it only when you need to verify the flow actually works. " +
+			"The whole call is bounded by the tool timeout (default 60s): a long flow is cancelled at that point and returns cancelled plus the nodes reached so far. " +
+			"Node output variables are not returned (they can be large): read them from the run records page or read_flow_run.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"flow": map[string]any{"type": "string", "description": flowRefHint},
 				"inputs": map[string]any{
 					"type": "object",
-					"description": "工作流入参：键对应 config.inputs 里 source_type=argument 的变量名，" +
-						"与 create_flow 的 arguments 声明同名。没声明过也能传，但不会出现在任何 source_type=argument 的变量里",
+					"description": "Workflow inputs: the keys match the source_type=argument variable names in config.inputs, " +
+						"i.e. the names declared in create_flow's arguments. Passing extras is allowed, but they never show up in any source_type=argument variable",
 				},
 				"follow_drafts": map[string]any{
 					"type": "boolean",
-					"description": "本次试跑调起的**子流程**读哪一份。缺省跟随当前会话的「子调用跟随草稿」设置" +
-						"（聊天窗口缺省开启）；显式传 false 让它们走已发布的正式版本（子流程从未发布过会直接报错）。" +
-						"正式运行（MCP / RPC / 端点）里此参数不会把草稿打开。" +
-						"只影响被调起的子流程，主流程本身始终跑当前草稿。",
+					"description": "Which version the **sub-flows** invoked by this test run read. Defaults to the current session's \"sub-calls follow drafts\" setting " +
+						"(on by default in the chat window); pass false explicitly to make them use the released version (a sub-flow that was never released errors out). " +
+						"In a formal run (MCP / RPC / endpoint) this parameter never opens up drafts. " +
+						"It only affects invoked sub-flows — the main flow always runs the current draft.",
 				},
 			},
 			"required": []any{"flow"},
@@ -2128,7 +2128,7 @@ func (t *runFlowTool) Execute(ctx context.Context, c *Context, args map[string]a
 	}
 	ref := strings.TrimSpace(argString(args, "flow"))
 	if ref == "" {
-		return nil, errors.New("需要工作流 id 或名称")
+		return nil, errors.New("a workflow id or name is required")
 	}
 	inputs, err := argObject(args, "inputs")
 	if err != nil {
@@ -2154,7 +2154,7 @@ func (t *runFlowTool) Execute(ctx context.Context, c *Context, args map[string]a
 		return nil, err
 	}
 	if res == nil {
-		return nil, fmt.Errorf("工作流 %q 不存在", ref)
+		return nil, fmt.Errorf("workflow %q does not exist", ref)
 	}
 	clipFlowRun(res, c.MaxOutputLimit())
 	return res, nil
@@ -2193,20 +2193,20 @@ func (t *readFlowRunTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "read_flow_run",
 		Category: CategoryFlowAdmin,
-		Description: "读一次工作流运行记录的完整细节：整体状态、入参 / 流程变量，" +
-			"以及每个节点的输入 / 输出 / 局部变量、错误码、错误栈、日志、重试次数、错误处理动作。" +
-			"run_flow 只回「成没成、卡在哪」，这里回「为什么」—— 按 run_id 精确取。" +
-			"run_id 来自 run_flow 的返回，或前端「运行记录」列表（前端 debug 跑出来的记录也能查）。" +
-			"缺省只回失败节点；变量是落库快照，落库时已按 64KB 顶层 key 截断过。",
+		Description: "Read the full detail of one workflow run: overall status, inputs / flow variables, " +
+			"and each node's input / output / local variables, error code, error stack, logs, retry count and error-handling action. " +
+			"run_flow only answers \"did it succeed, where did it stop\"; this answers \"why\" — fetched by run_id. " +
+			"run_id comes from run_flow's result or from the run-records list in the UI (records produced by UI debug runs are queryable too). " +
+			"Only failed nodes are returned by default; the variables are a persisted snapshot, already truncated per top-level key at 64KB when stored.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"run_id":      map[string]any{"type": "string", "description": "运行 id（run_flow 返回的 run_id，或前端运行记录里的 id）"},
-				"only_failed": map[string]any{"type": "boolean", "description": "只回失败节点，缺省 true；要看全链路传 false"},
+				"run_id":      map[string]any{"type": "string", "description": "Run id (the run_id returned by run_flow, or an id from the run-records list in the UI)"},
+				"only_failed": map[string]any{"type": "boolean", "description": "Only return failed nodes (default true); pass false for the whole chain"},
 				"nodes": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "只看这些节点 id（可选）；与 only_failed 同时生效，用于只看某几步",
+					"description": "Only look at these node ids (optional); combined with only_failed, for inspecting just a few steps",
 				},
 			},
 			"required": []any{"run_id"},
@@ -2220,14 +2220,14 @@ func (t *readFlowRunTool) Execute(ctx context.Context, c *Context, args map[stri
 	}
 	runID := strings.TrimSpace(argString(args, "run_id"))
 	if runID == "" {
-		return nil, errors.New("需要 run_id")
+		return nil, errors.New("run_id is required")
 	}
 	res, err := c.Flows.GetRun(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
 	if res == nil {
-		return nil, fmt.Errorf("运行记录 %q 不存在（run_id 来自 run_flow 返回，或前端运行记录列表）", runID)
+		return nil, fmt.Errorf("run record %q does not exist (run_id comes from run_flow output or the run-record list in the UI)", runID)
 	}
 
 	// only_failed 缺省 true：这个工具的用途是定位失败，成功节点只会白占上下文。
@@ -2345,7 +2345,7 @@ func cutHeadBytes(s string, limit int) string {
 	for i > 0 && !utf8.RuneStart(s[i]) {
 		i--
 	}
-	return s[:i] + "\n…（已截断）"
+	return s[:i] + "\n… (truncated)"
 }
 
 // cutTailBytes 同上，但保留结尾。
@@ -2357,7 +2357,7 @@ func cutTailBytes(s string, limit int) string {
 	for i < len(s) && !utf8.RuneStart(s[i]) {
 		i++
 	}
-	return "…（已截断，仅保留末尾）\n" + s[i:]
+	return "… (truncated, tail kept)\n" + s[i:]
 }
 
 func init() {

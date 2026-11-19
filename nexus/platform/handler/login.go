@@ -26,35 +26,35 @@ type LoginRequest struct {
 func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		// 不区分「账号不存在」与「密码错误」，避免账号枚举
-		xhttp.ErrJSON(c, "用户名或密码错误", nil, "")
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
 		return
 	}
 	if !db.IsConnected() {
-		xhttp.ErrJSON(c, "Database not connected", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Database not connected", "")
 		return
 	}
 
 	u, err := pmusers.GetByName(name)
 	if err != nil {
 		// 表未建 / 未执行迁移等情况如实报出，便于排查（与租户侧登录同一风格）
-		xhttp.ErrJSON(c, "Failed to load platform user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load platform user: "+err.Error(), "")
 		return
 	}
 	if u == nil {
-		xhttp.ErrJSON(c, "用户名或密码错误", nil, "")
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
 		return
 	}
 
 	// 密码校验：bcrypt 优先，兼容历史 MD5（空值一律不通过）
 	ok, needRehash := account.VerifyPassword(u.Password, req.Password)
 	if !ok {
-		xhttp.ErrJSON(c, "用户名或密码错误", nil, "")
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
 		return
 	}
 	if needRehash {
@@ -65,16 +65,16 @@ func Login(c *gin.Context) {
 	// 状态校验：停用 / 锁定都拒绝
 	if u.Status != account.StatusActive {
 		if u.Status == account.StatusLocked {
-			xhttp.ErrJSON(c, "该账号已被锁定，请联系管理员解锁", nil, "")
+			xhttp.ErrCode(c, "auth.account_locked", nil, "该账号已被锁定，请联系管理员解锁", "")
 			return
 		}
-		xhttp.ErrJSON(c, "该账号已被停用，请联系管理员", nil, "")
+		xhttp.ErrCode(c, "auth.account_disabled", nil, "该账号已被停用，请联系管理员", "")
 		return
 	}
 
 	token, err := auth.GenerateToken(u.ID, u.Name, u.Role)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to generate token: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to generate token: "+err.Error(), "")
 		return
 	}
 

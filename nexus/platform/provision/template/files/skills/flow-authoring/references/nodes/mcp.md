@@ -1,51 +1,51 @@
-# `mcp` 节点
+# The `mcp` node
 
-调一个 MCP 连接上的工具。
+Calls a tool on an MCP connection.
 
-## config 形状
+## config shape
 
 ```json
 {
   "mcp": {
-    "connection_id": "<MCP 连接 id>",
+    "connection_id": "<MCP connection id>",
     "tool_name": "calculator",
     "arguments": "{\"a\": 6, \"b\": 7, \"op\": \"{{ .input.op }}\"}",
     "progress": false
   },
   "inputs": {"op": {"type": "string", "source_type": "argument", "source_key": "op"}},
   "outputs": {
-    "result": {"type": "string", "description": "工具返回结果"},
-    "progress": {"type": "array[string]", "description": "进度通知数组"},
-    "error": {"type": "string", "description": "调用错误信息"}
+    "result": {"type": "string", "description": "tool result"},
+    "progress": {"type": "array[string]", "description": "progress notifications"},
+    "error": {"type": "string", "description": "call error message"}
   }
 }
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `mcp.connection_id` | ✅ | — | 连接必须存在且启用，否则 `not_found` / `config` |
-| `mcp.tool_name` | ✅ | — | 该连接上暴露的工具名 |
-| `mcp.arguments` | — | `{}` | **前端存成 JSON 字符串**；对象形态也接受。字符串值支持模板 |
-| `mcp.progress` | — | `false` | 关时 `progress` 恒为空数组，服务端不会把思考/文本全量推一遍 |
-| `mcp.handler` | — | — | 后处理脚本 `{script, lang, timeout{enabled,seconds}}`；**不支持 `template`** |
-| `config.outputs` | 建议写全 | 无兜底 | 三个固定变量；**漏声明会在写入时报 `output var ... not defined`** |
+| `mcp.connection_id` | ✅ | — | the connection must exist and be enabled, otherwise `not_found` / `config` |
+| `mcp.tool_name` | ✅ | — | a tool name exposed by that connection |
+| `mcp.arguments` | — | `{}` | **stored by the front end as a JSON string**; an object is accepted too. String values support templates |
+| `mcp.progress` | — | `false` | when off, `progress` is always an empty array and the server does not push reasoning / text in full |
+| `mcp.handler` | — | — | post-processing script `{script, lang, timeout{enabled,seconds}}`; **`template` is not supported** |
+| `config.outputs` | recommended to write in full | no fallback | the three fixed variables; **a missing declaration reports `output var ... not defined` at write time** |
 
-## 输出变量
+## Output variables
 
-固定：`result`(string) / `progress`(array[string]) / `error`(string)。
-工具的 `isError=true` 时写 `error`，节点仍是**成功**；只有调用异常才 failed。
+Fixed: `result`(string) / `progress`(array[string]) / `error`(string).
+When the tool returns `isError=true`, `error` is written but the node still **succeeds**; only a call exception marks it failed.
 
-## 出边
+## Outgoing edges
 
-普通节点：执行完沿**第一条出边**继续。
+An ordinary node: continues along **its first outgoing edge** when done.
 
-## 常见错误
+## Common errors
 
-- `mcp config not found` —— `config` 里没有 `mcp` 子对象。
-- `mcp connection_id 不能为空` / `tool_name 不能为空`。
-- `MCP 连接不存在` / `连接未启用`。
-- `arguments JSON 解码失败` —— 字符串形态的 `arguments` 不是合法 JSON（注意模板渲染后仍要合法）。
+- `mcp config not found` — there is no `mcp` sub-object in `config`.
+- `mcp connection_id must not be empty` / `tool_name must not be empty`.
+- `MCP connection does not exist` / `connection is not enabled`.
+- `failed to decode arguments JSON` — the string form of `arguments` is not valid JSON (note it must still be valid after templates render).
 
-源码：`service/flow/executors/mcp.go`
+Source: `service/flow/executors/mcp.go`

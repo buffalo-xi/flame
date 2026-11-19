@@ -1,8 +1,8 @@
-# `http` 节点
+# The `http` node
 
-发一次 HTTP 请求，支持 JSON / 表单体与 SSE 流式响应。
+Sends one HTTP request, supporting JSON / form bodies and SSE streaming responses.
 
-## config 形状
+## config shape
 
 ```json
 {
@@ -18,60 +18,61 @@
   },
   "inputs": {"q": {"type": "string", "source_type": "argument", "source_key": "q"}},
   "outputs": {
-    "body": {"type": "string", "description": "响应体"},
-    "mode": {"type": "string", "description": "响应模式"},
-    "status": {"type": "number", "description": "HTTP 状态码"},
-    "headers": {"type": "string", "description": "响应头"},
-    "sse_events": {"type": "array[string]", "description": "SSE 事件列表"},
-    "stream_finished": {"type": "boolean", "description": "流式传输是否完成"}
+    "body": {"type": "string", "description": "response body"},
+    "mode": {"type": "string", "description": "response mode"},
+    "status": {"type": "number", "description": "HTTP status code"},
+    "headers": {"type": "string", "description": "response headers"},
+    "sse_events": {"type": "array[string]", "description": "SSE event list"},
+    "stream_finished": {"type": "boolean", "description": "whether streaming finished"}
   }
 }
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `http.url` | ✅ | — | 支持模板 |
+| `http.url` | ✅ | — | templates supported |
 | `http.method` | — | `GET` | |
-| `http.headers` | — | `[]` | **`[{key,value}]` 数组**，不是对象；值支持模板 |
-| `http.params` | — | `[]` | 追加到 query，同上数组结构 |
-| `http.body` | — | 空 | 支持模板 |
-| `http.body_type` | — | `json` | `json` / `form`，只决定缺省 `Content-Type` |
-| `http.response_mode` | — | 空 = 自动 | 空时按响应 `Content-Type: text/event-stream` 判定；也可强制 `complete` / `sse_stream` |
-| `http.timeout` | — | 关闭 | `{enabled, seconds}`；关闭（或未配置）时不设节点级超时，由运行上限兜底 |
-| `http.handler` | — | — | 后处理脚本 `{script, lang, timeout{enabled,seconds}}`；**不支持 `template`** |
-| `config.inputs` | — | — | 模板来源 |
-| `config.outputs` | 建议写全 | 执行器补齐 | 六个固定变量；漏了也能跑 |
+| `http.headers` | — | `[]` | a **`[{key,value}]` array**, not an object; values support templates |
+| `http.params` | — | `[]` | appended to the query string; same array shape |
+| `http.body` | — | empty | templates supported |
+| `http.body_type` | — | `json` | `json` / `form`; only decides the default `Content-Type` |
+| `http.response_mode` | — | empty = automatic | when empty, decided by the response `Content-Type: text/event-stream`; may also force `complete` / `sse_stream` |
+| `http.timeout` | — | off | `{enabled, seconds}`; when off (or unset) there is no node-level timeout and the run limit applies |
+| `http.handler` | — | — | post-processing script `{script, lang, timeout{enabled,seconds}}`; **`template` is not supported** |
+| `config.inputs` | — | — | source of template values |
+| `config.outputs` | recommended to write in full | filled in by the executor | the six fixed variables; it still runs if they are missing |
 
-## 输出变量
+## Output variables
 
-固定：`mode` / `status` / `headers` / `body` / `sse_events` / `stream_finished`。
-`handler` 在 complete 模式跑一次，SSE 模式每个事件跑一次 + 收尾一次，只能写自定义变量。
+Fixed: `mode` / `status` / `headers` / `body` / `sse_events` / `stream_finished`.
+The `handler` runs once in complete mode, and in SSE mode once per event plus once at the end; it may only write custom variables.
 
-## 出边
+## Outgoing edges
 
-普通节点：执行完沿**第一条出边**继续。
+An ordinary node: continues along **its first outgoing edge** when done.
 
-## 凭据：优先引用全局变量
+## Credentials: prefer global variables
 
-做法是先在 `config.inputs` 里加一项来源为全局变量的输入，再在 header 里引用它：
+The pattern is to add an input sourced from a global variable in `config.inputs`, then reference it in the header:
 
 ```json
 "inputs":  { "token": {"type": "string", "source_type": "global", "source_key": "CRM_TOKEN"} },
 "headers": [{"key": "Authorization", "value": "Bearer {{ .input.token }}"}]
 ```
 
-值不落在流程定义里，资产导出只带引用名，装到别的租户后由对方的变量值填充。
-**不要**写 `{{ .global_vars.X }}`：这个写法已下线，流程载入时直接报错。
+The value never lands in the flow definition, an asset export carries only the reference name, and after installing into
+another tenant the target tenant's value fills it in.
+**Do not** write `{{ .global_vars.X }}`: that form was removed and the flow fails at load time.
 
-不要直接把 token / 口令写进 `headers` / `params` / `body` —— 上架时会被按键名清空（安装方还得重填），
-跨租户带走就是泄漏。
+Do not put tokens or passwords directly into `headers` / `params` / `body` — they are cleared by key name when listing (the
+installer has to fill them in again), and carrying them across tenants is a leak.
 
-## 常见错误
+## Common errors
 
-- `url is required` —— 没写 `url`（或渲染后为空）。
-- 连接失败/超时 → `connection` / `timeout`，要兜就在 `on_error.retry.codes` 里写上这两个码。
-- SSE 场景下游拿不到 `body` —— 流式时正文在 `sse_events` 里，`body` 可能为空。
+- `url is required` — `url` is missing (or renders empty).
+- Connection failure / timeout → `connection` / `timeout`; to handle them, list those two codes in `on_error.retry.codes`.
+- Downstream cannot get `body` in an SSE scenario — when streaming, the body is in `sse_events` and `body` may be empty.
 
-源码：`service/flow/executors/http.go`
+Source: `service/flow/executors/http.go`

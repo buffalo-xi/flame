@@ -157,8 +157,11 @@ func executeBuiltin(ctx context.Context, c *Context, tool Tool, name string, arg
 
 	// 能力硬闸门：平台没给这个租户开通的能力，执行层直接拒。
 	// 目录置灰只是提示 —— 已绑定该工具的 agent 仍持有旧工具清单，必须在这里兜住。
+	//
+	// 名字用 ShortLabel：这是执行层报错，要与调用方刚做的事对得上；Label 的场景枚举
+	// 是给管理端能力卡片看的，放进这里一旦档位与场景不符就会误导（见 capability.go）。
 	if key := CapabilityOf(meta.Category); key != "" && c.Caps != nil && !c.Caps[key] {
-		return nil, fmt.Errorf("工具 %s 需要能力 %s（%s），平台未给本租户开通", name, key, capability.Label(key))
+		return nil, fmt.Errorf("tool %s requires capability %s (%s), which the platform has not granted this tenant", name, key, capability.ShortLabel(key))
 	}
 
 	// 参数别名归位：把模型自造的参数名（如 skill_name）映射回 schema 规范名（name）

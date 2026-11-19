@@ -48,7 +48,7 @@ func toJSON(cfg *agentconfigrepo.AgentConfig) gin.H {
 func GetAgentConfigs(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -129,7 +129,7 @@ func checkNotExceed(field string, tenantVal, sysVal sql.NullInt32) error {
 func UpdateTenantAgentConfigs(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)

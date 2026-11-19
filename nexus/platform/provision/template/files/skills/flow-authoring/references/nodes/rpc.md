@@ -1,56 +1,57 @@
-# `rpc` 节点
+# The `rpc` node
 
-两种用法：调一个 RPC 连接上的工具，或**进程内直调本租户已对外开放的端点**。
+Two uses: call a tool on an RPC connection, or **call an endpoint this tenant has exposed, in-process**.
 
-## config 形状
+## config shape
 
 ```json
 {
   "rpc": {
     "target_type": "endpoint",
-    "endpoint": "<端点名>",
+    "endpoint": "<endpoint name>",
     "arguments": {"x": "{{ .input.x }}"}
   },
   "inputs": {"x": {"type": "string", "source_type": "argument", "source_key": "x"}},
   "outputs": {
-    "result": {"type": "string", "description": "调用结果"},
-    "progress": {"type": "array[string]", "description": "进度通知数组"},
-    "error": {"type": "string", "description": "调用错误信息"}
+    "result": {"type": "string", "description": "call result"},
+    "progress": {"type": "array[string]", "description": "progress notifications"},
+    "error": {"type": "string", "description": "call error message"}
   }
 }
 ```
 
-外部连接形态：
+The external-connection form:
 
 ```json
-{"rpc": {"target_type": "connection", "connection_id": "<RPC 连接 id>",
+{"rpc": {"target_type": "connection", "connection_id": "<RPC connection id>",
          "tool_name": "foo", "arguments": {"x": 1}}}
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `rpc.target_type` | — | `connection` | `connection` = 外部 RPC 连接；`endpoint` = 本租户已对外开放端点（同进程直调） |
-| `rpc.connection_id` + `rpc.tool_name` | `connection` 模式必填 | — | 连接须启用 |
-| `rpc.endpoint` | `endpoint` 模式必填 | — | **端点名**（= 流程名 / 智能体名，租户内唯一，实体改名时同步）。写名字不写 id：id 在导出导入后会变。本租户直调，不要求端点已对外开放 |
-| `rpc.arguments` | — | `{}` | 对象或 JSON 字符串，值支持模板 |
-| `rpc.progress` | — | `false` | 关时 `progress` 恒为空数组 |
-| `rpc.handler` | — | — | 后处理脚本，**不支持 `template`** |
-| `config.outputs` | 建议写全 | 无兜底 | 漏声明会在写入时报 `output var ... not defined` |
+| `rpc.target_type` | — | `connection` | `connection` = an external RPC connection; `endpoint` = an endpoint this tenant has exposed (called directly in-process) |
+| `rpc.connection_id` + `rpc.tool_name` | required in `connection` mode | — | the connection must be enabled |
+| `rpc.endpoint` | required in `endpoint` mode | — | **the endpoint name** (= the flow name / agent name, unique per tenant, follows renames). Use the name, not the id: ids change after export and import. This is an in-tenant call, so the endpoint does not have to be exposed |
+| `rpc.arguments` | — | `{}` | an object or a JSON string; values support templates |
+| `rpc.progress` | — | `false` | when off, `progress` is always an empty array |
+| `rpc.handler` | — | — | post-processing script; **`template` is not supported** |
+| `config.outputs` | recommended to write in full | no fallback | a missing declaration reports `output var ... not defined` at write time |
 
-## 输出变量
+## Output variables
 
-固定：`result`(string) / `progress`(array[string]) / `error`(string)。
+Fixed: `result`(string) / `progress`(array[string]) / `error`(string).
 
-## 出边
+## Outgoing edges
 
-普通节点：执行完沿**第一条出边**继续。
+An ordinary node: continues along **its first outgoing edge** when done.
 
-## 常见错误
+## Common errors
 
-- `rpc config not found` / `endpoint` 缺失（或误写成 `endpoint_id`）。
-- `RPC 连接不存在` / `连接未启用`。
-- 端点直调报"不存在" —— 端点名写错（名字 = 流程名 / 智能体名），或那个流程根本没有 rpc 端点。
+- `rpc config not found` / `endpoint` missing (or mistakenly written as `endpoint_id`).
+- `RPC connection does not exist` / `connection is not enabled`.
+- The endpoint call says "does not exist" — the endpoint name is wrong (the name = the flow name / agent name), or that flow
+  has no rpc endpoint at all.
 
-源码：`service/flow/executors/rpc.go`
+Source: `service/flow/executors/rpc.go`

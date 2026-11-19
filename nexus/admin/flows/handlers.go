@@ -89,7 +89,7 @@ func SetFlowStatus(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -106,13 +106,13 @@ func SetFlowStatus(c *gin.Context) {
 	switch body.Status {
 	case models.StatusNormal, models.StatusDeprecated:
 	default:
-		xhttp.ErrJSON(c, "status must be 1(正常) / 3(废弃)；工作流不设「锁定」，线上由版本管理", nil, "")
+		xhttp.ErrCode(c, "flow.invalid_status", nil, "status must be 1(正常) / 3(废弃)；工作流不设「锁定」，线上由版本管理", "")
 		return
 	}
 
 	if err := repo.UpdateStatus(ai, id, body.Status); err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "flow instance not found", nil, "")
+			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -136,7 +136,7 @@ func ListFlows(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -229,7 +229,7 @@ func GetFlow(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -238,7 +238,7 @@ func GetFlow(c *gin.Context) {
 	s, err := repo.GetFlow(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "flow instance not found", nil, "")
+			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -251,7 +251,7 @@ func GetFlow(c *gin.Context) {
 	if s != nil {
 		masked, merr := maskedEnvVars(s.EnvVars)
 		if merr != nil {
-			xhttp.ErrJSON(c, "环境变量脱敏失败: "+merr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "环境变量脱敏失败: "+merr.Error(), "")
 			return
 		}
 		s.EnvVars = masked
@@ -264,7 +264,7 @@ func CreateFlow(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -355,7 +355,7 @@ func CreateFlow(c *gin.Context) {
 	// 出参脱敏：secret 的值不回给前端（写库用的是上面的明文，这里只改响应体）
 	maskedEnv, merr := maskedEnvVars(Instance.EnvVars)
 	if merr != nil {
-		xhttp.ErrJSON(c, "环境变量脱敏失败: "+merr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "环境变量脱敏失败: "+merr.Error(), "")
 		return
 	}
 	Instance.EnvVars = maskedEnv
@@ -389,7 +389,7 @@ func UpdateFlow(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -482,7 +482,7 @@ func UpdateFlow(c *gin.Context) {
 	if len(req.EnvVars) > 0 && oldErr == nil && old != nil {
 		merged, merr := secureval.MergeEnvVarSecrets(rawOf(old.EnvVars), req.EnvVars)
 		if merr != nil {
-			xhttp.ErrJSON(c, "合并环境变量失败: "+merr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "合并环境变量失败: "+merr.Error(), "")
 			return
 		}
 		Instance.EnvVars = xsql.JSONB{Data: json.RawMessage(merged)}
@@ -492,7 +492,7 @@ func UpdateFlow(c *gin.Context) {
 	err := repo.UpdateFlow(authInfo.(*auth.AuthInfo), id, &Instance)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "flow instance not found", nil, "")
+			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -502,7 +502,7 @@ func UpdateFlow(c *gin.Context) {
 	// 出参脱敏：secret 的值不回给前端（写库用的是上面合并后的明文）
 	maskedEnv, merr := maskedEnvVars(Instance.EnvVars)
 	if merr != nil {
-		xhttp.ErrJSON(c, "环境变量脱敏失败: "+merr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "环境变量脱敏失败: "+merr.Error(), "")
 		return
 	}
 	Instance.EnvVars = maskedEnv
@@ -535,7 +535,7 @@ func DeleteFlow(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -551,7 +551,7 @@ func DeleteFlow(c *gin.Context) {
 	err := repo.DeleteFlow(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "flow instance not found", nil, "")
+			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -614,7 +614,7 @@ func validateFlowLimits(authInfo *auth.AuthInfo, timeout, maxRecursionDepth, max
 func GetBreakpoints(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	id := c.Param("id")
@@ -630,7 +630,7 @@ func GetBreakpoints(c *gin.Context) {
 func SetBreakpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	id := c.Param("id")

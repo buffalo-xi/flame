@@ -1,39 +1,42 @@
-# `fork` 节点
+# The `fork` node
 
-并发组标记：本身不做事，只是给「要并发执行的节点」一个组名（节点 id）。
+A concurrency group marker: it does nothing itself, it just gives the "nodes to run concurrently" a group name (its node id).
 
-## config 形状
+## config shape
 
 ```json
 {"max_concurrency": -1}
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `max_concurrency` | — | `-1`（不限流） | 该组同时最多跑几个；`>=1` 才限流。**必须是数字**，类型不对（如字符串）直接报 `config` 错误，不再静默当成“不限制” |
+| `max_concurrency` | — | `-1` (unlimited) | how many run at once in this group; only `>=1` throttles. **Must be a number** — a wrong type (e.g. a string) is a `config` error instead of silently meaning "unlimited" |
 
-无输出变量，从不失败。
+No output variables, never fails.
 
-## 怎么让节点加入并发组
+## How a node joins a concurrency group
 
-**并发默认关闭**：工具会摘掉节点上的 `config.concurrency` 并回 warning，除非用户明确要求并发、
-且调用时声明了 `concurrency=group`（`create_flow` / `create_node` / `insert_node`）。
+**Concurrency is off by default**: the tools strip `config.concurrency` from nodes and return a warning, unless the user
+explicitly asked for concurrency and `concurrency=group` was declared in the call (`create_flow` / `create_node` /
+`insert_node`).
 
-开启后在**要并发的那个节点**上写 `config.concurrency`：
+Once enabled, write `config.concurrency` on **the node that should run concurrently**:
 
-- 缺省 = 串行，正常沿出边走；
-- `{"mode": "mono"}` = 单体并发（一个节点内部并发处理多份数据，不属于任何 fork 组）；
-- `{"mode": "fork", "fork_node_id": "<fork 节点 id>"}` = 加入该 `fork` 组（并发组并发）。
+- absent = serial, following its outgoing edge normally;
+- `{"mode": "mono"}` = mono concurrency (one node processes several records concurrently; not part of any fork group);
+- `{"mode": "fork", "fork_node_id": "<fork node id>"}` = join that `fork` group (group concurrency).
 
-被标记并发执行的节点**只执行自己，不沿出边**继续 —— 后续由 `wait` 节点汇合。
+A node marked for concurrent execution **runs only itself and does not follow its outgoing edge** — the subsequent flow is
+joined by a `wait` node.
 
-## 出边
+## Outgoing edges
 
-`fork` 节点本身按普通节点走**它唯一的那条出边**（通常直接连到 `wait` 或不连）。
+The `fork` node itself behaves like an ordinary node, following **its single outgoing edge** (usually straight to `wait`, or
+nowhere).
 
-并发分支**不是**从 `fork` 拉出去的 —— 是靠成员节点自己的 `config.concurrency` 声明（见上）。
-所以 `fork` 上连第二条出边没有任何意义，运行期会报 `config` 错误。
+Concurrent branches are **not** pulled out of the `fork` — they are declared by the members' own `config.concurrency` (see
+above). So a second outgoing edge on `fork` means nothing and reports a `config` error at runtime.
 
-源码：`service/flow/executors/fork.go`、`runner.go`
+Source: `service/flow/executors/fork.go`, `runner.go`

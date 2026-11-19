@@ -28,7 +28,7 @@ var providerRepository = providerRepo.NewRepository()
 func GetLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -37,7 +37,7 @@ func GetLLMModel(c *gin.Context) {
 	llmModel, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "LLM model not found", nil, "")
+			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -51,7 +51,7 @@ func GetLLMModel(c *gin.Context) {
 func CreateLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -95,7 +95,7 @@ func CreateLLMModel(c *gin.Context) {
 func UpdateLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -121,14 +121,14 @@ func UpdateLLMModel(c *gin.Context) {
 	existing, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "LLM model not found", nil, "")
+			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
 		return
 	}
 	if string(existing.GatewayID) != "" && req.GatewayModel != string(existing.GatewayModel) {
-		xhttp.ErrJSON(c, "模型已启用，gateway_model 不可修改，请先禁用", nil, "")
+		xhttp.ErrCode(c, "llm.model_enabled_locked", nil, "模型已启用，gateway_model 不可修改，请先禁用", "")
 		return
 	}
 
@@ -146,7 +146,7 @@ func UpdateLLMModel(c *gin.Context) {
 	err = repo.Update(authInfo.(*auth.AuthInfo), id, &llmModel)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "LLM model not found", nil, "")
+			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -162,7 +162,7 @@ func UpdateLLMModel(c *gin.Context) {
 func DeleteLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -171,7 +171,7 @@ func DeleteLLMModel(c *gin.Context) {
 	m, err := repo.GetByID(info, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "LLM model not found", nil, "")
+			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -194,7 +194,7 @@ func DeleteLLMModel(c *gin.Context) {
 	// 2. 解开 agent 引用 + 删除模型行
 	if err := repo.DeleteCascade(info, id); err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "LLM model not found", nil, "")
+			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -208,7 +208,7 @@ func DeleteLLMModel(c *gin.Context) {
 func ListLLMModels(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -240,7 +240,7 @@ func ListLLMModels(c *gin.Context) {
 func ListLLMModelsByProviderID(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -274,14 +274,14 @@ func ListLLMModelsByProviderID(c *gin.Context) {
 func GetDefaultLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
 	llmModel, err := repo.GetDefault(authInfo.(*auth.AuthInfo))
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Default LLM model not found", nil, "")
+			xhttp.ErrCode(c, "llm.model_not_found", nil, "Default LLM model not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -296,7 +296,7 @@ func GetDefaultLLMModel(c *gin.Context) {
 func ListSelectableLLMModels(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -318,7 +318,7 @@ func ListSelectableLLMModels(c *gin.Context) {
 func ProvisionLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -333,7 +333,7 @@ func ProvisionLLMModel(c *gin.Context) {
 	m, err := repo.GetByID(info, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "LLM model not found", nil, "")
+			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -355,7 +355,7 @@ func ProvisionLLMModel(c *gin.Context) {
 
 	// 2.1 服务商必须处于启用状态 —— 否则会在网关上注册一个在下拉里选不到的模型
 	if !bool(provider.Enabled) {
-		xhttp.ErrJSON(c, "服务商已停用，请先在「LLM 服务商」里启用后再启用模型", nil, "")
+		xhttp.ErrCode(c, "llm.provider_disabled", nil, "服务商已停用，请先在「LLM 服务商」里启用后再启用模型", "")
 		return
 	}
 
@@ -363,7 +363,7 @@ func ProvisionLLMModel(c *gin.Context) {
 	// 该模型此刻 gateway_id 必为空，所以这条统计天然排除了自己。
 	gatewayModel := string(m.GatewayModel)
 	if gatewayModel == "" {
-		xhttp.ErrJSON(c, "网关模型名(gateway_model)不能为空，请先填写后再启用", nil, "")
+		xhttp.ErrCode(c, "llm.gateway_model_required", nil, "网关模型名(gateway_model)不能为空，请先填写后再启用", "")
 		return
 	}
 	dup, err := repo.CountEnabledByGatewayModel(info, gatewayModel)
@@ -372,7 +372,7 @@ func ProvisionLLMModel(c *gin.Context) {
 		return
 	}
 	if dup > 0 {
-		xhttp.ErrJSON(c, "网关模型名 "+gatewayModel+" 已被其他启用中的模型使用，会导致网关路由歧义，请改用不同的 gateway_model", nil, "")
+		xhttp.ErrCode(c, "llm.gateway_model_taken", gin.H{"name": gatewayModel}, "网关模型名 "+gatewayModel+" 已被其他启用中的模型使用，会导致网关路由歧义，请改用不同的 gateway_model", "")
 		return
 	}
 
@@ -432,7 +432,7 @@ func ProvisionLLMModel(c *gin.Context) {
 func DeprovisionLLMModel(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -447,7 +447,7 @@ func DeprovisionLLMModel(c *gin.Context) {
 	m, err := repo.GetByID(info, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "LLM model not found", nil, "")
+			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -505,7 +505,7 @@ func DeprovisionLLMModel(c *gin.Context) {
 func DeprovisionAllLLMModels(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -587,7 +587,7 @@ type syncFailure struct {
 func SyncLLMModels(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)

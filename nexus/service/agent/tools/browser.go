@@ -39,13 +39,13 @@ func (t *browserTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "browser",
 		Category: CategoryBrowser,
-		Description: "在沙箱内的浏览器里操作网页（Chromium / CDP）。" +
-			"每次操作返回页面标题、URL 和一份无障碍树快照：形如 `- e4 [button] \"登录\"`，" +
-			"click / type 用快照里的 ref（如 e4），不要猜 CSS 选择器。" +
-			"快照只包含可读文本与可操作元素；导航后旧 ref 全部失效，需重新 snapshot。" +
-			"截图会存到工作区并返回路径（截图是给人看的，你自己读不到图像，判断页面用 snapshot / text）。" +
-			"浏览器是常驻的重量级进程（Chromium）：只在确实需要渲染或交互（登录态、JS 页面、点击流程）时才开，" +
-			"能用 exec（curl / requests）拿到内容就不要开；不再交互时用 action=close 收掉，否则进程随会话一直保留。",
+		Description: "Operate web pages in a browser inside the sandbox (Chromium / CDP). " +
+			"Every action returns the page title, URL and an accessibility-tree snapshot such as `- e4 [button] \"Sign in\"`; " +
+			"pass refs from that snapshot to click / type (e.g. e4) instead of guessing CSS selectors. " +
+			"The snapshot only contains readable text and actionable elements; all refs go stale after navigation, so take a new snapshot. " +
+			"Screenshots are written into the workspace and the path is returned (screenshots are for humans — you cannot read images, so inspect pages with snapshot / text). " +
+			"The browser is a long-lived, heavyweight process (Chromium): start it only when rendering or interaction is genuinely required (logged-in state, JS-rendered pages, click flows); " +
+			"if exec (curl / requests) can fetch the content, do not start it. When you are done, close it with action=close — otherwise the process lives on with the session.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -55,27 +55,27 @@ func (t *browserTool) Meta() ToolMeta {
 						"open", "goto", "snapshot", "click", "type", "press",
 						"scroll", "wait", "text", "screenshot", "tabs", "switch", "back", "close",
 					},
-					"description": "open=打开页面（首次会拉起浏览器）；snapshot=获取当前页面快照；" +
-						"click/type/press=按 ref 操作；wait=等文本或选择器出现；" +
-						"text=取页面纯文本；tabs/switch=多标签页；back=后退；close=关闭整个浏览器会话",
+					"description": "open=open a page (launches the browser on first use); snapshot=capture the current page; " +
+						"click/type/press=act by ref; wait=wait for text or a selector to appear; " +
+						"text=plain text of the page; tabs/switch=multiple tabs; back=go back; close=close the whole browser session",
 				},
-				"url":       map[string]any{"type": "string", "description": "open / goto 的目标地址（http/https）"},
-				"ref":       map[string]any{"type": "string", "description": "snapshot 返回的元素引用（如 e4）"},
-				"text":      map[string]any{"type": "string", "description": "type 要输入的内容；wait 要等待的文本片段"},
-				"key":       map[string]any{"type": "string", "description": "press 的按键：Enter / Tab / Escape / ArrowDown 等"},
-				"selector":  map[string]any{"type": "string", "description": "wait 的 CSS 选择器（与 text 二选一）"},
-				"submit":    map[string]any{"type": "boolean", "description": "type 之后是否按 Enter"},
-				"full_page": map[string]any{"type": "boolean", "description": "screenshot 是否截整页（默认只截视口）"},
-				"new_tab":   map[string]any{"type": "boolean", "description": "open 是否新开标签页"},
-				"path":      map[string]any{"type": "string", "description": "screenshot 的保存路径（相对工作区，默认 browser/shot-<时间>.png）"},
-				"target":    map[string]any{"type": "string", "description": "switch 的目标标签页 id（来自 tabs）"},
-				"index":     map[string]any{"type": "number", "description": "switch 的目标标签页序号（从 1 开始）"},
-				"x":         map[string]any{"type": "number", "description": "scroll 的横向像素（正数向右）"},
-				"y":         map[string]any{"type": "number", "description": "scroll 的纵向像素（正数向下）"},
-				"max_bytes": map[string]any{"type": "number", "description": "snapshot / text 的输出上限（默认 snapshot 8KB、text 32KB）"},
-				"max_nodes": map[string]any{"type": "number", "description": "snapshot 的节点数上限（默认 400）"},
-				"timeout":   map[string]any{"type": "number", "description": "本次操作超时秒数（默认 30，仍受 Context.Timeout 上限约束）"},
-				"headed":    map[string]any{"type": "boolean", "description": "open 时是否有头（可见窗口）。只有部署允许（mode=none + allow_headed）时可用；浏览器一旦创建不能再切换"},
+				"url":       map[string]any{"type": "string", "description": "Target address for open / goto (http/https)"},
+				"ref":       map[string]any{"type": "string", "description": "Element ref returned by snapshot (e.g. e4)"},
+				"text":      map[string]any{"type": "string", "description": "Text to type for type; text fragment to wait for on wait"},
+				"key":       map[string]any{"type": "string", "description": "Key for press: Enter / Tab / Escape / ArrowDown, etc."},
+				"selector":  map[string]any{"type": "string", "description": "CSS selector for wait (mutually exclusive with text)"},
+				"submit":    map[string]any{"type": "boolean", "description": "Whether to press Enter after type"},
+				"full_page": map[string]any{"type": "boolean", "description": "Whether screenshot captures the whole page (default: viewport only)"},
+				"new_tab":   map[string]any{"type": "boolean", "description": "Whether open uses a new tab"},
+				"path":      map[string]any{"type": "string", "description": "Save path for screenshot (relative to the workspace; default browser/shot-<time>.png)"},
+				"target":    map[string]any{"type": "string", "description": "Target tab id for switch (from tabs)"},
+				"index":     map[string]any{"type": "number", "description": "Target tab index for switch (1-based)"},
+				"x":         map[string]any{"type": "number", "description": "Horizontal pixels for scroll (positive = right)"},
+				"y":         map[string]any{"type": "number", "description": "Vertical pixels for scroll (positive = down)"},
+				"max_bytes": map[string]any{"type": "number", "description": "Output cap for snapshot / text (default: 8KB for snapshot, 32KB for text)"},
+				"max_nodes": map[string]any{"type": "number", "description": "Node cap for snapshot (default 400)"},
+				"timeout":   map[string]any{"type": "number", "description": "Timeout in seconds for this action (default 30, still bounded by Context.Timeout)"},
+				"headed":    map[string]any{"type": "boolean", "description": "Whether open shows a visible window. Only available when the deployment allows it (mode=none + allow_headed); cannot be changed once the browser exists"},
 			},
 			"required": []any{"action"},
 		},

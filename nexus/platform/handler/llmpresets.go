@@ -71,7 +71,7 @@ func (r *presetRequest) toInput() (*presetrepo.PresetInput, error) {
 func presetID(c *gin.Context) (string, bool) {
 	id := strings.TrimSpace(c.Param("id"))
 	if _, err := uuid.Parse(id); err != nil {
-		xhttp.ErrJSON(c, "非法的预设 id", nil, "")
+		xhttp.ErrCode(c, "llm.preset_invalid_id", gin.H{"id": id}, "非法的预设 id", "")
 		return "", false
 	}
 	return id, true
@@ -133,7 +133,7 @@ func UpdateLLMProviderPreset(c *gin.Context) {
 		return
 	}
 	if n == 0 {
-		xhttp.ErrJSON(c, "预设不存在", nil, "")
+		xhttp.ErrCode(c, "llm.preset_not_found", gin.H{"id": id}, "预设不存在", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"id": id, "updated": n}, "")
@@ -152,7 +152,7 @@ func DeleteLLMProviderPreset(c *gin.Context) {
 		return
 	}
 	if n == 0 {
-		xhttp.ErrJSON(c, "预设不存在", nil, "")
+		xhttp.ErrCode(c, "llm.preset_not_found", gin.H{"id": id}, "预设不存在", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"id": id, "deleted": n}, "")

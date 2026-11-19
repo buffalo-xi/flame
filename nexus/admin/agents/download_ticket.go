@@ -66,7 +66,7 @@ func ticketValid(t DownloadTicket, sig string) bool {
 func CreateDownloadTicket(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -77,7 +77,7 @@ func CreateDownloadTicket(c *gin.Context) {
 		return
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return
 	}
 
@@ -116,7 +116,7 @@ func CreateDownloadTicket(c *gin.Context) {
 	}
 	// 签票前先确认文件存在：否则用户拿到票、点了才发现 404
 	if _, _, statErr := st.Stat(context.Background(), abs); statErr != nil {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "agent.file_not_found", nil, "file not found", "")
 		return
 	}
 

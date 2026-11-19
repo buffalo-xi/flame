@@ -18,6 +18,7 @@ import (
 	"flame/nexus/shared/quota"
 	agents "flame/nexus/shared/repository/agents"
 	skills "flame/nexus/shared/repository/skills"
+	"flame/nexus/shared/skeleton"
 	"flame/nexus/shared/storage"
 	"flame/nexus/shared/versioning"
 	"flame/tools/xhttp"
@@ -119,7 +120,7 @@ func skillToMap(s *models.Skill, content string) gin.H {
 func ListSkills(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -191,7 +192,7 @@ func ListSkills(c *gin.Context) {
 func GetSkill(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -203,7 +204,7 @@ func GetSkill(c *gin.Context) {
 		return
 	}
 	if s == nil {
-		xhttp.ErrJSON(c, "Skill not found", nil, "")
+		xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 		return
 	}
 
@@ -240,13 +241,16 @@ type skillRequest struct {
 	UserInvocable   bool   `json:"user_invocable"`
 	CommandDispatch string `json:"command_dispatch"`
 	CommandTool     string `json:"command_tool"`
+	// Lang 正文为空时用于生成 SKILL.md 骨架的语言（不进库）。
+	// 不传 / 不认识 → 英文骨架（见 shared/skeleton.Normalize）。
+	Lang string `json:"lang"`
 }
 
 // CreateSkill 创建 skill。
 func CreateSkill(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -258,7 +262,7 @@ func CreateSkill(c *gin.Context) {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if !tools.ValidName(req.Name) {
-		xhttp.ErrJSON(c, "Invalid skill name (只允许字母数字横线，长度≤64)", nil, "")
+		xhttp.ErrCode(c, "skill.invalid_name", nil, "Invalid skill name (只允许字母数字横线，长度≤64)", "")
 		return
 	}
 	// 归属范围内重名检查（全状态）
@@ -309,7 +313,7 @@ func CreateSkill(c *gin.Context) {
 	// 内容为空时写入默认骨架（与 agent 新建时写 AGENT.md 一致），保证"新建后即可编辑"。
 	entry := req.Content
 	if strings.TrimSpace(entry) == "" {
-		entry = defaultSkillMD(req.Name, req.Description)
+		entry = skeleton.SkillMD(skeleton.Normalize(req.Lang), req.Name, req.Description)
 	}
 	if err := st.WriteFile(context.Background(), contentPath(info.Schema, agentName, req.Name), []byte(entry)); err != nil {
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -345,7 +349,7 @@ func CreateSkill(c *gin.Context) {
 func UpdateSkill(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -363,7 +367,7 @@ func UpdateSkill(c *gin.Context) {
 		return
 	}
 	if s == nil {
-		xhttp.ErrJSON(c, "Skill not found", nil, "")
+		xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 		return
 	}
 	// 归属 agent 非编辑态 → 它的私有 skill 整片冻结（与 skills.go / tools/gate.go 同口径）
@@ -373,7 +377,7 @@ func UpdateSkill(c *gin.Context) {
 	}
 	// 只有正常态允许改定义，与 agent / flow 同口径
 	if !s.IsModifiable() {
-		xhttp.ErrJSON(c, "skill 已废弃，不能修改（如需修改请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能修改（如需修改请先切回「正常」）", "")
 		return
 	}
 
@@ -388,7 +392,7 @@ func UpdateSkill(c *gin.Context) {
 			return
 		}
 		if !tools.ValidName(newName) {
-			xhttp.ErrJSON(c, "Invalid skill name (只允许字母数字横线，长度≤64)", nil, "")
+			xhttp.ErrCode(c, "skill.invalid_name", nil, "Invalid skill name (只允许字母数字横线，长度≤64)", "")
 			return
 		}
 		exist, err := skillRepo.FindByName(info.Schema, newName, string(s.AgentID))
@@ -422,7 +426,7 @@ func UpdateSkill(c *gin.Context) {
 
 	if err := skillRepo.Update(info.Schema, s); err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Skill not found", nil, "")
+			xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -464,7 +468,7 @@ func UpdateSkill(c *gin.Context) {
 			verOld := paths.VersionEntityKey(info.Schema, paths.VersionSkills, oldName)
 			verNew := paths.VersionEntityKey(info.Schema, paths.VersionSkills, newName)
 			if rerr := st.Rename(context.Background(), verOld, verNew); rerr != nil {
-				xhttp.ErrJSON(c, "技能已改名，但版本目录迁移失败（请重试或手工搬运）: "+rerr.Error(), nil, "")
+				xhttp.ErrCode(c, "skill.rename_failed", nil, "技能已改名，但版本目录迁移失败（请重试或手工搬运）: "+rerr.Error(), "")
 				return
 			}
 		}
@@ -490,7 +494,7 @@ func UpdateSkill(c *gin.Context) {
 func DeleteSkill(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -502,7 +506,7 @@ func DeleteSkill(c *gin.Context) {
 		return
 	}
 	if s == nil {
-		xhttp.ErrJSON(c, "Skill not found", nil, "")
+		xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 		return
 	}
 
@@ -513,7 +517,7 @@ func DeleteSkill(c *gin.Context) {
 	}
 	// 废弃不允许删除（与 agent / flow 同口径）
 	if !s.IsModifiable() {
-		xhttp.ErrJSON(c, "skill 已废弃，不能删除（如需删除请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能删除（如需删除请先切回「正常」）", "")
 		return
 	}
 
@@ -547,7 +551,7 @@ func DeleteSkill(c *gin.Context) {
 func SetSkillStatus(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -563,7 +567,7 @@ func SetSkillStatus(c *gin.Context) {
 	switch body.Status {
 	case models.StatusNormal, models.StatusDeprecated:
 	default:
-		xhttp.ErrJSON(c, "status must be 1(正常) / 3(废弃)", nil, "")
+		xhttp.ErrCode(c, "skill.invalid_status", nil, "status must be 1(正常) / 3(废弃)", "")
 		return
 	}
 
@@ -575,7 +579,7 @@ func SetSkillStatus(c *gin.Context) {
 		return
 	}
 	if s == nil {
-		xhttp.ErrJSON(c, "Skill not found", nil, "")
+		xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 		return
 	}
 	if verr := ensureOwnerAgentModifiable(info, s); verr != nil {
@@ -585,7 +589,7 @@ func SetSkillStatus(c *gin.Context) {
 
 	if err := skillRepo.UpdateStatus(info.Schema, id, body.Status); err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Skill not found", nil, "")
+			xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -599,7 +603,7 @@ func SetSkillStatus(c *gin.Context) {
 func GetSkillVisibility(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -611,7 +615,7 @@ func GetSkillVisibility(c *gin.Context) {
 		return
 	}
 	if s == nil {
-		xhttp.ErrJSON(c, "Skill not found", nil, "")
+		xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 		return
 	}
 
@@ -633,7 +637,7 @@ func GetSkillVisibility(c *gin.Context) {
 func SetSkillVisibility(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -654,7 +658,7 @@ func SetSkillVisibility(c *gin.Context) {
 		return
 	}
 	if s == nil {
-		xhttp.ErrJSON(c, "Skill not found", nil, "")
+		xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 		return
 	}
 	// 归属 agent 非编辑态 → 它的私有 skill 整片冻结（与 skills.go / tools/gate.go 同口径）
@@ -664,7 +668,7 @@ func SetSkillVisibility(c *gin.Context) {
 	}
 	// 可见性是定义的一部分：废弃期间不接受调整
 	if !s.IsModifiable() {
-		xhttp.ErrJSON(c, "skill 已废弃，不能修改（如需修改请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能修改（如需修改请先切回「正常」）", "")
 		return
 	}
 	// 私有 skill 的可见性由归属决定，不接受收窄配置
@@ -681,7 +685,7 @@ func SetSkillVisibility(c *gin.Context) {
 			continue
 		}
 		if _, aerr := agentRepo.GetAgent(&auth.AuthInfo{Schema: info.Schema}, aid); aerr != nil {
-			xhttp.ErrJSON(c, "agent not found: "+aid, nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "agent not found: "+aid, "")
 			return
 		}
 		seen[aid] = true

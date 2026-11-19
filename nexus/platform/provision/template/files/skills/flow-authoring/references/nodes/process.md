@@ -1,41 +1,43 @@
-# `process` 节点
+# The `process` node
 
-内联子流程容器：把一组节点收进一个框里顺序执行，跑完回到主链。
+An inline sub-flow container: groups a set of nodes into one box, runs them in order, and returns to the main chain.
 
-## config 形状
+## config shape
 
 ```json
 {
-  "outputs": {"summary": {"type": "string", "description": "子流程产出"}},
+  "outputs": {"summary": {"type": "string", "description": "sub-flow output"}},
   "locals": {}
 }
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `outputs` | — | `{}` | 子流程对外暴露的变量；由**内层节点**用 `targets`（`source_ref: <process id>`）写入 |
-| `locals` | — | `{}` | 容器内局部变量 |
-| `concurrency` | — | 不写（串行） | **容器永远不带这一项：工具会忽略这里写的 `concurrency` 并回 warning**；并发（默认关闭，只有用户明确要求才开）配在组内的**成员节点**上（`{"mode":"mono"}` 或 `{"mode":"fork","fork_node_id":"<id>"}`，见 `README.md`） |
+| `outputs` | — | `{}` | variables the sub-flow exposes; written by **inner nodes** via `targets` (`source_ref: <process id>`) |
+| `locals` | — | `{}` | container-local variables |
+| `concurrency` | — | absent (serial) | **a container never carries this key: the tools ignore any `concurrency` here and return a warning**; concurrency (off by default, enabled only when the user explicitly asks) is configured on the **member nodes** of the group (`{"mode":"mono"}` or `{"mode":"fork","fork_node_id":"<id>"}`, see `README.md`) |
 
-**不读** `inputs`，也**没有**「调用另一个流程」的引用键 —— 子节点就是同一个 diagram 里
-`parentNode = process.id` 的节点。
+It **does not read** `inputs`, and there is **no** reference key for "call another flow" — the children are simply the nodes
+with `parentNode = process.id` in the same diagram.
 
-## 结构要求
+## Structural requirements
 
-- 容器内必须有 `entry` 子节点（`type: "entry"`、`parentNode: <process id>`），前端建容器时自动生成。
-- 没有 entry → 运行期报 `config` 错误（`process node X: body entry node not found`）。
-  以前是静默跳过，等于整个子流程没执行却看不出来。
-- 体內链从 entry 沿第一条出边跑到底；每次执行新建子进程。
-- 容器自己的出边只能有一条；连第二条会报 `config` 错误（不是"只走第一条"）。
+- the container must have an `entry` child (`type: "entry"`, `parentNode: <process id>`), generated automatically when the
+  front end creates a container.
+- no entry → a `config` error at runtime (`process node X: body entry node not found`).
+  It used to be a silent skip, so the whole sub-flow never ran and nobody could tell.
+- the body chain runs from the entry along the first outgoing edge to the end; each execution gets a fresh child process.
+- the container itself may have only one outgoing edge; a second one reports a `config` error (not "only the first is followed").
 
-## 控制信号
+## Control signals
 
-`break` / `continue` / `return` / `exit` 都以成功收尾并**向上传播**（不会在容器里被吞掉）。
+`break` / `continue` / `return` / `exit` all finish successfully and **propagate upwards** (they are not swallowed inside the
+container).
 
-## 出边
+## Outgoing edges
 
-容器跑完后，沿 `process` 节点自己的**第一条出边**继续。
+After the container finishes, execution continues along the `process` node's own **first outgoing edge**.
 
-源码：`service/flow/executors/process.go`
+Source: `service/flow/executors/process.go`

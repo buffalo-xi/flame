@@ -708,8 +708,28 @@ func (a *agentImpl) loadSystemPrompt() (string, error) {
 	if notes := a.sandboxNotes(); notes != "" {
 		prompt += "\n\n" + notes
 	}
+	// 回复语言放在**最末**：这一段本身就是对前面所有内容的约束（含 AGENT.md），
+	// 排在能力/沙箱说明之后，模型读到的顺序才是「事实 → 约定」。
+	prompt += "\n\n" + responseLanguageRule
 	return prompt, nil
 }
+
+// responseLanguageRule 回复语言的唯一硬约定。
+//
+// 为什么要显式写一句：工具说明、AGENT.md、技能正文、本文件里的能力/沙箱说明都可能是
+// 中文，也可能是英文（产品主语言切换时它们会分批翻译，长期并存）。模型很容易把
+// **提示词的语言**当成**回复的语言** —— 英文提示词下的中文提问于是得到英文回答，
+// 这是「主语言换成英语」时用户唯一能立刻感知到的退化。
+//
+// 所以这条约定要把两者解耦：提示词的语言 ≠ 回复语言，回复语言跟用户走。
+// 中英各写一遍：不依赖模型对另一门语言的阅读理解，也方便非中文的 AGENT.md 作者看懂。
+// AGENT.md 的显式指定优先 —— 有的 agent 天生只服务一种语言（如某语种的写作老师），
+// 那是有意为之，不能被这条通用约定覆盖。
+const responseLanguageRule = "回复语言：跟随用户当前使用的语言（用户用中文就用中文，用英文就用英文）。" +
+	"本提示词、工具说明、技能正文的语言**不**代表回复语言。" +
+	"仅当 AGENT.md 明确指定了固定语言时，才按它执行。\n" +
+	"Reply in the language the user writes in. The language of this prompt, of tool descriptions " +
+	"and of skill docs is NOT the reply language. Follow AGENT.md only if it explicitly pins one."
 
 // sandboxNotes 生成「沙箱环境」说明：沙箱能否联网（sandboxd 的**声明**）+ 沙箱里有什么（探测原文）。
 //

@@ -43,7 +43,7 @@ const (
 func skillRoot(c *gin.Context, forWrite bool) (storage.Storage, string, bool) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return nil, "", false
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -54,7 +54,7 @@ func skillRoot(c *gin.Context, forWrite bool) (storage.Storage, string, bool) {
 		return nil, "", false
 	}
 	if s == nil {
-		xhttp.ErrJSON(c, "Skill not found", nil, "")
+		xhttp.ErrCode(c, "skill.not_found", nil, "Skill not found", "")
 		return nil, "", false
 	}
 	// 写路径过双重状态闸：归属 agent + skill 自身（与 admin.go 的 Update / Delete、
@@ -65,7 +65,7 @@ func skillRoot(c *gin.Context, forWrite bool) (storage.Storage, string, bool) {
 			return nil, "", false
 		}
 		if !s.IsModifiable() {
-			xhttp.ErrJSON(c, "skill 已废弃，不能修改（如需修改请先切回「正常」）", nil, "")
+			xhttp.ErrCode(c, "skill.deprecated", nil, "skill 已废弃，不能修改（如需修改请先切回「正常」）", "")
 			return nil, "", false
 		}
 	}
@@ -161,7 +161,7 @@ func ReadSkillFile(c *gin.Context) {
 	}
 	data, rerr := st.ReadFile(context.Background(), abs)
 	if rerr != nil {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "skill.file_not_found", nil, "file not found", "")
 		return
 	}
 	if len(data) > maxSkillFileBytes {
@@ -250,7 +250,7 @@ func CreateSkillEntry(c *gin.Context) {
 		return
 	}
 	if ex, _ := st.Exists(context.Background(), abs); ex {
-		xhttp.ErrJSON(c, "already exists", nil, "")
+		xhttp.ErrCode(c, "skill.file_exists", gin.H{"path": clean}, "already exists", "")
 		return
 	}
 	if body.IsDir {
@@ -428,11 +428,4 @@ func DownloadSkillFile(c *gin.Context) {
 		return
 	}
 	agents.ServeDownload(c, st, abs, clean)
-}
-
-// defaultSkillMD 新建 skill 时的默认正文（与 agent 入口文件同样的做法）。
-func defaultSkillMD(name, desc string) string {
-	return "# " + name + "\n\n" + strings.TrimSpace(desc) + "\n\n" +
-		"## 何时使用\n\n（描述这个技能适用于什么场景）\n\n" +
-		"## 技能内容\n\n（写给模型看的说明、步骤或规范）\n"
 }

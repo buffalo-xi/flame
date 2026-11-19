@@ -72,7 +72,7 @@ func ListAgentVersions(c *gin.Context) {
 		WHERE v.agent_id = $1
 		ORDER BY v.version DESC`, inst.ID)
 	if err != nil {
-		xhttp.ErrJSON(c, "读取版本历史失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
 		return
 	}
 	defer rows.Close()
@@ -83,13 +83,13 @@ func ListAgentVersions(c *gin.Context) {
 		if err := rows.Scan(&v.Version, &v.Name, &v.Description, &v.IsCurrent, &v.Note,
 			&v.CreatedBy, &v.CreatedByName, &v.CreatedAt, &v.FilesCount, &v.TotalBytes,
 			&v.PrivateSkills); err != nil {
-			xhttp.ErrJSON(c, "读取版本历史失败: "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
 			return
 		}
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
-		xhttp.ErrJSON(c, "读取版本历史失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"versions": out}, "")
@@ -106,7 +106,7 @@ func ReleaseAgentVersion(c *gin.Context) {
 		return
 	}
 	if !inst.IsModifiable() {
-		xhttp.ErrJSON(c, "agent 已废弃，不能发布版本（如需发布请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能发布版本（如需发布请先切回「正常」）", "")
 		return
 	}
 
@@ -154,14 +154,14 @@ func ReleaseAgentVersion(c *gin.Context) {
 	if err := tx.QueryRow(`SELECT status FROM `+info.Schema+`.agents WHERE id = $1 FOR UPDATE`, inst.ID).
 		Scan(&status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
 		return
 	}
 	if !models.IsModifiable(status) {
-		xhttp.ErrJSON(c, "agent 已废弃，不能发布版本（如需发布请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能发布版本（如需发布请先切回「正常」）", "")
 		return
 	}
 
@@ -180,7 +180,7 @@ func ReleaseAgentVersion(c *gin.Context) {
 	files, err := versions.Snapshot(ctx, st, srcKey, dstKey, paths.AgentEntryFile, skip)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, "冻结版本失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "冻结版本失败: "+err.Error(), "")
 		return
 	}
 	rawFiles, err := versions.Encode(files)
@@ -244,7 +244,7 @@ func ApplyAgentVersion(c *gin.Context) {
 		return
 	}
 	if !inst.IsModifiable() {
-		xhttp.ErrJSON(c, "agent 已废弃，不能载入版本（如需操作请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能载入版本（如需操作请先切回「正常」）", "")
 		return
 	}
 	target, perr := strconv.Atoi(c.Param("version"))
@@ -274,7 +274,7 @@ func ApplyAgentVersion(c *gin.Context) {
 		return
 	}
 	if !models.IsModifiable(status) {
-		xhttp.ErrJSON(c, "agent 已废弃，不能载入版本（如需操作请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能载入版本（如需操作请先切回「正常」）", "")
 		return
 	}
 
@@ -290,7 +290,7 @@ func ApplyAgentVersion(c *gin.Context) {
 		WHERE agent_id = $1 AND version = $2`, inst.ID, target).
 		Scan(&rawFiles, &rawSkills, &desc, &rawConfig, &toolsUnrestricted, &discovery)
 	if errors.Is(err, sql.ErrNoRows) {
-		xhttp.ErrJSON(c, "version not found", nil, "")
+		xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 		return
 	}
 	if err != nil {
@@ -321,7 +321,7 @@ func ApplyAgentVersion(c *gin.Context) {
 
 	missing, err := assetpack.RestoreFiles(ctx, st, srcKey, draftKey, files)
 	if err != nil {
-		xhttp.ErrJSON(c, "载入版本失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "载入版本失败: "+err.Error(), "")
 		return
 	}
 	// 元数据回写：只铺正文的话，载入完还会显示「有改动」（描述 / 配置 / 私有技能元数据仍不同）
@@ -330,12 +330,12 @@ func ApplyAgentVersion(c *gin.Context) {
 		    updated_at = now()
 		WHERE id = $1`,
 		inst.ID, desc, rawConfig, toolsUnrestricted, discovery); err != nil {
-		xhttp.ErrJSON(c, "写回 agent 元数据失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "写回 agent 元数据失败: "+err.Error(), "")
 		return
 	}
 	// 私有技能：只回写版本里有的那些（快照里没有的说明是发布之后新建的，保持原样）
 	if err := versioning.RestoreAgentPrivateSkills(tx, info.Schema, inst.ID, rawSkills); err != nil {
-		xhttp.ErrJSON(c, "写回私有技能元数据失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "写回私有技能元数据失败: "+err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -374,7 +374,7 @@ func RollbackAgentVersion(c *gin.Context) {
 	}
 	// 切版本会改线上行为，与发布同口径：废弃的 agent 不允许
 	if !inst.IsModifiable() {
-		xhttp.ErrJSON(c, "agent 已废弃，不能切换版本（如需切换请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能切换版本（如需切换请先切回「正常」）", "")
 		return
 	}
 	target, err := strconv.Atoi(c.Param("version"))
@@ -395,7 +395,7 @@ func RollbackAgentVersion(c *gin.Context) {
 	if err := tx.QueryRow(`SELECT 1 FROM `+agentVersionTable(info.Schema)+`
 		WHERE agent_id = $1 AND version = $2 FOR UPDATE`, inst.ID, target).Scan(&one); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "version not found", nil, "")
+			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -429,7 +429,7 @@ func DeleteAgentVersion(c *gin.Context) {
 		return
 	}
 	if !inst.IsModifiable() {
-		xhttp.ErrJSON(c, "agent 已废弃，不能删除版本（如需操作请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能删除版本（如需操作请先切回「正常」）", "")
 		return
 	}
 	target, perr := strconv.Atoi(c.Param("version"))
@@ -456,7 +456,7 @@ func DeleteAgentVersion(c *gin.Context) {
 	err = tx.QueryRow(`SELECT is_current FROM `+agentVersionTable(info.Schema)+`
 		WHERE agent_id = $1 AND version = $2`, inst.ID, target).Scan(&isCurrent)
 	if errors.Is(err, sql.ErrNoRows) {
-		xhttp.ErrJSON(c, "version not found", nil, "")
+		xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 		return
 	}
 	if err != nil {
@@ -471,7 +471,7 @@ func DeleteAgentVersion(c *gin.Context) {
 			return
 		}
 		if total <= 1 {
-			xhttp.ErrJSON(c, fmt.Sprintf("v%d 是唯一的版本，不能删除；如需清理历史请先发布一个新版本", target), nil, "")
+			xhttp.ErrCode(c, "agent.last_version_undeletable", gin.H{"version": target}, fmt.Sprintf("v%d 是唯一的版本，不能删除；如需清理历史请先发布一个新版本", target), "")
 			return
 		}
 		xhttp.ErrJSON(c, versions.ErrCannotDeleteCurrentVersion.Error(), nil, "")
@@ -479,7 +479,7 @@ func DeleteAgentVersion(c *gin.Context) {
 	}
 
 	if err := st.DeletePrefix(ctx, paths.VersionKey(info.Schema, paths.VersionAgents, inst.Name, target)); err != nil {
-		xhttp.ErrJSON(c, "删除版本目录失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "删除版本目录失败: "+err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`DELETE FROM `+agentVersionTable(info.Schema)+`
@@ -499,7 +499,7 @@ func DeleteAgentVersion(c *gin.Context) {
 func authOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return nil, false
 	}
 	ai, ok := v.(*auth.AuthInfo)
@@ -517,7 +517,7 @@ func mustAgent(c *gin.Context, info *auth.AuthInfo) (*models.Agent, bool) {
 		return nil, false
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return nil, false
 	}
 	return inst, true

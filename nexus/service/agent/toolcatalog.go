@@ -174,6 +174,15 @@ func searchCatalog(query string, all map[string]toolgrant.ToolInfo, groups []too
 		res.Notes = append(res.Notes,
 			"未给 query 时只列组概览（组 ref + 成员数 + 前几个成员 ref）；要看某个组的全部工具，用 query 匹配（如 fs、read_file）")
 	}
+	// 零命中必须明说，并直接给跨语言的退路：matchQuery 是**子串**匹配（见下），
+	// 目录里的名字/描述可能是英文、模型却拿中文原话去查（或反过来）。
+	// 静默返回空会让模型以为「本租户没有这类工具」，比搜不到更误导。
+	if q != "" && len(res.Groups) == 0 && len(res.Tools) == 0 {
+		res.Notes = append(res.Notes,
+			"没有匹配项：query 是子串匹配（跨语言不会自动对应），可改用工具名 / ref 片段 / 英文关键词再试一次"+
+				"（如 exec、read_file、mcp:fs）。\n"+
+				"No match — the query is a substring match; retry with a tool name, a ref fragment or an English keyword.")
+	}
 	return res
 }
 

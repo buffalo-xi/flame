@@ -42,7 +42,8 @@ func ListMarketCatalog(c *gin.Context) {
 	if s := strings.TrimSpace(c.Query("since")); s != "" {
 		t, err := time.Parse(time.RFC3339, s)
 		if err != nil {
-			xhttp.ErrJSON(c, "since 需要 RFC3339 时间（如 2026-11-02T10:00:00Z）", nil, "")
+			xhttp.ErrCode(c, "common.invalid_params", gin.H{"param": "since"},
+				"since 需要 RFC3339 时间（如 2026-11-02T10:00:00Z）", "")
 			return
 		}
 		since = t
@@ -50,7 +51,7 @@ func ListMarketCatalog(c *gin.Context) {
 
 	list, err := sharedassets.List(f)
 	if err != nil {
-		xhttp.ErrJSON(c, "查询市场目录失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "查询市场目录失败: "+err.Error(), "")
 		return
 	}
 
@@ -95,7 +96,7 @@ func ListMarketCatalog(c *gin.Context) {
 func MarketAssetPackage(c *gin.Context) {
 	a, err := sharedassets.Get(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, "查询资产失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "查询资产失败: "+err.Error(), "")
 		return
 	}
 	if a == nil || a.Status != sharedassets.StatusListed || a.OriginServer != "" {

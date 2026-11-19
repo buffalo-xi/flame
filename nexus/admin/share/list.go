@@ -232,7 +232,7 @@ func Withdraw(c *gin.Context) {
 	}
 	// 导入行不是「我上架的」：source_schema 只是对方那台机器上的租户名，与本机撞名是巧合
 	if a.SourceSchema != info.Schema || a.OriginServer != "" {
-		xhttp.ErrJSON(c, "只能撤回本租户上架的资产", nil, "")
+		xhttp.ErrCode(c, "asset.not_owner", map[string]any{"id": a.ID}, "只能撤回本租户上架的资产", "")
 		return
 	}
 
@@ -254,7 +254,8 @@ func Withdraw(c *gin.Context) {
 		}
 		xhttp.OkJSON(c, "Success", gin.H{"deleted": true}, "")
 	default:
-		xhttp.ErrJSON(c, "当前状态（"+a.Status+"）不能撤回：已通过审核的资产由平台下架", nil, "")
+		xhttp.ErrCode(c, "asset.invalid_status", map[string]any{"id": a.ID, "status": a.Status},
+			"当前状态（"+a.Status+"）不能撤回：已通过审核的资产由平台下架", "")
 	}
 }
 
@@ -278,12 +279,13 @@ func DeleteMine(c *gin.Context) {
 		return
 	}
 	if a.SourceSchema != info.Schema || a.OriginServer != "" {
-		xhttp.ErrJSON(c, "只能删除本租户上架的资产", nil, "")
+		xhttp.ErrCode(c, "asset.not_owner", map[string]any{"id": a.ID}, "只能删除本租户上架的资产", "")
 		return
 	}
 	if a.Status == sharedassets.StatusListed {
-		xhttp.ErrJSON(c, "已通过审核的资产不能直接删除：它可能已经被别的租户装走，"+
-			"请先让平台下架（delisted），再回来删除", nil, "")
+		xhttp.ErrCode(c, "asset.invalid_status", map[string]any{"id": a.ID, "status": a.Status},
+			"已通过审核的资产不能直接删除：它可能已经被别的租户装走，"+
+				"请先让平台下架（delisted），再回来删除", "")
 		return
 	}
 	if err := sharedassets.Delete(a.ID); err != nil {

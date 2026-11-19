@@ -75,7 +75,7 @@ func isReadonlyRel(clean string) bool {
 func agentWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return nil, "", false
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -86,7 +86,7 @@ func agentWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 		return nil, "", false
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return nil, "", false
 	}
 	st, serr := getStorage()
@@ -102,7 +102,7 @@ func agentWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 func agentMutable(c *gin.Context) bool {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return false
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -112,12 +112,12 @@ func agentMutable(c *gin.Context) bool {
 		return false
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return false
 	}
 	// 只有正常态允许改文件内容
 	if !inst.IsModifiable() {
-		xhttp.ErrJSON(c, "agent 已废弃，不能修改（如需修改请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能修改（如需修改请先切回「正常」）", "")
 		return false
 	}
 	return true
@@ -257,7 +257,7 @@ func ReadAgentFile(c *gin.Context) {
 	}
 	data, rerr := st.ReadFile(context.Background(), abs)
 	if rerr != nil {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "agent.file_not_found", nil, "file not found", "")
 		return
 	}
 	if len(data) > maxAgentFileBytes {
@@ -288,7 +288,7 @@ func ReadAgentFile(c *gin.Context) {
 func sessionWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return nil, "", false
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -299,7 +299,7 @@ func sessionWorkspace(c *gin.Context) (storage.Storage, string, bool) {
 		return nil, "", false
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return nil, "", false
 	}
 
@@ -379,7 +379,7 @@ func ReadSessionFile(c *gin.Context) {
 	}
 	data, rerr := st.ReadFile(context.Background(), abs)
 	if rerr != nil {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "agent.file_not_found", nil, "file not found", "")
 		return
 	}
 	if len(data) > maxAgentFileBytes {
@@ -433,12 +433,12 @@ func CreateSessionEntry(c *gin.Context) {
 		return
 	}
 	if !body.IsDir && len(body.Content) > maxAgentFileBytes {
-		xhttp.ErrJSON(c, fmt.Sprintf("内容过大（上限 %d MB）", maxAgentFileBytes>>20), nil, "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": maxAgentFileBytes >> 20}, fmt.Sprintf("内容过大（上限 %d MB）", maxAgentFileBytes>>20), "")
 		return
 	}
 	ctx := context.Background()
 	if ex, _ := st.Exists(ctx, abs); ex {
-		xhttp.ErrJSON(c, "already exists", nil, "")
+		xhttp.ErrCode(c, "agent.file_exists", gin.H{"path": clean}, "already exists", "")
 		return
 	}
 	if !body.IsDir {
@@ -560,7 +560,7 @@ func RenameSessionEntry(c *gin.Context) {
 	}
 	ctx := context.Background()
 	if !entryExists(ctx, st, oldAbs) {
-		xhttp.ErrJSON(c, "not found: "+oldClean, nil, "")
+		xhttp.ErrCode(c, "agent.file_not_found", nil, "not found: "+oldClean, "")
 		return
 	}
 	// 覆盖一律拒绝：见 checkRename 的注释
@@ -724,12 +724,12 @@ func ServeDownload(c *gin.Context, st storage.Storage, abs, clean string) {
 	// 先拿元信息：既做上限检查，也给 ServeContent 提供 modTime（Content-Length 由它补）
 	size, mod, serr := st.Stat(ctx, abs)
 	if serr != nil {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "agent.file_not_found", nil, "file not found", "")
 		return
 	}
 	limit := config.Cfg.Agent.HTTP.MaxDownloadBytes()
 	if size > limit {
-		xhttp.ErrJSON(c, fmt.Sprintf("文件过大（上限 %d MB）", limit>>20), nil, "")
+		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": limit >> 20}, fmt.Sprintf("文件过大（上限 %d MB）", limit>>20), "")
 		return
 	}
 
@@ -753,7 +753,7 @@ func ServeDownload(c *gin.Context, st storage.Storage, abs, clean string) {
 	if seekable, ok := st.(storage.SeekableStorage); ok {
 		f, oerr := seekable.OpenSeekCloser(ctx, abs)
 		if oerr != nil {
-			xhttp.ErrJSON(c, "file not found", nil, "")
+			xhttp.ErrCode(c, "agent.file_not_found", nil, "file not found", "")
 			return
 		}
 		defer f.Close()
@@ -763,7 +763,7 @@ func ServeDownload(c *gin.Context, st storage.Storage, abs, clean string) {
 
 	rc, rerr := st.ReadStream(ctx, abs)
 	if rerr != nil {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "agent.file_not_found", nil, "file not found", "")
 		return
 	}
 	defer rc.Close()
@@ -885,7 +885,7 @@ func CreateAgentEntry(c *gin.Context) {
 		return
 	}
 	if ex, _ := st.Exists(context.Background(), abs); ex {
-		xhttp.ErrJSON(c, "already exists", nil, "")
+		xhttp.ErrCode(c, "agent.file_exists", gin.H{"path": clean}, "already exists", "")
 		return
 	}
 	if body.IsDir {
@@ -934,7 +934,7 @@ func UploadAgentFile(c *gin.Context) {
 		return
 	}
 	if cleanDir != "" && isReadonlyRel(cleanDir) {
-		xhttp.ErrJSON(c, "skills/ 目录只读，请到技能编辑页修改", nil, "")
+		xhttp.ErrCode(c, "agent.skills_dir_readonly", nil, "skills/ 目录只读，请到技能编辑页修改", "")
 		return
 	}
 	name := sanitizeUploadName(fh.Filename)
@@ -946,7 +946,7 @@ func UploadAgentFile(c *gin.Context) {
 	rel := uniqueUploadRel(ctx, st, wsKey, cleanDir, name)
 	// rel 带着 dir 前缀，dir 已挡过；这里再兜一次，防止将来改坏 uniqueUploadRel 的语义
 	if isReadonlyRel(rel) {
-		xhttp.ErrJSON(c, "skills/ 目录只读，请到技能编辑页修改", nil, "")
+		xhttp.ErrCode(c, "agent.skills_dir_readonly", nil, "skills/ 目录只读，请到技能编辑页修改", "")
 		return
 	}
 
@@ -1013,13 +1013,6 @@ func DeleteAgentEntry(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"path": clean}, "")
 }
 
-// defaultAgentMD 新建 agent 时写入的默认入口文件内容。
-func defaultAgentMD(name, desc string) string {
-	return "# " + name + "\n\n" + strings.TrimSpace(desc) + "\n\n" +
-		"## 角色\n\n（描述这个智能体的职责与能力边界）\n\n" +
-		"## 工作方式\n\n（描述它的工作流程、约束与输出要求）\n"
-}
-
 // ============================================================================
 // 会话工作区：上传（chat 输入框的「+」）
 //   与上面的浏览接口同一落点（会话工作目录），区别只在于这里是**写**。
@@ -1032,7 +1025,7 @@ func defaultAgentMD(name, desc string) string {
 func UploadSessionFile(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -1043,7 +1036,7 @@ func UploadSessionFile(c *gin.Context) {
 		return
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return
 	}
 
@@ -1187,7 +1180,8 @@ func authInfoID(c *gin.Context) string {
 func respondQuotaErr(c *gin.Context, err error) {
 	var qe *quota.ExceededError
 	if errors.As(err, &qe) {
-		xhttp.ErrQuota(c, qe.Error(), gin.H{
+		// 507 有两种情形（会话空间满 / 会话数满），文案不同：带 error 编码让前端各翻各的
+		xhttp.ErrQuotaCode(c, quotaErrCode(qe), nil, qe.Error(), gin.H{
 			"scope":  qe.Scope,
 			"metric": qe.Metric,
 			"used":   qe.Used,
@@ -1196,6 +1190,17 @@ func respondQuotaErr(c *gin.Context, err error) {
 		return
 	}
 	xhttp.ErrJSON(c, err.Error(), nil, "")
+}
+
+// quotaErrCode 把配额错误的 metric 映射成业务编码（见 nexus/docs/error-codes.md）。
+func quotaErrCode(qe *quota.ExceededError) string {
+	switch qe.Metric {
+	case "bytes":
+		return "quota.session_storage_exceeded"
+	case "sessions":
+		return "quota.user_sessions_exceeded"
+	}
+	return "quota.exceeded"
 }
 
 // sanitizeUploadName 只保留文件名本身（浏览器可能带完整路径），去掉控制字符并限制长度。

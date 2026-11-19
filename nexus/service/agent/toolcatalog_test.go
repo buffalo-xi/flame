@@ -195,5 +195,34 @@ func TestSearchCatalogTruncatesGroupMembers(t *testing.T) {
 	}
 }
 
+// 零命中要明确说出来并给跨语言退路：matchQuery 是子串匹配，中文 query 撞上英文目录
+// （或反过来）会一条都不命中；静默返回空容易被读成「本租户没有这类工具」。
+func TestSearchCatalogZeroHitNote(t *testing.T) {
+	all := map[string]toolgrant.ToolInfo{
+		"builtin:read_file": leaf("builtin:read_file", "read_file", true),
+	}
+	res := searchCatalog("搜索文件", all, nil, nil)
+	if len(res.Groups) != 0 || len(res.Tools) != 0 {
+		t.Fatalf("不该命中：groups=%d tools=%d", len(res.Groups), len(res.Tools))
+	}
+	found := false
+	for _, n := range res.Notes {
+		if strings.Contains(n, "没有匹配项") && strings.Contains(n, "substring") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("零命中时应提示跨语言子串匹配的限制，notes = %v", res.Notes)
+	}
+
+	// 有命中时不能加这条噪音
+	res = searchCatalog("read_file", all, nil, nil)
+	for _, n := range res.Notes {
+		if strings.Contains(n, "没有匹配项") {
+			t.Errorf("有命中时不该提示零命中：%q", n)
+		}
+	}
+}
+
 // 没有注入目录管理器时必须是明确错误，而不是空结果（空结果会让模型以为"没有工具"）。
 // 工具本体在 tools 包，这里只验 handler 这一侧的接线，见 tools/search_tools_test.go。

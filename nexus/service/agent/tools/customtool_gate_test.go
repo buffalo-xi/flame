@@ -27,6 +27,8 @@ func (f fakeScriptSource) Status(context.Context, string) (int, bool, error) {
 // 与 skills 的差别：自定义工具的代码**就是**工具本体，所以「不存在」必须拒绝写 ——
 // 否则可以直接 mkdir 一个目录，绕过 custom_tools 表造出「盘上有、库里没有」的孤儿。
 func TestCheckWriteCustomTool(t *testing.T) {
+	// wantErr 只钉「哪个判据拦下的」所需的标识或关键词（错误文案会随产品主语言翻译，
+	// 整句中文不该成为接口契约）；空串 = 这一条应当放行。
 	cases := []struct {
 		name    string
 		agent   string
@@ -35,10 +37,10 @@ func TestCheckWriteCustomTool(t *testing.T) {
 		wantErr string
 	}{
 		{"超级智能体写正常态工具", "main", fakeScriptSource{status: models.StatusNormal, found: true}, "tools/sum/main.py", ""},
-		{"工具不存在", "main", fakeScriptSource{}, "tools/sum/main.py", "不存在"},
-		{"工具已锁定", "main", fakeScriptSource{status: models.StatusLocked, found: true}, "tools/sum/main.py", "锁定"},
-		{"实体根目录本身", "main", fakeScriptSource{status: models.StatusNormal, found: true}, "tools/sum", "实体目录本身"},
-		{"非 supervisor 一律拒绝", "poet", fakeScriptSource{status: models.StatusNormal, found: true}, "tools/sum/main.py", "仅 supervisor"},
+		{"工具不存在", "main", fakeScriptSource{}, "tools/sum/main.py", "create_custom_tool"},
+		{"工具已锁定", "main", fakeScriptSource{status: models.StatusLocked, found: true}, "tools/sum/main.py", "locked"},
+		{"实体根目录本身", "main", fakeScriptSource{status: models.StatusNormal, found: true}, "tools/sum", "entity directory itself"},
+		{"非 supervisor 一律拒绝", "poet", fakeScriptSource{status: models.StatusNormal, found: true}, "tools/sum/main.py", "supervisor"},
 	}
 
 	for _, tc := range cases {

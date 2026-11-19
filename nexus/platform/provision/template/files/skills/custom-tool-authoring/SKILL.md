@@ -1,159 +1,163 @@
-# 自定义工具编写指南
+# Custom Tool Authoring Guide
 
-## 用途   
+## Purpose
 
-把「一段固定的业务逻辑」落成一个**租户级自定义工具**（对外工具名 `custom__<name>`）：
-模型给参数、脚本算结果、返回结构化 JSON。
+Turn "a fixed piece of business logic" into a **tenant-level custom tool** (public tool name `custom__<name>`):
+the model supplies arguments, the script computes the result, and a structured JSON value comes back.
 
-本技能负责**判断该不该做**、**选语言**、**设计元数据与参数**、**怎么写代码**、**怎么验证**。
+This skill covers **whether it should be a tool at all**, **choosing the language**, **designing metadata and
+parameters**, **how to write the code**, and **how to verify it**.
 
-## 两条落地路径
+## Two ways to get it done
 
-| 角色 | 怎么做 | 形态 |
+| Who | How | Shape |
 |---|---|---|
-| 超级智能体 | `create_custom_tool` → `write_file` → `grant_agent_tool` | 全自动，三步闭环 |
-| 人 | 「工具 → 自定义工具」页填表 + 贴代码 | 表单字段与下面第 1 / 第 2 段一一对应 |
+| Super agent | `create_custom_tool` → `write_file` → `grant_agent_tool` | fully automated, three steps |
+| A person | fill in the form and paste the code on the "Tools → Custom tools" page | form fields map one-to-one onto sections 1 and 2 below |
 
-超级智能体的三步，**顺序不能变**：
+The super agent's three steps, **in this order and no other**:
 
-1. **`create_custom_tool`** —— 建实体：契约文件 `tools/<name>/TOOL.json` + 一个可跑的最小骨架。
-   参数里给 `name` / `description` / `display_name` / `lang` / `entry` / `parameters` / `output` / `config_fields` / `configs` / `timeout_ms` / `max_output_bytes` / `egress`。
-2. **`write_file("/tools/<name>/<entry>", "<代码全文>")`** —— 写真正的实现，覆盖骨架。
-   entry 缺省按语言取 `main.py` / `main.js` / `main.lua` / `main.sh`。
-3. **`grant_agent_tool(agent="<目标>", ref="custom:<name>")`** —— 授权给要用它的 agent。
+1. **`create_custom_tool`** — create the entity: the contract file `tools/<name>/TOOL.json` plus a minimal runnable skeleton.
+   Arguments: `name` / `description` / `display_name` / `lang` / `entry` / `parameters` / `output` / `config_fields` / `configs` / `timeout_ms` / `max_output_bytes` / `egress`.
+2. **`write_file("/tools/<name>/<entry>", "<full code>")`** — write the real implementation, overwriting the skeleton.
+   Without `entry`, the default depends on the language: `main.py` / `main.js` / `main.lua` / `main.sh`.
+3. **`grant_agent_tool(agent="<target>", ref="custom:<name>")`** — grant it to the agent that will use it.
 
-**契约在 `TOOL.json` 里，与代码同目录**（磁盘优先于库里那份）：描述 / 参数 schema /
-语言 / 入口 / 限制 / 配置声明都写在这里，改名或改 schema 都请走 `update_custom_tool`
-（它会同步写文件），不要手改库。
+**The contract lives in `TOOL.json`, next to the code** (the file on disk wins over the row in the database):
+description / parameter schema / language / entry / limits / configuration declarations all live there. To rename or
+change the schema go through `update_custom_tool` (it writes the file too); do not edit the database by hand.
 
-**第 3 步漏了 = 模型看不见这个工具。** 建完不授权时，目标 agent 的工具目录里根本不会出现它，
-模型也就永远不会调用（自省用 `list_custom_tools`，那是超级智能体的活）。
+**Skipping step 3 = the model cannot see the tool.** Created but not granted, it never shows up in the target agent's
+tool catalog, so the model never calls it (introspection is `list_custom_tools`, and that is the super agent's job).
 
-维护已有工具：
+Maintaining an existing tool:
 
-| 要改什么 | 用什么 |
+| What to change | With what |
 |---|---|
-| 描述 / 参数 schema / 语言 / 入口 / 超时 / 出网 / 配置 | `update_custom_tool`（只传要改的字段） |
-| 代码内容 | `write_file` 直接改 `/tools/<name>/<entry>`（前导 `/` 不能漏，见第 2 步） |
-| 启用 / 锁定 / 废弃 | **管理端**（状态切换不走元工具） |
-| 删除 | `delete_custom_tool`（仍被授权 / 依赖 / 组引用时默认拒绝，列出引用方；确认删再传 `force=true`） |
+| Description / parameter schema / language / entry / timeout / egress / configuration | `update_custom_tool` (pass only the fields to change) |
+| Code | `write_file` straight to `/tools/<name>/<entry>` (do not drop the leading `/`, see step 2) |
+| Enable / lock / deprecate | **the console** (status changes do not go through meta tools) |
+| Delete | `delete_custom_tool` (refused by default while it is granted / depended on / referenced by a group, listing the references; pass `force=true` to delete anyway) |
 
-**工具的存在性以 `tools/<name>/TOOL.json` 为准**（目录即实体）：把一整个工具目录拷进
-`tools/` 就算存在（缺省正常态、无配置），目录没了就等于删除。反过来，只改库不写文件
-是不生效的 —— 描述与参数以文件为准。
+**Existence follows `tools/<name>/TOOL.json`** (the directory is the entity): copying a whole tool directory into
+`tools/` makes it exist (normal status, no configuration by default), and removing the directory deletes it. Conversely,
+changing only the database without writing the file has no effect — description and parameters follow the file.
 
-非超级智能体的 agent 没有这几个元工具（分类 `custom-tool`，仅超级智能体），只能把代码交给用户去「工具 → 自定义工具」落地。
+Agents other than the super agent do not have these meta tools (category `custom-tool`, super agent only); they can only
+hand the code to the user to create it under "Tools → Custom tools".
 
-## 何时使用
+## When to use
 
-出现这些意图时：
+When these intents appear:
 
-- 「写个工具来查 / 算 / 转换 X」「让 agent 自己能调这个脚本」
-- 「这段脚本每次都贴一遍，能不能存成工具」
-- 「自定义工具跑不通」：输出不是 JSON、超时、缺配置、出网被拦
+- "write a tool that looks up / computes / converts X", "let the agent call this script itself"
+- "I paste this script every time — can it be saved as a tool?"
+- "the custom tool does not work": output is not JSON, timeouts, missing configuration, egress blocked
 
-**先做选型，别默认选自定义工具**：
+**Decide the shape first; do not default to a custom tool:**
 
-| 需求形态 | 用什么 | 判据 |
+| Need | Use | Rule of thumb |
 |---|---|---|
-| 一次性任务 | 直接做（`exec` / 现有工具） | 只跑一次，不需要复用 |
-| 固定逻辑、模型给参数、结果结构化 | **自定义工具** | 纯计算 / 查表 / 调 HTTP，输入输出清晰 |
-| 需要读写会话文件、跑任意命令 | 内置 `read_file` / `exec` | 自定义工具是「一个函数」，不是另一个 shell |
-| 知识、流程、规范（没有代码） | skill（先读 `skill-authoring`） | 不需要可执行 |
-| 技能自带的可执行脚本 | skill 的 `scripts/` + `run_skill_script` | 跟技能同生命周期，不单独授权 |
-| 一份代码服务多个租户、要按租户配 key / 多实现 | 插件 | 自定义工具**只属于本租户** |
+| One-off task | just do it (`exec` / existing tools) | runs once, no reuse |
+| Fixed logic, model supplies arguments, structured result | **custom tool** | pure computation / lookup / HTTP call with clear input and output |
+| Needs to read and write session files, or run arbitrary commands | built-in `read_file` / `exec` | a custom tool is "one function", not another shell |
+| Knowledge, process, conventions (no code) | a skill (read `skill-authoring` first) | nothing executable needed |
+| Executable scripts that ship with a skill | the skill's `scripts/` + `run_skill_script` | lives with the skill, no separate grant |
+| One codebase serving several tenants, with per-tenant keys / several implementations | a plugin | a custom tool **belongs to this tenant only** |
 
-一句话：**要授权给 agent 用、要进工具目录、要参数 schema —— 才是自定义工具。**
+In one sentence: **it must be granted to an agent, appear in the tool catalog, and take a parameter schema — only then is
+it a custom tool.**
 
-## 第 0 步：选语言
+## Step 0: choose the language
 
-支持 `python` / `js` / `lua` / `sh`，但**能不能跑由部署决定**，不是代码保证：
+`python` / `js` / `lua` / `sh` are supported, but **whether it can actually run depends on the deployment**, not on the code:
 
-| 语言 | 走哪条路 | 注意 |
+| Language | Path | Notes |
 |---|---|---|
-| `python` | sandboxd 的 `langs.python` | **默认选它**：绝大多数环境都有 |
-| `js` | `langs.js` | 镜像里的命令通常叫 `node`，语言名仍写 `js` |
-| `lua` | `langs.lua` | 最容易被漏装；有的部署要求绝对路径（如 `lua55`） |
-| `sh` | 不经 `langs`，直接 `sh <entry>` | 只要沙箱有 `/bin/sh` 就能跑；只适合简单命令 |
+| `python` | sandboxd's `langs.python` | **the default choice**: almost every environment has it |
+| `js` | `langs.js` | the binary in the image is usually called `node`; the language name is still `js` |
+| `lua` | `langs.lua` | most often missing; some deployments require an absolute path (e.g. `lua55`) |
+| `sh` | bypasses `langs`, runs `sh <entry>` directly | works wherever the sandbox has `/bin/sh`; only for simple commands |
 
-判据：
+How to decide:
 
-1. **默认 python**，除非有明确理由换；
-2. 换之前先确认环境装了：「工具 → 自定义工具」页顶显示「沙箱 xxx · 可执行语言 a / b」，语言下拉里不可用的会标「（环境不可用）」；
-3. 页顶显示「沙箱能力未知」时**不要猜**：先让 sandboxd 起来，或直接用 `exec` 跑一次 `node -v` / `lua -v` 确认；
-4. `mode=none` 下配置错语言会**启动就失败**（宿主 LookPath 校验）；`nsjail` / `docker` 下不校验，错误要等到第一次调用 —— 所以别凭「服务起来了」判断语言可用。
+1. **Default to python** unless there is a clear reason not to;
+2. before switching, confirm the environment has it: the top of the "Tools → Custom tools" page shows "sandbox xxx · runnable languages a / b", and unavailable languages are marked "(not available in this environment)" in the dropdown;
+3. when the page shows "sandbox capability unknown", **do not guess**: start sandboxd first, or run `node -v` / `lua -v` once with `exec` to confirm;
+4. under `mode=none` a wrong language configuration **fails at startup** (host `LookPath` validation); under `nsjail` / `docker` it is not validated, so the error only appears on the first call — never judge availability by "the service started fine".
 
-## 硬约束（先看，避免白干）
+## Hard constraints (read first, to avoid wasted work)
 
-| 约束 | 细节 |
+| Constraint | Details |
 |---|---|
-| 名称 | 只允许字母、数字与短横线（`sum-sales`），不能以短横线开头；**不能含 `__`**（对外名是 `custom__<name>`）；长度 ≤ 64；**创建后不可改**（改名会让 `custom:<name>` 的授权静默失效） |
-| 写代码的路径 | 必须是 `/tools/<name>/<entry>`：**前导 `/` = 从租户根算**。少了它会被当成工作区相对路径 —— 文件写进会话工作区、工具仍读 create 时生成的骨架，表现为「改了代码却跑旧逻辑」 |
-| 生效三件套 | `status = 1` **且** 目标 agent 被授权 `custom:<name>` **且** 平台开通 `sandbox.exec`。缺一个：目录置灰、执行被拒 |
-| 运行环境 | 沙箱内 cwd 是 `/workspace`（本次运行的工作区，可写）；工具目录只读挂在 `/tool` |
-| 出网 | 默认断网；要开 `egress` **并且**平台开通 `net.egress` 才通 |
-| 超时 | 工具 `timeout_ms` 与本次运行上限**取小**；最大 600000 |
-| 输出 | `stdout` 必须是**一段合法 JSON**；超过 `max_output_bytes`（默认 65536，上限 1048576）**直接判失败**（不截断） |
-| 日志 | 一律写 `stderr`（同样限长） |
-| 密钥 | 配置里的 `secret` 项回显打码；脚本拿得到明文，但输出里出现**字符串型且长度 ≥ 8** 的配置值会被替换成 `••••`，并给结果加 `_masked: true`（太短的值不遮，避免误伤正文，别指望它兜住短 key，自己就不要往结果里塞） |
+| Name | letters, digits and dashes only (`sum-sales`), cannot start with a dash; **must not contain `__`** (the public name is `custom__<name>`); ≤ 64 characters; **immutable after creation** (renaming silently invalidates every `custom:<name>` grant) |
+| Where to write code | must be `/tools/<name>/<entry>`: **a leading `/` means from the tenant root**. Without it the path is treated as workspace-relative — the file lands in the session workspace while the tool keeps reading the skeleton from creation time, which looks like "I changed the code but the old logic runs" |
+| Three-part rule | `status = 1` **and** the target agent is granted `custom:<name>` **and** the platform has `sandbox.exec` enabled. Miss one: the catalog entry is greyed out and execution is refused |
+| Runtime | inside the sandbox the cwd is `/workspace` (this run's workspace, writable); the tool directory is mounted read-only at `/tool` |
+| Egress | offline by default; requires `egress` **and** the platform's `net.egress` to be enabled |
+| Timeout | the smaller of the tool's `timeout_ms` and this run's limit; maximum 600000 |
+| Output | `stdout` must be **one valid JSON value**; exceeding `max_output_bytes` (default 65536, maximum 1048576) **fails outright** (no truncation) |
+| Logs | always write to `stderr` (also length-limited) |
+| Secrets | `secret` configuration items are masked on read-back; the script sees the plain value, but any **string** configuration value of **length ≥ 8** appearing in the output is replaced with `••••` and the result gets `_masked: true` (short values are not masked, to avoid mangling prose — do not rely on it for short keys, and never put them into the result yourself) |
 
-## 给人抄的时候，按这三段交付
+## When handing it to a person, deliver three sections
 
-1. **元数据表** —— 可逐字段照抄进表单；
-2. **代码全文** —— 一个完整可运行的文件（不是片段，不要 `...`）；
-3. **验证清单** —— 建完之后按顺序确认哪些点。
+1. **Metadata table** — field by field, ready to copy into the form;
+2. **Full code** — one complete runnable file (not a fragment, no `...`);
+3. **Verification checklist** — what to confirm, in order, after creating it.
 
-超级智能体自己落地时不用**输出**这三段，但顺序是一致的：先定元数据再写代码，最后照清单验一遍。
+When the super agent does it itself, there is no need to **output** these three sections, but the order is the same: decide
+the metadata first, then write the code, then walk the checklist.
 
 ---
 
-## 第 1 段：元数据
+## Section 1: metadata
 
-| 字段 | 填什么 |
+| Field | What to put |
 |---|---|
-| `name` | `sum-sales`（字母数字短横线，创建后不可改） |
-| `display_name` | 面板短标题，可空（**不影响模型**，模型只看 name + description） |
-| `description` | **给模型看**：一句话说清「什么时候该用、什么时候别用」 |
-| `lang` / `entry` | `python` + `main.py`（或 `js`/`main.js`、`lua`/`main.lua`、`sh`/`main.sh`） |
-| `parameters` | 入参 JSON Schema（**发给模型**） |
-| `output` | 出参 JSON Schema（**不发模型**，浅校验与展示；可留空） |
-| `config_fields` | 配置项声明（API key、阈值之类） |
-| `timeout_ms` | 默认 60000；按预估耗时留 2–3 倍余量 |
-| `max_output_bytes` | 默认 65536；返回大表时调大，但别超过模型能读的量 |
-| `egress` | 确实要访问外部 HTTP 才开，并在说明里写清目标域名 |
+| `name` | `sum-sales` (letters, digits, dashes; immutable after creation) |
+| `display_name` | short panel title, may be empty (**does not affect the model**, which only sees name + description) |
+| `description` | **for the model**: one sentence saying when to use it and when not to |
+| `lang` / `entry` | `python` + `main.py` (or `js`/`main.js`, `lua`/`main.lua`, `sh`/`main.sh`) |
+| `parameters` | input JSON Schema (**sent to the model**) |
+| `output` | output JSON Schema (**not sent to the model**; shallow validation and display only; may be empty) |
+| `config_fields` | configuration declarations (API keys, thresholds, etc.) |
+| `timeout_ms` | default 60000; leave 2–3× headroom over the estimated runtime |
+| `max_output_bytes` | default 65536; raise it for large tables, but stay within what the model can read |
+| `egress` | enable only when external HTTP is genuinely needed, and name the target domains in the description |
 
-### description 怎么写
+### How to write the description
 
-模型靠它决定是否调用。写「用途 + 边界」：
+The model decides whether to call the tool based on it. Write "purpose + boundary":
 
-- 好：`按区域与月份汇总销售额，返回总额与环比。数据在租户内置表里，不访问外部网络。`
-- 差：`一个强大的销售汇总工具`
+- Good: `Summarizes sales by region and month, returning the total and the month-over-month change. Data comes from the tenant's built-in tables; no external network access.`
+- Bad: `A powerful sales summary tool`
 
-### parameters 怎么设计
+### How to design parameters
 
-1. **只放模型能可靠给出的东西**：它看不到你的数据库，别设计 `table_id`、`file_path` 这类它猜不出的参数；
-2. 每个参数写 `description`；能给 `enum` 就给，能给 `default` 就给默认值；
-3. 必填放 `required`；可空的必须有默认值或明确说明「不传则…」；
-4. 类型用 `string` / `integer` / `number` / `boolean` / `array` / `object`，不要用 `oneOf` 之类组合（模型容易填错）；
-5. **不要设计路径参数**：路径语义不稳定。
+1. **Only include what the model can reliably supply**: it cannot see your database, so do not design parameters such as `table_id` or `file_path` that it cannot guess;
+2. give every parameter a `description`; add `enum` where possible, and a `default` where possible;
+3. put required ones in `required`; optional ones need a default or an explicit "if omitted, …";
+4. use `string` / `integer` / `number` / `boolean` / `array` / `object`; avoid combinations such as `oneOf` (the model fills them in wrongly);
+5. **do not design path parameters**: path semantics are unstable.
 
 ```json
 {
   "type": "object",
   "properties": {
-    "month": { "type": "string", "description": "月份，格式 YYYY-MM，例如 2026-09" },
-    "region": { "type": "string", "enum": ["华东", "华北", "华南"], "description": "销售区域；不传则汇总全部" },
-    "top_n": { "type": "integer", "default": 5, "description": "返回前 N 个商品，默认 5" }
+    "month": { "type": "string", "description": "Month in YYYY-MM form, e.g. 2026-09" },
+    "region": { "type": "string", "enum": ["east", "north", "south"], "description": "Sales region; omit to aggregate all" },
+    "top_n": { "type": "integer", "default": 5, "description": "Return the top N products, default 5" }
   },
   "required": ["month"]
 }
 ```
 
-### output 怎么写（可选，建议给）
+### How to write `output` (optional, recommended)
 
-- 只有设置了 `output` 才校验；校验是**浅校验**：顶层 `required` 键存在 + `properties` 里声明的基础类型匹配（多返回字段不报错）；
-- **一旦设置 `output`，脚本输出必须是 JSON 对象**（数组会被拒）；
-- 不递归校验深层结构，别指望它替代脚本内校验。
+- validation only happens when `output` is set, and it is **shallow**: the top-level `required` keys exist and the basic types declared in `properties` match (extra fields are fine);
+- **once `output` is set, the script must emit a JSON object** (arrays are rejected);
+- deep structures are not validated recursively; do not expect it to replace validation inside the script.
 
 ```json
 {
@@ -163,56 +167,58 @@
 }
 ```
 
-### config_fields 与配置值
+### `config_fields` and configuration values
 
-需要租户自己填的东西（API key、接口地址、阈值）走配置，不要硬编码：
+Anything the tenant must fill in (API keys, endpoint URLs, thresholds) goes into configuration, never hardcoded:
 
-| 字段 | 说明 |
+| Field | Meaning |
 |---|---|
-| `key` | 脚本里用 `config["<key>"]` 取 |
-| `label` / `help` | 填表的人看 |
+| `key` | read in the script as `config["<key>"]` |
+| `label` / `help` | what the person filling the form sees |
 | `type` | `string` / `int` / `bool` |
-| `secret` | 打码回显；**输出里出现该值会被自动遮蔽** |
-| `required` | 缺了在**执行前**就报错并指出缺哪个 key |
-| `default` | 可空 |
+| `secret` | masked on read-back; **any occurrence in the output is masked automatically** |
+| `required` | missing it fails **before execution**, naming the missing key |
+| `default` | may be empty |
 
-不要把「可选优化项」标成 `required` —— 那会让工具在没填时直接不可用。
+Do not mark "optional nice-to-have" items as `required` — that makes the tool unusable until they are filled in.
 
-### 和全局变量 / 环境变量的边界
+### Boundary with global variables / environment variables
 
-**自定义工具拿不到这两者**，别在脚本里按它们设计：
+**A custom tool gets neither**, so do not design the script around them:
 
-| | 用在哪 | 工具里能拿到吗 |
+| | Where it works | Available inside a tool? |
 |---|---|---|
-| 全局变量 | 工作流节点输入、`AGENT.md` / `SKILL.md` 的 `${global_vars.X}` | ❌ 工具没有节点输入，文档也不会被展开 |
-| 环境变量（`flows.env_vars`） | 只有它所属的那个流程 | ❌ 不是工具的运行上下文 |
+| Global variables | workflow node inputs, `${global_vars.X}` in `AGENT.md` / `SKILL.md` | ❌ a tool has no node inputs, and documents are not expanded for it |
+| Environment variables (`flows.env_vars`) | only the flow they belong to | ❌ not the tool's runtime context |
 
-工具是沙箱里的一个进程，输入只有 `stdin` 的 `args` + `config`。所以本租户的常量
-（API 地址、区域、账号、阈值）**只有一条路**：声明成 `config_fields`，值由人在
-「工具 → 自定义工具」里填，脚本从 `config["<key>"]` 取。要让同一份逻辑服务多个租户，
-就各建一份工具、各自填配置，不要指望它跟着全局变量走。
+A tool is one process in the sandbox, and its only input is `args` + `config` on `stdin`. So the tenant's constants
+(API base URLs, regions, accounts, thresholds) have **exactly one path**: declare them as `config_fields`, let a person
+fill the values in under "Tools → Custom tools", and read them in the script from `config["<key>"]`. To serve the same
+logic to several tenants, create one tool per tenant and fill in the configuration separately; do not expect it to follow
+global variables.
 
-也别想用 `args.env` 注入环境变量：`exec` 与 `run_skill_script` 会读 `args.env`，
-**自定义工具不会**（执行器只带运行时自有的附加环境变量）。脚本里能读到的进程环境
-随沙箱模式（`none` / `nsjail` / `docker`）而变，拿它当配置来源等于把工具绑死在某种部署上。
+Nor can you inject environment variables through `args.env`: `exec` and `run_skill_script` read `args.env`,
+**custom tools do not** (the executor only adds its own runtime environment). The process environment a script can read
+varies with the sandbox mode (`none` / `nsjail` / `docker`); using it as a configuration source welds the tool to one kind
+of deployment.
 
 ---
 
-## 第 2 段：实现代码
+## Section 2: implementation code
 
-### 协议（固定）
+### Protocol (fixed)
 
 ```
-stdin  : {"args": {...模型传的参数...}, "config": {...工具配置...}}
-stdout : 一段 JSON（结果本体）
-stderr : 日志 / 报错（不要写进 stdout）
+stdin  : {"args": {...arguments from the model...}, "config": {...tool configuration...}}
+stdout : one JSON value (the result itself)
+stderr : logs / errors (never write these to stdout)
 ```
 
-读完 stdin 到 EOF 才开始执行，不要等交互输入。**stdout 只能有 JSON**。
+Read stdin to EOF before doing any work; do not wait for interactive input. **stdout must contain JSON and nothing else.**
 
-### 骨架
+### Skeletons
 
-Python（默认）：
+Python (default):
 
 ```python
 import json
@@ -220,17 +226,17 @@ import sys
 
 
 def main():
-    payload = json.load(sys.stdin)          # 读完即 EOF
+    payload = json.load(sys.stdin)          # read to EOF
     args = payload.get("args") or {}
     config = payload.get("config") or {}
 
     month = str(args.get("month") or "").strip()
     if not month:
-        print("参数 month 必填（格式 YYYY-MM）", file=sys.stderr)
-        sys.exit(2)                          # 非 0 退出码 → 工具报错，stderr 原文带上
+        print("missing required argument month (YYYY-MM)", file=sys.stderr)
+        sys.exit(2)                          # non-zero exit code → the tool fails; raw stderr is passed through
 
     top_n = int(args.get("top_n") or 5)
-    # ... 业务逻辑 ...
+    # ... business logic ...
     result = {"total": 0, "items": []}
     json.dump(result, sys.stdout, ensure_ascii=False)
 
@@ -239,7 +245,7 @@ if __name__ == "__main__":
     main()
 ```
 
-JavaScript（确认环境 `langs` 里有 `js`）：
+JavaScript (confirm the environment has `js` under `langs`):
 
 ```js
 let raw = ''
@@ -248,78 +254,79 @@ process.stdin.on('data', (c) => { raw += c })
 process.stdin.on('end', () => {
   const { args = {}, config = {} } = JSON.parse(raw || '{}')
   if (!args.month) {
-    console.error('参数 month 必填（格式 YYYY-MM）')
+    console.error('missing required argument month (YYYY-MM)')
     process.exit(2)
   }
   process.stdout.write(JSON.stringify({ total: 0, items: [] }))
 })
 ```
 
-Lua（确认环境 `langs` 里有 `lua`；没有标准库 JSON，按运行环境决定是否自带库）：
+Lua (confirm the environment has `lua` under `langs`; there is no standard JSON library, so whether one ships depends on
+the runtime):
 
 ```lua
-local input = io.read("a")               -- 读完整段 stdin
--- 用运行环境提供的 JSON 库解析 input 得到 args / config
+local input = io.read("a")               -- read all of stdin
+-- parse input with the JSON library the runtime provides to get args / config
 local out = { total = 0, items = {} }
-io.write(require("json").encode(out))    -- stdout 只写结果
+io.write(require("json").encode(out))    -- stdout carries the result only
 ```
 
-Shell（只适合简单命令；复杂逻辑换 python）：
+Shell (simple commands only; use python for anything complex):
 
 ```sh
 #!/bin/sh
 payload=$(cat)
-echo "$payload" >&2                      # 调试信息走 stderr
+echo "$payload" >&2                      # debug output goes to stderr
 printf '{"ok": true}\n'
 ```
 
-### 错误处理约定
+### Error handling conventions
 
-| 情况 | 怎么做 |
+| Situation | What to do |
 |---|---|
-| 参数不合法 | `stderr` 写一句人话（哪个参数、期望什么），`exit 2` |
-| 业务上的「没查到 / 无权限」 | **不要**抛异常，正常返回 `{"ok": false, "error": "该区域无数据"}` |
-| 真的异常 | `stderr` 打堆栈摘要 + 非 0 退出码（模型会看到 stderr 原文） |
-| 结果太大 | 只返回摘要或前 N 条；超上限直接失败，不会帮你截断 |
-| 接口挂了 | 有限重试（1–2 次），仍失败返回 `{"ok": false, "error": "..."}` 并说明可重试 |
+| Invalid arguments | write one plain sentence to `stderr` (which argument, what was expected) and `exit 2` |
+| A business-level "not found / no permission" | **do not** throw; return `{"ok": false, "error": "no data for that region"}` normally |
+| A genuine exception | print a summary of the stack to `stderr` and exit non-zero (the model sees the raw stderr) |
+| Result too large | return a summary or the first N rows; exceeding the limit fails outright, nothing is truncated for you |
+| The remote API is down | retry a few times (1–2), then return `{"ok": false, "error": "..."}` and say it may be retried |
 
-关键：**预期内的失败用 JSON 表达，意料外的崩溃用退出码表达**。
+The key: **express expected failures as JSON, express unexpected crashes as exit codes**.
 
-### 可以依赖 / 不要依赖
+### What you may and may not rely on
 
-- ✅ `/tool`（本工具目录，只读）：主文件可以 `import` 同目录模块（Lua 的 `require` 要先改 `package.path`，见「引用同目录文件」）；
-- ✅ `/workspace`（cwd）可以放**本次调用**的临时文件；
-- ❌ 不要指望 `/workspace` 跨调用保留：它随本次运行的工作区走，不保证下次还在；
-- ❌ 不要假设能 `pip install` / `npm install`：依赖要么内置，要么用标准库手写；
-- ❌ 不要读 `/agent`、`skills/` 等其它实体目录：脚本只挂 `/workspace` 与 `/tool`；
-- ❌ 不要往 stdout 打日志：一句 `print("debug")` 就让整次调用失败。
+- ✅ `/tool` (this tool's directory, read-only): the main file may `import` sibling modules (for Lua, adjust `package.path` before `require`; see "Referencing sibling files");
+- ✅ `/workspace` (cwd) is fine for temporary files **of this call**;
+- ❌ do not expect `/workspace` to persist between calls: it follows this run's workspace and is not guaranteed to be there next time;
+- ❌ do not assume `pip install` / `npm install` works: dependencies must be either built in or written by hand with the standard library;
+- ❌ do not read `/agent`, `skills/` or other entity directories: only `/workspace` and `/tool` are mounted;
+- ❌ do not log to stdout: a single `print("debug")` fails the whole call.
 
-### 多文件怎么组织
+### Organizing multiple files
 
 ```
 tools/sum-sales/
 ├── main.py          ← entry
-└── rules.py         ← main.py 可以 import rules
+└── rules.py         ← main.py can import rules
 ```
 
-- 管理端表单只提交**元数据**（写进 `TOOL.json`）；代码与附属文件在「文件」面板里按目录编辑；
-- 超级智能体建完工具后，附属文件用 `write_file` 直接补：`write_file("/tools/sum-sales/rules.py", "<代码>")`；
-- 不能写**已登记工具目录之外**的路径，也不能写不存在的工具目录（先 `create_custom_tool`）；
-- 工具删除只能走 `delete_custom_tool` / 管理端，不能 `delete_file` 整目录。
+- the console form submits **metadata only** (written into `TOOL.json`); code and auxiliary files are edited by directory in the "Files" panel;
+- after the super agent creates a tool, add auxiliary files directly with `write_file`: `write_file("/tools/sum-sales/rules.py", "<code>")`;
+- you cannot write outside a **registered tool directory**, nor into a tool directory that does not exist (call `create_custom_tool` first);
+- deleting a tool only goes through `delete_custom_tool` / the console; `delete_file` cannot remove a whole directory.
 
-### 引用同目录文件
+### Referencing sibling files
 
-入口的启动形态是 `[解释器, /tool/<entry>]`，**cwd 是 `/workspace`** —— 所以「相对脚本文件」
-能引用，「相对 cwd」指向的是工作区，不是工具目录：
+The entry point is launched as `[interpreter, /tool/<entry>]` and **the cwd is `/workspace`** — so paths relative to the
+script file work, while paths relative to the cwd point at the workspace, not the tool directory:
 
-| 语言 | 写法 | 说明 |
+| Language | How | Notes |
 |---|---|---|
-| Python | `from rules import calc` | 脚本所在目录在 `sys.path[0]`，直接可 import |
-| Node | `require("./rules.js")` | 模块解析相对**引用它的文件**，与 cwd 无关 |
-| Lua | 先 `package.path = TOOL_DIR .. "/?.lua;" .. package.path`，再 `require("rules")` | **只写 `require("rules")` 会失败**：默认的 `./?.lua` 相对 cwd（工作区） |
-| Shell | `. "$TOOL_DIR/lib.sh"` | `source` 的相对路径同样跟着 cwd |
+| Python | `from rules import calc` | the script's directory is on `sys.path[0]`, so the import just works |
+| Node | `require("./rules.js")` | module resolution is relative to **the requiring file**, not the cwd |
+| Lua | set `package.path = TOOL_DIR .. "/?.lua;" .. package.path` before `require("rules")` | **plain `require("rules")` fails**: the default `./?.lua` is relative to the cwd (the workspace) |
+| Shell | `. "$TOOL_DIR/lib.sh"` | `source` follows the cwd for relative paths too |
 
-`TOOL_DIR` 一律从**脚本自身位置**推导，不要硬编码 `/tool`：
+Always derive `TOOL_DIR` from **the script's own location**; never hardcode `/tool`:
 
 ```python
 from pathlib import Path
@@ -327,7 +334,7 @@ TOOL_DIR = Path(__file__).resolve().parent          # Python
 ```
 
 ```javascript
-const TOOL_DIR = __dirname                          // Node（CJS；ESM 用 import.meta.dirname）
+const TOOL_DIR = __dirname                          // Node (CJS; ESM uses import.meta.dirname)
 ```
 
 ```lua
@@ -338,41 +345,40 @@ local TOOL_DIR = (arg and arg[0] or ""):match("^(.*)[/\\]") or "."   -- Lua
 TOOL_DIR=$(cd "$(dirname "$0")" && pwd)             # Shell
 ```
 
-原因：`/tool` 只在 nsjail / docker 下真实存在。`mode: none` 不做隔离，挂载表只翻译 argv 与
-cwd —— 代码里写死的 `/tool/...` 在本地调试会「文件不存在」，而线上却正常，这种分叉最难查。
+The reason: `/tool` only really exists under nsjail / docker. `mode: none` performs no isolation, and the mount table only
+translates argv and cwd — a hardcoded `/tool/...` inside the code reports "file not found" when debugging locally yet works
+in production, and that kind of divergence is the hardest to diagnose.
 
-两条附加约束：
+Two more constraints:
 
-- **stdin 只能读一次**：入口读完就是 EOF，被 import 的模块再读只会拿到空串 —— 参数要显式传进去；
-- **配置从 stdin 的 `config` 取**，不必为了拿配置去解析 `TOOL.json`（它可读，但没有这个必要）。
-
----
-
-## 第 3 段：验证清单
-
-1. **登记成功**：`list_custom_tools` 能看到（或管理端「工具 → 自定义工具」里有），状态「已启用」；
-2. **平台能力**：没有「平台未开通」提示（`sandbox.exec` 已开通 —— 自定义工具走 `/v1/exec`，
-   与 `exec` 工具同档；`sandbox.code` 是工作流池化脚本的闸，与自定义工具无关）；
-3. **语言可用**：页顶「可执行语言」包含你选的那个；如果显示「能力未知」，先用 `exec` 确认解释器存在；
-4. **授权**：`grant_agent_tool(agent="<目标>", ref="custom:<name>")`。**只创建不授权 = 模型看不见这个工具**；
-5. **最小调用**：管理端面板的「试跑」能用最小参数跑一次（跑的是**已保存**的代码，
-   表单有未保存改动时按钮会置灰），确认拿到 JSON 结果；
-6. **参数校验**：故意少传必填 / 传错类型，确认错误信息说清是哪个参数；
-7. **配置**：`required` 配置留空跑一次，确认报错指出缺哪个 key；填上后再跑；
-8. **密钥遮蔽**：用了 `secret` 配置时，确认结果里没有明文密钥（会被替换并带 `_masked`）；
-9. **出网**：需要联网时，`egress=true` 且平台开通 `net.egress` 后再验证；断网时的错误要可读。
+- **stdin can only be read once**: after the entry point reads it, it is at EOF, so a module it imports only gets an empty string — pass arguments in explicitly;
+- **take configuration from `config` on stdin**; there is no need to parse `TOOL.json` for it (it is readable, but unnecessary).
 
 ---
 
-## 常见坑（按出现频率）
+## Section 3: verification checklist
 
-1. **stdout 混日志** → 「stdout 不是合法 JSON」。调试输出一律 `stderr`。
-2. **创建了但模型看不见** → 忘了 `grant_agent_tool ref="custom:<name>"`，或平台没开 `sandbox.exec`。
-3. **选了环境没装的语言** → 调用时才发现。看页顶「可执行语言」，先确认再选；默认 python。
-4. **退出码非 0 但脚本其实成功了** → 有些库末尾会返回非 0；确保正常路径显式 `exit 0`。
-5. **输出超上限** → 返回摘要/分页，别指望截断。
-6. **`output` 设了但返回数组** → 必须是 JSON 对象。
-7. **把密钥写进结果** → 用 `secret` 配置项，别把 key 拼进返回值。
-8. **改了 entry 没写文件** → 调用直接失败，错误信息像「目录不可达」。改 `entry` 时同一次把代码写好。
-9. **依赖装不上** → 沙箱里没有包管理器，换标准库实现。
-10. **想改名** → 名称创建后不可改（改名会打断已有的 `custom:<name>` 授权）。要换名就新建 + 重新授权 + 删旧的。
+1. **Registered**: `list_custom_tools` shows it (or the console's "Tools → Custom tools" does), status "enabled";
+2. **Platform capability**: no "not enabled on this platform" warning (`sandbox.exec` is enabled — custom tools go through `/v1/exec`, the same tier as the `exec` tool; `sandbox.code` gates pooled workflow scripts and is unrelated);
+3. **Language available**: the "runnable languages" line at the top includes the one you chose; if it says "capability unknown", confirm the interpreter exists with `exec` first;
+4. **Granted**: `grant_agent_tool(agent="<target>", ref="custom:<name>")`. **Created without a grant = the model cannot see this tool**;
+5. **Minimal call**: run it once with minimal arguments from the console's "Try it" (it runs the **saved** code; the button is greyed out while the form has unsaved changes) and confirm you get a JSON result;
+6. **Parameter validation**: deliberately omit a required argument / pass the wrong type and confirm the error names the argument;
+7. **Configuration**: run once with a `required` configuration item empty and confirm the error names the missing key; then fill it in and run again;
+8. **Secret masking**: with a `secret` configuration item, confirm the result contains no plaintext secret (it is replaced and `_masked` is set);
+9. **Egress**: when network access is needed, verify only after `egress=true` and the platform's `net.egress` is enabled; the offline error must be readable.
+
+---
+
+## Common pitfalls (by frequency)
+
+1. **Logs mixed into stdout** → "stdout is not valid JSON". Send every debug line to `stderr`.
+2. **Created but the model cannot see it** → the `grant_agent_tool ref="custom:<name>"` was forgotten, or the platform has not enabled `sandbox.exec`.
+3. **Picked a language the environment does not have** → discovered only at call time. Check "runnable languages" at the top of the page first; default to python.
+4. **Non-zero exit code although the script succeeded** → some libraries return non-zero at the end; make sure the normal path calls `exit 0` explicitly.
+5. **Output over the limit** → return a summary or paginate; do not expect truncation.
+6. **`output` set but an array is returned** → it must be a JSON object.
+7. **Secrets in the result** → use a `secret` configuration item; never concatenate the key into the return value.
+8. **`entry` changed without writing the file** → the call fails immediately, with an error that looks like "directory unreachable". Write the code in the same step as changing `entry`.
+9. **Dependencies cannot be installed** → there is no package manager in the sandbox; reimplement with the standard library.
+10. **Want to rename** → the name is immutable after creation (renaming breaks existing `custom:<name>` grants). To change it: create a new one, grant it again, then delete the old one.

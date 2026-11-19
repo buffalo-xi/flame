@@ -96,7 +96,7 @@ func peerView(p *peers.Peer) gin.H {
 func ListPeers(c *gin.Context) {
 	list, err := peers.ListPeers()
 	if err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("查询对端失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
 		return
 	}
 	items := make([]gin.H, 0, len(list))
@@ -196,7 +196,7 @@ func (r *peerRequest) normalize() error {
 func CreatePeer(c *gin.Context) {
 	var req peerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "参数不合法: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: "+err.Error(), "")
 		return
 	}
 	if err := req.normalize(); err != nil {
@@ -205,11 +205,11 @@ func CreatePeer(c *gin.Context) {
 	}
 	exist, err := peers.ExistsPeerName(req.Name, "")
 	if err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("查询对端失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
 		return
 	}
 	if exist {
-		xhttp.ErrJSON(c, "同名对端已存在："+req.Name, nil, "")
+		xhttp.ErrCode(c, "peer.name_taken", gin.H{"name": req.Name}, "同名对端已存在："+req.Name, "")
 		return
 	}
 	enabled := true
@@ -222,7 +222,7 @@ func CreatePeer(c *gin.Context) {
 		InstallPolicy: req.InstallPolicy,
 	}
 	if err := peers.InsertPeer(p); err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("新建对端失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("新建对端失败", "peer_market.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"peer": peerView(p)}, "")
@@ -232,16 +232,16 @@ func CreatePeer(c *gin.Context) {
 func UpdatePeer(c *gin.Context) {
 	p, err := peers.GetPeer(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("查询对端失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
 		return
 	}
 	if p == nil {
-		xhttp.ErrJSON(c, "对端不存在", nil, "")
+		xhttp.ErrCode(c, "peer.not_found", gin.H{"id": c.Param("id")}, "对端不存在", "")
 		return
 	}
 	var req peerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "参数不合法: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: "+err.Error(), "")
 		return
 	}
 	// 认证方式优先于「留空 = 不改」：
@@ -256,11 +256,11 @@ func UpdatePeer(c *gin.Context) {
 	}
 	exist, err := peers.ExistsPeerName(req.Name, p.ID)
 	if err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("查询对端失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
 		return
 	}
 	if exist {
-		xhttp.ErrJSON(c, "同名对端已存在："+req.Name, nil, "")
+		xhttp.ErrCode(c, "peer.name_taken", gin.H{"name": req.Name}, "同名对端已存在："+req.Name, "")
 		return
 	}
 	p.Name, p.BaseURL, p.Token = req.Name, req.BaseURL, req.Token
@@ -269,7 +269,7 @@ func UpdatePeer(c *gin.Context) {
 		p.Enabled = *req.Enabled
 	}
 	if err := peers.UpdatePeer(p); err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("更新对端失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("更新对端失败", "peer_market.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"peer": peerView(p)}, "")
@@ -278,7 +278,7 @@ func UpdatePeer(c *gin.Context) {
 // DeletePeer DELETE /platform/peers/:id
 func DeletePeer(c *gin.Context) {
 	if err := peers.DeletePeer(c.Param("id")); err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("删除对端失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("删除对端失败", "peer_market.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{}, "")
@@ -300,7 +300,7 @@ func PeerCatalog(c *gin.Context) {
 	resp, err := peerGet(p, pathQS)
 	if err != nil {
 		_ = peers.TouchPeer(p.ID, err.Error())
-		xhttp.ErrJSON(c, "连接对端失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "peer.unreachable", gin.H{"peer": p.Name}, "连接对端失败: "+err.Error(), "")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -330,14 +330,15 @@ func PeerCatalog(c *gin.Context) {
 	}
 	if jerr := json.Unmarshal(body, &payload); jerr != nil {
 		_ = peers.TouchPeer(p.ID, "对端响应不是合法 JSON")
-		xhttp.ErrJSON(c, "对端响应不是合法 JSON（对端快照过旧或地址填错？）", body, "")
+		xhttp.ErrCodeData(c, "peer.invalid_response", gin.H{"peer": p.Name},
+			"对端响应不是合法 JSON（对端快照过旧或地址填错？）", body, "")
 		return
 	}
 
 	// 本机已从该站点导入过的资产：origin_asset_id → 本地快照
 	imported, err := sharedassets.List(sharedassets.Filter{OriginServer: p.Name})
 	if err != nil {
-		xhttp.ErrJSON(c, "查询本机导入失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "查询本机导入失败: "+err.Error(), "")
 		return
 	}
 	local := make(map[string]gin.H, len(imported))
@@ -388,14 +389,14 @@ func ImportFromPeer(c *gin.Context) {
 		Force   bool   `json:"force"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.AssetID) == "" {
-		xhttp.ErrJSON(c, "请提供要导入的资产 id", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "请提供要导入的资产 id", "")
 		return
 	}
 
 	resp, err := peerGet(p, "/market/assets/"+url.PathEscape(req.AssetID)+"/package")
 	if err != nil {
 		_ = peers.TouchPeer(p.ID, err.Error())
-		xhttp.ErrJSON(c, "连接对端失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "peer.unreachable", gin.H{"peer": p.Name}, "连接对端失败: "+err.Error(), "")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -410,11 +411,12 @@ func ImportFromPeer(c *gin.Context) {
 
 	data, rerr := io.ReadAll(io.LimitReader(resp.Body, maxPackageUpload+1))
 	if rerr != nil {
-		xhttp.ErrJSON(c, "读取对端资产包失败: "+rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "peer.invalid_response", gin.H{"peer": p.Name}, "读取对端资产包失败: "+rerr.Error(), "")
 		return
 	}
 	if len(data) > maxPackageUpload {
-		xhttp.ErrJSON(c, fmt.Sprintf("对端的包超过上限（%d MiB）", maxPackageUpload>>20), nil, "")
+		xhttp.ErrCode(c, "asset.package_too_large", gin.H{"limit_mb": maxPackageUpload >> 20},
+			fmt.Sprintf("对端的包超过上限（%d MiB）", maxPackageUpload>>20), "")
 		return
 	}
 
@@ -456,15 +458,15 @@ func ImportFromPeer(c *gin.Context) {
 func mustPeer(c *gin.Context) (*peers.Peer, bool) {
 	p, err := peers.GetPeer(c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("查询对端失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询对端失败", "peer_market.sql", err), "")
 		return nil, false
 	}
 	if p == nil {
-		xhttp.ErrJSON(c, "对端不存在", nil, "")
+		xhttp.ErrCode(c, "peer.not_found", gin.H{"id": c.Param("id")}, "对端不存在", "")
 		return nil, false
 	}
 	if !p.Enabled {
-		xhttp.ErrJSON(c, "对端已停用："+p.Name, nil, "")
+		xhttp.ErrCode(c, "peer.disabled", gin.H{"name": p.Name}, "对端已停用："+p.Name, "")
 		return nil, false
 	}
 	return p, true
@@ -490,7 +492,7 @@ func peerGet(p *peers.Peer, path string) (*http.Response, error) {
 func GetMarketSettings(c *gin.Context) {
 	s, err := peers.GetMarketSetting()
 	if err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("查询市场设置失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询市场设置失败", "peer_market.sql", err), "")
 		return
 	}
 	v := gin.H{"open": s.Open}
@@ -518,11 +520,11 @@ func SetMarketSettings(c *gin.Context) {
 		Open *bool `json:"open"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Open == nil {
-		xhttp.ErrJSON(c, "参数不合法: body 需要 {\"open\": true|false}", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: body 需要 {\"open\": true|false}", "")
 		return
 	}
 	if err := peers.SetMarketOpen(*req.Open, info.ID); err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("保存市场设置失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("保存市场设置失败", "peer_market.sql", err), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"open": *req.Open}, "")
@@ -547,7 +549,7 @@ func marketTokenView(t *peers.MarketToken) gin.H {
 func ListMarketTokens(c *gin.Context) {
 	list, err := peers.ListMarketTokens()
 	if err != nil {
-		xhttp.ErrJSON(c, schemaErrMsg("查询市场令牌失败", "peer_market.sql", err), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, schemaErrMsg("查询市场令牌失败", "peer_market.sql", err), "")
 		return
 	}
 	items := make([]gin.H, 0, len(list))
@@ -570,18 +572,18 @@ func CreateMarketToken(c *gin.Context) {
 		Name string `json:"name"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "参数不合法: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: "+err.Error(), "")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if !tokenNameRe.MatchString(req.Name) {
-		xhttp.ErrJSON(c, "令牌名只允许字母、数字、点、下划线、横线，长度 ≤64", nil, "")
+		xhttp.ErrCode(c, "peer.invalid_token_name", nil, "令牌名只允许字母、数字、点、下划线、横线，长度 ≤64", "")
 		return
 	}
 
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		xhttp.ErrJSON(c, "生成令牌失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "生成令牌失败: "+err.Error(), "")
 		return
 	}
 	plain := "flmt_" + hex.EncodeToString(raw)
@@ -597,7 +599,7 @@ func CreateMarketToken(c *gin.Context) {
 		t.CreatedBy.Valid = true
 	}
 	if err := peers.InsertMarketToken(t); err != nil {
-		xhttp.ErrJSON(c, "新建市场令牌失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "新建市场令牌失败: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"token": marketTokenView(t), "plain": plain}, "")
@@ -609,11 +611,11 @@ func SetMarketToken(c *gin.Context) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "参数不合法: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "参数不合法: "+err.Error(), "")
 		return
 	}
 	if err := peers.SetMarketTokenEnabled(c.Param("id"), req.Enabled); err != nil {
-		xhttp.ErrJSON(c, "更新市场令牌失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "更新市场令牌失败: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"enabled": req.Enabled}, "")
@@ -622,7 +624,7 @@ func SetMarketToken(c *gin.Context) {
 // DeleteMarketToken DELETE /platform/market-tokens/:id
 func DeleteMarketToken(c *gin.Context) {
 	if err := peers.DeleteMarketToken(c.Param("id")); err != nil {
-		xhttp.ErrJSON(c, "删除市场令牌失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "删除市场令牌失败: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{}, "")

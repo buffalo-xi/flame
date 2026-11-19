@@ -1,139 +1,142 @@
-# Skill 编写指南
+# Skill Authoring Guide
 
-## 用途
+## Purpose
 
-指导你创建 / 修改 / 删除 skill，并写出高质量的 `SKILL.md`。
-带**可执行脚本**的技能，还要把脚本放对位置，并在正文里讲清怎么调用它。
+Guide you through creating / updating / deleting a skill, and writing a high-quality `SKILL.md`.
+Skills with **executable scripts** also need those scripts in the right place, with the body explaining how to run them.
 
-## 何时使用
+## When to use
 
-出现这些意图时：
+When these intents appear:
 
-- 「把这个流程 / 规范存成 skill」、「以后都这么做」
-- 「写个 skill 来做 X」、「把这个脚本 / 这段代码存成 skill」
-- 「改一下 / 删掉某个 skill」、「现在有哪些 skill？」
+- "save this process / convention as a skill", "do it this way from now on"
+- "write a skill that does X", "save this script / this code as a skill"
+- "change / delete some skill", "which skills are there now?"
 
-**只做一次的事不要建 skill** —— 直接做即可。
+**Do not create a skill for something done once** — just do it.
 
-## 什么是 skill
+## What a skill is
 
-skill 由**两部分**组成（后者可选）：
+A skill consists of **two parts** (the second is optional):
 
-| 部分 | 位置 | 必选 | 作用 |
+| Part | Location | Required | Role |
 |---|---|---|---|
-| `SKILL.md` | 技能目录根 | 是 | 知识正文：这件事该怎么做 |
-| `scripts/` | 技能目录内 | 否 | 配套的**可执行脚本**，入口固定 `scripts/main.py` |
+| `SKILL.md` | skill directory root | yes | the knowledge body: how the job is done |
+| `scripts/` | inside the skill directory | no | accompanying **executable scripts**, entry fixed at `scripts/main.py` |
 
-由此有两种形态：
+Hence two shapes:
 
-- **纯文档技能** —— 只有正文（规范、流程、模板）；
-- **可执行技能** —— 正文讲「怎么用」，代码在 `scripts/`，agent 用 `run_skill_script`
-  **直接运行**，**不需要**把代码抄到工作区。
+- **document-only skill** — body only (conventions, processes, templates);
+- **executable skill** — the body explains "how to use it", the code lives in `scripts/`, and the agent runs it **directly** with `run_skill_script` — there is **no need** to copy the code into the workspace.
 
-目录形态（相对 `agent.root_dir`）：
+Directory layout (relative to `agent.root_dir`):
 
 ```
-tenants/{schema}/skills/{name}/                    共享（租户级）
+tenants/{schema}/skills/{name}/                    shared (tenant-level)
 ├── SKILL.md
-└── scripts/main.py                                ← 可选；不传 script 时的默认入口
+└── scripts/main.py                                ← optional; the default entry when script is omitted
 
-tenants/{schema}/agents/{agent}/skills/{name}/     私有（agent 级）
+tenants/{schema}/agents/{agent}/skills/{name}/     private (agent-level)
 ├── SKILL.md
 └── scripts/…
 ```
 
-每个 skill 有**归属**，由 `agent_id` 决定：
+Every skill has an **ownership**, decided by `agent_id`:
 
-| 归属 | 内容位置（相对 agent.root_dir） | 生效方式 |
+| Ownership | Content location (relative to agent.root_dir) | How it takes effect |
 |---|---|---|
-| **共享**（租户级） | `tenants/{schema}/skills/{name}/SKILL.md` | 只有**绑定**到某个 agent 后才会进入它的提示词；可见性另由「全员可见 / 白名单」控制 |
-| **私有**（agent 级） | `tenants/{schema}/agents/{agent}/skills/{name}/SKILL.md` | 归属 agent 天然拥有（常驻其提示词），仅它可见、可改删 |
+| **Shared** (tenant-level) | `tenants/{schema}/skills/{name}/SKILL.md` | enters an agent's prompt only after being **bound** to it; visibility is separately controlled by "visible to everyone / allowlist" |
+| **Private** (agent-level) | `tenants/{schema}/agents/{agent}/skills/{name}/SKILL.md` | owned by the owning agent automatically (resident in its prompt); only it can see, edit or delete |
 
-同名时**私有覆盖共享**。
+On a name collision, **private shadows shared**.
 
-**共享 ≠ 自动生效**：共享 skill 建出来后是**收窄**状态（`restricted = true`，白名单只含创建者），
-需要在 agent 的「设置 → 调用授权 → 可使用的技能」里绑定，它才会写进那个 agent 的提示词；
-没绑定它的 agent **看不到、也改不了**它。**超级智能体可以直接做这两件事**：`bind_skill` / `unbind_skill`
-增删白名单，`update_shared_skill(..., restricted=false)` 放开为全员可见（`restricted=true` 收回白名单模式，
-白名单数据保留、不用重建）；`read_skill` 会回显当前的 `restricted`、`bound_agents`，
-以及它声明的工具依赖 `tool_deps`（只展示，不激活）。
+**Shared ≠ automatically in effect**: a freshly created shared skill is **narrowed** (`restricted = true`, with an allowlist
+containing only the creator). It must be bound under the agent's "Settings → Call grants → Available skills" before it is
+written into that agent's prompt; agents it is not bound to **cannot see it and cannot change it**. **The super agent can do
+both directly**: `bind_skill` / `unbind_skill` add and remove allowlist entries, and
+`update_shared_skill(..., restricted=false)` opens it up to everyone (`restricted=true` goes back to allowlist mode, keeping
+the allowlist data so nothing has to be rebuilt); `read_skill` echoes the current `restricted`, `bound_agents`, and the tool
+dependencies it declares (`tool_deps`, shown but not activated).
 
-## 选共享还是私有
+## Shared or private?
 
-判据：**这条知识是所有 agent 都用，还是只有特定 agent 用？**
-私有与共享是**两套工具**，选哪个工具就是选归属：
+The criterion: **is this knowledge used by every agent, or only by specific agents?**
+Private and shared are **two separate tool sets**, and picking the tool picks the ownership:
 
-| 场景 | 用什么工具 |
+| Situation | Tool |
 |---|---|
-| 元能力（造 skill、造 agent、改系统）、某个 agent 岗位专用且**它自己能维护** | `create_own_skill`（自己的私有；**需管理员先授权**） |
-| 业务领域知识、通用规范（报告格式、提 PR 流程等） | `create_shared_skill`（租户级共享，**仅超级智能体** 可用） |
-| 某个 agent 岗位专用，但**由超级智能体代建**（对方没被授权，或不便自己建） | `create_agent_skill`（归属指定 agent 的私有，**仅超级智能体** 可用） |
+| Meta capability (creating skills, creating agents, changing the system), specific to one agent's role and **maintainable by that agent itself** | `create_own_skill` (its own private; **requires an administrator grant first**) |
+| Business domain knowledge, shared conventions (report format, PR process…) | `create_shared_skill` (tenant-level shared, **super agent only**) |
+| Specific to one agent's role but **created on its behalf by the super agent** (it is not granted, or creating it itself is impractical) | `create_agent_skill` (private, owned by the named agent; **super agent only**) |
 
-两条硬约束：
+Two hard constraints:
 
-1. **skill 的可用范围应与工具可用范围一致** —— 一条技能要用到的工具，得先确认目标 agent 确实拿得到，再把它绑定过去；
-2. **绑定才注入** —— 进 system prompt 的是"绑定关系"（每条约几十至上百字符），与共享/私有无关。
-   判不准时优先私有（私有天然只进归属 agent 的提示词），或共享 + 只绑给真正需要的 agent。
+1. **A skill's availability should match the availability of its tools** — confirm the target agent can actually get the tools a skill needs before binding it there;
+2. **Binding is what injects it** — what enters the system prompt is the "binding" (tens to a few hundred characters each), regardless of shared/private.
+   When in doubt, prefer private (private only ever enters the owning agent's prompt), or shared + bind only to the agents that really need it.
 
-**默认私有；拿不准时也用私有** —— 私有随时能改成共享，共享扩出去后要逐个 agent 收绑定才干净。
-非超级智能体只能用私有那一套（`*_own_skill`，且**需管理员先授权**）；需要共享 skill 时请超级智能体建，再 `bind_skill` 绑定。
-超级智能体还能用 `*_agent_skill` 直接替某个 agent 建 / 改 / 删它的私有技能 —— **无需**给那个 agent 授权 `*_own_skill`。
+**Default to private; when unsure, also private** — private can become shared at any time, whereas a shared skill that has
+spread requires unbinding it agent by agent to be clean again.
+Agents other than the super agent only have the private set (`*_own_skill`, and **an administrator must grant it first**); when a
+shared skill is needed, ask the super agent to create it and then `bind_skill` it.
+The super agent can also use `*_agent_skill` to create / update / delete an agent's private skills directly — **without**
+granting that agent `*_own_skill`.
 
-## 代码放正文，还是放 `scripts/`？
+## Code in the body, or in `scripts/`?
 
-**判据：超过约 20 行、或需要 `import`、或需要参数解析 —— 一律放 `scripts/`。**
+**Criterion: more than about 20 lines, or needs `import`, or needs argument parsing — always `scripts/`.**
 
-| 形态 | 适用 | 代价 |
+| Shape | Fits | Cost |
 |---|---|---|
-| 内嵌正文 | 三五行的片段 / 一次性示意 | agent 每次都要抄到工作区再跑 → 正文与副本**会分叉**；参数经 shell，有引号坑 |
-| `scripts/main.py` | 完整可运行的程序（`import` / `argparse` / 错误处理 / 多函数） | 需要宿主 agent 被授权 `builtin:exec`；写它的人受限（见下表） |
+| Embedded in the body | three-to-five-line snippets / one-off illustrations | the agent must copy it into the workspace and run it every time → the body and the copy **drift apart**; arguments cross a shell, with quoting traps |
+| `scripts/main.py` | a complete runnable program (`import` / `argparse` / error handling / several functions) | the host agent must be granted `builtin:exec`; who may write it is restricted (see below) |
 
-优先 `scripts/` 的三个理由 —— `run_skill_script` 就是为此而设：
+Three reasons to prefer `scripts/` — `run_skill_script` exists for exactly this:
 
-- **代码只有一份**：技能目录只读挂载到 `/skill`，不存在「正文一份、工作区一份」的分叉；
-- **参数不经 shell**：`args` 是**字面量 argv 数组**逐字传给脚本，没有分词 / 引号 / 转义问题
-  （`exec` 走 shell，Windows 下 `cmd` 会吃掉引号，`python -c "…"` 常表现为 exit 1 且无输出）；
-- **省轮次**：少一次 `write_file`，且不用每次重抄。
+- **one copy of the code**: the skill directory is mounted read-only at `/skill`, so there is no "one copy in the body, one in the workspace" divergence;
+- **arguments never cross a shell**: `args` is passed to the script **verbatim as an argv array**, with no splitting / quoting / escaping issues
+  (`exec` goes through a shell; on Windows `cmd` swallows quotes, and `python -c "…"` often shows up as exit 1 with no output);
+- **saves turns**: one fewer `write_file`, and no re-copying every time.
 
-### 脚本的硬约定
+### Hard conventions for scripts
 
-| 约定 | 内容 |
+| Convention | Detail |
 |---|---|
-| 入口 | `scripts/main.py` —— `run_skill_script` 不传 `script` 时的默认值 |
-| 扩展名 | 只支持 `.py` / `.js` / `.lua` / `.sh`；**扩展名决定解释器**（命令名 `python` / `node` / `lua` / `sh`，**不能**指定绝对路径或版本） |
-| cwd | 工作区根（沙箱内 `/workspace`）。引用**工作区**里的文件用相对路径；引用**技能目录**里的文件见下方「脚本里怎么引用技能目录内的文件」 |
-| 挂载 | `/skill` **只读**（技能目录）、`/workspace` **读写**（同时是 cwd）；**不挂** `/agent` |
-| 参数 | 由 `args` 数组逐字传入（argv），不是一整条命令行字符串 |
-| 路径 | `script` 必须落在技能目录内 —— 工具会拒绝任意路径（跑任意路径是 `exec` 的事） |
-| 附属模块 | 放 `scripts/lib/`，用**绝对 import**（`from lib.x import y`）；**禁止** relative import。这是 **Python** 的写法，其它语言见下一节 |
+| Entry | `scripts/main.py` — the default when `run_skill_script` has no `script` |
+| Extension | only `.py` / `.js` / `.lua` / `.sh`; **the extension decides the interpreter** (command names `python` / `node` / `lua` / `sh`; **no** absolute paths or versions) |
+| cwd | the workspace root (`/workspace` inside the sandbox). Reference files in the **workspace** with relative paths; for files in the **skill directory** see "Referencing files inside the skill directory from a script" below |
+| Mounts | `/skill` **read-only** (skill directory), `/workspace` **read-write** (also the cwd); `/agent` is **not mounted** |
+| Arguments | passed verbatim from the `args` array (argv), not as a single command-line string |
+| Path | `script` must live inside the skill directory — arbitrary paths are rejected (running arbitrary paths is `exec`'s job) |
+| Auxiliary modules | put them in `scripts/lib/` and use **absolute imports** (`from lib.x import y`); **relative imports are forbidden**. This is the **Python** convention; see the next section for other languages |
 
-跑法：
+How to run:
 
 ```
 run_skill_script(skill="xlsx-report", args=["--input", "in.xlsx", "--min-amount", "1000"])
 ```
 
-### 脚本里怎么引用技能目录内的文件
+### Referencing files inside the skill directory from a script
 
-脚本的启动形态是 `[解释器, /skill/<script>]`，**cwd 是 `/workspace`** —— 所以「引用技能目录里的
-文件」与「引用工作区里的文件」是两套路径，别混：
+The script is launched as `[interpreter, /skill/<script>]` and **the cwd is `/workspace`** — so "files in the skill
+directory" and "files in the workspace" are two different path systems; do not mix them:
 
-| 语言 | 引用技能目录内的文件 | 说明 |
+| Language | Referencing files inside the skill directory | Notes |
 |---|---|---|
-| Python | `Path(__file__).parent / "lib/x.py"`；模块用 `from lib.x import y` | `/skill/scripts` 在 `sys.path[0]`，同目录可直接 import |
-| Node | `require("./lib/x.js")` | 相对**引用它的文件**解析，与 cwd 无关 |
-| Lua | `dofile(SKILL_DIR .. "/lib/x.lua")`，或先 `package.path = SKILL_DIR .. "/?.lua;" .. package.path` 再 `require("x")` | **只写 `require("x")` 会失败**：默认的 `./?.lua` 相对 cwd（工作区） |
-| Shell | `. "$SKILL_DIR/lib.sh"` | `source` 的相对路径同样跟着 cwd |
+| Python | `Path(__file__).parent / "lib/x.py"`; modules via `from lib.x import y` | `/skill/scripts` is on `sys.path[0]`, so sibling imports work |
+| Node | `require("./lib/x.js")` | resolved relative to **the requiring file**, not the cwd |
+| Lua | `dofile(SKILL_DIR .. "/lib/x.lua")`, or set `package.path = SKILL_DIR .. "/?.lua;" .. package.path` before `require("x")` | **plain `require("x")` fails**: the default `./?.lua` is relative to the cwd (the workspace) |
+| Shell | `. "$SKILL_DIR/lib.sh"` | `source` follows the cwd for relative paths too |
 
-`SKILL_DIR` 一律从**脚本自身位置**推导，不要硬编码 `/skill`：
+Always derive `SKILL_DIR` from **the script's own location**; never hardcode `/skill`:
 
 ```python
 from pathlib import Path
-SKILL_DIR = Path(__file__).resolve().parent.parent      # scripts/ 的上一级
+SKILL_DIR = Path(__file__).resolve().parent.parent      # one level above scripts/
 ```
 
 ```javascript
-const SKILL_DIR = require("path").resolve(__dirname, "..")   // Node（CJS；ESM 用 import.meta.dirname）
+const SKILL_DIR = require("path").resolve(__dirname, "..")   // Node (CJS; ESM uses import.meta.dirname)
 ```
 
 ```lua
@@ -144,185 +147,233 @@ local SKILL_DIR = (arg and arg[0] or ""):match("^(.*)[/\\]scripts[/\\]") or "." 
 SKILL_DIR=$(cd "$(dirname "$0")/.." && pwd)             # Shell
 ```
 
-原因：`/skill` 只在 nsjail / docker 下真实存在。`mode: none` 不做隔离，挂载表只翻译 argv 与
-cwd —— 代码里写死的 `/skill/...` 在本地调试会「文件不存在」，而线上却正常，这类分叉最难查。
+The reason: `/skill` only really exists under nsjail / docker. `mode: none` performs no isolation, and the mount table only
+translates argv and cwd — a hardcoded `/skill/...` inside the code reports "file not found" when debugging locally yet works
+in production, and that kind of divergence is the hardest to diagnose.
 
-三条附加约束：
+Three more constraints:
 
-- **`scripts/` 是代码、`templates/` / `references/` 是数据**：都在 `/skill` 下、都只读，但只有
-  `scripts/` 里的那几个扩展名（`.py` / `.js` / `.lua` / `.sh`）会被 `run_skill_script` 当可执行脚本；
-- **`/skill` 只读**：产物一律写 `/workspace`（cwd）或其子目录，别试图落进技能目录；
-- **Shell 的 `.` 是致命的**：`sh` 里 `. 不存在的文件` 会**直接终止整个脚本**（不是报错继续），
-  症状是「没有任何输出、也没退出码可看」—— 相对路径写错的代价比想象中大，一律写 `SKILL_DIR` 绝对路径。
+- **`scripts/` is code, `templates/` / `references/` are data**: both are under `/skill` and both are read-only, but only the extensions in
+  `scripts/` (`.py` / `.js` / `.lua` / `.sh`) are treated as executable by `run_skill_script`;
+- **`/skill` is read-only**: write every artifact to `/workspace` (the cwd) or a subdirectory — do not try to land them in the skill directory;
+- **`.` is lethal in shell**: in `sh`, `. a-file-that-does-not-exist` **terminates the whole script** (it does not report and continue),
+  and the symptom is "no output at all, not even an exit code" — a wrong relative path costs more than you expect, so always use the absolute `SKILL_DIR`.
 
-### 写 `scripts/` 的权限
+### Permissions for writing `scripts/`
 
-`create_*_skill` **只写 `SKILL.md` 正文**，脚本要**另外**用文件工具写：
+`create_*_skill` **writes only the `SKILL.md` body**; scripts must be written **separately** with the file tools:
 
-| 技能归属 | 谁能写脚本 | 路径写法 |
+| Skill ownership | Who may write scripts | Path form |
 |---|---|---|
-| 共享（租户级） | **仅超级智能体** | `write_file("/skills/<name>/scripts/main.py", …)` |
-| 私有（agent 级） | 归属 agent 自己，或超级智能体 | `write_file("/agents/<自己>/skills/<name>/scripts/main.py", …)` |
+| Shared (tenant-level) | **super agent only** | `write_file("/skills/<name>/scripts/main.py", …)` |
+| Private (agent-level) | the owning agent itself, or the super agent | `write_file("/agents/<yourself>/skills/<name>/scripts/main.py", …)` |
 
-写侧闸门（两档同口径）：**目标 skill 必须正常态**；**归属 agent** 也须是**正常态**（废弃一律冻结）。
-超级智能体也按同一判据判**归属 agent**，不因身份放宽。
+Write gate (the same criterion for both tiers): **the target skill must be in normal status**; **the owning agent** must also be in
+**normal status** (deprecated is frozen). The super agent is judged by the same criterion for the **owning agent** — identity
+does not relax it.
 
-## SKILL.md 怎么写
+## How to write SKILL.md
 
-固定四段（二级标题 `##`），只写必要信息：
+Four fixed sections (level-2 headings `##`), containing only what is necessary:
 
-- `## 用途` —— 一句话说明这个 skill 解决什么问题
-- `## 何时使用` —— 什么情况下该读它；触发条件要具体、可识别
-- `## 怎么做` —— 步骤 / 规则 / 模板，这是主体
-- `## 注意事项` —— 容易踩的坑、边界条件
+- `## Purpose` — one sentence on what problem this skill solves
+- `## When to use` — when it should be read; the triggers must be concrete and recognizable
+- `## How to do it` — steps / rules / templates; this is the main body
+- `## Cautions` — easy pitfalls and boundary conditions
 
-写作要求：
+Writing requirements:
 
-- **开头就写「何时使用」** —— agent 靠这段决定要不要读；
-- **写成可执行指令** —— 写「运行 `go test ./...`」，别写「要做测试」；
-- **给模板与示例** —— 比大段描述更省 token、也更好用；
-- **不写常识** —— 只写模型不知道或容易做错的；
-- **短**。skill 是按需读取的知识，越长越贵。
+- **lead with "When to use"** — the agent relies on that section to decide whether to read the rest;
+- **write executable instructions** — "run `go test ./...`", not "testing should be done";
+- **provide templates and examples** — cheaper in tokens and more usable than long prose;
+- **do not write common sense** — only what the model does not know or easily gets wrong;
+- **be short**. A skill is knowledge read on demand; the longer it is, the more it costs.
 
-**正文里可以引用全局变量**：写 `${global_vars.变量名}`（注意是 `${}`，不是流程里的 `{{ }}`），
-`read_skill` / `use_skill` 取到的正文由后端按本租户的值展开。用途是让「环境相关」的常量
-（接口地址、区域、账号名、库表名）留在租户配置里，同一份技能装到别的租户只用改那边的变量。
+**System skills are always written in English**: `skill-authoring` / `agent-authoring` / `custom-tool-authoring` /
+`flow-authoring`, together with their `references/` and `templates/`, are part of the system prompt. Any change to those files
+must be written in **English**, whatever language the user speaks. Tenant-built skills follow the user's language.
 
-四条要注意：
+**The body can reference global variables**: write `${global_vars.<variable name>}` (note `${}`, not the `{{ }}` used in flows);
+the body returned by `read_skill` / `use_skill` is expanded by the backend from this tenant's values. The point is to keep
+environment-specific constants (endpoint URLs, regions, account names, table names) in the tenant configuration, so the same
+skill installed into another tenant only needs the variables changed there.
 
-- **只有 `SKILL.md` 会被展开**：`scripts/` 里的脚本、`references/` / `templates/` 里的附属文件原样落地，
-  写 `${global_vars.X}` 没人替换 —— 脚本要取环境值，让它读环境变量，或由调用方经 `args` 传进来；
-- 引用了不存在的变量，或**引用了 `secret` 类变量**，读取正文时会直接失败并报出变量名 —— 不是警告；
-  密钥不要写进正文：正文会进模型上下文与运行记录；
-- 资产上架 / 导出只带走引用名、不带值；装到目标租户后由对方的同名变量填充，名字对不上就装完读不出来；
-- **`create_*_skill` / `update_*_skill` 写正文时不校验引用**（管理端文件接口才会拦 secret），
-  写错了要到第一次 `read_skill` 才炸 —— 建完顺手读一次最省事。
+Four things to watch:
 
-不确定名字怎么写时：超级智能体可直接调 `list_global_vars`（只回名字 / 类型 / 描述，**不回值**）；
-普通 agent 拿不到这个工具（仅超级智能体），别硬猜，问管理员要准确名字。
+- **only `SKILL.md` is expanded**: scripts in `scripts/`, and files in `references/` / `templates/`, land verbatim, and nobody
+  replaces `${global_vars.X}` there — if a script needs an environment value, let it read an environment variable, or have the
+  caller pass it in through `args`;
+- referencing a variable that does not exist, or **referencing a `secret` variable**, fails outright when the body is read and
+  names the variable — it is not a warning; never put secrets into the body: the body enters the model context and run records;
+- listing / exporting an asset carries only the reference names, never the values; after installing into the target tenant, that
+  tenant's variables of the same name fill them in, and if the names do not match the body cannot be read after installing;
+- **`create_*_skill` / `update_*_skill` do not validate references when writing the body** (only the console's file endpoint
+  rejects secrets), so a mistake only blows up on the first `read_skill` — reading it once right after creating it is the
+  cheapest safeguard.
 
-**带脚本时，正文必须讲清三件事**（这是可执行技能与纯文档技能的唯一差别）：
+When unsure how a name is spelled: the super agent can call `list_global_vars` directly (names / types / descriptions only,
+**never values**); an ordinary agent does not have this tool (super agent only), so do not guess — ask the administrator for the
+exact name.
 
-1. **脚本做什么** —— 一句话，别复述代码；
-2. **怎么调** —— 给出 `run_skill_script` 的完整示例，含典型 `args`；把参数含义列成表；
-3. **输入 / 输出约定** —— 读哪个文件、产物写到哪里、失败怎么表现。
+**When a skill has scripts, the body must cover three things** (this is the only difference between an executable skill and a
+document-only one):
 
-**别把脚本代码贴进正文** —— 代码在 `scripts/` 里，正文只讲怎么用。
-正文贴代码会产生两份副本并分叉：改了脚本忘了改正文，读到正文的 agent 会照着过期代码行动。
+1. **what the script does** — one sentence; do not restate the code;
+2. **how to call it** — a complete `run_skill_script` example including typical `args`, with the arguments explained in a table;
+3. **input / output contract** — which file it reads, where the artifacts go, how failure looks.
 
-## 命名规范
+**Never paste script code into the body** — the code lives in `scripts/`; the body explains only how to use it.
+Pasting code into the body creates a second copy that drifts: change the script, forget the body, and an agent that reads the
+body acts on stale code.
 
-必须匹配 `^[a-zA-Z0-9][a-zA-Z0-9-]*$`，且不超过 64 字符：
+## Naming rules
 
-- 字母、数字、横线；**不能**下划线、**不能**以横线开头；
-- 用小写 + 横线：`git-pr-flow`、`report-format`；
-- 一眼看出用途：`code-review` 优于 `cr`、`helper`。
+Must match `^[a-zA-Z0-9][a-zA-Z0-9-]*$` and be at most 64 characters:
 
-## 用什么工具
+- letters, digits, dashes; **no** underscores, **no** leading dash;
+- lowercase + dashes: `git-pr-flow`, `report-format`;
+- recognizable at a glance: `code-review` beats `cr` or `helper`.
 
-**私有**（自己的，只有本 agent 可见）——**需管理员为该 agent 授权 `*_own_skill`** 后才能用：
+## Which tools to use
 
-| 目的 | 工具 | 关键参数 |
+**Private** (your own, visible only to this agent) — usable only after **an administrator grants the agent `*_own_skill`**:
+
+| Purpose | Tool | Key arguments |
 |---|---|---|
-| 新建 | `create_own_skill` | `name`、`skill_md` **必填**；`description` 可选 |
-| 改内容 / 描述 / 改名 | `update_own_skill` | `name` **必填**（定位用）；`skill_md`、`description`、`new_name` 按需 |
-| 删除 | `delete_own_skill` | `name`（或 `skill_id`） |
+| Create | `create_own_skill` | `name`, `skill_md` **required**; `description` optional |
+| Change content / description / rename | `update_own_skill` | `name` **required** (for locating); `skill_md`, `description`, `new_name` as needed |
+| Delete | `delete_own_skill` | `name` (or `skill_id`) |
 
-**共享**（租户级共享）——**仅超级智能体** 可用：
+**Shared** (tenant-level) — **super agent only**:
 
-| 目的 | 工具 | 关键参数 |
+| Purpose | Tool | Key arguments |
 |---|---|---|
-| 新建 | `create_shared_skill` | 同 `create_own_skill`；建后默认只授权你自己，要给别人用再 `bind_skill` |
-| 改内容 / 描述 / 改名 | `update_shared_skill` | 同 `update_own_skill`；改动会影响**所有**绑定它的 agent |
-| 删除 | `delete_shared_skill` | 同 `delete_own_skill` |
+| Create | `create_shared_skill` | same as `create_own_skill`; after creation only you are granted, so `bind_skill` it to others |
+| Change content / description / rename | `update_shared_skill` | same as `update_own_skill`; changes affect **every** agent bound to it |
+| Delete | `delete_shared_skill` | same as `delete_own_skill` |
 
-**指定归属**（替某个 agent 建它的私有 skill）——**仅超级智能体** 可用：
+**Explicit ownership** (create an agent's private skill on its behalf) — **super agent only**:
 
-| 目的 | 工具 | 关键参数 |
+| Purpose | Tool | Key arguments |
 |---|---|---|
-| 新建 | `create_agent_skill` | `agent`、`name`、`skill_md` **必填** |
-| 改内容 / 描述 / 改名 | `update_agent_skill` | `agent`、`name` **必填**；`skill_md`、`description`、`new_name` 按需 |
-| 删除 | `delete_agent_skill` | `agent`、`name`（或 `skill_id`） |
+| Create | `create_agent_skill` | `agent`, `name`, `skill_md` **required** |
+| Change content / description / rename | `update_agent_skill` | `agent`, `name` **required**; `skill_md`, `description`, `new_name` as needed |
+| Delete | `delete_agent_skill` | `agent`, `name` (or `skill_id`) |
 
-**共享 / 代建可声明工具依赖（`tool_deps`，仅超级智能体）**：`create_shared_skill` / `update_shared_skill` /
-`create_agent_skill` / `update_agent_skill` 多一个可选参数 `tool_deps` —— 该技能要用到的工具 ref 列表
-（如 `builtin:exec`、`builtin:file`）。全量替换：传 `[]` 清空，不传则不改。它**不产生授权**，只是把宿主 agent
-**已有的** `allow` 授权「点亮」；同时决定 `grant_agent_tool` 写 `allow`（按需注入、省上下文）还是
-`required`（恒注入）。`*_own_skill` 系列**不接受**该参数（传了会显式报错）。
+**Shared / on-behalf skills may declare tool dependencies (`tool_deps`, super agent only)**: `create_shared_skill` /
+`update_shared_skill` / `create_agent_skill` / `update_agent_skill` take one extra optional argument, `tool_deps` — the list of
+tool refs the skill needs (such as `builtin:exec`, `builtin:file`). It is a full replacement: pass `[]` to clear, omit it to leave
+unchanged. It **does not create a grant**; it only "lights up" an `allow` grant the host agent **already has**, and it decides
+whether `grant_agent_tool` writes `allow` (on-demand injection, saving context) or `required` (always injected). The
+`*_own_skill` family **does not accept** this argument (passing it is an explicit error).
 
-**改单条依赖用增量工具（仅超级智能体）**：`grant_skill_tool(name|skill_id, ref)` 追加一条、
-`revoke_skill_tool(name|skill_id, ref)` 移除一条。二者幂等，而且**只动这一条** —— 不像
-`tool_deps` 那样全量替换（那个不传 = 不动、传 `[]` 才清空）。返回值带变更后的完整
-`tool_deps`，不必再 `read_skill` 一次。
+**Change a single dependency with the incremental tools (super agent only)**: `grant_skill_tool(name|skill_id, ref)` adds one,
+`revoke_skill_tool(name|skill_id, ref)` removes one. Both are idempotent and touch **only that one row** — unlike `tool_deps`,
+which is a full replacement (omit = leave unchanged, pass `[]` to clear). The return value carries the complete `tool_deps` after
+the change, so there is no need to `read_skill` again.
 
-`ref` 写法与 `grant_agent_tool` 一致：`builtin:<工具名>` / `builtin:<类别>` /
-`mcp:<连接>[:<工具>]` / `rpc:…` / `local:rpc[:<端点>]`；**不接受自定义组**（`custom:*` 会被拒）。
-目标 skill 须处于正常态（废弃一律拒写），其归属 agent 也须是正常态（废弃则它名下的私有技能冻结）；
-改名不归它们管，走 `update_*_skill` 的 `new_name`。
-移除时**不做存在性校验** —— 工具/连接被删后留下的死 ref 照样能清掉，这是有意的。
+`ref` follows the same form as `grant_agent_tool`: `builtin:<tool name>` / `builtin:<category>` /
+`mcp:<connection>[:<tool>]` / `rpc:…` / `local:rpc[:<endpoint>]`; **custom groups are not accepted** (`custom:*` is rejected).
+The target skill must be in normal status (deprecated is always rejected), and its owning agent must be in normal status too
+(when deprecated, its private skills are frozen); renaming is not their job — use `new_name` on `update_*_skill`.
+Removal does **not** check existence — stale refs left behind by deleted tools or connections can still be cleaned up, and that
+is intentional.
 
-> **技能带脚本时，`tool_deps` 必须声明 `builtin:exec`** —— `run_skill_script` 属于该类别组，
-> 宿主 agent 没被授权时技能建了也跑不起来（调用会被明确拒绝）。声明依赖本身不产生授权，
-> 仍需管理员或超级智能体用 `grant_agent_tool(agent, "builtin:exec")` 真正授权；
-> 而且**该技能必须已绑定给宿主 agent**（`run_skill_script` 只认「注入给我」的技能：私有 ∪ 已绑定）。
+> **When a skill ships scripts, `tool_deps` must declare `builtin:exec`** — `run_skill_script` belongs to that category group, and
+> without a grant on the host agent the skill cannot run even after it is created (the call is refused explicitly). Declaring the
+> dependency does not create a grant: an administrator or the super agent must still grant it with
+> `grant_agent_tool(agent, "builtin:exec")`; and **the skill must be bound to the host agent** (`run_skill_script` only accepts
+> skills "injected into me": private ∪ bound).
 
-**通用**：
+**General**:
 
-| 目的 | 工具 | 关键参数 |
+| Purpose | Tool | Key arguments |
 |---|---|---|
-| 看有哪些可用 | `list_skills` | 无 |
-| 读某个的全文（**不激活**） | `read_skill` | `name`（或 `skill_id`，按 id 定向仅超级智能体）；回显 `tool_deps` 与可见性 |
-| 用某个（**激活**它的工具依赖） | `use_skill` | `name`（或 `skill_id`）；返回同样的正文 + `tool_deps`，其依赖从下一轮推理起注入 |
-| 绑定 / 解绑（白名单） | `bind_skill` / `unbind_skill` | `agent`、`skill`（**仅超级智能体**，幂等） |
+| See what is available | `list_skills` | none |
+| Read one in full (**without activating**) | `read_skill` | `name` (or `skill_id`; targeting by id is super agent only); echoes `tool_deps` and visibility |
+| Use one (**activates its tool dependencies**) | `use_skill` | `name` (or `skill_id`); returns the same body + `tool_deps`, and its dependencies are injected from the next inference on |
+| Bind / unbind (allowlist) | `bind_skill` / `unbind_skill` | `agent`, `skill` (**super agent only**, idempotent) |
 
-`list_skills` 只列当前**可见范围**（私有 + 已绑定；该 agent 开了 discovery 时再加「全员可见」的共享技能），
-单次最多 100 条（`truncated=true` 时按 note 缩小范围）；**超级智能体视角是全量租户级**（忽略白名单）。
+`list_skills` lists only the current **visible scope** (private + bound; plus "visible to everyone" shared skills when the agent has
+`discovery` enabled), at most 100 per call (when `truncated=true`, narrow the scope as the note suggests); **the super agent's view
+is all tenant-level skills** (the allowlist is ignored).
 
-工具名即归属：`*_own_skill` 只动你自己的私有 skill，`*_shared_skill` 只动租户级共享 skill，
-`*_agent_skill` 只动**指定 agent** 的私有 skill，拿错工具会被明确拒绝（不会静默改到另一个空间）。
-反过来也一样严格：`scope` 参数**已下线**，传了会显式报错并提示改用对偶工具；`restricted`
-只有 `update_shared_skill` 接受，传给 `*_own_skill` / `*_agent_skill` 同样显式报错。
+The tool name is the ownership: `*_own_skill` touches only your own private skills, `*_shared_skill` only tenant-level shared
+skills, `*_agent_skill` only **the named agent's** private skills; the wrong tool is rejected explicitly (it never silently
+changes another scope).
+The reverse is equally strict: the `scope` argument **has been removed**, and passing it is an explicit error pointing at the
+counterpart tool; `restricted` is accepted only by `update_shared_skill`, and passing it to `*_own_skill` / `*_agent_skill` is
+likewise an explicit error.
 
-## 创建流程（四步，缺一不可）
+## Creation procedure (four steps, none optional)
 
-| 步 | 动作 | 漏了会怎样 |
+| Step | Action | What happens if skipped |
 |---|---|---|
-| 1 | `create_shared_skill` / `create_own_skill` / `create_agent_skill` —— **只写 `SKILL.md`** | —— |
-| 2 | 带脚本时：用 `write_file` 把脚本写进 `<技能目录>/scripts/`（**路径必须以 `/` 开头**，写法见上方「写 `scripts/` 的权限」表） | 正文教人跑脚本、脚本却不存在；**创建照样成功**，直到运行时才炸 |
-| 3 | **冒烟测试**：立刻 `run_skill_script` 跑一遍，并**回读产物**验证 | 缺陷留到用户第一次使用时才暴露 |
-| 4 | 要给别人用：`bind_skill` + `grant_agent_tool(agent, "builtin:exec")` | 技能在库里，但那个 agent 看不到 / 跑不起来 |
+| 1 | `create_shared_skill` / `create_own_skill` / `create_agent_skill` — **writes `SKILL.md` only** | —— |
+| 2 | when scripts are involved: use `write_file` to put them under `<skill dir>/scripts/` (**the path must start with `/`**; see the "Permissions for writing `scripts/`" table above) | the body tells people to run a script that does not exist; **creation still succeeds**, and it only blows up at runtime |
+| 3 | **smoke test**: run it once with `run_skill_script` right away, and **read the artifact back** to verify | the defect waits until the user's first use |
+| 4 | to let others use it: `bind_skill` + `grant_agent_tool(agent, "builtin:exec")` | the skill is in the database, but that agent cannot see it / cannot run it |
 
-**第 1 步不会建 `scripts/` 目录**（实测：建完 `list_files` 只有 `SKILL.md`），也**没有任何校验** —— 正文里写「运行 `scripts/main.py`」而脚本没写，创建依然返回成功。所以第 2、3 步必须自己做。
+**Step 1 does not create the `scripts/` directory** (measured: after creation `list_files` shows only `SKILL.md`), and there is
+**no validation at all** — a body saying "run `scripts/main.py`" with no script written still returns success. So steps 2 and 3
+are up to you.
 
-**冒烟测试至少覆盖三点**：
+**The smoke test must cover at least three things**:
 
-1. 正常参数跑通；
-2. **回读产物**确认内容正确 —— `run_skill_script` 回 `stdout` / `stderr` / `exit_code` / `truncated` 四项，
-   退出码 0 **不等于**产物对；报错先看 `stderr`（输出过长被截时 `truncated=true`）；
-3. 一个边界（非法参数、不存在的输出目录、空输入等）。
+1. the happy path with normal arguments;
+2. **reading the artifact back** to confirm the content is right — `run_skill_script` returns `stdout` / `stderr` / `exit_code` /
+   `truncated`; exit code 0 **does not** mean the artifact is correct; on error read `stderr` first (when output is too long it is
+   cut and `truncated=true`);
+3. one boundary case (invalid arguments, a non-existent output directory, empty input, …).
 
-看了 `stderr` 仍定位不出来时，再用 `exec` 把脚本落盘成 `.py` 单独跑一遍，重定向到日志后 `read_file` 看。
+When `stderr` still does not explain it, use `exec` to drop the script into the workspace as a `.py` file, run it standalone,
+redirect to a log and read that with `read_file`.
 
-## 注意事项
+## Cautions
 
-- **不要手动往目录里写 `SKILL.md`** —— 那样表里没有记录，`list_skills` 看不到它，会变成「孤儿文件」。一律走 `create_own_skill`（共享则 `create_shared_skill`、代建则 `create_agent_skill`）/ `update_*_skill` / `delete_*_skill`。
-- **正文进 `skill_md`，附属文件要另写**：`*_own_skill` 系列只写 `SKILL.md` 正文。脚本 / 模板 / 示例 / 清单这类**附属文件**，要另行用文件工具按 `/` 前缀写进技能目录（路径与权限见「写 `scripts/` 的权限」）。注意 `/` 前缀对普通 agent **只能到自己的私有 skill 目录**：别人的 agent / skill、租户级共享 skill、自己的 `AGENT.md` 都不可达（共享技能的附属文件只有超级智能体能写）。
-- **附属文件分两类，别混为一谈**：
-  - **被动数据**（模板 / 示例 / 清单 / 语料）—— 运行时确实不会自动读，是「死文件」：要么把关键内容写进正文，要么在正文里写明它的路径与用途，让读到的人在需要时去打开；
-  - **可执行脚本**（`scripts/*.py|*.js|*.lua|*.sh`）—— **不是死文件**：`run_skill_script` 会挂载技能目录并直接运行它，扩展名决定解释器。这类文件的存在与用法**必须写进正文的「怎么做」**。
-- **`*_own_skill` 不是每个 agent 都有**（缺省工具集**不含**技能自建）：拿不到工具就别硬试 —— 要么请管理员在「工具配置」里给该 agent 授权，要么请超级智能体用 `create_shared_skill` 建共享 skill 再 `bind_skill` 绑给它。
-- **改名会连整个技能目录一起搬**：`update_own_skill` / `update_shared_skill` 传 `new_name` 时，目录（含附属文件与子目录）整体迁移，你不用管。
-- **不传 `skill_md` 时只改元数据**，内容保持不变。
-- **`tool_deps` 只在共享 / 代建上有**（仅超级智能体）：私有 `*_own_skill` 传它会显式报错。改单条用 `grant_skill_tool` / `revoke_skill_tool`，全量替换用 `update_*_skill(tool_deps=[...])`。三个「不等于」要分清：
-  - **声明依赖 ≠ 授权**：宿主 agent 没有对应的 `allow` 授权时，声明了也不会注入；
-  - **绑定 ≠ 注入**：绑定只让技能进提示词清单，不产生工具候选；
-  - **`read_skill` 看到依赖 ≠ 已激活**：依赖只在 `use_skill` 之后（下一轮起）生效，本 run 结束失效。
-- **`run_skill_script` 需要文件系统存储**（`local` / `nfs`）：技能目录要被挂进沙箱，S3 存储下宿主路径不可达，会直接报「技能目录在宿主上不可达」（脚本本身没问题，别去改脚本）。
-- **共享 skill 的改删要谨慎（仅超级智能体）** —— 它可能正被别的 agent 绑定使用；改名/改内容会影响所有绑定它的 agent。
-- **`SKILL.md` 入口文件不能单独删**：`delete_file` 在根寻址下会拒删 `SKILL.md`（删掉会留下「登记在库、没有正文」的空技能，运行时读不到正文会静默降级为空内容）。删整个技能请用 `delete_own_skill` / `delete_shared_skill` / `delete_agent_skill`。
-- **`skill-authoring` / `agent-authoring` 是系统基石：不可删除、不可改名**（正文与描述仍可改）。同口径还有 `main` 这个预置超级智能体（不可删 / 不可改名；它可以被其它 agent 调用，被调起时恒读草稿）—— 这在状态闸之外，报错里写 `protected` 就别再试。
-- **system prompt 里只出现 name + description**，正文要 `read_skill` 才读到。所以 `description` 必须写清「什么时候该读我」。
-- **建完自检**：
-  1. 名字合法？工具选对（私有还是共享）？
-  2. `description` 能让别的 agent 判断该不该读？正文的「何时使用」够具体？
-  3. **带脚本吗**？带的话：脚本写进 `scripts/` 了吗（不是贴在正文里）？`tool_deps` 声明 `builtin:exec` 了吗？正文讲清「脚本做什么 / 怎么调 / 输入输出约定」了吗？宿主 agent 被授权 `builtin:exec`、且已绑定该技能了吗？
+- **Do not write `SKILL.md` into a directory by hand** — there is no row in the database then, `list_skills` cannot see it, and it
+  becomes an orphan file. Always go through `create_own_skill` (or `create_shared_skill` for shared, `create_agent_skill` on
+  behalf of another agent) / `update_*_skill` / `delete_*_skill`.
+- **The body goes into `skill_md`; auxiliary files are written separately**: the `*_own_skill` family writes only the `SKILL.md`
+  body. Auxiliary files such as scripts / templates / samples / checklists must be written separately into the skill directory with
+  the file tools using the `/` prefix (paths and permissions in "Permissions for writing `scripts/`"). Note that for an ordinary
+  agent the `/` prefix **reaches only its own private skill directory**: other agents / skills, tenant-level shared skills and its
+  own `AGENT.md` are unreachable (shared skills' auxiliary files can be written only by the super agent).
+- **Auxiliary files come in two kinds; do not conflate them**:
+  - **passive data** (templates / samples / checklists / corpora) — not read automatically at runtime, i.e. "dead files": either put the key
+    content into the body, or state their path and purpose in the body so whoever reads it can open them when needed;
+  - **executable scripts** (`scripts/*.py|*.js|*.lua|*.sh`) — **not dead files**: `run_skill_script` mounts the skill directory and
+    runs them directly, with the extension deciding the interpreter. Their existence and usage **must be written into the body's
+    "How to do it"**.
+- **`*_own_skill` is not available to every agent** (the default tool set **does not include** own-skill creation): if you cannot get
+  the tool, do not keep trying — either ask an administrator to grant it under "tool configuration", or ask the super agent to create
+  a shared skill with `create_shared_skill` and `bind_skill` it to the agent.
+- **Renaming moves the whole skill directory**: when `update_own_skill` / `update_shared_skill` receive `new_name`, the directory
+  (auxiliary files and subdirectories included) is moved as a whole; you need do nothing.
+- **Omitting `skill_md` changes metadata only**; the content stays as it is.
+- **`tool_deps` exists only on shared / on-behalf tools** (super agent only): passing it to the private `*_own_skill` family is an
+  explicit error. Use `grant_skill_tool` / `revoke_skill_tool` for single changes and `update_*_skill(tool_deps=[...])` for a full
+  replacement. Keep three "not equal to"s apart:
+  - **declaring a dependency ≠ granting it**: if the host agent has no matching `allow` grant, declaring it injects nothing;
+  - **binding ≠ injection**: binding only puts the skill into the prompt index; it produces no tool candidates;
+  - **seeing the dependencies in `read_skill` ≠ activated**: dependencies take effect only after `use_skill` (from the next inference
+    on) and expire when this run ends.
+- **`run_skill_script` needs file-system storage** (`local` / `nfs`): the skill directory has to be mounted into the sandbox, and
+  under S3 storage the host path is unreachable, which reports "the skill directory is unreachable on the host" (the script itself is
+  fine; do not go changing it).
+- **Change and delete shared skills carefully (super agent only)** — other agents may be bound to it and using it; renaming or
+  changing content affects every agent bound to it.
+- **The `SKILL.md` entry file cannot be deleted on its own**: under root addressing `delete_file` refuses to delete `SKILL.md`
+  (deleting it would leave an empty skill "registered in the database without a body", and at runtime a missing body degrades
+  silently to empty content). To delete a whole skill use `delete_own_skill` / `delete_shared_skill` / `delete_agent_skill`.
+- **`skill-authoring` / `agent-authoring` are system cornerstones: they cannot be deleted or renamed** (body and description remain
+  editable). The same applies to the built-in super agent `main` (cannot be deleted / renamed; it can be called by other agents, and
+  when invoked it always reads drafts) — this sits outside the status gate; when the error says `protected`, stop retrying.
+- **The system prompt carries only name + description**; the body is read with `read_skill`. So `description` must state clearly
+  "when I should be read".
+- **Self-check after creating**:
+  1. is the name valid? Is the right tool chosen (private or shared)?
+  2. does `description` let another agent decide whether to read it? Is the body's "When to use" concrete enough?
+  3. **are there scripts?** If so: are they written into `scripts/` (not pasted into the body)? Does `tool_deps` declare
+     `builtin:exec`? Does the body explain "what the script does / how to call it / input-output contract"? Is the host agent granted
+     `builtin:exec`, and is the skill bound to it?

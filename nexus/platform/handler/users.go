@@ -87,7 +87,7 @@ func UserTenants(c *gin.Context) {
 		return
 	}
 	if u == nil {
-		xhttp.ErrJSON(c, "用户不存在", nil, "")
+		xhttp.ErrCode(c, "user.not_found", gin.H{"id": id}, "用户不存在", "")
 		return
 	}
 
@@ -123,16 +123,16 @@ func CreateUser(c *gin.Context) {
 	role := strings.TrimSpace(req.Role)
 	displayName := strings.TrimSpace(req.DisplayName)
 	if !namePattern.MatchString(name) {
-		xhttp.ErrJSON(c, "登录名只允许字母/数字/下划线/横线，长度 1-64", nil, "")
+		xhttp.ErrCode(c, "user.invalid_name", gin.H{"name": name}, "登录名只允许字母/数字/下划线/横线，长度 1-64", "")
 		return
 	}
 	if role != auth.RoleAdmin && role != auth.RoleUser {
-		xhttp.ErrJSON(c, "role 只能是 admin 或 user", nil, "")
+		xhttp.ErrCode(c, "user.invalid_role", gin.H{"role": role}, "role 只能是 admin 或 user", "")
 		return
 	}
 	switch {
 	case len(req.Password) < account.MinPasswordLength:
-		xhttp.ErrJSON(c, "密码至少 8 位", nil, "")
+		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": account.MinPasswordLength}, "密码至少 8 位", "")
 		return
 	case len(req.Password) > account.MaxPasswordBytes:
 		xhttp.ErrJSON(c, account.ErrPasswordTooLong.Error(), nil, "")
@@ -145,13 +145,13 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 	if exist != nil {
-		xhttp.ErrJSON(c, "登录名已存在: "+name, nil, "")
+		xhttp.ErrCode(c, "user.name_taken", gin.H{"name": name}, "登录名已存在: "+name, "")
 		return
 	}
 
 	hash, herr := account.HashPassword(req.Password)
 	if herr != nil {
-		xhttp.ErrJSON(c, "设置密码失败: "+herr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
 		return
 	}
 	u := &pmusers.User{
@@ -185,7 +185,7 @@ type updatePlatformUserRequest struct {
 func UpdateUser(c *gin.Context) {
 	me, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.ErrJSON(c, "平台身份缺失", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "平台身份缺失", "")
 		return
 	}
 	id := strings.TrimSpace(c.Param("id"))
@@ -198,13 +198,13 @@ func UpdateUser(c *gin.Context) {
 	role := strings.TrimSpace(req.Role)
 	status := strings.TrimSpace(req.Status)
 	if role != auth.RoleAdmin && role != auth.RoleUser {
-		xhttp.ErrJSON(c, "role 只能是 admin 或 user", nil, "")
+		xhttp.ErrCode(c, "user.invalid_role", gin.H{"role": role}, "role 只能是 admin 或 user", "")
 		return
 	}
 	switch status {
 	case account.StatusActive, account.StatusDisabled, account.StatusLocked:
 	default:
-		xhttp.ErrJSON(c, "status 只能是 active / disabled / locked", nil, "")
+		xhttp.ErrCode(c, "user.invalid_status", gin.H{"status": status}, "status 只能是 active / disabled / locked", "")
 		return
 	}
 
@@ -214,7 +214,7 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 	if target == nil {
-		xhttp.ErrJSON(c, "用户不存在", nil, "")
+		xhttp.ErrCode(c, "user.not_found", gin.H{"id": id}, "用户不存在", "")
 		return
 	}
 
@@ -222,13 +222,14 @@ func UpdateUser(c *gin.Context) {
 	// 放在"不能对自己动手"之前，所以 plat 本人登录也改不了自己（含改显示名、降级、停用）。
 	// 删除不存在：本模块没有 DELETE /users/:id（账号由环境初始数据预置、之后只能停用/改资料）。
 	if isProtectedPlatformUser(target.Name) {
-		xhttp.ErrJSON(c, "受保护管理员账号 "+target.Name+" 不可修改（由环境初始数据预置）", nil, "")
+		xhttp.ErrCode(c, "user.protected_account", gin.H{"name": target.Name},
+			"受保护管理员账号 "+target.Name+" 不可修改（由环境初始数据预置）", "")
 		return
 	}
 
 	// 守卫 1：不能对自己动手
 	if target.ID == me.ID && (role != auth.RoleAdmin || status != account.StatusActive) {
-		xhttp.ErrJSON(c, "不能停用或降级当前登录账号", nil, "")
+		xhttp.ErrCode(c, "user.cannot_modify_self", nil, "不能停用或降级当前登录账号", "")
 		return
 	}
 
@@ -242,7 +243,7 @@ func UpdateUser(c *gin.Context) {
 			return
 		}
 		if n <= 1 {
-			xhttp.ErrJSON(c, "不能停用或降级最后一个平台管理员", nil, "")
+			xhttp.ErrCode(c, "user.last_admin_undeletable", nil, "不能停用或降级最后一个平台管理员", "")
 			return
 		}
 	}
@@ -281,7 +282,7 @@ func ResetUserPassword(c *gin.Context) {
 	}
 	switch {
 	case len(req.Password) < account.MinPasswordLength:
-		xhttp.ErrJSON(c, "密码至少 8 位", nil, "")
+		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": account.MinPasswordLength}, "密码至少 8 位", "")
 		return
 	case len(req.Password) > account.MaxPasswordBytes:
 		xhttp.ErrJSON(c, account.ErrPasswordTooLong.Error(), nil, "")
@@ -294,13 +295,13 @@ func ResetUserPassword(c *gin.Context) {
 		return
 	}
 	if u == nil {
-		xhttp.ErrJSON(c, "用户不存在", nil, "")
+		xhttp.ErrCode(c, "user.not_found", gin.H{"id": id}, "用户不存在", "")
 		return
 	}
 
 	hash, herr := account.HashPassword(req.Password)
 	if herr != nil {
-		xhttp.ErrJSON(c, "设置密码失败: "+herr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
 		return
 	}
 	if err := pmusers.UpdatePassword(id, hash); err != nil {

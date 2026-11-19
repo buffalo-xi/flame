@@ -19,7 +19,7 @@ import (
 func ListFlowVersions(c *gin.Context) {
 	raw, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := raw.(*auth.AuthInfo)
@@ -41,7 +41,7 @@ func ListFlowVersions(c *gin.Context) {
 func ReleaseFlowVersion(c *gin.Context) {
 	raw, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := raw.(*auth.AuthInfo)
@@ -57,7 +57,7 @@ func ReleaseFlowVersion(c *gin.Context) {
 	v, err := repo.ReleaseFlowVersion(ai, c.Param("id"), strings.TrimSpace(body.Note))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "flow instance not found", nil, "")
+			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -74,7 +74,7 @@ func ReleaseFlowVersion(c *gin.Context) {
 func RollbackFlowVersion(c *gin.Context) {
 	raw, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := raw.(*auth.AuthInfo)
@@ -88,7 +88,7 @@ func RollbackFlowVersion(c *gin.Context) {
 	v, err := repo.RollbackFlowVersion(ai, c.Param("id"), target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "version not found", nil, "")
+			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -106,7 +106,7 @@ func RollbackFlowVersion(c *gin.Context) {
 func ApplyFlowVersion(c *gin.Context) {
 	raw, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := raw.(*auth.AuthInfo)
@@ -119,7 +119,7 @@ func ApplyFlowVersion(c *gin.Context) {
 
 	if err := repo.ApplyFlowVersionToDraft(ai, c.Param("id"), target); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "version not found", nil, "")
+			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -137,7 +137,7 @@ func ApplyFlowVersion(c *gin.Context) {
 func DeleteFlowVersion(c *gin.Context) {
 	raw, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := raw.(*auth.AuthInfo)
@@ -150,7 +150,7 @@ func DeleteFlowVersion(c *gin.Context) {
 
 	if err := repo.DeleteFlowVersion(ai, c.Param("id"), target); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "version not found", nil, "")
+			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
 		if errors.Is(err, repository.ErrCannotDeleteCurrentVersion) {

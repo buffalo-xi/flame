@@ -44,7 +44,7 @@ func ExportAssetPackage(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		xhttp.ErrJSON(c, "资产不存在", nil, "")
+		xhttp.ErrCode(c, "asset.not_found", nil, "资产不存在", "")
 		return
 	}
 	data, err := buildAssetPackage(a)
@@ -120,19 +120,21 @@ func ImportAssetPackage(c *gin.Context) {
 		// 超限（MaxBytesReader）与「没选文件」是两回事，别糊成一句让人摸不着头脑的话
 		var mbe *http.MaxBytesError
 		if errors.As(ferr, &mbe) {
-			xhttp.ErrJSON(c, fmt.Sprintf("资产包超过上传上限（%d MiB）", maxPackageUpload>>20), nil, "")
+			xhttp.ErrCode(c, "asset.package_too_large", gin.H{"limit_mb": maxPackageUpload >> 20},
+				fmt.Sprintf("资产包超过上传上限（%d MiB）", maxPackageUpload>>20), "")
 			return
 		}
-		xhttp.ErrJSON(c, "请选择要导入的资产包（multipart 字段名 file）", nil, "")
+		xhttp.ErrCode(c, "asset.package_required", nil, "请选择要导入的资产包（multipart 字段名 file）", "")
 		return
 	}
 	if file.Size <= 0 || file.Size > maxPackageUpload {
-		xhttp.ErrJSON(c, fmt.Sprintf("资产包大小非法（%d 字节，上限 %d）", file.Size, maxPackageUpload), nil, "")
+		xhttp.ErrCode(c, "asset.invalid_package", gin.H{"size": file.Size, "limit": maxPackageUpload},
+			fmt.Sprintf("资产包大小非法（%d 字节，上限 %d）", file.Size, maxPackageUpload), "")
 		return
 	}
 	f, oerr := file.Open()
 	if oerr != nil {
-		xhttp.ErrJSON(c, "读取上传文件失败: "+oerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取上传文件失败: "+oerr.Error(), "")
 		return
 	}
 	defer func() { _ = f.Close() }()

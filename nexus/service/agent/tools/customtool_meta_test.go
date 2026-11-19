@@ -66,11 +66,11 @@ func TestCreateCustomToolValidation(t *testing.T) {
 	}{
 		// ValidName 本身就不允许下划线，所以 "__" / 前缀这两条属于防御性分支
 		// （将来若放宽名字规则，它们才会真正拦人）。
-		{"下划线", map[string]any{"name": "sum_sales", "description": "d"}, nil, "字母、数字与短横线"},
-		{"带前缀", map[string]any{"name": "custom__sum", "description": "d"}, nil, "字母、数字与短横线"},
-		{"空名", map[string]any{"name": "", "description": "d"}, nil, "不能为空"},
-		{"entry 跳出目录", map[string]any{"name": "sum", "description": "d", "entry": "../evil.py"}, nil, "跳出"},
-		{"entry 绝对路径", map[string]any{"name": "sum", "description": "d", "entry": "/etc/passwd"}, nil, "相对"},
+		{"下划线", map[string]any{"name": "sum_sales", "description": "d"}, nil, "letters, digits and hyphens"},
+		{"带前缀", map[string]any{"name": "custom__sum", "description": "d"}, nil, "letters, digits and hyphens"},
+		{"空名", map[string]any{"name": "", "description": "d"}, nil, "must not be empty"},
+		{"entry 跳出目录", map[string]any{"name": "sum", "description": "d", "entry": "../evil.py"}, nil, "must not escape"},
+		{"entry 绝对路径", map[string]any{"name": "sum", "description": "d", "entry": "/etc/passwd"}, nil, "must be a path relative"},
 		{"entry 反斜杠", map[string]any{"name": "sum", "description": "d", "entry": "sub\\main.py"}, nil, "/"},
 		{"未开通 exec", map[string]any{"name": "sum", "description": "d"}, map[string]bool{}, capability.Exec},
 		{"egress 未开通", map[string]any{"name": "sum", "description": "d", "egress": true},
@@ -193,7 +193,7 @@ func TestCustomToolMetaWithoutAdmin(t *testing.T) {
 	} {
 		args := map[string]any{"name": "sum", "description": "d"}
 		if _, err := tool.Execute(context.Background(), c, args); err == nil ||
-			!strings.Contains(err.Error(), "不可用") {
+			!strings.Contains(err.Error(), "is not available") {
 			t.Errorf("%s 应报 admin 不可用，实际 %v", tool.Meta().Name, err)
 		}
 	}

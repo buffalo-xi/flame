@@ -87,7 +87,7 @@ func assetErrMsg(prefix string, err error) string {
 func mustAuth(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return nil, false
 	}
 	info, ok := v.(*auth.AuthInfo)

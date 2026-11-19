@@ -1,64 +1,66 @@
-# `llm` 节点
+# The `llm` node
 
-调一次模型，拿文本结果（可流式）。固定输出三个变量，脚本只能写自定义变量。
+Calls the model once for a text result (streaming supported). Three fixed output variables; scripts may only write custom
+variables.
 
-## config 形状
+## config shape
 
 ```json
 {
   "llm": {
     "gateway_model": "",
     "messages": [
-      {"role": "system", "content": "你是数据分析师"},
-      {"role": "user", "content": "根据数据写 3 条要点：{{ .input.data }}"}
+      {"role": "system", "content": "You are a data analyst"},
+      {"role": "user", "content": "Write 3 key points from this data: {{ .input.data }}"}
     ],
     "params": {"temperature": 0.3, "max_tokens": 800},
     "response_mode": "complete"
   },
   "inputs": {"data": {"type": "string", "source_type": "node", "source_ref": "2", "source_key": "body"}},
   "outputs": {
-    "content": {"type": "string", "description": "回复正文"},
-    "reasoning_content": {"type": "string", "description": "推理过程"},
-    "tool_calls": {"type": "array[object]", "description": "工具调用列表"}
+    "content": {"type": "string", "description": "reply text"},
+    "reasoning_content": {"type": "string", "description": "reasoning trace"},
+    "tool_calls": {"type": "array[object]", "description": "tool call list"}
   }
 }
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `llm.messages` | ✅ | — | `[{role, content}]`；`role` 缺省 `user`；`content` 支持模板；空数组 → `config` 错误 |
-| `llm.gateway_model` | — | 空 = 租户缺省模型 | 填了但找不到 → `not_found`；租户没配缺省模型也 `not_found` |
-| `llm.response_mode` | — | `complete` | 只接受 `complete` / `sse_stream`，其它值直接 `config` 错误 |
+| `llm.messages` | ✅ | — | `[{role, content}]`; `role` defaults to `user`; `content` supports templates; an empty array → `config` error |
+| `llm.gateway_model` | — | empty = tenant default model | set but not found → `not_found`; a tenant with no default model also gives `not_found` |
+| `llm.response_mode` | — | `complete` | accepts `complete` / `sse_stream` only; anything else is a `config` error |
 | `llm.params` | — | `{}` | `max_tokens` / `temperature` / `top_p` / `extra_params` |
-| `llm.handler` | — | — | 后处理脚本 `{script, lang, timeout{enabled,seconds}}`；**不支持 `template`** |
-| `config.inputs` | — | — | 模板 `{{ .input.x }}` 的来源 |
-| `config.outputs` | 建议写全 | 执行器补齐 | 固定三变量；漏声明也能跑（`ensureFixedOutputs` 补），前端会写全 |
-| `config.locals` | — | — | 局部变量，handler 里用 `{{ .local.x }}` |
+| `llm.handler` | — | — | post-processing script `{script, lang, timeout{enabled,seconds}}`; **`template` is not supported** |
+| `config.inputs` | — | — | source of the `{{ .input.x }}` templates |
+| `config.outputs` | recommended to write in full | filled in by the executor | the three fixed variables; it runs without them (`ensureFixedOutputs` adds them), and the front end writes them all |
+| `config.locals` | — | — | local variables, used in the handler as `{{ .local.x }}` |
 
-## 输出变量
+## Output variables
 
-固定：`content`(string) / `reasoning_content`(string，推理模型才有值) / `tool_calls`(array[object])。
-`handler` 只能写自定义输出；写这三个会被拦。
+Fixed: `content`(string) / `reasoning_content`(string, only reasoning models produce it) / `tool_calls`(array[object]).
+The `handler` may only write custom outputs; writing these three is blocked.
 
-## 出边
+## Outgoing edges
 
-普通节点：执行完沿**第一条出边**继续。
+An ordinary node: continues along **its first outgoing edge** when done.
 
-## 提示词与全局变量
+## Prompts and global variables
 
-全局变量经输入变量进入提示词：`config.inputs` 里声明 `{"source_type": "global", "source_key": "NAME"}`，
-`messages[].content` 里写 `{{ .input.xxx }}`。**没有** `{{ .global_vars.X }}` 这种写法
-（已下线，配置里留着它会在流程载入时直接报错，而不是渲染成 `<no value>`）。
+Global variables enter the prompt through input variables: declare `{"source_type": "global", "source_key": "NAME"}` in
+`config.inputs` and write `{{ .input.xxx }}` in `messages[].content`. **There is no** `{{ .global_vars.X }}` form (it was
+removed; leaving it in the config makes the flow fail at load time instead of rendering `<no value>`).
 
-引用 `secret` 类全局变量**不阻断**，但会记一条告警：值会进模型上下文，也会进 `session_records` 与 SSE。
-密钥优先用于连接 / 工具配置（`http.headers`、`mcp` / `rpc` 的连接参数），别往提示词里塞。
+Referencing a `secret` global variable is **not blocked**, but a warning is logged: the value enters the model context, and
+also `session_records` and SSE. Prefer using secrets in connection / tool configuration (`http.headers`, `mcp` / `rpc`
+connection parameters) rather than in prompts.
 
-## 常见错误
+## Common errors
 
-- `messages 不能为空` —— `messages` 是空数组或不是数组。
-- `不支持的 response_mode` —— 写了 `auto` 之类。
-- `未指定模型且不存在缺省模型` —— `gateway_model` 空且租户没配默认模型。
+- `messages must not be empty` — `messages` is an empty array or is not an array.
+- `unsupported response_mode` — something like `auto` was written.
+- `no model specified and no default model` — `gateway_model` is empty and the tenant has no default model configured.
 
-源码：`service/flow/executors/llm.go`
+Source: `service/flow/executors/llm.go`

@@ -1,35 +1,36 @@
-# `wait` 节点
+# The `wait` node
 
-并发同步点：等一个 `fork` 组里的并发分支全部结束。
+A concurrency join point: waits for all concurrent branches in a `fork` group to finish.
 
-**只在并发组场景（用户明确要求并发、且声明了 `concurrency=group`）才用到**；
-并发默认关闭，单独一个 `wait` 没有意义。
+**Only used in the concurrency-group scenario (the user explicitly asked for concurrency and `concurrency=group` was
+declared)**; concurrency is off by default, and a lone `wait` means nothing.
 
-## config 形状
+## config shape
 
 ```json
 {
-  "fork_node_id": "<同一 process 链上的 fork 节点 id>",
+  "fork_node_id": "<id of the fork node on the same process chain>",
   "timeout": {"enabled": false, "seconds": 30}
 }
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `fork_node_id` | ✅ | — | `fork` 节点的 id，必须在**同一条 process 链**上；没填、指错、不在同一条链上都是 `config` 错误（不再报 `internal`） |
-| `timeout` | — | 未启用 → 走实例/系统上限（**不是 30 秒**） | `{enabled, seconds}` |
+| `fork_node_id` | ✅ | — | the `fork` node's id, which must be on the **same process chain**; missing, wrong, or on another chain are all `config` errors (no longer `internal`) |
+| `timeout` | — | not enabled → the instance / system limit (**not 30 seconds**) | `{enabled, seconds}` |
 
-无输出变量。
+No output variables.
 
-## 行为
+## Behaviour
 
-扫并发组成员的状态：任一 `failed` / `cancelled` → 本节点失败（`other`）；
-超时还没全部完成 → `timeout`。同一 fork 只能被一个 `wait` 等（重复 wait → `config`，属于图结构错误）。
+Scans the status of the concurrency group members: any `failed` / `cancelled` → this node fails (`other`);
+still incomplete at the timeout → `timeout`. A given fork can be waited on by only one `wait` (a duplicate wait → `config`, a graph
+structure error).
 
-## 出边
+## Outgoing edges
 
-普通节点：同步完成后沿**第一条出边**继续。
+An ordinary node: continues along **its first outgoing edge** once the join completes.
 
-源码：`service/flow/executors/wait.go`
+Source: `service/flow/executors/wait.go`

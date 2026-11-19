@@ -18,6 +18,7 @@ import (
 	flowsrepo "flame/nexus/shared/repository/flows"
 	skills "flame/nexus/shared/repository/skills"
 	svcendpoints "flame/nexus/shared/repository/svcendpoints"
+	"flame/nexus/shared/skeleton"
 	"flame/nexus/shared/versioning"
 	"flame/tools/xhttp"
 	"flame/tools/xlog"
@@ -84,7 +85,7 @@ func ListAgents(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -129,7 +130,7 @@ func GetAgent(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -138,7 +139,7 @@ func GetAgent(c *gin.Context) {
 	s, err := repo.GetAgent(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -174,6 +175,9 @@ type agentRequest struct {
 	// 调用授权（仅创建时生效）：新 agent 可调用谁 / 谁能调用新 agent
 	CanCallIDs  []string `json:"can_call_ids"`
 	CalledByIDs []string `json:"called_by_ids"`
+	// Lang 新建时用于生成 AGENT.md 骨架的语言（仅创建时生效，不进库）。
+	// 不传 / 不认识 → 英文骨架（见 shared/skeleton.Normalize）。
+	Lang string `json:"lang"`
 }
 
 // toModel 将请求转为 Agent
@@ -206,7 +210,7 @@ func CreateAgent(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -221,7 +225,7 @@ func CreateAgent(c *gin.Context) {
 	// 先校验：名称合法 + 不与其它 agent、工作流重名（任何写库之前）
 	req.Name = strings.TrimSpace(req.Name)
 	if !tools.ValidName(req.Name) {
-		xhttp.ErrJSON(c, "Invalid agent name (只允许字母数字横线，长度≤64)", nil, "")
+		xhttp.ErrCode(c, "agent.invalid_name", nil, "Invalid agent name (只允许字母数字横线，长度≤64)", "")
 		return
 	}
 	if err := validateAgentNameUnique(info, req.Name, ""); err != nil {
@@ -240,7 +244,7 @@ func CreateAgent(c *gin.Context) {
 		req.Status = models.StatusNormal
 	}
 	if req.Status != models.StatusNormal && req.Status != models.StatusDeprecated {
-		xhttp.ErrJSON(c, "status must be 1(正常) / 3(废弃)", nil, "")
+		xhttp.ErrCode(c, "agent.invalid_status", nil, "status must be 1(正常) / 3(废弃)", "")
 		return
 	}
 
@@ -288,7 +292,8 @@ func CreateAgent(c *gin.Context) {
 	if st, serr := getStorage(); serr == nil {
 		key := path.Join(tools.AgentsKey(info.Schema, agent.Name), entryFile)
 		if ex, _ := st.Exists(context.Background(), key); !ex {
-			_ = st.WriteFile(context.Background(), key, []byte(defaultAgentMD(agent.Name, req.Description)))
+			_ = st.WriteFile(context.Background(), key,
+				[]byte(skeleton.AgentMD(skeleton.Normalize(req.Lang), agent.Name, req.Description)))
 		}
 	}
 
@@ -320,7 +325,7 @@ func filterValidAgentIDs(info *auth.AuthInfo, selfID string, ids []string) []str
 func GetAgentRelations(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -332,7 +337,7 @@ func GetAgentRelations(c *gin.Context) {
 		return
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return
 	}
 
@@ -357,7 +362,7 @@ func GetAgentRelations(c *gin.Context) {
 func SetAgentRelations(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -378,12 +383,12 @@ func SetAgentRelations(c *gin.Context) {
 		return
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return
 	}
 	// 只有正常态允许改定义（端点对外开放不会自动带入任何冻结）
 	if !inst.IsModifiable() {
-		xhttp.ErrJSON(c, "agent 已废弃，不能修改（如需修改请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能修改（如需修改请先切回「正常」）", "")
 		return
 	}
 
@@ -407,7 +412,7 @@ func SetAgentRelations(c *gin.Context) {
 func GetAgentSkillBindings(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -416,14 +421,14 @@ func GetAgentSkillBindings(c *gin.Context) {
 	inst, err := repo.GetAgent(info, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
 		return
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return
 	}
 
@@ -446,7 +451,7 @@ func GetAgentSkillBindings(c *gin.Context) {
 func SetAgentSkillBindings(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info := authInfo.(*auth.AuthInfo)
@@ -465,19 +470,19 @@ func SetAgentSkillBindings(c *gin.Context) {
 	inst, err := repo.GetAgent(info, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
 		return
 	}
 	if inst == nil {
-		xhttp.ErrJSON(c, "Agent not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return
 	}
 	// 只有正常态允许改定义（与调用授权一致）
 	if !inst.IsModifiable() {
-		xhttp.ErrJSON(c, "agent 已废弃，不能修改（如需修改请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能修改（如需修改请先切回「正常」）", "")
 		return
 	}
 
@@ -500,7 +505,7 @@ func UpdateAgent(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -518,7 +523,7 @@ func UpdateAgent(c *gin.Context) {
 	old, err := repo.GetAgent(ai, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -526,7 +531,7 @@ func UpdateAgent(c *gin.Context) {
 	}
 	// 只有正常态允许改定义（含改名 / 迁移目录）
 	if old != nil && !old.IsModifiable() {
-		xhttp.ErrJSON(c, "agent 已废弃，不能修改（如需修改请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能修改（如需修改请先切回「正常」）", "")
 		return
 	}
 
@@ -539,7 +544,7 @@ func UpdateAgent(c *gin.Context) {
 			return
 		}
 		if !tools.ValidName(req.Name) {
-			xhttp.ErrJSON(c, "Invalid agent name (只允许字母数字横线，长度≤64)", nil, "")
+			xhttp.ErrCode(c, "agent.invalid_name", nil, "Invalid agent name (只允许字母数字横线，长度≤64)", "")
 			return
 		}
 		if err := validateAgentNameUnique(ai, req.Name, id); err != nil {
@@ -573,7 +578,7 @@ func UpdateAgent(c *gin.Context) {
 		req.Status = int(old.Status)
 	}
 	if req.Status != models.StatusNormal && req.Status != models.StatusDeprecated {
-		xhttp.ErrJSON(c, "status must be 1(正常) / 3(废弃)", nil, "")
+		xhttp.ErrCode(c, "agent.invalid_status", nil, "status must be 1(正常) / 3(废弃)", "")
 		return
 	}
 
@@ -595,11 +600,11 @@ func UpdateAgent(c *gin.Context) {
 	if renamed {
 		st, serr := getStorage()
 		if serr != nil {
-			xhttp.ErrJSON(c, "存储未就绪，无法迁移定义域/版本目录: "+serr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "存储未就绪，无法迁移定义域/版本目录: "+serr.Error(), "")
 			return
 		}
 		if rerr := paths.MoveEntityStorage(st, ai.Schema, paths.VersionAgents, old.Name, agent.Name); rerr != nil {
-			xhttp.ErrJSON(c, "迁移定义域/版本目录失败（改名未生效）: "+rerr.Error(), nil, "")
+			xhttp.ErrCode(c, "agent.rename_failed", nil, "迁移定义域/版本目录失败（改名未生效）: "+rerr.Error(), "")
 			return
 		}
 	}
@@ -616,7 +621,7 @@ func UpdateAgent(c *gin.Context) {
 			}
 		}
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -641,7 +646,7 @@ func DeleteAgent(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -652,7 +657,7 @@ func DeleteAgent(c *gin.Context) {
 	inst, err := repo.GetAgent(ai, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -665,7 +670,7 @@ func DeleteAgent(c *gin.Context) {
 	}
 	// 废弃不允许删除（需先切回「正常」）
 	if inst != nil && !inst.IsModifiable() {
-		xhttp.ErrJSON(c, "agent 已废弃，不能删除（如需删除请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能删除（如需删除请先切回「正常」）", "")
 		return
 	}
 
@@ -673,7 +678,7 @@ func DeleteAgent(c *gin.Context) {
 	// （skills.agent_id 没有外键，不能指望 DB 级联）。
 	if err := repo.DeleteAgent(ai, id); err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -701,7 +706,7 @@ func SetAgentStatus(c *gin.Context) {
 	// 从context中获取认证信息
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -718,13 +723,13 @@ func SetAgentStatus(c *gin.Context) {
 	switch body.Status {
 	case models.StatusNormal, models.StatusDeprecated:
 	default:
-		xhttp.ErrJSON(c, "status must be 1(正常) / 3(废弃)", nil, "")
+		xhttp.ErrCode(c, "agent.invalid_status", nil, "status must be 1(正常) / 3(废弃)", "")
 		return
 	}
 
 	if err := repo.UpdateStatus(ai, id, body.Status); err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")

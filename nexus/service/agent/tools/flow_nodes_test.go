@@ -110,12 +110,12 @@ func TestCreateNodeRejectsIllegalContainer(t *testing.T) {
 		args   map[string]any
 		wantEr string
 	}{
-		{"function 进容器", map[string]any{"flow": "demo", "type": "function", "parent_node": "7"}, "只能建在顶层"},
-		{"return 不在 function 里", map[string]any{"flow": "demo", "type": "return", "parent_node": "7"}, "function 容器内部"},
-		{"父节点不是容器", map[string]any{"flow": "demo", "type": "code", "parent_node": "2"}, "只有 loop / process / function"},
-		{"父节点不存在", map[string]any{"flow": "demo", "type": "code", "parent_node": "zz"}, "不存在"},
-		{"start 不能建", map[string]any{"flow": "demo", "type": "start"}, "不能建"},
-		{"entry 不能建", map[string]any{"flow": "demo", "type": "entry"}, "不能建"},
+		{"function 进容器", map[string]any{"flow": "demo", "type": "function", "parent_node": "7"}, "only be created at the top level"},
+		{"return 不在 function 里", map[string]any{"flow": "demo", "type": "return", "parent_node": "7"}, "inside a function container"},
+		{"父节点不是容器", map[string]any{"flow": "demo", "type": "code", "parent_node": "2"}, "only loop / process / function are containers"},
+		{"父节点不存在", map[string]any{"flow": "demo", "type": "code", "parent_node": "zz"}, "does not exist"},
+		{"start 不能建", map[string]any{"flow": "demo", "type": "start"}, "cannot create a node of type"},
+		{"entry 不能建", map[string]any{"flow": "demo", "type": "entry"}, "cannot create a node of type"},
 		{"knowledge 没有执行器", map[string]any{"flow": "demo", "type": "knowledge"}, "no executor registered"},
 	}
 	for _, tc := range cases {
@@ -218,7 +218,7 @@ func TestInsertNodeRejectsTerminalType(t *testing.T) {
 	_, err := (&insertNodeTool{}).Execute(context.Background(), c, map[string]any{
 		"flow": "demo", "edge_id": "10001", "type": "exit",
 	})
-	if err == nil || !strings.Contains(err.Error(), "出边") {
+	if err == nil || !strings.Contains(err.Error(), "no outgoing handle") {
 		t.Fatalf("err = %v, want 没有出边", err)
 	}
 	if len(fk.updatedDiagram) != 0 {
@@ -286,7 +286,7 @@ func TestDeleteNodeCascadesEdges(t *testing.T) {
 func TestDeleteNodeRefusesReferenced(t *testing.T) {
 	c, fk := edgeTestCtx(nodeTestDiagram)
 	_, err := (&deleteNodeTool{}).Execute(context.Background(), c, map[string]any{"flow": "demo", "node_id": "5"})
-	if err == nil || !strings.Contains(err.Error(), "引用") {
+	if err == nil || !strings.Contains(err.Error(), "still reference it") {
 		t.Fatalf("err = %v, want 拒绝并列出引用方", err)
 	}
 	if len(fk.updatedDiagram) != 0 {
@@ -446,7 +446,7 @@ func TestCreateNodeRejectsDuplicateLabel(t *testing.T) {
 	_, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{
 		"flow": "demo", "type": "code", "label": "计算",
 	})
-	if err == nil || !strings.Contains(err.Error(), "必须唯一") {
+	if err == nil || !strings.Contains(err.Error(), "must be unique") {
 		t.Fatalf("err = %v, want label 重名被拒", err)
 	}
 	if len(fk.updatedDiagram) != 0 {
@@ -466,8 +466,8 @@ func TestCreateNodeAutoSuffixForDefaultLabel(t *testing.T) {
 		node, _ := out.(map[string]any)["node"].(map[string]any)
 		labels = append(labels, nodeLabel(t, fk, node["id"].(string)))
 	}
-	if labels[0] != "代码" {
-		t.Errorf("第一个默认 label = %q, want 代码", labels[0])
+	if labels[0] != "Code" {
+		t.Errorf("第一个默认 label = %q, want Code", labels[0])
 	}
 	if labels[0] == labels[1] {
 		t.Errorf("两个默认 label 都是 %q：应该自动加后缀", labels[0])
@@ -498,7 +498,7 @@ func TestUpdateNodeRenameLabelRules(t *testing.T) {
 	_, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{
 		"flow": "demo", "node_id": "2", "label": "上游",
 	})
-	if err == nil || !strings.Contains(err.Error(), "必须唯一") {
+	if err == nil || !strings.Contains(err.Error(), "must be unique") {
 		t.Fatalf("err = %v, want 改名重名被拒", err)
 	}
 	if len(fk.updatedDiagram) != 0 {
@@ -528,7 +528,7 @@ func TestCreateFlowRejectsDuplicateLabels(t *testing.T) {
 			map[string]any{"type": "code", "label": "同名", "config": codeCfg},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "重名") {
+	if err == nil || !strings.Contains(err.Error(), "collides with") {
 		t.Fatalf("err = %v, want 第 2 步 label 重名被拒", err)
 	}
 }

@@ -1,69 +1,72 @@
-# 改结构：`create_node` / `insert_node` / `update_node` / `delete_node`
+# Changing structure: `create_node` / `insert_node` / `update_node` / `delete_node`
 
-`create_flow` 一次给全 `steps` 最省事。漏了节点、要插到链中间、要改 `config`、要挪进容器，用这四个。
-它们只动 `nodes`（以及必要的 `edges`），不碰流程图以外的任何东西。
+Supplying all `steps` to `create_flow` in one go is the least work. For a missed node, an insertion mid-chain, a `config`
+change or a move into a container, use these four. They touch only `nodes` (plus the `edges` that are necessarily affected) and
+nothing outside the flow diagram.
 
-## 什么时候用哪个
+## Which one to use
 
-| 想干什么 | 用哪个 |
+| Goal | Tool |
 |---|---|
-| 加一个节点（顶层或容器内） | `create_node` |
-| 在已有链的某处插一个节点 | `insert_node`（原子：删旧边 + 连 A→新→B） |
-| 改标题 / 改 config / 挪进容器 / 挪位置 | `update_node` |
-| 删节点（连带边与子树） | `delete_node` |
+| Add a node (top level or inside a container) | `create_node` |
+| Insert a node somewhere in an existing chain | `insert_node` (atomic: delete the old edge + connect A→new→B) |
+| Change the label / config / move into a container / move it | `update_node` |
+| Delete a node (with its edges and subtree) | `delete_node` |
 
-建完节点还没有边，**下一步用 `create_edge`**（返回体里的 `handles` 直接给出可用位置）。
+A newly created node has no edges yet — **the next step is `create_edge`** (the `handles` in the return value state the
+positions available).
 
 ## `create_node`
 
 ```json
-{"flow": "daily-sales-report", "type": "code", "label": "清洗"}
+{"flow": "daily-sales-report", "type": "code", "label": "clean"}
 {"flow": "daily-sales-report", "type": "http", "parent_node": "7"}
 ```
 
-参数：`flow`、`type`、`label?`、`config?`、`parent_node?`。
+Arguments: `flow`, `type`, `label?`, `config?`, `parent_node?`.
 
-- `config` **不给就用该类型的默认模板**（与前端「新建节点」写进去的一致：`http` 带 outputs、
-  `assign` 带空 `inputs/outputs/targets/assignments`、`loop` 带 `loop` + `loop_vars`、
-  `branch`/`intent` 自动带一条 `children`）。给了就按你的来，缺的键不补。
-- `parent_node` 只能是 `loop` / `process` / `function` 的 id。传了就建在容器里（坐标是相对父节点的，
-  并带 `extent` 限制在父节点范围内）。
-- **容器自动带 `entry`**；父容器原来没有 `entry` 也会顺手补一个（返回 `parent_entry` 并给 warning）——
-  没有 entry 的容器会「成功但什么都没跑」。
-- `function` 只能建在顶层；`return` 只能建在 `function` 容器内部；`start` / `entry` 不接受手动创建。
-- 返回：`node` `entry`（新建容器的）`parent_entry`（补的）`handles` `warnings` `node_count` `edge_count`。
+- Without `config` the **type's default template is used** (the same one the front end's "New node" writes: `http` comes with
+  outputs, `assign` with empty `inputs/outputs/targets/assignments`, `loop` with `loop` + `loop_vars`, `branch`/`intent`
+  automatically with one `children` entry). If you supply it, it is used as-is and missing keys are not filled in.
+- `parent_node` may only be the id of a `loop` / `process` / `function`. Passing it builds the node inside that container
+  (coordinates are relative to the parent, with `extent` constraining it inside the parent).
+- **Containers get an `entry` automatically**; if the parent container had none, one is added along the way (returning
+  `parent_entry` and a warning) — a container without an entry "succeeds but runs nothing".
+- `function` can only be created at the top level; `return` only inside a `function` container; `start` / `entry` cannot be created manually.
+- Returns: `node` `entry` (of the container just created) `parent_entry` (the one added) `handles` `warnings` `node_count` `edge_count`.
 
 ## `insert_node`
 
 ```json
-{"flow": "daily-sales-report", "edge_id": "04958", "type": "code", "label": "审计"}
+{"flow": "daily-sales-report", "edge_id": "04958", "type": "code", "label": "audit"}
 ```
 
-- `edge_id` 来自 `read_flow` 的 `diagram.edges[].id`。
-- 新节点落在与这条边相同的 `parent` 下；原来那条边被删，改成 `A→新`、`新→B` 两条。
-- 只能插**既有入边又有出边**的节点：`function`（没有边）、`exit`/`break`/`continue`/`return`（没有出边）
-  都会被拒绝。
-- 返回：`node` `edges`（两条）`handles` `warnings`。
+- `edge_id` comes from `read_flow`'s `diagram.edges[].id`.
+- The new node lands under the same `parent` as that edge; the old edge is deleted and replaced by two: `A→new` and `new→B`.
+- Only a node that ends up with **both an incoming and an outgoing edge** can be inserted: `function` (no edges) and
+  `exit`/`break`/`continue`/`return` (no outgoing edge) are rejected.
+- Returns: `node` `edges` (the two edges) `handles` `warnings`.
 
 ## `update_node`
 
 ```json
-{"flow": "daily-sales-report", "node_id": "3", "label": "改成新标题"}
-{"flow": "daily-sales-report", "node_id": "3", "config": {...}}          // 整体替换
-{"flow": "daily-sales-report", "node_id": "3", "config_patch": {"limit": 5, "window": null}}  // 顶层合并，null = 删键
-{"flow": "daily-sales-report", "node_id": "4", "parent_node": "7"}       // 移进容器
-{"flow": "daily-sales-report", "node_id": "4", "parent_node": ""}        // 移回顶层
-{"flow": "daily-sales-report", "node_id": "3", "position": {"x": 1240, "y": 320}}  // 挪位置
+{"flow": "daily-sales-report", "node_id": "3", "label": "new title"}
+{"flow": "daily-sales-report", "node_id": "3", "config": {...}}          // full replacement
+{"flow": "daily-sales-report", "node_id": "3", "config_patch": {"limit": 5, "window": null}}  // top-level merge, null = delete the key
+{"flow": "daily-sales-report", "node_id": "4", "parent_node": "7"}       // move into a container
+{"flow": "daily-sales-report", "node_id": "4", "parent_node": ""}        // move back to the top level
+{"flow": "daily-sales-report", "node_id": "3", "position": {"x": 1240, "y": 320}}  // move it
 ```
 
-- `config` 与 `config_patch` **二选一**。返回体里带最终 `config`，改完扫一眼。
-- `position` 是画布坐标：顶层节点写绝对值；容器内节点写**相对父容器**的坐标。
-  自动排版看着别扭时用它微调，规则同 `SKILL.md` 的「布局」：`x`/`y` 取 20 的倍数，
-  主链同 `y`、相邻叶子 `x` 步长 200（`branch` / 容器之后 380），分支放分支节点右下方（行间 ≥ 72），别和已有节点重叠。
-  返回的 `node.position` 就是落库后的坐标。
-- 改 `parent_node` 时：**横跨新旧容器的边会被删掉**（跨 `parent_node` 的边本来就不合法），
-  返回 `removed_edges`，需要在新容器里重新 `create_edge`。
-- 不能把节点移进它自己的子树；`function` 不能移进容器；`start` / `entry` 不能移动。
+- `config` and `config_patch` are **mutually exclusive**. The return value carries the final `config`; glance at it afterwards.
+- `position` is canvas coordinates: absolute for top-level nodes, **relative to the parent container** for nodes inside one.
+  Use it to fine-tune when automatic layout looks off, following the same rules as "Layout" in `SKILL.md`: `x`/`y` are
+  multiples of 20, the main chain shares one `y` with an `x` step of 200 between adjacent leaves (380 after `branch` /
+  containers), branches go below-right of the branch node (rows ≥ 72 apart), and nothing overlaps an existing node.
+  The returned `node.position` is the coordinate as stored.
+- When changing `parent_node`: **edges crossing between the old and new container are deleted** (cross-`parent_node` edges were
+  never valid), returned in `removed_edges`; reconnect them inside the new container with `create_edge`.
+- A node cannot be moved into its own subtree; `function` cannot be moved into a container; `start` / `entry` cannot be moved.
 
 ## `delete_node`
 
@@ -71,51 +74,54 @@
 {"flow": "daily-sales-report", "node_id": "4"}
 ```
 
-- 连带删掉与该节点相连的所有边。
-- 删容器 = 删整棵子树（含它自己的 `entry`），`deleted_nodes` 会列全。
-- **被引用时拒绝**，并列出引用方：
+- Deletes every edge connected to that node along with it.
+- Deleting a container = deleting its whole subtree (including its own `entry`); `deleted_nodes` lists them all.
+- **Refused while referenced**, listing the referrers:
   - `config.inputs.<key>.source_ref`
-  - `config.target`（`call` 调用目标）
-  - `config.fork_node_id`（`wait` 等的并发组）
+  - `config.target` (the `call` target)
+  - `config.fork_node_id` (the concurrency group a `wait` joins)
 
-  先 `update_node` 把这些引用改掉再删，否则删完运行期直接报取值失败。
-- `start` 不能删（删了整张图跑不起来）；`entry` 也不能单独删（随容器走）。
+  Change those references with `update_node` first, or the run fails to resolve values right after the delete.
+- `start` cannot be deleted (the whole graph could not run); `entry` cannot be deleted on its own (it goes with the container).
 
-## label 必须全图唯一
+## Labels must be unique across the graph
 
-`label` 是 `config.inputs.*.source_ref`、`call.config.target`、`wait.config.fork_node_id` 的**可写形式**
-（工具会按 label 换真实 id），所以重名会让这些引用指向错误节点。全流程图内 label 必须唯一：
+`label` is the **writable form** of `config.inputs.*.source_ref`, `call.config.target` and `wait.config.fork_node_id` (the tool
+replaces it with the real id), so a duplicate makes those references point at the wrong node. Labels must be unique within the
+whole flow graph:
 
-| 场景 | 撞名怎么办 |
+| Situation | What happens on a collision |
 |---|---|
-| `create_flow` 的 `steps[].label`（显式写的） | **报错**，说明是第几步、被哪个节点 id 占用 |
-| `create_node` / `insert_node` 的 `label` | **报错** |
-| `update_node` 改名 | **报错**（改成自己原来的名字不算撞） |
-| 不写 `label`（用默认名）、容器自动生成的 `entry` | **自动加 `-2` / `-3` 后缀**，不会失败 |
-| 画布拖入节点 / 面板改名 | **自动加 3 位字符数字后缀**（如 `代码-x7k`），并提示已改名 |
-| 保存接口（画布「保存」） | **拒绝保存**：`节点名称不能重复：「代码」（节点 2 与 3）…`，改名后才能存 |
+| `steps[].label` written explicitly in `create_flow` | **error**, naming the step and the node id that holds it |
+| `label` on `create_node` / `insert_node` | **error** |
+| Renaming via `update_node` | **error** (renaming to its own current name is not a collision) |
+| Omitted `label` (default name), container-generated `entry` | **a `-2` / `-3` suffix is appended automatically**; no failure |
+| Dragging a node in on the canvas / renaming in the panel | **a 3-character alphanumeric suffix is appended** (e.g. `code-x7k`), with a notice that it was renamed |
+| The save endpoint (canvas "Save") | **refuses to save**: duplicate node name ("Code" used by nodes 2 and 3)…; rename before saving |
 
-所以：
+Therefore:
 
-- 想稳稳引用某一步时，**给它起个明确的名字**，重名会被拦下来，不会默默指错；
-- 同类型的第二个「代码」节点会自动叫 `代码-2`，不要以为两个都叫「代码」；
-- 第二个容器的入口叫 `入口-2`（`entry` 也参与唯一性）。
+- to reference a step reliably, **give it a distinct name**; duplicates are blocked, so it never silently points elsewhere;
+- the second "Code" node of the same type is automatically called `code-2`; do not assume both are called "Code";
+- the second container's entry is called `entry-2` (`entry` participates in uniqueness too).
 
-## 容器的结构约定
+## Container structure conventions
 
-容器（`loop` / `process` / `function`）的执行入口是 `parent_node == 容器id && type == "entry"` 的节点。
-找不到入口会在运行期报 `config` 错误（`... body entry node not found`），不再静默跳过。所以：
+A container (`loop` / `process` / `function`) executes from the node where `parent_node == container id && type == "entry"`.
+When no entry is found it reports a `config` error at runtime (`... body entry node not found`), no longer a silent skip. So:
 
-- 往容器里加节点后，确认容器有 `entry`，并且 `entry` 有一条出边指向子链首节点（`create_edge`）。
-- 容器内部节点之间可以自由连线，但**不能跨容器**：`parent_node` 不同的两个节点连不上。
-- 容器可以嵌套（`loop` 里放 `process`），`return` 必须在 `function` 的任意层祖先里。
+- after adding a node into a container, confirm the container has an `entry` and that `entry` has an outgoing edge to the first
+  child node (`create_edge`);
+- nodes inside a container may be connected freely, but **never across containers**: two nodes with different `parent_node`
+  cannot be connected;
+- containers can nest (`process` inside `loop`); `return` must be inside a `function` at any ancestor level.
 
-## 与其他工具的分工
+## Division of work with the other tools
 
-| 工具 | 边界 |
+| Tool | Boundary |
 |---|---|
-| `create_flow` | 一次建出主干（含 `branches` / `children`）；步骤内的结构它最省事 |
-| `create_node` / `insert_node` | 只建节点，不替你连边（`insert_node` 除外，它自带两条边） |
-| `create_edge` / `update_edge` / `delete_edge` | 只动边，不建节点、不改 `config` |
-| `update_node` | 只改 `label` / `config` / `parent_node` / `position`，不改边（除了清理跨容器边） |
-| `delete_node` | 删节点 + 相关边，不重建 |
+| `create_flow` | builds the whole main chain at once (including `branches` / `children`); least work for structure within the steps |
+| `create_node` / `insert_node` | create nodes only and do not connect them for you (`insert_node` excepted — it brings its two edges) |
+| `create_edge` / `update_edge` / `delete_edge` | edges only; create no nodes, change no `config` |
+| `update_node` | changes only `label` / `config` / `parent_node` / `position`, never edges (except cleaning up cross-container edges) |
+| `delete_node` | deletes the node plus its edges; never rebuilds |

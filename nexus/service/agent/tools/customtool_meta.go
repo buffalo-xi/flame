@@ -101,60 +101,60 @@ func (t *createCustomToolTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "create_custom_tool",
 		Category: CategoryCustomTool,
-		Description: "新建一个租户级**自定义工具**（仅超级智能体）。自定义工具是租户自己的代码：" +
-			"模型给参数、拿到结构化结果，运行时走 /v1/exec 一次性进程（要求租户已开通 " + capability.Exec + "）。" +
-			"本工具只建实体（表行 + tools/<name>/ 目录 + 可跑的最小骨架），代码请随后用 " +
-			"write_file 写 /tools/<name>/<entry>（**前导 / 表示从租户根算**，少了它文件会落进会话工作区，工具读不到），" +
-			"再用 grant_agent_tool 授 ref `custom:<name>` 给目标 agent。" +
-			"工具名创建后不可改（会打断已有授权）。",
+		Description: "Create a tenant-level **custom tool** (supervisor only). A custom tool is the tenant's own code: " +
+			"the model supplies arguments and gets a structured result; at run time it uses the one-shot /v1/exec process (requires the tenant to have " + capability.Exec + " enabled). " +
+			"This tool only creates the entity (DB row + tools/<name>/ directory + a minimal runnable skeleton). Write the code afterwards with " +
+			"write_file to /tools/<name>/<entry> (**the leading / means the tenant root**; without it the file lands in the session workspace and the tool cannot read it), " +
+			"then grant the ref `custom:<name>` to the target agent with grant_agent_tool. " +
+			"The tool name cannot be changed after creation (it would break existing grants).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "工具短名：字母/数字/短横线，不能以短横线开头，不能含双下划线或点",
+					"description": "Tool short name: letters/digits/hyphens, must not start with a hyphen, must not contain a double underscore or a dot",
 				},
 				"description": map[string]any{
 					"type":        "string",
-					"description": "给模型看的用途说明（决定它何时被调用，写清边界）",
+					"description": "Purpose shown to the model (decides when it gets called — state the boundaries clearly)",
 				},
-				"display_name": map[string]any{"type": "string", "description": "管理端展示名（不进模型上下文，可空）"},
+				"display_name": map[string]any{"type": "string", "description": "Admin-facing display name (not part of the model context; may be empty)"},
 				"lang": map[string]any{
 					"type":        "string",
-					"description": "python（默认）/ js / lua / sh",
+					"description": "python (default) / js / lua / sh",
 					"enum":        []any{"python", "js", "lua", "sh"},
 				},
 				"entry": map[string]any{
 					"type":        "string",
-					"description": "入口文件（相对 tools/<name>/，必须留在该目录内）；缺省按语言取 main.py/js/lua/sh",
+					"description": "Entry file (relative to tools/<name>/, must stay inside that directory); defaults to main.py/js/lua/sh by language",
 				},
 				"parameters": map[string]any{
 					"type":        "object",
-					"description": "入参 JSON Schema（发给模型），如 {\"type\":\"object\",\"properties\":{...}}",
+					"description": "Input JSON Schema (sent to the model), e.g. {\"type\":\"object\",\"properties\":{...}}",
 				},
 				"output": map[string]any{
 					"type":        "object",
-					"description": "出参 JSON Schema（不发给模型，仅用于校验脚本输出）",
+					"description": "Output JSON Schema (not sent to the model; used only to validate the script output)",
 				},
 				"timeout_ms": map[string]any{
 					"type":        "integer",
-					"description": "单次执行超时（毫秒，缺省 60000，上限 600000）",
+					"description": "Per-run timeout in milliseconds (default 60000, max 600000)",
 				},
 				"max_output_bytes": map[string]any{
 					"type":        "integer",
-					"description": "stdout 上限（字节，缺省 65536，上限 1048576）；超限即失败",
+					"description": "stdout cap in bytes (default 65536, max 1048576); exceeding it fails the run",
 				},
 				"egress": map[string]any{
 					"type":        "boolean",
-					"description": "是否允许脚本访问外网；需要平台已开通 " + capability.Egress + "，否则本工具直接拒绝",
+					"description": "Whether the script may reach the internet; requires " + capability.Egress + " to be enabled by the platform, otherwise this tool refuses",
 				},
 				"config_fields": map[string]any{
 					"type":        "array",
-					"description": "配置项声明（[{key,label,type,help,secret,required,default}]），据此渲染表单并决定哪些打码",
+					"description": "Config field declarations ([{key,label,type,help,secret,required,default}]); drives the rendered form and decides which values are masked",
 				},
 				"configs": map[string]any{
 					"type":        "object",
-					"description": "配置值（明文；secret 项的用途是执行时注入，不要写进脚本）",
+					"description": "Config values (plaintext; secret entries are only injected at run time — never hardcode them in the script)",
 				},
 			},
 			"required": []any{"name", "description"},
@@ -164,7 +164,7 @@ func (t *createCustomToolTool) Meta() ToolMeta {
 
 func (t *createCustomToolTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	if c.CustomToolsAdmin == nil {
-		return nil, errors.New("自定义工具管理不可用")
+		return nil, errors.New("custom tool management is not available")
 	}
 	name := strings.TrimSpace(argString(args, "name"))
 	if err := validateCustomToolName(name); err != nil {
@@ -194,12 +194,12 @@ func (t *createCustomToolTool) Execute(ctx context.Context, c *Context, args map
 	in.ConfigFields = argMapSlice(args, "config_fields")
 	if v := argInt(args, "max_output_bytes"); v > 0 {
 		if v > maxCustomToolOutput {
-			return nil, fmt.Errorf("max_output_bytes 最大 %d", maxCustomToolOutput)
+			return nil, fmt.Errorf("max_output_bytes is at most %d", maxCustomToolOutput)
 		}
 		in.MaxOutputBytes = v
 	}
 	if in.TimeoutMS > maxCustomToolTimeoutMS {
-		return nil, fmt.Errorf("timeout_ms 最大 %d", maxCustomToolTimeoutMS)
+		return nil, fmt.Errorf("timeout_ms is at most %d", maxCustomToolTimeoutMS)
 	}
 
 	spec, err := c.CustomToolsAdmin.Create(ctx, in)
@@ -225,24 +225,24 @@ func (t *updateCustomToolTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "update_custom_tool",
 		Category: CategoryCustomTool,
-		Description: "修改自定义工具的**元数据**（描述 / 参数 schema / 语言 / 入口 / 超时 / 出网 / 配置；仅超级智能体）。" +
-			"只传要改的字段，其余保持原样。工具名与状态不能改（改名会打断授权，状态切换只走管理端）。" +
-			"代码内容请用 write_file 改 tools/<name>/<entry>。",
+		Description: "Update a custom tool's **metadata** (description / parameter schema / language / entry / timeout / egress / config; supervisor only). " +
+			"Pass only the fields you want to change; everything else stays as it is. Name and status cannot be changed (renaming breaks grants, status switches go through the admin UI only). " +
+			"Change the code itself with write_file to tools/<name>/<entry>.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":             map[string]any{"type": "string", "description": "要改的工具短名"},
-				"display_name":     map[string]any{"type": "string", "description": "管理端展示名（传空串 = 清空）"},
-				"description":      map[string]any{"type": "string", "description": "给模型看的用途说明"},
+				"name":             map[string]any{"type": "string", "description": "Short name of the tool to update"},
+				"display_name":     map[string]any{"type": "string", "description": "Admin-facing display name (pass an empty string to clear)"},
+				"description":      map[string]any{"type": "string", "description": "Purpose shown to the model"},
 				"lang":             map[string]any{"type": "string", "enum": []any{"python", "js", "lua", "sh"}},
-				"entry":            map[string]any{"type": "string", "description": "入口文件（相对工具目录）"},
-				"parameters":       map[string]any{"type": "object", "description": "入参 JSON Schema（整份替换）"},
-				"output":           map[string]any{"type": "object", "description": "出参 JSON Schema（整份替换）"},
-				"timeout_ms":       map[string]any{"type": "integer", "description": "单次执行超时（毫秒）"},
-				"max_output_bytes": map[string]any{"type": "integer", "description": "stdout 上限（字节）"},
-				"egress":           map[string]any{"type": "boolean", "description": "是否允许出网（需 " + capability.Egress + "）"},
-				"config_fields":    map[string]any{"type": "array", "description": "配置项声明（整份替换）"},
-				"configs":          map[string]any{"type": "object", "description": "配置值（按键合并，未提供的键保持原值）"},
+				"entry":            map[string]any{"type": "string", "description": "Entry file (relative to the tool directory)"},
+				"parameters":       map[string]any{"type": "object", "description": "Input JSON Schema (replaced wholesale)"},
+				"output":           map[string]any{"type": "object", "description": "Output JSON Schema (replaced wholesale)"},
+				"timeout_ms":       map[string]any{"type": "integer", "description": "Per-run timeout in milliseconds"},
+				"max_output_bytes": map[string]any{"type": "integer", "description": "stdout cap in bytes"},
+				"egress":           map[string]any{"type": "boolean", "description": "Whether the script may reach the internet (requires " + capability.Egress + ")"},
+				"config_fields":    map[string]any{"type": "array", "description": "Config field declarations (replaced wholesale)"},
+				"configs":          map[string]any{"type": "object", "description": "Config values (merged by key; keys you omit keep their current value)"},
 			},
 			"required": []any{"name"},
 		},
@@ -251,7 +251,7 @@ func (t *updateCustomToolTool) Meta() ToolMeta {
 
 func (t *updateCustomToolTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	if c.CustomToolsAdmin == nil {
-		return nil, errors.New("自定义工具管理不可用")
+		return nil, errors.New("custom tool management is not available")
 	}
 	name := strings.TrimSpace(argString(args, "name"))
 	if err := validateCustomToolName(name); err != nil {
@@ -282,13 +282,13 @@ func (t *updateCustomToolTool) Execute(ctx context.Context, c *Context, args map
 	}
 	if v := argInt(args, "timeout_ms"); v > 0 {
 		if v > maxCustomToolTimeoutMS {
-			return nil, fmt.Errorf("timeout_ms 最大 %d", maxCustomToolTimeoutMS)
+			return nil, fmt.Errorf("timeout_ms is at most %d", maxCustomToolTimeoutMS)
 		}
 		in.TimeoutMS = &v
 	}
 	if v := argInt(args, "max_output_bytes"); v > 0 {
 		if v > maxCustomToolOutput {
-			return nil, fmt.Errorf("max_output_bytes 最大 %d", maxCustomToolOutput)
+			return nil, fmt.Errorf("max_output_bytes is at most %d", maxCustomToolOutput)
 		}
 		in.MaxOutputBytes = &v
 	}
@@ -320,14 +320,14 @@ func (t *deleteCustomToolTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "delete_custom_tool",
 		Category: CategoryCustomTool,
-		Description: "删除自定义工具及其代码目录（仅超级智能体）。若它仍被 agent 授权 / skill 依赖 / " +
-			"工具组引用，默认**拒绝**并列出引用方；确认要删再传 force=true。授权行不会被清理，" +
-			"因此误删后重建同名工具可自动恢复授权。",
+		Description: "Delete a custom tool and its code directory (supervisor only). If it is still granted to an agent, required by a skill, or " +
+			"referenced by a tool group, the call is **refused** by default and the referrers are listed; pass force=true once you are sure. " +
+			"Grant rows are not cleaned up, so recreating a tool with the same name restores the grants automatically.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":  map[string]any{"type": "string", "description": "要删除的工具短名"},
-				"force": map[string]any{"type": "boolean", "description": "忽略引用直接删除"},
+				"name":  map[string]any{"type": "string", "description": "Short name of the tool to delete"},
+				"force": map[string]any{"type": "boolean", "description": "Delete anyway, ignoring references"},
 			},
 			"required": []any{"name"},
 		},
@@ -336,7 +336,7 @@ func (t *deleteCustomToolTool) Meta() ToolMeta {
 
 func (t *deleteCustomToolTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	if c.CustomToolsAdmin == nil {
-		return nil, errors.New("自定义工具管理不可用")
+		return nil, errors.New("custom tool management is not available")
 	}
 	name := strings.TrimSpace(argString(args, "name"))
 	if err := validateCustomToolName(name); err != nil {
@@ -348,12 +348,12 @@ func (t *deleteCustomToolTool) Execute(ctx context.Context, c *Context, args map
 	// 只有带 force 时才会既删成功又返回引用方，所以判据里必须带上 !force，
 	// 否则 force 删除会被误报成拒绝。
 	if err == nil && !force && refs.Total() > 0 {
-		return nil, fmt.Errorf("自定义工具 %q 仍被引用（agents=%v skills=%v groups=%v），确认删除请传 force=true",
+		return nil, fmt.Errorf("custom tool %q is still referenced (agents=%v skills=%v groups=%v); pass force=true to delete it anyway",
 			name, refs.Agents, refs.Skills, refs.Groups)
 	}
 	if err != nil {
 		if refs.Total() > 0 {
-			return nil, fmt.Errorf("%w（引用方：agents=%v skills=%v groups=%v，确认删除请传 force=true）",
+			return nil, fmt.Errorf("%w (referenced by agents=%v skills=%v groups=%v; pass force=true to delete it anyway)",
 				err, refs.Agents, refs.Skills, refs.Groups)
 		}
 		return nil, err
@@ -376,8 +376,8 @@ func (t *listCustomToolsTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "list_custom_tools",
 		Category: CategoryCustomTool,
-		Description: "列出本租户全部自定义工具（含锁定 / 废弃态；仅超级智能体）。" +
-			"模型在工具目录里只能看到已授权的 custom__*，看不到未授权或被锁定的，本工具补这个盲区。",
+		Description: "List every custom tool in this tenant (including locked / deprecated ones; supervisor only). " +
+			"The model only sees granted custom__* tools in its catalog and can never see ungranted or locked ones — this tool covers that blind spot.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -387,7 +387,7 @@ func (t *listCustomToolsTool) Meta() ToolMeta {
 
 func (t *listCustomToolsTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	if c.CustomToolsAdmin == nil {
-		return nil, errors.New("自定义工具管理不可用")
+		return nil, errors.New("custom tool management is not available")
 	}
 	list, err := c.CustomToolsAdmin.ListAll(ctx)
 	if err != nil {
@@ -409,16 +409,16 @@ const (
 // 切乱，让模型看到 custom__a__b 这种无法反解的工具名。
 func validateCustomToolName(name string) error {
 	if name == "" {
-		return errors.New("name 不能为空")
+		return errors.New("name must not be empty")
 	}
 	if !ValidName(name) {
-		return fmt.Errorf("工具名 %q 只能包含字母、数字与短横线，且不能以短横线开头", name)
+		return fmt.Errorf("tool name %q may only contain letters, digits and hyphens, and must not start with a hyphen", name)
 	}
 	if strings.Contains(name, "__") {
-		return fmt.Errorf("工具名 %q 不能包含连续下划线（对外名是 custom__<name>）", name)
+		return fmt.Errorf("tool name %q must not contain consecutive underscores (the exposed name is custom__<name>)", name)
 	}
 	if strings.HasPrefix(name, CustomToolPrefix) {
-		return fmt.Errorf("工具名 %q 不能以 %q 开头（那是内部命名空间）", name, CustomToolPrefix)
+		return fmt.Errorf("tool name %q must not start with %q (that is the internal namespace)", name, CustomToolPrefix)
 	}
 	return nil
 }
@@ -432,14 +432,14 @@ func validateScriptEntry(entry string) error {
 		return nil // 由服务层按语言补默认
 	}
 	if strings.ContainsRune(entry, '\\') {
-		return fmt.Errorf("entry %q 请用 / 分隔", entry)
+		return fmt.Errorf("entry %q must be separated with /", entry)
 	}
 	if path.IsAbs(entry) {
-		return fmt.Errorf("entry %q 必须是相对工具目录的路径", entry)
+		return fmt.Errorf("entry %q must be a path relative to the tool directory", entry)
 	}
 	clean := path.Clean(entry)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-		return fmt.Errorf("entry %q 不能跳出工具目录", entry)
+		return fmt.Errorf("entry %q must not escape the tool directory", entry)
 	}
 	return nil
 }
@@ -454,10 +454,10 @@ func requireCustomToolCaps(c *Context, egress bool) error {
 		return nil // 无租户语义的调用方（单测 / 内部），不按能力拦
 	}
 	if egress && !c.Caps[capability.Egress] {
-		return fmt.Errorf("egress=true 需要平台开通 %s（自定义工具走 exec 通道，出网是单独一档）", capability.Egress)
+		return fmt.Errorf("egress=true requires the platform to grant %s (custom tools run on the exec channel, and egress is a separate grant)", capability.Egress)
 	}
 	if !c.Caps[capability.Exec] {
-		return fmt.Errorf("自定义工具运行需要平台开通 %s，当前租户未开通", capability.Exec)
+		return fmt.Errorf("running custom tools requires the platform to grant %s, which this tenant does not have", capability.Exec)
 	}
 	return nil
 }

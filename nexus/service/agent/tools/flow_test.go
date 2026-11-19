@@ -205,23 +205,23 @@ func TestCreateFlowValidation(t *testing.T) {
 		{
 			"缺描述",
 			map[string]any{"name": "f", "steps": []any{map[string]any{"type": "llm"}}},
-			"description 不能为空",
+			"description must not be empty",
 		},
 		{
 			"空步骤",
 			map[string]any{"name": "f", "description": "d", "steps": []any{}},
-			"steps 必须是非空数组",
+			"steps must be a non-empty array",
 		},
 		{
 			// start 由工具自动生成，写进 steps 会变成 id!=1 的 start 节点，运行时无执行器
 			"结构节点",
 			map[string]any{"name": "f", "description": "d", "steps": []any{map[string]any{"type": "start"}}},
-			"不支持的步骤类型",
+			"unsupported step type",
 		},
 		{
 			"无执行器的节点",
 			map[string]any{"name": "f", "description": "d", "steps": []any{map[string]any{"type": "knowledge"}}},
-			"不支持的步骤类型",
+			"unsupported step type",
 		},
 		{
 			"非法端点协议",
@@ -230,18 +230,18 @@ func TestCreateFlowValidation(t *testing.T) {
 				"steps":              []any{map[string]any{"type": "llm"}},
 				"external_protocols": []any{"http"},
 			},
-			"只支持 mcp / rpc",
+			"supports mcp / rpc only",
 		},
 		{
 			// 名字就是端点名 / 模型侧工具名 local__<name>：中文能建出来，却对外开放不了、授权不上
 			"名字含中文",
 			map[string]any{"name": "每日简报", "description": "d", "steps": []any{map[string]any{"type": "llm"}}},
-			"只能用字母、数字与横线",
+			"letters, digits and hyphens only",
 		},
 		{
 			"名字过长",
 			map[string]any{"name": strings.Repeat("a", 65), "description": "d", "steps": []any{map[string]any{"type": "llm"}}},
-			"只能用字母、数字与横线",
+			"letters, digits and hyphens only",
 		},
 		{
 			// 写坏的 schema 在创建期不报错，到调用方那里才变成「参数没有说明」
@@ -249,14 +249,14 @@ func TestCreateFlowValidation(t *testing.T) {
 			map[string]any{"name": "f", "description": "d",
 				"steps":     []any{map[string]any{"type": "http"}},
 				"arguments": map[string]any{"properties": map[string]any{"x": map[string]any{"type": "date"}}}},
-			`type="date" 不支持`,
+			`type="date"`,
 		},
 		{
 			"数组缺 items",
 			map[string]any{"name": "f", "description": "d",
 				"steps":     []any{map[string]any{"type": "http"}},
 				"arguments": map[string]any{"properties": map[string]any{"x": map[string]any{"type": "array"}}}},
-			"必须写 items",
+			"needs items",
 		},
 		{
 			"required 指向不存在的参数",
@@ -266,7 +266,7 @@ func TestCreateFlowValidation(t *testing.T) {
 					"properties": map[string]any{"x": map[string]any{"type": "string"}},
 					"required":   []any{"y"},
 				}},
-			"properties 里没有这个参数",
+			"properties has no such parameter",
 		},
 	}
 	for _, tc := range cases {
@@ -364,7 +364,7 @@ func TestCreateFlowWarnsLangNotInWorkflowPool(t *testing.T) {
 	if len(warns) != 1 {
 		t.Fatalf("warnings = %v, want 仅 js 那一步一条", warns)
 	}
-	for _, want := range []string{"js", "code.lang", "unsupported_lang", "lua、python"} {
+	for _, want := range []string{"js", "code.lang", "unsupported_lang", "lua, python"} {
 		if !strings.Contains(warns[0], want) {
 			t.Errorf("warning 缺少 %q: %s", want, warns[0])
 		}
@@ -402,8 +402,8 @@ func TestCreateFlowRejectsMalformedStepConfig(t *testing.T) {
 		step    map[string]any
 		wantErr string
 	}{
-		{"code 块不是对象", map[string]any{"type": "code", "config": map[string]any{"code": "return 1"}}, "config.code 必须是对象"},
-		{"children 不是数组", map[string]any{"type": "branch", "config": map[string]any{"children": "a"}}, "config.children 必须是数组"},
+		{"code 块不是对象", map[string]any{"type": "code", "config": map[string]any{"code": "return 1"}}, "config.code must be an object"},
+		{"children 不是数组", map[string]any{"type": "branch", "config": map[string]any{"children": "a"}}, "config.children must be an array"},
 		{"loop.type 非法", map[string]any{"type": "loop", "config": map[string]any{"loop": map[string]any{"type": "nope"}}}, "loop.type"},
 	}
 	for _, tc := range cases {
@@ -431,7 +431,7 @@ func TestCreateFlowRejectsDuplicateName(t *testing.T) {
 		"name": "dup", "description": "d",
 		"steps": []any{map[string]any{"type": "llm"}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "已存在") {
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("err = %v, want 已存在", err)
 	}
 	if fk.created != nil {
@@ -442,7 +442,7 @@ func TestCreateFlowRejectsDuplicateName(t *testing.T) {
 // read_flow 取不到时必须报错：返回 null 会让模型以为「这个流程是空的」。
 func TestReadFlowNotFound(t *testing.T) {
 	_, err := (&readFlowTool{}).Execute(context.Background(), &Context{Flows: &fakeFlows{}}, map[string]any{"flow": "ghost"})
-	if err == nil || !strings.Contains(err.Error(), "不存在") {
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v, want 不存在", err)
 	}
 }
@@ -466,7 +466,7 @@ func TestDeleteFlowPassesRef(t *testing.T) {
 
 func TestDeleteFlowNotFound(t *testing.T) {
 	_, err := (&deleteFlowTool{}).Execute(context.Background(), &Context{Flows: &fakeFlows{}}, map[string]any{"flow": "ghost"})
-	if err == nil || !strings.Contains(err.Error(), "不存在") {
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v, want 不存在", err)
 	}
 }
@@ -482,7 +482,9 @@ func TestFlowToolsSteerToNameNotUUID(t *testing.T) {
 		if desc != flowRefHint {
 			t.Errorf("%s: flow 描述未复用 flowRefHint: %q", meta.Name, desc)
 		}
-		for _, want := range []string{"例如 daily-sales-report", "不要自己编 id"} {
+		// 钉 ASCII 事实而不是散文：示例名 + 「id 只能来自 list_flows」这两件事
+		// 足以表达「往名字上引、别自己编」，描述的语言变了也不用改测试。
+		for _, want := range []string{"daily-sales-report", "list_flows"} {
 			if !strings.Contains(desc, want) {
 				t.Errorf("%s: 描述缺少 %q: %s", meta.Name, want, desc)
 			}
@@ -539,7 +541,7 @@ func TestRunFlowToolDropsInvalidSession(t *testing.T) {
 // 不存在的流程回明确错误，而不是空结果 —— 空结果会被模型读成「跑通了但没输出」。
 func TestRunFlowToolNotFound(t *testing.T) {
 	_, err := (&runFlowTool{}).Execute(context.Background(), &Context{Flows: &fakeFlows{}}, map[string]any{"flow": "ghost"})
-	if err == nil || !strings.Contains(err.Error(), "不存在") {
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v, want 不存在", err)
 	}
 }
@@ -548,7 +550,7 @@ func TestRunFlowToolNotFound(t *testing.T) {
 func TestRunFlowToolRejectsNonObjectInputs(t *testing.T) {
 	_, err := (&runFlowTool{}).Execute(context.Background(), &Context{Flows: &fakeFlows{}},
 		map[string]any{"flow": "f", "inputs": `{"q":"x"}`})
-	if err == nil || !strings.Contains(err.Error(), "必须是对象") {
+	if err == nil || !strings.Contains(err.Error(), "must be an object") {
 		t.Fatalf("err = %v, want inputs 必须是对象", err)
 	}
 }
@@ -647,7 +649,7 @@ func TestReadFlowRunFilterOptions(t *testing.T) {
 
 func TestReadFlowRunNotFound(t *testing.T) {
 	_, err := (&readFlowRunTool{}).Execute(context.Background(), &Context{Flows: &fakeFlows{}}, map[string]any{"run_id": "run-x"})
-	if err == nil || !strings.Contains(err.Error(), "不存在") {
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v, want 不存在", err)
 	}
 }
@@ -980,7 +982,7 @@ func TestCreateFlowBranchMustBeTerminal(t *testing.T) {
 			map[string]any{"type": "result", "config": map[string]any{}},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "最后一步") {
+	if err == nil || !strings.Contains(err.Error(), "must be the last step") {
 		t.Fatalf("err = %v, want 提示 branches 必须在最后一步", err)
 	}
 	if fk.created != nil {
@@ -1030,7 +1032,7 @@ func TestCreateFlowBranchMissingCaseWarns(t *testing.T) {
 		t.Fatalf("create_flow = %v", err)
 	}
 	warns, _ := out.(map[string]any)["warnings"].([]string)
-	if len(warns) != 1 || !strings.Contains(warns[0], `"c2"`) || !strings.Contains(warns[0], "没有出边") {
+	if len(warns) != 1 || !strings.Contains(warns[0], `"c2"`) || !strings.Contains(warns[0], "no outgoing edge") {
 		t.Fatalf("warnings = %v, want 一条 c2 没有出边的提示", warns)
 	}
 }
@@ -1049,7 +1051,7 @@ func TestCreateFlowBranchesRejectedOnNonBranch(t *testing.T) {
 			},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "不支持 branches") {
+	if err == nil || !strings.Contains(err.Error(), "does not support branches") {
 		t.Fatalf("err = %v, want 只有 branch / intent 有子分支", err)
 	}
 }
@@ -1174,27 +1176,27 @@ func TestUpdateFlowArgumentsRejectsBadInput(t *testing.T) {
 		{
 			"坏 type",
 			map[string]any{"flow": "demo", "set": map[string]any{"t": map[string]any{"type": "date"}}},
-			`type="date" 不支持`,
+			`type="date"`,
 		},
 		{
 			"数组缺 items",
 			map[string]any{"flow": "demo", "set": map[string]any{"ids": map[string]any{"type": "array"}}},
-			"必须写 items",
+			"needs items",
 		},
 		{
 			"required 指向不存在的参数",
 			map[string]any{"flow": "demo", "set": map[string]any{"b": map[string]any{"type": "string"}}, "required": []any{"zzz"}},
-			"properties 里没有这个参数",
+			"properties has no such parameter",
 		},
 		{
 			"set 与 remove 同名",
 			map[string]any{"flow": "demo", "set": map[string]any{"a": map[string]any{"type": "string"}}, "remove": []any{"a"}},
-			"同时出现在 set 与 remove",
+			"is in both set and remove",
 		},
 		{
 			"什么都没给",
 			map[string]any{"flow": "demo"},
-			"至少要给一个",
+			"give at least one of",
 		},
 	}
 	for _, tc := range cases {
@@ -1220,7 +1222,7 @@ func TestUpdateFlowArgumentsMissingFlow(t *testing.T) {
 		"flow": "nope",
 		"set":  map[string]any{"a": map[string]any{"type": "string"}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "不存在") {
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v, want 不存在", err)
 	}
 }

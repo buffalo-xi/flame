@@ -47,7 +47,7 @@ type chatRequest struct {
 func ChatAgent(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := authInfo.(*auth.AuthInfo)
@@ -68,7 +68,7 @@ func ChatAgent(c *gin.Context) {
 
 	instance, err := repo.GetAgent(ai, id)
 	if err != nil {
-		xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 		return
 	}
 
@@ -310,14 +310,14 @@ type stopRequest struct {
 func StopAgentRun(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := authInfo.(*auth.AuthInfo)
 
 	// 仍要过 GetAgent：先确认这个 agent 在本租户可见，再谈停止
 	if _, err := repo.GetAgent(ai, c.Param("id")); err != nil {
-		xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 		return
 	}
 

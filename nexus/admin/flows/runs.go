@@ -141,7 +141,7 @@ func toNodeDetail(n *models.FlowNodeRecord) *nodeDetail {
 func ListRuns(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	flowId := c.Param("id")
@@ -199,7 +199,7 @@ func ListRuns(c *gin.Context) {
 func GetRunDetail(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	runID := c.Param("runId")
@@ -208,7 +208,7 @@ func GetRunDetail(c *gin.Context) {
 	run, nodes, err := runRepo.GetRunDetail(schema, runID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Run record not found", nil, "")
+			xhttp.ErrCode(c, "run.not_found", nil, "Run record not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -231,7 +231,7 @@ func GetRunDetail(c *gin.Context) {
 func DeleteRun(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	flowId := c.Param("id")
@@ -247,7 +247,7 @@ func DeleteRun(c *gin.Context) {
 		return
 	}
 	if deleted == 0 {
-		xhttp.ErrJSON(c, "Run record not found", nil, "")
+		xhttp.ErrCode(c, "run.not_found", nil, "Run record not found", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": deleted}, "")
@@ -258,7 +258,7 @@ func DeleteRun(c *gin.Context) {
 func DeleteRuns(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	flowId := c.Param("id")

@@ -70,6 +70,24 @@ func ErrQuota(c *gin.Context, msg string, data interface{}, trace string) {
 	respond(c, codeQuota, msg, data, trace)
 }
 
+// ErrQuotaCode 配额不足 + 机器可读编码（body.code = 507，HTTP 仍为 200）。
+//
+// 与 ErrQuota 只差 error / params：507 的两种情形（会话空间满、会话数满）文案不同，
+// 前端靠 error 区分，不能只凭 body.code 猜。data 继续带 scope/metric/used/limit。
+func ErrQuotaCode(c *gin.Context, errCode string, params map[string]any, msg string, data interface{}, trace string) {
+	if trace == "" {
+		trace = c.Request.Host + c.Request.URL.Path
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":   codeQuota,
+		"error":  errCode,
+		"params": params,
+		"msg":    msg,
+		"data":   data,
+		"trace":  trace,
+	})
+}
+
 // ErrCode 业务错误 + 机器可读编码（前端据此翻译，见 nexus/docs/error-codes.md）。
 //
 // 与 ErrJSON 只差一点：多带 error（编码）与 params（渲染参数）。
@@ -89,6 +107,25 @@ func ErrCode(c *gin.Context, errCode string, params map[string]any, msg string, 
 		"params": params,
 		"msg":    msg,
 		"data":   nil,
+		"trace":  trace,
+	})
+}
+
+// ErrCodeData 业务错误 + 机器可读编码 + 附加数据（body.code = 400，HTTP 仍为 200）。
+//
+// 与 ErrCode 只差 data：有些错误除了文案还要给对方结构化信息（例如同名冲突的
+// suggested_name / can_overwrite，前端据此把红条变成「确认覆盖」按钮）。
+// 这类响应不能只用 ErrCode，否则 data 会丢成 null、界面退化成「只能改名」。
+func ErrCodeData(c *gin.Context, errCode string, params map[string]any, msg string, data interface{}, trace string) {
+	if trace == "" {
+		trace = c.Request.Host + c.Request.URL.Path
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":   codeInvalid,
+		"error":  errCode,
+		"params": params,
+		"msg":    msg,
+		"data":   data,
 		"trace":  trace,
 	})
 }

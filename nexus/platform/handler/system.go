@@ -163,7 +163,8 @@ func UpdateSystemQuota(c *gin.Context) {
 		return
 	}
 	if req.MaxSessionStorageBytes != nil && *req.MaxSessionStorageBytes < -1 {
-		xhttp.ErrJSON(c, "max_session_storage_bytes 只能是 -1（不限制）或非负数", nil, "")
+		xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": "max_session_storage_bytes", "min": -1},
+			"max_session_storage_bytes 只能是 -1（不限制）或非负数", "")
 		return
 	}
 

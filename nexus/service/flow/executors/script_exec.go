@@ -34,8 +34,10 @@ var capabilitySnapshot = capabilitypolicy.Snapshot
 type capabilityError struct{ capability string }
 
 func (e *capabilityError) Error() string {
+	// 流程节点报错属于执行层，用 ShortLabel：不把「工作流 code 节点 / 分支 / binding」
+	// 这类场景枚举塞进报错（见 capability.go 的 Label 注释）。
 	return "平台未给本租户开通能力 " + e.capability +
-		"（" + capability.Label(e.capability) + "），需平台管理员在「插件与能力」中开通"
+		"（" + capability.ShortLabel(e.capability) + "），需平台管理员在「插件与能力」中开通"
 }
 
 // ensureCodeCapability 工作流 code 节点的平台能力准入。

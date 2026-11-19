@@ -21,7 +21,7 @@ import (
 func CreateSession(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := authInfo.(*auth.AuthInfo)
@@ -29,7 +29,7 @@ func CreateSession(c *gin.Context) {
 
 	instance, err := repo.GetAgent(ai, id)
 	if err != nil {
-		xhttp.ErrJSON(c, "Agent instance not found", nil, "")
+		xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 		return
 	}
 
@@ -46,7 +46,7 @@ func CreateSession(c *gin.Context) {
 func ListSessions(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := authInfo.(*auth.AuthInfo)
@@ -75,7 +75,7 @@ func ListSessions(c *gin.Context) {
 func ListSessionMessages(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := authInfo.(*auth.AuthInfo)
@@ -95,7 +95,7 @@ func ListSessionMessages(c *gin.Context) {
 	}
 	if !sessionVisibleTo(sess, ai) {
 		// 与「不存在」同一句话：否则这里就是一个探测 sid 是否存在的接口
-		xhttp.ErrJSON(c, "Session not found", nil, "")
+		xhttp.ErrCode(c, "session.not_found", nil, "Session not found", "")
 		return
 	}
 
@@ -192,7 +192,7 @@ func sessionMessages(records []models.SessionRecord) []gin.H {
 func DeleteSession(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := authInfo.(*auth.AuthInfo)
@@ -210,7 +210,7 @@ func DeleteSession(c *gin.Context) {
 		return
 	}
 	if !sessionVisibleTo(sess, ai) {
-		xhttp.ErrJSON(c, "Session not found", nil, "")
+		xhttp.ErrCode(c, "session.not_found", nil, "Session not found", "")
 		return
 	}
 
@@ -229,7 +229,7 @@ func DeleteSession(c *gin.Context) {
 func GetSessionUsage(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := authInfo.(*auth.AuthInfo)
@@ -244,7 +244,7 @@ func GetSessionUsage(c *gin.Context) {
 		return
 	}
 	if !sessionVisibleTo(sess, ai) {
-		xhttp.ErrJSON(c, "Session not found", nil, "")
+		xhttp.ErrCode(c, "session.not_found", nil, "Session not found", "")
 		return
 	}
 
@@ -271,7 +271,7 @@ func GetSessionUsage(c *gin.Context) {
 func GetLatestSession(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	ai := authInfo.(*auth.AuthInfo)

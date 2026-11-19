@@ -20,7 +20,7 @@ var repo = mcprepo.NewRepository()
 func GetMcpConnection(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
@@ -28,7 +28,7 @@ func GetMcpConnection(c *gin.Context) {
 
 	conn, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
-		xhttp.ErrJSON(c, "MCP connection not found", nil, "")
+		xhttp.ErrCode(c, "mcp.connection_not_found", nil, "MCP connection not found", "")
 		return
 	}
 
@@ -39,7 +39,7 @@ func GetMcpConnection(c *gin.Context) {
 func CreateMcpConnection(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
@@ -84,7 +84,7 @@ func CreateMcpConnection(c *gin.Context) {
 func UpdateMcpConnection(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
@@ -135,7 +135,7 @@ func UpdateMcpConnection(c *gin.Context) {
 func SetMcpConnectionEnabled(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
@@ -157,11 +157,11 @@ func SetMcpConnectionEnabled(c *gin.Context) {
 		// 启用：先重新发现并持久化工具，成功后才落库，保证卡片状态与库一致
 		conn, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 		if err != nil {
-			xhttp.ErrJSON(c, "MCP connection not found", nil, "")
+			xhttp.ErrCode(c, "mcp.connection_not_found", nil, "MCP connection not found", "")
 			return
 		}
 		if err := client.RefreshToolsWithRepo(c.Request.Context(), authInfo.(*auth.AuthInfo), conn, repo); err != nil {
-			xhttp.ErrJSON(c, "工具发现失败，未启用该连接: "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "mcp.discovery_failed", nil, "工具发现失败，未启用该连接: "+err.Error(), "")
 			return
 		}
 		if err := repo.UpdateIsActive(authInfo.(*auth.AuthInfo), id, true); err != nil {
@@ -207,7 +207,7 @@ func rejectSelfLink(schema, rawURL string) error {
 func DeleteMcpConnection(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
@@ -228,7 +228,7 @@ func DeleteMcpConnection(c *gin.Context) {
 func ListMcpConnections(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
@@ -266,7 +266,7 @@ func ListMcpConnections(c *gin.Context) {
 func ListMcpConnectionTools(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
@@ -285,7 +285,7 @@ func ListMcpConnectionTools(c *gin.Context) {
 func RefreshMcpConnectionTools(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return
 	}
 
@@ -293,7 +293,7 @@ func RefreshMcpConnectionTools(c *gin.Context) {
 
 	conn, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
-		xhttp.ErrJSON(c, "MCP connection not found", nil, "")
+		xhttp.ErrCode(c, "mcp.connection_not_found", nil, "MCP connection not found", "")
 		return
 	}
 

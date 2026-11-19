@@ -199,7 +199,7 @@ func RemoteAssets(c *gin.Context) {
 
 	list, err := peers.ListPeers()
 	if err != nil {
-		xhttp.ErrJSON(c, "查询远端市场失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "查询远端市场失败: "+err.Error(), "")
 		return
 	}
 
@@ -370,14 +370,14 @@ func PullAsset(c *gin.Context) {
 	peerName := strings.TrimSpace(req.Peer)
 	assetID := strings.TrimSpace(req.AssetID)
 	if peerName == "" || assetID == "" {
-		xhttp.ErrJSON(c, "请提供来源站点与资产 id", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "请提供来源站点与资产 id", "")
 		return
 	}
 
 	// 只能点平台配好的源：名字 → 配置，URL 不来自请求体（没有 SSRF 面）
 	list, err := peers.ListPeers()
 	if err != nil {
-		xhttp.ErrJSON(c, "查询远端市场失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "查询远端市场失败: "+err.Error(), "")
 		return
 	}
 	var peer *peers.Peer
@@ -388,7 +388,8 @@ func PullAsset(c *gin.Context) {
 		}
 	}
 	if peer == nil || !peers.VisibleToTenant(peer, info.Schema) {
-		xhttp.ErrJSON(c, "该远端市场未对你所在的租户开放", nil, "")
+		xhttp.ErrCode(c, "asset.peer_not_available", map[string]any{"peer": peerName},
+			"该远端市场未对你所在的租户开放", "")
 		return
 	}
 
@@ -432,7 +433,8 @@ func PullAsset(c *gin.Context) {
 			// ConflictError 只陈述事实（来源 / 名字 / 快照号），平台导入侧是自己弹确认框；
 			// 租户市场的按钮语义不一样，所以这里自己拼一句「需要覆盖才能继续」，
 			// 连同结构化 conflict 一起回，前端问一次再带 force 重试。
-			xhttp.ErrJSON(c,
+			xhttp.ErrCodeData(c, "asset.name_conflict",
+				map[string]any{"name": ce.Name, "build": ce.ExistingBuild},
 				fmt.Sprintf("本机已有同名资产「%s」（v%d），需要覆盖才能继续", ce.Name, ce.ExistingBuild),
 				gin.H{"conflict": gin.H{
 					"name":     ce.Name,
@@ -443,7 +445,7 @@ func PullAsset(c *gin.Context) {
 				}}, "")
 			return
 		}
-		xhttp.ErrJSON(c, "拉取失败: "+ierr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "拉取失败: "+ierr.Error(), "")
 		return
 	}
 	invalidatePeerCatalog(peer.ID)

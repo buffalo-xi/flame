@@ -36,7 +36,7 @@ var (
 func authOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return nil, false
 	}
 	info, ok := v.(*auth.AuthInfo)
@@ -158,7 +158,7 @@ func SetAgentToolGrants(c *gin.Context) {
 			return
 		}
 		if len(list) == 0 {
-			xhttp.ErrJSON(c, "ref not found or has no tools: "+g.Ref, nil, "")
+			xhttp.ErrCode(c, "toolgrant.ref_not_found", nil, "ref not found or has no tools: "+g.Ref, "")
 			return
 		}
 		if g.GrantKind == models.GrantKindRequired {
@@ -364,7 +364,7 @@ func SetSkillToolGrants(c *gin.Context) {
 			return
 		}
 		if len(list) == 0 {
-			xhttp.ErrJSON(c, "ref not found or has no tools: "+it.Ref, nil, "")
+			xhttp.ErrCode(c, "toolgrant.ref_not_found", nil, "ref not found or has no tools: "+it.Ref, "")
 			return
 		}
 		seen[it.Ref] = true
@@ -441,7 +441,7 @@ func UpsertToolGroup(c *gin.Context) {
 			return
 		}
 		if len(list) == 0 {
-			xhttp.ErrJSON(c, "item not found or has no tools: "+it.Ref, nil, "")
+			xhttp.ErrCode(c, "toolgrant.item_not_found", nil, "item not found or has no tools: "+it.Ref, "")
 			return
 		}
 		items = append(items, models.ToolGroupItem{ItemType: toolgrant.ItemTypeOfRef(it.Ref), Ref: it.Ref})

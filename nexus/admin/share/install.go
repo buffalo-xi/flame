@@ -159,9 +159,12 @@ func installFrom(c *gin.Context, info *auth.AuthInfo, src *installSource, name s
 	// 把不认识的字段静默丢掉，装出来的是「能跑但行为不对」的实体，比装不上更难排查。
 	// 老包没有 spec（=0）按 1 处理，不受影响。
 	if src.manifest.Spec > assetpack.ManifestSpec {
-		xhttp.ErrJSON(c, fmt.Sprintf(
+		xhttp.ErrCode(c, "asset.package_too_new", map[string]any{
+			"spec":      src.manifest.Spec,
+			"supported": assetpack.ManifestSpec,
+		}, fmt.Sprintf(
 			"该资产包使用了更新版本的清单格式（spec %d，本程序支持到 %d）：请升级 Nexus 后再安装",
-			src.manifest.Spec, assetpack.ManifestSpec), nil, "")
+			src.manifest.Spec, assetpack.ManifestSpec), "")
 		return
 	}
 
@@ -175,7 +178,8 @@ func installFrom(c *gin.Context, info *auth.AuthInfo, src *installSource, name s
 	case assetpack.KindWorkflow:
 		installWorkflow(c, info, src, name, req)
 	default:
-		xhttp.ErrJSON(c, "未知的资产类型："+string(src.kind), nil, "")
+		xhttp.ErrCode(c, "asset.invalid_kind", map[string]any{"kind": string(src.kind)},
+			"未知的资产类型："+string(src.kind), "")
 	}
 }
 
@@ -203,10 +207,11 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		if !req.Overwrite {
 			// 冲突不静默：can_overwrite 让前端把它变成「确认覆盖」而不是只提示改名 ——
 			// 覆盖会丢弃该技能未发布的草稿改动，必须由用户点过确认再带 overwrite=1 重试。
-			xhttp.ErrJSON(c, "本租户已有同名技能："+name, gin.H{
-				"suggested_name": suggestFreeSkillName(info.Schema, name),
-				"can_overwrite":  true,
-			}, "")
+			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "skill", "name": name},
+				"本租户已有同名技能："+name, gin.H{
+					"suggested_name": suggestFreeSkillName(info.Schema, name),
+					"can_overwrite":  true,
+				}, "")
 			return
 		}
 		prev = exist
@@ -233,7 +238,7 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		// 覆盖：整棵目录先删再铺。直接往上叠会把旧版独有、包里没有的文件留在原地
 		// （删掉的引用文档会「复活」，还会被下次导出一起打进去）。
 		if derr := st.DeletePrefix(ctx, dstDir); derr != nil {
-			xhttp.ErrJSON(c, "清理既有技能目录失败: "+derr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "清理既有技能目录失败: "+derr.Error(), "")
 			return
 		}
 	} else {
@@ -242,7 +247,7 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		// EnsureAbsent 报 version exists，错误信息完全指不到「是安装带进来的」。
 		// 覆盖时不清：那份历史属于这个被覆盖的实体自己。
 		if verr := st.DeletePrefix(ctx, paths.VersionEntityKey(info.Schema, paths.VersionSkills, name)); verr != nil {
-			xhttp.ErrJSON(c, "清理同名技能的旧版本目录失败: "+verr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "清理同名技能的旧版本目录失败: "+verr.Error(), "")
 			return
 		}
 	}
@@ -250,7 +255,7 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 	missing, rerr := assetpack.RestoreFiles(ctx, st, src.snapDir, dstDir, assetpack.BodyFiles(src.manifest.Files))
 	if rerr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		xhttp.ErrJSON(c, "写入技能文件失败: "+rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "写入技能文件失败: "+rerr.Error(), "")
 		return
 	}
 
@@ -288,7 +293,8 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		if uerr := skillRepo.Update(info.Schema, upd); uerr != nil {
 			// 目录已被新内容替换：这里**不删**它。行是旧的、文件是新的，技能至少还能打开，
 			// 补一次导入即可对齐；删掉反而会留下「有行、没文件」的坏实体，比不一致更糟。
-			xhttp.ErrJSON(c, "覆盖技能记录失败（文件已写入，请重试导入）: "+uerr.Error(), nil, "")
+			xhttp.ErrCode(c, "asset.record_write_failed", map[string]any{"kind": "skill", "name": name},
+				"覆盖技能记录失败（文件已写入，请重试导入）: "+uerr.Error(), "")
 			return
 		}
 		id = string(prev.ID)
@@ -322,7 +328,7 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		id, ierr = insertInstalledSkill(info, name, status, src.payload)
 		if ierr != nil {
 			_ = st.DeletePrefix(ctx, dstDir)
-			xhttp.ErrJSON(c, "写入技能记录失败: "+ierr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "写入技能记录失败: "+ierr.Error(), "")
 			return
 		}
 	}
@@ -470,10 +476,11 @@ func installTool(c *gin.Context, info *auth.AuthInfo, src *installSource, name s
 		return
 	}
 	if (dirExists || prev != nil) && !req.Overwrite {
-		xhttp.ErrJSON(c, "本租户已有同名工具："+name, gin.H{
-			"suggested_name": suggestFreeToolName(store, name),
-			"can_overwrite":  true,
-		}, "")
+		xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "custom_tool", "name": name},
+			"本租户已有同名工具："+name, gin.H{
+				"suggested_name": suggestFreeToolName(store, name),
+				"can_overwrite":  true,
+			}, "")
 		return
 	}
 
@@ -498,7 +505,7 @@ func installTool(c *gin.Context, info *auth.AuthInfo, src *installSource, name s
 		// 目录在、行不在（历史残留）：先清掉再铺，免得旧文件混进这次安装。
 		// 行还没有，所以 placeTool 看不到 prev，这里替它做掉。
 		if derr := st.DeletePrefix(context.Background(), paths.ToolsKey(info.Schema)+"/"+name); derr != nil {
-			xhttp.ErrJSON(c, "清理残留的工具目录失败: "+derr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "清理残留的工具目录失败: "+derr.Error(), "")
 			return
 		}
 	}
@@ -733,10 +740,11 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		if !req.Overwrite {
 			// can_overwrite 让前端把它变成「确认覆盖」而不是只提示改名：
 			// 覆盖一个既有智能体是破坏性动作，必须由用户点过确认再带 overwrite=1 重试。
-			xhttp.ErrJSON(c, "本租户已有同名智能体："+name, gin.H{
-				"suggested_name": suggestFreeAgentName(info, name),
-				"can_overwrite":  true,
-			}, "")
+			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "agent", "name": name},
+				"本租户已有同名智能体："+name, gin.H{
+					"suggested_name": suggestFreeAgentName(info, name),
+					"can_overwrite":  true,
+				}, "")
 			return
 		}
 		p, perr := agentRepo.FindByName(info, name)
@@ -758,9 +766,10 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 			xhttp.ErrJSON(c, "check name: "+ferr.Error(), nil, "")
 			return
 		} else if flowExist {
-			xhttp.ErrJSON(c, "本租户已有同名工作流，智能体名不能与工作流重名："+name, gin.H{
-				"suggested_name": suggestFreeAgentName(info, name),
-			}, "")
+			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "workflow", "name": name},
+				"本租户已有同名工作流，智能体名不能与工作流重名："+name, gin.H{
+					"suggested_name": suggestFreeAgentName(info, name),
+				}, "")
 			return
 		}
 	}
@@ -769,7 +778,7 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 	// 覆盖不新增实体，跳过 —— 否则「已经顶到上限的租户连更新自己已有的智能体都做不到」。
 	if !exist {
 		if cnt, qerr := quota.CountAgents(info.Schema); qerr != nil {
-			xhttp.ErrJSON(c, "统计智能体数量失败: "+qerr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "统计智能体数量失败: "+qerr.Error(), "")
 			return
 		} else if qerr := models.CheckQuota("agent", cnt, quota.Resolve(info.Schema).MaxAgents); qerr != nil {
 			xhttp.ErrJSON(c, qerr.Error(), nil, "")
@@ -789,7 +798,7 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		// 覆盖：整棵目录先删再铺。直接往上叠会把旧版独有、包里没有的文件留在原地
 		// （删掉的脚本 / 旧私有技能目录会「复活」，还会被下次导出一起打进去）。
 		if derr := st.DeletePrefix(ctx, dstDir); derr != nil {
-			xhttp.ErrJSON(c, "清理既有智能体目录失败: "+derr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "清理既有智能体目录失败: "+derr.Error(), "")
 			return
 		}
 	} else {
@@ -797,7 +806,7 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		// （错误信息指不到「是导入带进来的」）。版本目录在 versions/agents/<name>，
 		// 与草稿目录不重叠；覆盖时不删（那份历史属于这个被覆盖的实体自己）。
 		if verr := st.DeletePrefix(ctx, paths.VersionEntityKey(info.Schema, paths.VersionAgents, name)); verr != nil {
-			xhttp.ErrJSON(c, "清理同名智能体的旧版本目录失败: "+verr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "清理同名智能体的旧版本目录失败: "+verr.Error(), "")
 			return
 		}
 	}
@@ -805,7 +814,7 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 	missing, rerr := assetpack.RestoreFiles(ctx, st, src.snapDir, dstDir, assetpack.BodyFiles(src.manifest.Files))
 	if rerr != nil {
 		_ = st.DeletePrefix(ctx, dstDir)
-		xhttp.ErrJSON(c, "写入智能体文件失败: "+rerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "写入智能体文件失败: "+rerr.Error(), "")
 		return
 	}
 
@@ -861,7 +870,8 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 			// 目录已经被新内容替换掉了：这里**不删**它。行还是旧的、文件是新的，
 			// 智能体至少还能跑（AGENT.md 就是新正文），补一次导入即可对齐；
 			// 删掉反而会留下「有行、没文件」的坏实体，比不一致更糟。
-			xhttp.ErrJSON(c, "覆盖智能体记录失败（文件已写入，请重试导入）: "+uerr.Error(), nil, "")
+			xhttp.ErrCode(c, "asset.record_write_failed", map[string]any{"kind": "agent", "name": name},
+				"覆盖智能体记录失败（文件已写入，请重试导入）: "+uerr.Error(), "")
 			return
 		}
 		id = prev.ID
@@ -890,7 +900,7 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		id, cerr = agentRepo.CreateAgent(info, ag, "") // creatorAgentID 空 = 不写 agent_relations
 		if cerr != nil {
 			_ = st.DeletePrefix(ctx, dstDir)
-			xhttp.ErrJSON(c, "写入智能体记录失败: "+cerr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "写入智能体记录失败: "+cerr.Error(), "")
 			return
 		}
 		if wantSupervisor {
@@ -1141,15 +1151,17 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 	}
 	if prev != nil {
 		if !req.Overwrite {
-			xhttp.ErrJSON(c, "本租户已有同名工作流："+name, gin.H{
-				"suggested_name": suggestFreeFlowName(info, name),
-				"can_overwrite":  true,
-			}, "")
+			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "workflow", "name": name},
+				"本租户已有同名工作流："+name, gin.H{
+					"suggested_name": suggestFreeFlowName(info, name),
+					"can_overwrite":  true,
+				}, "")
 			return
 		}
 		// 废弃态不能改定义（UpdateFlow 会拒）：提前说清，别让用户走完确认才发现
 		if int(prev.Status) == models.StatusDeprecated {
-			xhttp.ErrJSON(c, "本租户的同名工作流处于废弃态，覆盖前请先把它切回「正常」", nil, "")
+			xhttp.ErrCode(c, "asset.target_deprecated", map[string]any{"kind": "workflow", "name": name},
+				"本租户的同名工作流处于废弃态，覆盖前请先把它切回「正常」", "")
 			return
 		}
 	} else {
@@ -1159,14 +1171,15 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 			xhttp.ErrJSON(c, "check name: "+aerr.Error(), nil, "")
 			return
 		} else if agentExist {
-			xhttp.ErrJSON(c, "本租户已有同名智能体，工作流名不能与智能体重名："+name, gin.H{
-				"suggested_name": suggestFreeFlowName(info, name),
-			}, "")
+			xhttp.ErrCodeData(c, "asset.name_conflict", map[string]any{"kind": "agent", "name": name},
+				"本租户已有同名智能体，工作流名不能与智能体重名："+name, gin.H{
+					"suggested_name": suggestFreeFlowName(info, name),
+				}, "")
 			return
 		}
 		// 配额预检：与「新建工作流」同一条闸，别让超限的租户先建出行再回滚；覆盖不新增实体，跳过
 		if cnt, qerr := quota.CountFlows(info.Schema); qerr != nil {
-			xhttp.ErrJSON(c, "统计工作流数量失败: "+qerr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "统计工作流数量失败: "+qerr.Error(), "")
 			return
 		} else if qerr := models.CheckQuota("flow", cnt, quota.Resolve(info.Schema).MaxFlows); qerr != nil {
 			xhttp.ErrJSON(c, qerr.Error(), nil, "")
@@ -1182,12 +1195,13 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 	ctx := context.Background()
 	raw, rerr := st.ReadFile(ctx, path.Join(src.snapDir, assetpack.WorkflowFileName))
 	if rerr != nil {
-		xhttp.ErrJSON(c, "快照里没有工作流定义（"+assetpack.WorkflowFileName+"）：请让提供方重新上架", nil, "")
+		xhttp.ErrCode(c, "asset.invalid_package", map[string]any{"file": assetpack.WorkflowFileName},
+			"快照里没有工作流定义（"+assetpack.WorkflowFileName+"）：请让提供方重新上架", "")
 		return
 	}
 	var def assetpack.WorkflowSnapshot
 	if uerr := json.Unmarshal(raw, &def); uerr != nil {
-		xhttp.ErrJSON(c, "工作流定义损坏: "+uerr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.invalid_package", nil, "工作流定义损坏: "+uerr.Error(), "")
 		return
 	}
 
@@ -1200,7 +1214,7 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 	if prev != nil {
 		merged, merr := secureval.MergeEnvVarSecrets(jsonbBytes(prev.EnvVars), def.EnvVars)
 		if merr != nil {
-			xhttp.ErrJSON(c, "合并环境变量失败: "+merr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "合并环境变量失败: "+merr.Error(), "")
 			return
 		}
 		if string(merged) != string(def.EnvVars) {
@@ -1259,7 +1273,7 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 		// UpdateFlow 不写 status / endpoints / 断点，也不动 flow_versions：对外暴露配置、
 		// 调试状态与发布历史都属于目标租户。覆盖改的是草稿 —— 正式入口跑的是已发布版本。
 		if uerr := flowRepo.UpdateFlow(info, prev.ID, f); uerr != nil {
-			xhttp.ErrJSON(c, "覆盖工作流定义失败: "+uerr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "覆盖工作流定义失败: "+uerr.Error(), "")
 			return
 		}
 		id = prev.ID
@@ -1276,7 +1290,7 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 		var cerr error
 		id, cerr = flowRepo.CreateFlow(info, f)
 		if cerr != nil {
-			xhttp.ErrJSON(c, "写入工作流记录失败: "+cerr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "写入工作流记录失败: "+cerr.Error(), "")
 			return
 		}
 		// CreateFlow 的列缺省就是「正常」（1）；只有调用方显式要求废弃时才多写一次
@@ -1395,7 +1409,7 @@ func DeleteInstall(c *gin.Context) {
 	assetID := strings.TrimSpace(c.Param("asset_id"))
 	installedID := strings.TrimSpace(c.Param("installed_id"))
 	if assetID == "" || installedID == "" {
-		xhttp.ErrJSON(c, "缺少 asset_id / installed_id", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "缺少 asset_id / installed_id", "")
 		return
 	}
 	deleted, err := sharedassets.DeleteInstall(assetID, info.Schema, installedID)
@@ -1404,7 +1418,8 @@ func DeleteInstall(c *gin.Context) {
 		return
 	}
 	if !deleted {
-		xhttp.ErrJSON(c, "安装记录不存在（可能已被删除）", nil, "")
+		xhttp.ErrCode(c, "asset.install_not_found", map[string]any{"asset_id": assetID, "installed_id": installedID},
+			"安装记录不存在（可能已被删除）", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"deleted": true}, "")

@@ -114,13 +114,13 @@ func CustomToolSpecFromModel(t *models.CustomTool) CustomToolSpec {
 func SkeletonForLang(lang string) string {
 	switch strings.ToLower(strings.TrimSpace(lang)) {
 	case "js", "node":
-		return "// stdin: {\"args\": {...}, \"config\": {...}}\n// stdout: 一段 JSON（结果本体）；日志写 stderr\nprocess.stdin.resume();\n"
+		return "// stdin: {\"args\": {...}, \"config\": {...}}\n// stdout: a JSON object (the result itself); write logs to stderr\nprocess.stdin.resume();\n"
 	case "lua":
-		return "-- stdin: {\"args\": {...}, \"config\": {...}}\n-- stdout: 一段 JSON（结果本体）；日志写 stderr\n"
+		return "-- stdin: {\"args\": {...}, \"config\": {...}}\n-- stdout: a JSON object (the result itself); write logs to stderr\n"
 	case "sh", "shell":
-		return "#!/bin/sh\n# stdin: {\"args\": {...}, \"config\": {...}}\n# stdout: 一段 JSON（结果本体）；日志写 stderr\n"
+		return "#!/bin/sh\n# stdin: {\"args\": {...}, \"config\": {...}}\n# stdout: a JSON object (the result itself); write logs to stderr\n"
 	}
-	return "# stdin: {\"args\": {...}, \"config\": {...}}\n# stdout: 一段 JSON（结果本体）；日志写 stderr\nimport sys\n\n\ndef main():\n    raise SystemExit(\"TODO: 实现 main()\")\n\n\nif __name__ == \"__main__\":\n    main()\n"
+	return "# stdin: {\"args\": {...}, \"config\": {...}}\n# stdout: a JSON object (the result itself); write logs to stderr\nimport sys\n\n\ndef main():\n    raise SystemExit(\"TODO: implement main()\")\n\n\nif __name__ == \"__main__\":\n    main()\n"
 }
 
 // CustomToolRun 一次执行的输入（与 Context 解耦）。
@@ -169,7 +169,7 @@ type CustomToolRunResult struct {
 //	stdout : 一段 JSON（结果本体），日志/调试一律走 stderr
 func executeCustomTool(ctx context.Context, c *Context, name string, args map[string]any) (any, error) {
 	if c.CustomTools == nil {
-		return nil, fmt.Errorf("%w: %s (自定义工具未启用)", ErrToolNotFound, name)
+		return nil, fmt.Errorf("%w: %s (custom tools are not enabled)", ErrToolNotFound, name)
 	}
 	if err := requireExecCapability(c.Caps, name); err != nil {
 		return nil, err
@@ -221,7 +221,7 @@ func requireExecCapability(caps map[string]bool, name string) error {
 	if caps == nil || caps[capability.Exec] {
 		return nil
 	}
-	return fmt.Errorf("工具 %s 需要能力 %s（%s），平台未给本租户开通",
+	return fmt.Errorf("tool %s requires capability %s (%s), which the platform has not granted this tenant",
 		name, capability.Exec, capability.ShortLabel(capability.Exec))
 }
 
@@ -237,19 +237,19 @@ func RunCustomToolSpec(ctx context.Context, run CustomToolRun, args map[string]a
 	hostDir := strings.TrimSpace(run.ToolDir)
 	if hostDir == "" {
 		if strings.TrimSpace(run.ToolsRoot) == "" {
-			return nil, errors.New("自定义工具根目录未初始化（tools dir）")
+			return nil, errors.New("custom tool root is not initialized (tools dir)")
 		}
 		hostDir = filepath.Join(run.ToolsRoot, short)
 	}
 	// 必填配置：这里是唯一能给出「缺哪个」的地方（脚本自己只会拿到空值然后莫名失败）。
 	for _, key := range spec.RequiredConfigs {
 		if v, ok := spec.Configs[key]; !ok || strings.TrimSpace(fmt.Sprint(v)) == "" {
-			return nil, fmt.Errorf("自定义工具 %s 缺少必填配置 %s（请在管理端「自定义工具」里填写）", short, key)
+			return nil, fmt.Errorf("custom tool %s is missing the required config %s (fill it in on the admin console custom tool page)", short, key)
 		}
 	}
 
 	if st, serr := os.Stat(hostDir); serr != nil || !st.IsDir() {
-		return nil, fmt.Errorf("自定义工具目录在宿主上不可达：%s", hostDir)
+		return nil, fmt.Errorf("custom tool directory is not reachable on the host: %s", hostDir)
 	}
 	entry := strings.TrimSpace(spec.Entry)
 	if entry == "" {
@@ -262,7 +262,7 @@ func RunCustomToolSpec(ctx context.Context, run CustomToolRun, args map[string]a
 
 	sb := run.Sandbox
 	if sb == nil {
-		return nil, errors.New("sandbox not initialized: 自定义工具不可用")
+		return nil, errors.New("sandbox not initialized: custom tools are unavailable")
 	}
 
 	// 超时：工具自身上限与本次运行上限取小。
@@ -289,7 +289,7 @@ func RunCustomToolSpec(ctx context.Context, run CustomToolRun, args map[string]a
 
 	payload, err := json.Marshal(map[string]any{"args": args, "config": spec.Configs})
 	if err != nil {
-		return nil, fmt.Errorf("参数序列化失败: %w", err)
+		return nil, fmt.Errorf("failed to serialize arguments: %w", err)
 	}
 
 	workspace := run.Workspace
@@ -374,16 +374,16 @@ func RunCustomToolSpec(ctx context.Context, run CustomToolRun, args map[string]a
 
 	// 超时 / 取消：给一句能区分「脚本自己失败」与「被掐断」的原因
 	if execCtx.Err() != nil {
-		return res, fmt.Errorf("自定义工具 %s 执行超时或被中断: %w", short, execCtx.Err())
+		return res, fmt.Errorf("custom tool %s timed out or was interrupted: %w", short, execCtx.Err())
 	}
 
 	// 结构化输出截断后就是坏 JSON，静默失败比报错难查 —— 直接判失败。
 	if stdout.Truncated() {
-		return res, fmt.Errorf("自定义工具 %s 输出超过 %d 字节上限，已中止（请在脚本里分页或只返回摘要）", short, limit)
+		return res, fmt.Errorf("custom tool %s output exceeds the %d byte limit and was aborted (paginate inside the script or return a summary)", short, limit)
 	}
 
 	if exitCode != 0 {
-		return res, fmt.Errorf("自定义工具 %s 退出码 %d: %s", short, exitCode, errText)
+		return res, fmt.Errorf("custom tool %s exited with code %d: %s", short, exitCode, errText)
 	}
 
 	var result any
@@ -392,7 +392,7 @@ func RunCustomToolSpec(ctx context.Context, run CustomToolRun, args map[string]a
 		if len(snippet) > 200 {
 			snippet = snippet[:200]
 		}
-		return res, fmt.Errorf("自定义工具 %s 的 stdout 不是合法 JSON（约定：结果写 stdout、日志写 stderr）: %s",
+		return res, fmt.Errorf("custom tool %s wrote non-JSON to stdout (convention: result on stdout, logs on stderr): %s",
 			short, strings.TrimSpace(snippet))
 	}
 	res.Result = result
@@ -417,7 +417,7 @@ func RunCustomToolSpec(ctx context.Context, run CustomToolRun, args map[string]a
 func validateScriptOutput(name string, schema map[string]any, result any) error {
 	obj, ok := result.(map[string]any)
 	if !ok {
-		return fmt.Errorf("自定义工具 %s 的输出必须是 JSON 对象，实际是 %T", name, result)
+		return fmt.Errorf("custom tool %s output must be a JSON object, got %T", name, result)
 	}
 
 	if required, ok := schema["required"].([]any); ok {
@@ -432,7 +432,7 @@ func validateScriptOutput(name string, schema map[string]any, result any) error 
 			}
 		}
 		if len(missing) > 0 {
-			return fmt.Errorf("自定义工具 %s 的输出缺少字段 %v", name, missing)
+			return fmt.Errorf("custom tool %s output is missing fields %v", name, missing)
 		}
 	}
 
@@ -448,7 +448,7 @@ func validateScriptOutput(name string, schema map[string]any, result any) error 
 			continue // 缺的非必填字段不报错
 		}
 		if !typeMatches(want, val) {
-			return fmt.Errorf("自定义工具 %s 的输出字段 %s 类型不符：期望 %s，实际 %T", name, key, want, val)
+			return fmt.Errorf("custom tool %s output field %s has the wrong type: want %s, got %T", name, key, want, val)
 		}
 	}
 	return nil

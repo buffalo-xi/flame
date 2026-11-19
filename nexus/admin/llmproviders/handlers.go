@@ -22,7 +22,7 @@ var repo = repository.NewRepository()
 func GetLLMProvider(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -31,7 +31,7 @@ func GetLLMProvider(c *gin.Context) {
 	llmProvider, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "LLM provider not found", nil, "")
+			xhttp.ErrCode(c, "llm.provider_not_found", nil, "LLM provider not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -45,7 +45,7 @@ func GetLLMProvider(c *gin.Context) {
 func CreateLLMProvider(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -87,7 +87,7 @@ func CreateLLMProvider(c *gin.Context) {
 func UpdateLLMProvider(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -120,7 +120,7 @@ func UpdateLLMProvider(c *gin.Context) {
 	err := repo.Update(authInfo.(*auth.AuthInfo), id, &llmProvider)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "LLM provider not found", nil, "")
+			xhttp.ErrCode(c, "llm.provider_not_found", nil, "LLM provider not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -137,7 +137,7 @@ func UpdateLLMProvider(c *gin.Context) {
 func DeleteLLMProvider(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -223,7 +223,7 @@ func DeleteLLMProvider(c *gin.Context) {
 		return
 	}
 	if rowsAffected == 0 {
-		xhttp.ErrJSON(c, "LLM provider not found", nil, "")
+		xhttp.ErrCode(c, "llm.provider_not_found", nil, "LLM provider not found", "")
 		return
 	}
 
@@ -240,7 +240,7 @@ func DeleteLLMProvider(c *gin.Context) {
 func ListLLMProviders(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 

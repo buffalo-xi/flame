@@ -95,7 +95,7 @@ func resolveSkillScript(ctx context.Context, c *Context, skillName, script strin
 		}
 	}
 	if hit == nil {
-		return nil, fmt.Errorf("技能 %q 不存在，或未绑定给你；可执行范围 = 你的私有技能 ∪ 已绑定给你的技能", name)
+		return nil, fmt.Errorf("skill %q does not exist or is not bound to you; runnable set = your private skills plus skills bound to you", name)
 	}
 
 	rel := strings.TrimSpace(script)
@@ -114,11 +114,11 @@ func resolveSkillScript(ctx context.Context, c *Context, skillName, script strin
 	lang, isLang := langByExt[ext]
 	interp, isPassthrough := interpreterByExt[ext]
 	if !isLang && !isPassthrough {
-		return nil, fmt.Errorf("不支持的脚本类型 %q（目前支持 .py / .js / .lua / .sh）", path.Ext(rel))
+		return nil, fmt.Errorf("unsupported script type %q (currently .py / .js / .lua / .sh)", path.Ext(rel))
 	}
 
 	if c.SkillRoot == "" || c.AgentRoot == "" {
-		return nil, errors.New("skill root not initialized (定义域/挂载源未设置)")
+		return nil, errors.New("skill root not initialized (definition root / mount source not set)")
 	}
 	// 读哪一份由运行模式决定（草稿 / 当前版本），写路径不经过这里。
 	// 私有技能取「归属者」—— 注入清单里的私有技能只可能是自己的。
@@ -128,7 +128,7 @@ func resolveSkillScript(ctx context.Context, c *Context, skillName, script strin
 	case SkillScopeAgent:
 		ownerName = c.AgentName
 	default:
-		return nil, fmt.Errorf("未知的 skill 归属 %q", hit.Scope)
+		return nil, fmt.Errorf("unknown skill scope %q", hit.Scope)
 	}
 	key, hostDir, kerr := c.SkillReadDir(ownerName, hit.Name)
 	if kerr != nil {
@@ -142,11 +142,11 @@ func resolveSkillScript(ctx context.Context, c *Context, skillName, script strin
 			return nil, eerr
 		}
 		if !exists {
-			return nil, fmt.Errorf("技能 %q 的内容目录不存在（%s）", hit.Name, key)
+			return nil, fmt.Errorf("skill %q content directory does not exist (%s)", hit.Name, key)
 		}
 	}
 	if st, serr := os.Stat(hostDir); serr != nil || !st.IsDir() {
-		return nil, fmt.Errorf("技能目录在宿主上不可达：%s（沙箱挂载需要文件系统存储 local / nfs，S3 不支持）", hostDir)
+		return nil, fmt.Errorf("skill directory is not reachable on the host: %s (sandbox mounts need file-system storage local / nfs; S3 is not supported)", hostDir)
 	}
 
 	return &skillRun{
@@ -171,15 +171,15 @@ func (t *runSkillCustomTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "run_skill_script",
 		Category: CategoryExec,
-		Description: "运行某个已绑定技能自带的脚本（脚本必须位于该技能目录内），返回 stdout、stderr、exit_code。" +
-			"技能目录只读挂载在 /skill，工作区读写挂载在 /workspace（同时是 cwd）。",
+		Description: "Run a script bundled with one of your bound skills (the script must live inside that skill's directory). Returns stdout, stderr and exit_code. " +
+			"The skill directory is mounted read-only at /skill; the workspace is mounted read-write at /workspace (also the cwd).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"skill":   map[string]any{"type": "string", "description": "技能名（必须是你的私有技能，或已绑定给你的技能）"},
-				"script":  map[string]any{"type": "string", "description": "技能目录内的脚本相对路径，默认 scripts/main.py"},
-				"args":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "传给脚本的参数（argv）"},
-				"timeout": map[string]any{"type": "number", "description": "超时秒数（仍受 Context.Timeout 上限约束）"},
+				"skill":   map[string]any{"type": "string", "description": "Skill name (must be your own private skill, or a skill bound to you)"},
+				"script":  map[string]any{"type": "string", "description": "Script path relative to the skill directory; defaults to scripts/main.py"},
+				"args":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Arguments passed to the script (argv)"},
+				"timeout": map[string]any{"type": "number", "description": "Timeout in seconds (still bounded by Context.Timeout)"},
 			},
 			"required": []any{"skill"},
 		},

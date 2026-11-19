@@ -18,7 +18,7 @@ INSERT INTO agents
      tools_unrestricted, skill_discovery, is_supervisor)
 VALUES
     ('a0000000-0000-4000-8000-000000000001', 'main',
-     '租户默认的管理入口：建智能体、建技能、授工具，其余工作交给它调用其它智能体',
+     'Platform main agent: can create agents, skills and workflows',
      '{}'::jsonb, 1, '[]'::jsonb, true, true, true);
 
 -- 四个受保护技能（租户级：agent_id 为空，restricted=true 表示需显式绑定才可见）
@@ -26,13 +26,17 @@ INSERT INTO skills
     (id, name, description, metadata, status, agent_id, restricted, user_invocable)
 VALUES
     ('a0000000-0000-4000-8000-000000000011', 'skill-authoring',
-     '如何创建与维护技能', '{}'::jsonb, 1, NULL, true, false),
+     'Read before creating, updating or deleting a skill: choosing the scope (shared vs private), how to write SKILL.md, naming rules, tool usage and common pitfalls',
+     '{}'::jsonb, 1, NULL, true, false),
     ('a0000000-0000-4000-8000-000000000012', 'agent-authoring',
-     '如何创建与维护智能体', '{}'::jsonb, 1, NULL, true, false),
+     'Read before creating, updating or deleting an agent: naming rules, how to write AGENT.md, how tools and skills are configured, and create_agent / update_agent usage plus common pitfalls',
+     '{}'::jsonb, 1, NULL, true, false),
     ('a0000000-0000-4000-8000-000000000013', 'custom-tool-authoring',
-     '如何把业务逻辑落成自定义工具', '{}'::jsonb, 1, NULL, true, false),
+     'Turning a fixed piece of business logic into a tenant-level script tool (custom__ prefix): deciding whether a tool is the right fit, argument and output schemas, the code protocol, and a verification checklist. Read before creating or updating a script tool',
+     '{}'::jsonb, 1, NULL, true, false),
     ('a0000000-0000-4000-8000-000000000014', 'flow-authoring',
-     '如何创建与维护工作流，并发布为 mcp / rpc 端点', '{}'::jsonb, 1, NULL, true, false);
+     'How to create and maintain workflows, and publish them as MCP / RPC endpoints',
+     '{}'::jsonb, 1, NULL, true, false);
 
 -- main 的工具授权：6 组常驻（required）+ 5 组按技能点亮（allow）
 INSERT INTO agent_tool_grants (agent_id, grant_kind, item_type, ref) VALUES

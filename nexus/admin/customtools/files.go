@@ -56,30 +56,31 @@ func toolFileRoot(c *gin.Context, forWrite bool) (string, string, bool) {
 	name := c.Param("name")
 	// 名字闸：URL 里的 name 会拼进宿主路径，必须按创建时的规则校验
 	if !tools.ValidName(name) || strings.Contains(name, "__") {
-		xhttp.ErrJSON(c, "工具名不合法", nil, "")
+		xhttp.ErrCode(c, "tool.invalid_name", gin.H{"name": name}, "工具名不合法", "")
 		return "", "", false
 	}
 
 	dir := toolDir(info.Schema, name)
 	st, serr := os.Stat(dir)
 	if serr != nil || !st.IsDir() {
-		xhttp.ErrJSON(c, fmt.Sprintf("自定义工具目录不存在：tools/%s/", name), nil, "")
+		xhttp.ErrCode(c, "tool.not_found", gin.H{"name": name}, fmt.Sprintf("自定义工具目录不存在：tools/%s/", name), "")
 		return "", "", false
 	}
 
 	store := storeFor(info.Schema)
 	status, found, err := store.Status(name)
 	if err != nil {
-		xhttp.ErrJSON(c, "读取工具状态失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取工具状态失败: "+err.Error(), "")
 		return "", "", false
 	}
 	if forWrite {
 		if !found {
-			xhttp.ErrJSON(c, "该目录还不是合法工具（缺 TOOL.json 或契约无效）：请先用「新建自定义工具」创建，或先修好 TOOL.json", nil, "")
+			xhttp.ErrCode(c, "tool.invalid_contract", gin.H{"name": name},
+				"该目录还不是合法工具（缺 TOOL.json 或契约无效）：请先用「新建自定义工具」创建，或先修好 TOOL.json", "")
 			return "", "", false
 		}
 		if !models.IsModifiable(status) {
-			xhttp.ErrJSON(c, "该工具已锁定或已废弃，不能修改（请在列表里切回「正常」）", nil, "")
+			xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能修改（请在列表里切回「正常」）", "")
 			return "", "", false
 		}
 	}
@@ -180,7 +181,7 @@ func ReadToolFile(c *gin.Context) {
 	}
 	st, serr := os.Stat(abs)
 	if serr != nil || st.IsDir() {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "tool.file_not_found", nil, "file not found", "")
 		return
 	}
 	if st.Size() > maxToolFileBytes {
@@ -189,7 +190,7 @@ func ReadToolFile(c *gin.Context) {
 	}
 	data, rerr := os.ReadFile(abs)
 	if rerr != nil {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "tool.file_not_found", nil, "file not found", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
@@ -226,7 +227,8 @@ func WriteToolFile(c *gin.Context) {
 	}
 	if isToolContract(clean) {
 		// 契约只有一个写口：update_custom_tool / 表单（它会同时写文件与表行、并做 Validate）
-		xhttp.ErrJSON(c, "TOOL.json 是工具契约，请用上方表单修改（直接改文件会绕过校验并与库里的行分叉）", nil, "")
+		xhttp.ErrCode(c, "tool.contract_readonly", gin.H{"file": models.ToolFileName},
+			"TOOL.json 是工具契约，请用上方表单修改（直接改文件会绕过校验并与库里的行分叉）", "")
 		return
 	}
 	if len(body.Content) > maxToolFileBytes {
@@ -234,11 +236,11 @@ func WriteToolFile(c *gin.Context) {
 		return
 	}
 	if st, serr := os.Stat(abs); serr == nil && st.IsDir() {
-		xhttp.ErrJSON(c, "目标是目录，不能当文件写入", nil, "")
+		xhttp.ErrCode(c, "tool.invalid_path", gin.H{"path": clean}, "目标是目录，不能当文件写入", "")
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		xhttp.ErrJSON(c, "创建目录失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "创建目录失败: "+err.Error(), "")
 		return
 	}
 	if werr := os.WriteFile(abs, []byte(body.Content), 0o644); werr != nil {
@@ -272,15 +274,16 @@ func CreateToolEntry(c *gin.Context) {
 		return
 	}
 	if isToolContract(clean) {
-		xhttp.ErrJSON(c, models.ToolFileName+" 由「新建自定义工具」生成，不能手工创建", nil, "")
+		xhttp.ErrCode(c, "tool.contract_readonly", gin.H{"file": models.ToolFileName},
+			models.ToolFileName+" 由「新建自定义工具」生成，不能手工创建", "")
 		return
 	}
 	if isToolEntry(clean, entry) {
-		xhttp.ErrJSON(c, "这是当前入口文件，已存在；要改入口请改表单里的 entry", nil, "")
+		xhttp.ErrCode(c, "tool.entry_exists", gin.H{"entry": entry}, "这是当前入口文件，已存在；要改入口请改表单里的 entry", "")
 		return
 	}
 	if _, serr := os.Stat(abs); serr == nil {
-		xhttp.ErrJSON(c, "already exists", nil, "")
+		xhttp.ErrCode(c, "tool.file_exists", gin.H{"path": clean}, "already exists", "")
 		return
 	}
 	if body.IsDir {
@@ -290,7 +293,7 @@ func CreateToolEntry(c *gin.Context) {
 		}
 	} else {
 		if merr := os.MkdirAll(filepath.Dir(abs), 0o755); merr != nil {
-			xhttp.ErrJSON(c, "创建目录失败: "+merr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "创建目录失败: "+merr.Error(), "")
 			return
 		}
 		err = os.WriteFile(abs, []byte{}, 0o644)
@@ -318,11 +321,12 @@ func DeleteToolEntry(c *gin.Context) {
 		return
 	}
 	if isToolContract(clean) {
-		xhttp.ErrJSON(c, models.ToolFileName+" 是工具契约，不能删除（要删工具请删整个工具）", nil, "")
+		xhttp.ErrCode(c, "tool.contract_readonly", gin.H{"file": models.ToolFileName},
+			models.ToolFileName+" 是工具契约，不能删除（要删工具请删整个工具）", "")
 		return
 	}
 	if isToolEntry(clean, entry) {
-		xhttp.ErrJSON(c, "入口文件不能删除：删了工具还在，但一跑就报「入口不存在」", nil, "")
+		xhttp.ErrCode(c, "tool.entry_readonly", gin.H{"entry": entry}, "入口文件不能删除：删了工具还在，但一跑就报「入口不存在」", "")
 		return
 	}
 	if rerr := os.RemoveAll(abs); rerr != nil {
@@ -348,7 +352,7 @@ func UploadToolFile(c *gin.Context) {
 	}
 	tooLarge := fmt.Sprintf("文件过大（上限 %d MB）", maxToolFileBytes>>20)
 	if fh.Size > maxToolFileBytes {
-		xhttp.ErrJSON(c, tooLarge, nil, "")
+		xhttp.ErrCode(c, "tool.file_too_large", gin.H{"limit_mb": maxToolFileBytes >> 20}, tooLarge, "")
 		return
 	}
 	absDir, cleanDir, derr := joinToolFile(root, strings.TrimSpace(c.PostForm("dir")))
@@ -362,7 +366,7 @@ func UploadToolFile(c *gin.Context) {
 		return
 	}
 	if isToolContract(path.Join(cleanDir, name)) {
-		xhttp.ErrJSON(c, "不能覆盖契约文件 "+models.ToolFileName, nil, "")
+		xhttp.ErrCode(c, "tool.contract_readonly", gin.H{"file": models.ToolFileName}, "不能覆盖契约文件 "+models.ToolFileName, "")
 		return
 	}
 	rel := uniqueToolRel(absDir, name)
@@ -380,7 +384,7 @@ func UploadToolFile(c *gin.Context) {
 		return
 	}
 	if len(data) > maxToolFileBytes {
-		xhttp.ErrJSON(c, tooLarge, nil, "")
+		xhttp.ErrCode(c, "tool.file_too_large", gin.H{"limit_mb": maxToolFileBytes >> 20}, tooLarge, "")
 		return
 	}
 	if werr := os.WriteFile(filepath.Join(absDir, rel), data, 0o644); werr != nil {
@@ -413,12 +417,12 @@ func DownloadToolFile(c *gin.Context) {
 	}
 	st, serr := os.Stat(abs)
 	if serr != nil || st.IsDir() {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "tool.file_not_found", nil, "file not found", "")
 		return
 	}
 	f, oerr := os.Open(abs)
 	if oerr != nil {
-		xhttp.ErrJSON(c, "file not found", nil, "")
+		xhttp.ErrCode(c, "tool.file_not_found", nil, "file not found", "")
 		return
 	}
 	defer f.Close()

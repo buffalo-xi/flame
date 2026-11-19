@@ -41,6 +41,43 @@ const (
 	UnavailableEndpoint       = "endpoint"        // 本地 rpc 端点未对外开放
 )
 
+// 不可用原因的**编码**（ToolInfo.UnavailableCode / GroupInfo.UnavailableCode）。
+//
+// 比 UnavailableKind 更细：kind 是「归到哪一层」（能力 / 插件 / 连接），code 是
+// 「具体哪句话」，前端据此查语言包。两者都要，因为 kind 还兼着面板徽标的语义。
+//
+// 取值是接口约定（前端 toolUnavailable.<code> 直接按它找文案），改动即界面变空白 ——
+// 与 kind 一样属于「改了 UI 静默失效」的那类，改动前先搜前端。
+const (
+	UnavailableCodeCapability     = "capability"           // 参数：key
+	UnavailableCodePluginBlocked  = "plugin_blocked"       // 参数：plugin（平台全局停用）
+	UnavailableCodePluginDisabled = "plugin_disabled"      // 参数：plugin（平台对本租户停用）
+	UnavailableCodePluginInactive = "plugin_inactive"      // 参数：plugin（租户没启用）
+	UnavailableCodePolicyReadFail = "policy_read_failed"   // 无参数
+	UnavailableCodeMcpConnection  = "mcp_conn_disabled"    // 参数：connection
+	UnavailableCodeRpcConnection  = "rpc_conn_disabled"    // 参数：connection
+	UnavailableCodeEndpoint       = "endpoint_not_exposed" // 参数：endpoint
+)
+
+// unavail 一条「不可用原因」：编码 + 参数给前端本地化，reason 是中文兜底。
+//
+// 两者都留：后端不知道界面语言（见 nexus/docs/i18n.md 的口径：只回编码与参数），
+// 但日志、旧客户端、以及前端还没翻的编码仍然需要一句能直接读的话。
+// 前端优先用 code + params 本地化，取不到再显示 reason。
+type unavail struct {
+	code   string
+	params map[string]string
+	reason string
+}
+
+// unavailFail 「读取失败」这条原因（参数为空）：全是平台侧故障，没有可点的修复入口。
+func unavailFail(reason string) unavail {
+	return unavail{code: UnavailableCodePolicyReadFail, reason: reason}
+}
+
+// empty 没有任何原因（工具可用）。带 map 字段的结构体不能直接用 == 比较，故给个判据。
+func (u unavail) empty() bool { return u.code == "" && u.reason == "" }
+
 // ToolInfo 单个工具（展开后的叶子节点）。
 type ToolInfo struct {
 	Ref            string `json:"ref"`  // builtin:read_file / mcp:fs:read_file / plugin:web_search
@@ -57,6 +94,12 @@ type ToolInfo struct {
 	// UnavailableKind 归因（取值见 Unavailable* 常量）：前端据此出不同徽标文案，
 	// 不必解析中文原因。空 = 可用。
 	UnavailableKind string `json:"unavailable_kind,omitempty"`
+	// UnavailableCode 具体原因编码（取值见 UnavailableCode* 常量）：前端按它查语言包，
+	// 这样「插件被全局停用 / 被本租户停用」这类细分也能翻，而不是只认 kind。
+	// 空 = 可用，或后端版本较旧 —— 此时前端回落到 UnavailableReason。
+	UnavailableCode string `json:"unavailable_code,omitempty"`
+	// UnavailableParams UnavailableCode 的插值参数（如 {"plugin": "web_search"}）。
+	UnavailableParams map[string]string `json:"unavailable_params,omitempty"`
 	// Parameters 入参 schema（JSON Schema object）。
 	//
 	// 内置工具可以不带（agent 侧从 tools.List() 现取 Meta().Parameters），
@@ -79,12 +122,35 @@ type GroupInfo struct {
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 	// UnavailableKind 组不可用的归因（同 ToolInfo.UnavailableKind）。
 	UnavailableKind string `json:"unavailable_kind,omitempty"`
+	// UnavailableCode 组不可用的原因编码（同 ToolInfo.UnavailableCode）。
+	UnavailableCode string `json:"unavailable_code,omitempty"`
+	// UnavailableParams 组不可用的原因参数（同 ToolInfo.UnavailableParams）。
+	UnavailableParams map[string]string `json:"unavailable_params,omitempty"`
 	// Synthetic true = 类别容器，**不是可授权对象**（插件 / 自定义工具两类）。
 	//
 	// 它们成员是租户侧实体，数量随租户变化：一个工具一张卡会让组名退化成工具名
 	// （"利息终值计算"组），既难认又把 item_type 误导成 group。这里一张卡装全部成员，
 	// 授权落点仍是成员自己的工具 ref（容器 ref 形如 "custom:*"，ValidateRef 会拒）。
 	Synthetic bool `json:"synthetic,omitempty"`
+}
+
+// markUnavailable 把一条原因完整写到叶子上（Available 一并置 false，避免出现
+// 「原因写了、可用仍是 true」这种前端会当成可用的状态）。
+func (t *ToolInfo) markUnavailable(kind string, u unavail) {
+	t.Available = false
+	t.UnavailableKind = kind
+	t.UnavailableCode = u.code
+	t.UnavailableParams = u.params
+	t.UnavailableReason = u.reason
+}
+
+// markUnavailable 同 ToolInfo：组级原因由叶子抄上来，字段必须同步，否则卡片置灰但不给原因。
+func (g *GroupInfo) markUnavailable(kind string, u unavail) {
+	g.Available = false
+	g.UnavailableKind = kind
+	g.UnavailableCode = u.code
+	g.UnavailableParams = u.params
+	g.UnavailableReason = u.reason
 }
 
 // PresetGroup 预设组定义（代码内置，不可编辑）。
@@ -178,12 +244,16 @@ func (c *Catalog) WithCapabilities(allowed map[string]bool) *Catalog {
 }
 
 // capabilityBlocked 某能力是否被平台拦下（nil 视图 = 不拦）。
-func (c *Catalog) capabilityBlocked(key string) (bool, string) {
+func (c *Catalog) capabilityBlocked(key string) (bool, unavail) {
 	if c.caps == nil || key == "" || c.caps[key] {
-		return false, ""
+		return false, unavail{}
 	}
-	// 键名与中文名都写：前者便于在日志/接口里定位，后者给管理员看。
-	return true, "平台未给本租户开通能力 " + key + "（" + capability.Label(key) + "），需平台管理员在租户能力中开通"
+	// 键名与中文名都写：前者给前端查语言包（键是接口口径），后者给日志与兜底。
+	return true, unavail{
+		code:   UnavailableCodeCapability,
+		params: map[string]string{"key": key},
+		reason: "平台未给本租户开通能力 " + key + "（" + capability.Label(key) + "），需平台管理员在租户能力中开通",
+	}
 }
 
 // policyMap 取本租户的生效策略表；第二个返回值 = 读取失败。
@@ -277,9 +347,7 @@ func (c *Catalog) builtinTools() []ToolInfo {
 			continue
 		}
 		if blocked, why := c.capabilityBlocked(tools.CapabilityOf(builtinCategory(t))); blocked {
-			t.Available = false
-			t.UnavailableKind = UnavailableCapability
-			t.UnavailableReason = why
+			t.markUnavailable(UnavailableCapability, why)
 		}
 		out = append(out, t)
 	}
@@ -384,31 +452,33 @@ func (c *Catalog) pluginToolWith(name string, pol map[string]pluginpolicy.Policy
 	if failed {
 		// 读不到策略：按「已停用」展示。缺省虽是开放，但「读不出」不等于「没人停过」，
 		// 此时若显示可用，用户会看到工具亮着却调不通。
-		return ToolInfo{
-			Ref:               ScopePlugin + ":" + m.Name,
-			Name:              m.Name,
-			Label:             m.DisplayName,
-			Description:       m.Description,
-			Available:         false,
-			Source:            ScopePlugin + ":" + m.Name,
-			UnavailableKind:   UnavailablePluginPolicy,
-			UnavailableReason: "平台插件策略读取失败，暂按停用展示，请稍后重试",
-			Parameters:        m.Parameters,
-		}, true, nil
+		ti := ToolInfo{
+			Ref:         ScopePlugin + ":" + m.Name,
+			Name:        m.Name,
+			Label:       m.DisplayName,
+			Description: m.Description,
+			Source:      ScopePlugin + ":" + m.Name,
+			Parameters:  m.Parameters,
+		}
+		ti.markUnavailable(UnavailablePluginPolicy,
+			unavailFail("平台插件策略读取失败，暂按停用展示，请稍后重试"))
+		return ti, true, nil
 	}
-	avail, kind, reason := pluginUnavailable(m.Name, policyOf(pol, m.Name), active)
+	avail, kind, why := pluginUnavailable(m.Name, policyOf(pol, m.Name), active)
 
-	return ToolInfo{
-		Ref:               ScopePlugin + ":" + m.Name,
-		Name:              m.Name,
-		Label:             m.DisplayName,
-		Description:       m.Description,
-		Available:         avail,
-		Source:            ScopePlugin + ":" + m.Name,
-		UnavailableKind:   kind,
-		UnavailableReason: reason,
-		Parameters:        m.Parameters,
-	}, true, nil
+	ti := ToolInfo{
+		Ref:         ScopePlugin + ":" + m.Name,
+		Name:        m.Name,
+		Label:       m.DisplayName,
+		Description: m.Description,
+		Available:   avail,
+		Source:      ScopePlugin + ":" + m.Name,
+		Parameters:  m.Parameters,
+	}
+	if !avail {
+		ti.markUnavailable(kind, why)
+	}
+	return ti, true, nil
 }
 
 // pluginUnavailable 插件工具的可用性与归因（纯逻辑，便于单测）。
@@ -416,19 +486,29 @@ func (c *Catalog) pluginToolWith(name string, pol map[string]pluginpolicy.Policy
 // 两层闸分开报，且平台在前：平台停用时，租户启用也不会生效 ——
 // 先报「未启用」会让租户去点启用，点完仍然不可用，白绕一圈。
 // 「本租户被停用」与「全局停用」也要分开：前者只影响这一家，后者要等平台解闸。
-func pluginUnavailable(name string, pol pluginpolicy.Policy, active bool) (avail bool, kind, reason string) {
+func pluginUnavailable(name string, pol pluginpolicy.Policy, active bool) (avail bool, kind string, u unavail) {
+	plugin := map[string]string{"plugin": name}
 	switch {
 	case pol.Blocked:
-		return false, UnavailablePluginPolicy,
-			"插件 " + name + " 已被平台全局停用，需平台管理员在「插件与能力」中解除"
+		return false, UnavailablePluginPolicy, unavail{
+			code:   UnavailableCodePluginBlocked,
+			params: plugin,
+			reason: "插件 " + name + " 已被平台全局停用，需平台管理员在「插件与能力」中解除",
+		}
 	case !pol.Allowed:
-		return false, UnavailablePluginPolicy,
-			"插件 " + name + " 已被平台对本租户停用，需平台管理员在「插件与能力」中恢复"
+		return false, UnavailablePluginPolicy, unavail{
+			code:   UnavailableCodePluginDisabled,
+			params: plugin,
+			reason: "插件 " + name + " 已被平台对本租户停用，需平台管理员在「插件与能力」中恢复",
+		}
 	case !active:
-		return false, UnavailablePluginInactive,
-			"租户未启用插件 " + name + "，请在「工具与端点 → 插件」中启用并选择实现"
+		return false, UnavailablePluginInactive, unavail{
+			code:   UnavailableCodePluginInactive,
+			params: plugin,
+			reason: "租户未启用插件 " + name + "，请在「工具与端点 → 插件」中启用并选择实现",
+		}
 	}
-	return true, "", ""
+	return true, "", unavail{}
 }
 
 // policyOf 从「一次全取」的结果里取策略；表里没有 = 开放（与 pluginpolicy.Default 一致）。
@@ -581,8 +661,7 @@ func (c *Catalog) customTools() []ToolInfo {
 			Parameters:  t.ParamSchema(),
 		}
 		if blocked {
-			ti.Available = false
-			ti.UnavailableKind, ti.UnavailableReason = UnavailableCapability, why
+			ti.markUnavailable(UnavailableCapability, why)
 		}
 		out = append(out, ti)
 	}
@@ -651,7 +730,7 @@ func (c *Catalog) ToolsOfRef(ref string) ([]ToolInfo, error) {
 				Parameters: toolSchema(ep.InputSchema),
 			}
 			if !ti.Available {
-				ti.UnavailableKind, ti.UnavailableReason = endpointIssue(ep.Name)
+				ti.markUnavailable(endpointIssue(ep.Name))
 			}
 			out = append(out, ti)
 		}
@@ -726,7 +805,7 @@ func (c *Catalog) toolsOfConnection(p *ParsedRef) []ToolInfo {
 					Parameters:  toolSchema(t.InputSchema),
 				}
 				if !ti.Available {
-					ti.UnavailableKind, ti.UnavailableReason = mcpConnIssue(conn.Name)
+					ti.markUnavailable(mcpConnIssue(conn.Name))
 				}
 				out = append(out, ti)
 			}
@@ -761,7 +840,7 @@ func (c *Catalog) toolsOfConnection(p *ParsedRef) []ToolInfo {
 				Parameters:  toolSchema(t.InputSchema),
 			}
 			if !ti.Available {
-				ti.UnavailableKind, ti.UnavailableReason = rpcConnIssue(conn.Name)
+				ti.markUnavailable(rpcConnIssue(conn.Name))
 			}
 			out = append(out, ti)
 		}
@@ -814,7 +893,7 @@ func (c *Catalog) AllTools() (map[string]ToolInfo, error) {
 				Parameters: toolSchema(t.InputSchema),
 			}
 			if !ti.Available {
-				ti.UnavailableKind, ti.UnavailableReason = mcpConnIssue(conn.Name)
+				ti.markUnavailable(mcpConnIssue(conn.Name))
 			}
 			out[ref] = ti
 		}
@@ -837,7 +916,7 @@ func (c *Catalog) AllTools() (map[string]ToolInfo, error) {
 				Parameters: toolSchema(t.InputSchema),
 			}
 			if !ti.Available {
-				ti.UnavailableKind, ti.UnavailableReason = rpcConnIssue(conn.Name)
+				ti.markUnavailable(rpcConnIssue(conn.Name))
 			}
 			out[ref] = ti
 		}
@@ -855,7 +934,7 @@ func (c *Catalog) AllTools() (map[string]ToolInfo, error) {
 			Parameters: toolSchema(ep.InputSchema),
 		}
 		if !ti.Available {
-			ti.UnavailableKind, ti.UnavailableReason = endpointIssue(ep.Name)
+			ti.markUnavailable(endpointIssue(ep.Name))
 		}
 		out[ref] = ti
 	}
@@ -897,15 +976,14 @@ func (c *Catalog) Groups() ([]GroupInfo, error) {
 		// 平台能力闸：exec / shell / browser 三类按租户能力开关决定可用性。
 		// 叶子已经由 builtinTools 标好（判据只有一处，避免组与工具漂移），
 		// 这里只把结论提到组上，供前端卡片直接读。
-		available, kind, reason := true, "", ""
-		if blocked, why := c.capabilityBlocked(tools.CapabilityOf(category)); blocked {
-			available, kind, reason = false, UnavailableCapability, why
-		}
-		out = append(out, GroupInfo{
+		g := GroupInfo{
 			Ref: ScopeBuiltin + ":" + category, Name: "内置-" + category, Kind: ScopeBuiltin,
-			Description: builtinCategoryLabel(category), Available: available, Items: items,
-			UnavailableKind: kind, UnavailableReason: reason,
-		})
+			Description: builtinCategoryLabel(category), Available: true, Items: items,
+		}
+		if blocked, why := c.capabilityBlocked(tools.CapabilityOf(category)); blocked {
+			g.markUnavailable(UnavailableCapability, why)
+		}
+		out = append(out, g)
 	}
 
 	// 预设组
@@ -956,7 +1034,7 @@ func (c *Catalog) Groups() ([]GroupInfo, error) {
 			SourceID: conn.ID, RefreshedAt: c.mcpRefreshedAt(conn.ID),
 		}
 		if !g.Available {
-			g.UnavailableKind, g.UnavailableReason = mcpConnIssue(conn.Name)
+			g.markUnavailable(mcpConnIssue(conn.Name))
 		}
 		out = append(out, g)
 	}
@@ -977,7 +1055,7 @@ func (c *Catalog) Groups() ([]GroupInfo, error) {
 			SourceID: conn.ID, RefreshedAt: c.rpcRefreshedAt(conn.ID),
 		}
 		if !g.Available {
-			g.UnavailableKind, g.UnavailableReason = rpcConnIssue(conn.Name)
+			g.markUnavailable(rpcConnIssue(conn.Name))
 		}
 		out = append(out, g)
 	}
@@ -1045,8 +1123,13 @@ func categoryGroup(scope, name, desc string, items []ToolInfo) (GroupInfo, bool)
 	// 原因取第一条，与内置类组的做法一致。
 	for _, t := range items {
 		if !t.Available {
-			g.Available = false
-			g.UnavailableKind, g.UnavailableReason = t.UnavailableKind, t.UnavailableReason
+			// 编码与参数一起抄：只抄 kind/reason 会让前端拿到 reason 却翻不了，
+			// 卡片上于是出现「中文原因」而其它地方已是本地化文案。
+			g.markUnavailable(t.UnavailableKind, unavail{
+				code:   t.UnavailableCode,
+				params: t.UnavailableParams,
+				reason: t.UnavailableReason,
+			})
 			break
 		}
 	}
@@ -1097,14 +1180,26 @@ func displayName(display, fallback string) string {
 
 // 外部工具的不可用归因：三者的修复入口都在租户自己手里（连接 / 端点各自的管理页），
 // 所以原因里直接写「该去哪开」。这类工具最常见的困惑就是看不出连接是停用的。
-func mcpConnIssue(name string) (kind, reason string) {
-	return UnavailableConnection, "MCP 连接 " + name + " 未启用，请在「设置 → MCP 连接」中启用"
+func mcpConnIssue(name string) (kind string, u unavail) {
+	return UnavailableConnection, unavail{
+		code:   UnavailableCodeMcpConnection,
+		params: map[string]string{"connection": name},
+		reason: "MCP 连接 " + name + " 未启用，请在「设置 → MCP 连接」中启用",
+	}
 }
 
-func rpcConnIssue(name string) (kind, reason string) {
-	return UnavailableConnection, "RPC 连接 " + name + " 未启用，请在「设置 → RPC 连接」中启用"
+func rpcConnIssue(name string) (kind string, u unavail) {
+	return UnavailableConnection, unavail{
+		code:   UnavailableCodeRpcConnection,
+		params: map[string]string{"connection": name},
+		reason: "RPC 连接 " + name + " 未启用，请在「设置 → RPC 连接」中启用",
+	}
 }
 
-func endpointIssue(name string) (kind, reason string) {
-	return UnavailableEndpoint, "端点 " + name + " 未对外开放，请在「端点」页把它的「对外」打开"
+func endpointIssue(name string) (kind string, u unavail) {
+	return UnavailableEndpoint, unavail{
+		code:   UnavailableCodeEndpoint,
+		params: map[string]string{"endpoint": name},
+		reason: "端点 " + name + " 未对外开放，请在「端点」页把它的「对外」打开",
+	}
 }

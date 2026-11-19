@@ -152,7 +152,7 @@ func CleanupHistory(c *gin.Context) {
 
 	flowID, _, status, from, to := historyQuery(c)
 	if flowID == "" && status == "" && from == nil && to == nil {
-		xhttp.ErrJSON(c, "至少要给一个筛选条件（工作流 / 状态 / 时间范围），不允许无条件清空", nil, "")
+		xhttp.ErrCode(c, "run.filter_required", nil, "至少要给一个筛选条件（工作流 / 状态 / 时间范围），不允许无条件清空", "")
 		return
 	}
 

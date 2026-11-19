@@ -97,12 +97,13 @@ func CreateListing(c *gin.Context) {
 	}
 	kind := assetpack.Kind(strings.TrimSpace(req.Kind))
 	if !kind.Valid() {
-		xhttp.ErrJSON(c, "未知的资产类型（kind 只支持 skill / custom_tool / agent / workflow）", nil, "")
+		xhttp.ErrCode(c, "asset.invalid_kind", map[string]any{"kind": string(kind)},
+			"未知的资产类型（kind 只支持 skill / custom_tool / agent / workflow）", "")
 		return
 	}
 	ref := strings.TrimSpace(req.Ref)
 	if ref == "" {
-		xhttp.ErrJSON(c, "缺少 ref（skill / agent / workflow 用 id，custom_tool 用名字）", nil, "")
+		xhttp.ErrCode(c, "asset.ref_required", nil, "缺少 ref（skill / agent / workflow 用 id，custom_tool 用名字）", "")
 		return
 	}
 
@@ -274,7 +275,8 @@ func listingEntity(c *gin.Context, info *auth.AuthInfo, plan listingPlan) {
 		_ = st.DeletePrefix(ctx, dstDir)
 		// 并发上架：另一路已经把行推到更高的号，这次的内容作废（不算服务器错误，用户刷新即可）
 		if errors.Is(werr, sharedassets.ErrStaleBuild) {
-			xhttp.ErrJSON(c, "该资产刚被另一次上架覆盖（快照已前进），请刷新后重试", nil, "")
+			xhttp.ErrCode(c, "asset.stale_build", map[string]any{"id": a.ID},
+				"该资产刚被另一次上架覆盖（快照已前进），请刷新后重试", "")
 			return
 		}
 		xhttp.ErrJSON(c, "save asset: "+werr.Error(), nil, "")

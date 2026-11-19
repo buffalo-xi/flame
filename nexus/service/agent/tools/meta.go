@@ -40,7 +40,7 @@ func skillRefIn(args map[string]any, space, ownerID string) SkillRef {
 // name 与 skill_id 并列时，模型容易两个都填、或者干脆不知道填哪个；而 skill_id 只服务于
 // 「按全局唯一 id 跨归属定位」一个场景（且无名空间定向时仅超级智能体可用）。
 // 把默认值直接说成「不要传」比解释优先级更省事，也更少歧义。
-const skillIDDefaultHint = "；默认不要传 —— 用 name 定位即可，只有已从 list_skills 拿到确切 id 时才填"
+const skillIDDefaultHint = "; omit it by default — locate the skill by name; fill it only when you already have the exact id from list_skills"
 
 // rejectScopeArg 拒绝旧接口遗留的 scope 参数。
 //
@@ -51,7 +51,7 @@ func rejectScopeArg(args map[string]any, tool, counterpart string) error {
 	if _, ok := args["scope"]; !ok {
 		return nil
 	}
-	return fmt.Errorf("%s 不接受 scope 参数（工具名即口径）；建另一个空间的 skill 请改用 %s", tool, counterpart)
+	return fmt.Errorf("%s does not take a scope argument (the tool name carries the scope); use %s to create a skill in the other space", tool, counterpart)
 }
 
 // skillToolDeps 解析工具的 tool_deps 入参。
@@ -64,11 +64,11 @@ func skillToolDeps(args map[string]any, tool string, allowDeps bool) (*[]string,
 		return nil, nil
 	}
 	if !allowDeps {
-		return nil, fmt.Errorf("%s 不接受 tool_deps 参数：技能的工具依赖属授权面，只有超级智能体可用 *_agent_skill / *_shared_skill 声明", tool)
+		return nil, fmt.Errorf("%s does not take a tool_deps argument: skill tool deps belong to the grant surface, so only the supervisor can declare them via *_agent_skill / *_shared_skill", tool)
 	}
 	refs, ok := argStringSlice(args, "tool_deps")
 	if !ok {
-		return nil, fmt.Errorf("%s 的 tool_deps 必须是字符串数组（ref 形如 builtin:exec）", tool)
+		return nil, fmt.Errorf("%s: tool_deps must be an array of strings (refs look like builtin:exec)", tool)
 	}
 	return &refs, nil
 }
@@ -86,7 +86,7 @@ func withToolDeps(m ToolMeta) ToolMeta {
 	}
 	props["tool_deps"] = map[string]any{
 		"type": "array", "items": map[string]any{"type": "string"},
-		"description": "该技能声明需要的工具 ref 列表（如 builtin:exec、builtin:file）；全量替换，传 [] 清空，不传则不改。仅当宿主 agent 已被管理员以 allow 授权这些工具时才会真正生效",
+		"description": "Tool refs this skill declares it needs (e.g. builtin:exec, builtin:file); replaced wholesale — pass [] to clear, omit to leave unchanged. Only takes effect when the host agent already has an allow grant for those tools",
 	}
 	return m
 }
@@ -102,11 +102,11 @@ func skillRestricted(args map[string]any, tool string, allowRestricted bool) (*b
 		return nil, nil
 	}
 	if !allowRestricted {
-		return nil, fmt.Errorf("%s 不接受 restricted 参数：可见性只对租户级共享 skill 有意义，请改用 update_shared_skill", tool)
+		return nil, fmt.Errorf("%s does not take a restricted argument: visibility only applies to tenant-level shared skills, use update_shared_skill instead", tool)
 	}
 	b, ok := v.(bool)
 	if !ok {
-		return nil, fmt.Errorf("%s 的 restricted 必须是布尔值", tool)
+		return nil, fmt.Errorf("%s: restricted must be a boolean", tool)
 	}
 	return &b, nil
 }
@@ -124,8 +124,8 @@ func withRestricted(m ToolMeta) ToolMeta {
 	}
 	props["restricted"] = map[string]any{
 		"type": "boolean",
-		"description": "可见性开关（不传则不改）：true = 仅白名单内 agent 可见（默认），false = 全员可见。" +
-			"白名单成员用 bind_skill / unbind_skill 增删，本参数只切开关",
+		"description": "Visibility switch (omit to leave unchanged): true = only agents on the whitelist can see it (default), false = visible to everyone. " +
+			"Whitelist members are added and removed with bind_skill / unbind_skill — this parameter only flips the switch",
 	}
 	return m
 }
@@ -137,16 +137,16 @@ func (t *createAgentTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "create_agent",
 		Category:    CategoryAgentAdmin,
-		Description: "创建一个新的 agent 实例：写 AGENT.md 并注册到系统。",
+		Description: "Create a new agent instance: write AGENT.md and register it in the system.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":        map[string]any{"type": "string", "description": "唯一名，只含字母数字横线，即定义域目录名"},
-				"description": map[string]any{"type": "string", "description": "agent 描述"},
-				"agent_md":    map[string]any{"type": "string", "description": "AGENT.md 全文"},
-				"is_supervisor": map[string]any{"type": "boolean", "description": "是否直接建成超级权限 agent（可选，默认 false）。" +
-					"为 true 时会一并物化起步套件：core 工具组（含 builtin:agent-admin）、不限制工具、可发现未绑定技能、" +
-					"绑定 agent-authoring / skill-authoring / custom-tool-authoring / flow-authoring"},
+				"name":        map[string]any{"type": "string", "description": "Unique name, letters/digits/hyphens only — it is also the definition-domain directory name"},
+				"description": map[string]any{"type": "string", "description": "Agent description"},
+				"agent_md":    map[string]any{"type": "string", "description": "Full text of AGENT.md"},
+				"is_supervisor": map[string]any{"type": "boolean", "description": "Whether to create it directly as a supervisor (optional, default false). " +
+					"When true the starter kit is materialized as well: the core tool group (including builtin:agent-admin), unrestricted tools, discovery of unbound skills, " +
+					"and the agent-authoring / skill-authoring / custom-tool-authoring / flow-authoring skills bound"},
 			},
 			"required": []any{"name", "agent_md"},
 		},
@@ -156,7 +156,7 @@ func (t *createAgentTool) Meta() ToolMeta {
 func (t *createAgentTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	name := argString(args, "name")
 	if !ValidName(name) {
-		return nil, fmt.Errorf("invalid agent name %q (只允许字母数字横线)", name)
+		return nil, fmt.Errorf("invalid agent name %q (letters, digits and hyphens only)", name)
 	}
 	if c.Agents == nil {
 		return nil, errors.New("agent manager not available")
@@ -196,17 +196,17 @@ func (t *updateAgentTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "update_agent",
 		Category: CategoryAgentAdmin,
-		Description: "更新一个 agent：可改名字、描述，「可发现未绑定的技能」开关，或「不限制工具」开关（改名会同步迁移其定义域目录）。" +
-			"可以改自己（超级智能体即管理员），但**不能给自己改名**（本轮后续文件操作会失效）。",
+		Description: "Update an agent: rename it, change its description, the \"discover unbound skills\" switch or the \"unrestricted tools\" switch (a rename migrates its definition-domain directory too). " +
+			"You may update yourself (the supervisor is the admin), but **you cannot rename yourself** (the file operations later in this run would break).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":          map[string]any{"type": "string", "description": "当前 agent 名（可以是自己）"},
-				"new_name":      map[string]any{"type": "string", "description": "新名字（可选；不能用于改自己）"},
-				"description":   map[string]any{"type": "string", "description": "新描述（可选；传空或省略都表示不改 —— 这个工具无法清空描述，清空请找管理员在管理端操作）"},
-				"discovery":     map[string]any{"type": "boolean", "description": "是否允许该 agent 发现「未绑定的共享技能」（可选，不传则不改）"},
-				"unrestricted":  map[string]any{"type": "boolean", "description": "是否「不限制工具」：开启后候选工具不再被 allow 过滤（可选，不传则不改）"},
-				"is_supervisor": map[string]any{"type": "boolean", "description": "是否赋予超级权限（与 超级智能体同级：管理类工具 + 跨域写）。仅 supervisor 可操作；降级本租户最后一个 supervisor 会被拒绝（可选，不传则不改）"},
+				"name":          map[string]any{"type": "string", "description": "Current agent name (may be yourself)"},
+				"new_name":      map[string]any{"type": "string", "description": "New name (optional; cannot be used on yourself)"},
+				"description":   map[string]any{"type": "string", "description": "New description (optional; empty or omitted both mean unchanged — this tool cannot clear a description, ask an admin to do it in the admin UI)"},
+				"discovery":     map[string]any{"type": "boolean", "description": "Whether this agent may discover unbound shared skills (optional; omit to leave unchanged)"},
+				"unrestricted":  map[string]any{"type": "boolean", "description": "Whether tools are unrestricted: when on, candidate tools are no longer filtered by allow (optional; omit to leave unchanged)"},
+				"is_supervisor": map[string]any{"type": "boolean", "description": "Whether to grant supervisor power (same level as the supervisor: admin tools + cross-domain writes). Only a supervisor may do this; demoting the tenant's last supervisor is refused (optional; omit to leave unchanged)"},
 			},
 			"required": []any{"name"},
 		},
@@ -224,7 +224,7 @@ func (t *updateAgentTool) Execute(ctx context.Context, c *Context, args map[stri
 	// 对自己只禁止改名：改名会让本轮后续文件操作失效（技术原因，与权限无关）。
 	// description / discovery / unrestricted 属于超级智能体自己的管理面，放开（D5 修订）。
 	if name == c.AgentName && argString(args, "new_name") != "" {
-		return nil, errors.New("不能给运行中的自己改名（本轮后续文件操作会失效）；改名请找管理员")
+		return nil, errors.New("cannot rename the running agent itself (later file operations in this round would break); ask an administrator to rename it")
 	}
 	finalName, err := c.Agents.Update(ctx, name, argString(args, "new_name"), argString(args, "description"))
 	if err != nil {
@@ -290,11 +290,11 @@ func (t *deleteAgentTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "delete_agent",
 		Category:    CategoryAgentAdmin,
-		Description: "删除一个 agent（同时清理其定义域目录）。",
+		Description: "Delete an agent (its definition-domain directory is cleaned up too).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "agent 名"},
+				"name": map[string]any{"type": "string", "description": "Agent name"},
 			},
 			"required": []any{"name"},
 		},
@@ -329,14 +329,14 @@ func (t *createOwnSkillTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "create_own_skill",
 		Category: CategorySkillOwn,
-		Description: "在自己的私有空间创建一个 skill：写 SKILL.md 并登记到 skill 库。" +
-			"私有 skill 只有你自己可见；要跨 agent 复用，请让超级智能体用 create_shared_skill 建共享技能再 bind_skill 绑定。",
+		Description: "Create a skill in your own private space: write SKILL.md and register it in the skill library. " +
+			"A private skill is visible to you only; to reuse it across agents, have the supervisor create a shared skill with create_shared_skill and bind it with bind_skill.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":        map[string]any{"type": "string", "description": "唯一名，只含字母数字横线"},
-				"skill_md":    map[string]any{"type": "string", "description": "SKILL.md 全文"},
-				"description": map[string]any{"type": "string", "description": "skill 描述（可选）"},
+				"name":        map[string]any{"type": "string", "description": "Unique name, letters/digits/hyphens only"},
+				"skill_md":    map[string]any{"type": "string", "description": "Full text of SKILL.md"},
+				"description": map[string]any{"type": "string", "description": "Skill description (optional)"},
 			},
 			"required": []any{"name", "skill_md"},
 		},
@@ -353,7 +353,7 @@ func (t *createOwnSkillTool) Execute(ctx context.Context, c *Context, args map[s
 func createSkillInSpace(ctx context.Context, c *Context, args map[string]any, space, ownerID, tool, counterpart string, allowDeps bool) (any, error) {
 	name := argString(args, "name")
 	if !ValidName(name) {
-		return nil, fmt.Errorf("invalid skill name %q (只允许字母数字横线)", name)
+		return nil, fmt.Errorf("invalid skill name %q (letters, digits and hyphens only)", name)
 	}
 	if c.Skills == nil {
 		return nil, errors.New("skill manager not available")
@@ -389,14 +389,14 @@ func (t *createSharedSkillTool) Meta() ToolMeta {
 	return withToolDeps(ToolMeta{
 		Name:     "create_shared_skill",
 		Category: CategorySkillAdmin,
-		Description: "创建一个租户级共享 skill（仅超级智能体）：写 SKILL.md 并登记到 skill 库。" +
-			"其他 agent 需经 bind_skill 绑定才可见；建后默认只授权你自己，不会自动扩散。",
+		Description: "Create a tenant-level shared skill (supervisor only): write SKILL.md and register it in the skill library. " +
+			"Other agents only see it after bind_skill binds it; by default only you are granted, so it never spreads on its own.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":        map[string]any{"type": "string", "description": "唯一名，只含字母数字横线"},
-				"skill_md":    map[string]any{"type": "string", "description": "SKILL.md 全文"},
-				"description": map[string]any{"type": "string", "description": "skill 描述（可选）"},
+				"name":        map[string]any{"type": "string", "description": "Unique name, letters/digits/hyphens only"},
+				"skill_md":    map[string]any{"type": "string", "description": "Full text of SKILL.md"},
+				"description": map[string]any{"type": "string", "description": "Skill description (optional)"},
 			},
 			"required": []any{"name", "skill_md"},
 		},
@@ -417,11 +417,11 @@ func skillUpdateMeta(name, category, description, idHint string) ToolMeta {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":        map[string]any{"type": "string", "description": "当前 skill 名（定位用）"},
+				"name":        map[string]any{"type": "string", "description": "Current skill name (used to locate it)"},
 				"skill_id":    map[string]any{"type": "string", "description": idHint},
-				"new_name":    map[string]any{"type": "string", "description": "改名后的新名字（可选）"},
-				"skill_md":    map[string]any{"type": "string", "description": "新的 SKILL.md 全文（可选，不传则保留原内容）"},
-				"description": map[string]any{"type": "string", "description": "新的描述（可选）"},
+				"new_name":    map[string]any{"type": "string", "description": "New name after renaming (optional)"},
+				"skill_md":    map[string]any{"type": "string", "description": "New full text of SKILL.md (optional; omit to keep the current content)"},
+				"description": map[string]any{"type": "string", "description": "New description (optional)"},
 			},
 			"required": []any{"name"},
 		},
@@ -474,8 +474,8 @@ type updateOwnSkillTool struct{}
 
 func (t *updateOwnSkillTool) Meta() ToolMeta {
 	return skillUpdateMeta("update_own_skill", CategorySkillOwn,
-		"更新你自己的私有 skill：可改内容、描述或名字（改名会同步迁移其内容文件）。只能操作自己的私有 skill。",
-		"skill 的 id（可选；按 id 定位时仍须属于你自己的私有空间）")
+		"Update your own private skill: change its content, description or name (a rename migrates its content file). Only your own private skills can be updated.",
+		"Skill id (optional; when locating by id it must still be inside your own private space)")
 }
 
 func (t *updateOwnSkillTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
@@ -487,8 +487,8 @@ type updateSharedSkillTool struct{}
 
 func (t *updateSharedSkillTool) Meta() ToolMeta {
 	return withRestricted(withToolDeps(skillUpdateMeta("update_shared_skill", CategorySkillAdmin,
-		"更新一个租户级共享 skill（仅超级智能体）：可改内容、描述、名字、工具依赖或可见性开关（改名会同步迁移其内容文件）。注意它可能正被多个 agent 绑定使用。",
-		"skill 的 id（可选；按 id 定位时仍须是租户级共享 skill）")))
+		"Update a tenant-level shared skill (supervisor only): change its content, description, name, tool dependencies or visibility switch (a rename migrates its content file). Note it may currently be bound by several agents.",
+		"Skill id (optional; when locating by id it must still be a tenant-level shared skill)")))
 }
 
 func (t *updateSharedSkillTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
@@ -509,15 +509,15 @@ func skillDepMeta(name, description string) ToolMeta {
 		Name:     name,
 		Category: CategorySkillAdmin, // 仅超级智能体：依赖是 allow 授权的生效触发器
 		Description: description +
-			"**这不是授权**：只有当宿主 agent 已被授予该工具的 allow 授权、并且用 use_skill 激活了这个技能时才会注入。" +
-			"第一个参数是要声明的 skill（name 或 skill_id），不是 agent —— 给 agent 授权请用 grant_agent_tool。" +
-			"返回值带变更后的完整 tool_deps，不必再查一遍。",
+			"**This is not a grant**: the dependency is only injected when the host agent already has an allow grant for that tool and has activated this skill with use_skill. " +
+			"The first argument is the skill to declare it on (name or skill_id), not an agent — to grant an agent, use grant_agent_tool. " +
+			"The return value carries the complete tool_deps after the change, so there is no need to look it up again.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":     map[string]any{"type": "string", "description": "skill 名（按当前可见范围定位；跨归属的私有技能改用 skill_id）"},
-				"skill_id": map[string]any{"type": "string", "description": "skill 的 id（可选；与 name 二选一，非空时优先）" + skillIDDefaultHint},
-				"ref":      map[string]any{"type": "string", "description": "工具引用：builtin:<工具名> / builtin:<类别> / mcp:<连接>[:<工具>] / rpc:<连接>[:<工具>] / local:rpc[:<端点>]；不接受 group 工具组"},
+				"name":     map[string]any{"type": "string", "description": "Skill name (located within the currently visible scope; for a private skill owned by another agent use skill_id)"},
+				"skill_id": map[string]any{"type": "string", "description": "Skill id (optional; alternative to name, takes precedence when non-empty)" + skillIDDefaultHint},
+				"ref":      map[string]any{"type": "string", "description": "Tool reference: builtin:<tool> / builtin:<category> / mcp:<connection>[:<tool>] / rpc:<connection>[:<tool>] / local:rpc[:<endpoint>]; group refs are not accepted"},
 			},
 			"required": []any{"ref"},
 		},
@@ -528,7 +528,7 @@ func skillDepMeta(name, description string) ToolMeta {
 func skillDepByArgs(args map[string]any) (SkillRef, error) {
 	ref := skillRefFrom(args, "")
 	if ref.ID == "" && !ValidName(ref.Name) {
-		return ref, errors.New("需要 name（合法 skill 名）或 skill_id 来定位 skill")
+		return ref, errors.New("a name (a valid skill name) or a skill_id is required to locate the skill")
 	}
 	return ref, nil
 }
@@ -537,7 +537,7 @@ type grantSkillToolTool struct{}
 
 func (t *grantSkillToolTool) Meta() ToolMeta {
 	return skillDepMeta("grant_skill_tool",
-		"给某个 skill **追加**一条工具依赖（写入 skill_tool_grants；幂等，已存在则 added=false）。")
+		"**Append** one tool dependency to a skill (written to skill_tool_grants; idempotent, added=false when it already exists).")
 }
 
 func (t *grantSkillToolTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
@@ -555,7 +555,7 @@ type revokeSkillToolTool struct{}
 
 func (t *revokeSkillToolTool) Meta() ToolMeta {
 	return skillDepMeta("revoke_skill_tool",
-		"从某个 skill **移除**一条工具依赖（幂等；只删这一个，不清空其它依赖）。")
+		"**Remove** one tool dependency from a skill (idempotent; removes only this one and leaves the other dependencies alone).")
 }
 
 func (t *revokeSkillToolTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
@@ -578,7 +578,7 @@ func skillDeleteMeta(name, category, description, idHint string) ToolMeta {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":     map[string]any{"type": "string", "description": "skill 名，例如 english-joke-writing"},
+				"name":     map[string]any{"type": "string", "description": "Skill name, e.g. english-joke-writing"},
 				"skill_id": map[string]any{"type": "string", "description": idHint + skillIDDefaultHint},
 			},
 			"required": []any{"name"},
@@ -609,8 +609,8 @@ type deleteOwnSkillTool struct{}
 
 func (t *deleteOwnSkillTool) Meta() ToolMeta {
 	return skillDeleteMeta("delete_own_skill", CategorySkillOwn,
-		"删除你自己的私有 skill（同时删除其内容文件）。只能操作自己的私有 skill。",
-		"skill 的 id（可选；按 id 定位时仍须属于你自己的私有空间）")
+		"Delete your own private skill (its content file is deleted too). Only your own private skills can be deleted.",
+		"Skill id (optional; when locating by id it must still be inside your own private space)")
 }
 
 func (t *deleteOwnSkillTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
@@ -622,8 +622,8 @@ type deleteSharedSkillTool struct{}
 
 func (t *deleteSharedSkillTool) Meta() ToolMeta {
 	return skillDeleteMeta("delete_shared_skill", CategorySkillAdmin,
-		"删除一个租户级共享 skill（仅超级智能体，同时删除其内容文件）。注意它可能正被多个 agent 绑定使用。",
-		"skill 的 id（可选；按 id 定位时仍须是租户级共享 skill）")
+		"Delete a tenant-level shared skill (supervisor only; its content file is deleted too). Note it may currently be bound by several agents.",
+		"Skill id (optional; when locating by id it must still be a tenant-level shared skill)")
 }
 
 func (t *deleteSharedSkillTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
@@ -637,7 +637,7 @@ func skillAgentMeta(m ToolMeta) ToolMeta {
 		props = map[string]any{}
 		m.Parameters["properties"] = props
 	}
-	props["agent"] = map[string]any{"type": "string", "description": "目标 agent 名（该技能归属它，之后只有它自己可见）"}
+	props["agent"] = map[string]any{"type": "string", "description": "Target agent name (the skill belongs to it; afterwards only that agent can see it)"}
 	if req, ok := m.Parameters["required"].([]any); ok {
 		m.Parameters["required"] = append([]any{"agent"}, req...)
 	}
@@ -661,15 +661,15 @@ func (t *createAgentSkillTool) Meta() ToolMeta {
 	return skillAgentMeta(withToolDeps(ToolMeta{
 		Name:     "create_agent_skill",
 		Category: CategorySkillAdmin,
-		Description: "为**指定 agent** 创建它的私有 skill（仅超级智能体）：写 SKILL.md 并登记到 skill 库。" +
-			"该技能归属目标 agent，只有它自己可见；正文全部放在 skill_md。" +
-			"要给多个 agent 共用，请改用 create_shared_skill + bind_skill。",
+		Description: "Create a **specified agent**'s private skill (supervisor only): write SKILL.md and register it in the skill library. " +
+			"The skill belongs to the target agent and only that agent can see it; all content goes into skill_md. " +
+			"To share it between several agents, use create_shared_skill + bind_skill instead.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":        map[string]any{"type": "string", "description": "唯一名，只含字母数字横线"},
-				"skill_md":    map[string]any{"type": "string", "description": "SKILL.md 全文（技能的全部内容）"},
-				"description": map[string]any{"type": "string", "description": "skill 描述（可选）"},
+				"name":        map[string]any{"type": "string", "description": "Unique name, letters/digits/hyphens only"},
+				"skill_md":    map[string]any{"type": "string", "description": "Full text of SKILL.md (the entire content of the skill)"},
+				"description": map[string]any{"type": "string", "description": "Skill description (optional)"},
 			},
 			"required": []any{"name", "skill_md"},
 		},
@@ -689,8 +689,8 @@ type updateAgentSkillTool struct{}
 
 func (t *updateAgentSkillTool) Meta() ToolMeta {
 	return skillAgentMeta(withToolDeps(skillUpdateMeta("update_agent_skill", CategorySkillAdmin,
-		"更新**指定 agent 的私有 skill**（仅超级智能体）：可改内容、描述、名字或工具依赖（改名会同步迁移其内容文件）。",
-		"skill 的 id（可选；按 id 定位时仍须属于该 agent 的私有空间）")))
+		"Update a **specified agent**'s private skill (supervisor only): change its content, description, name or tool dependencies (a rename migrates its content file).",
+		"Skill id (optional; when locating by id it must still be inside that agent's private space)")))
 }
 
 func (t *updateAgentSkillTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
@@ -706,8 +706,8 @@ type deleteAgentSkillTool struct{}
 
 func (t *deleteAgentSkillTool) Meta() ToolMeta {
 	return skillAgentMeta(skillDeleteMeta("delete_agent_skill", CategorySkillAdmin,
-		"删除**指定 agent 的私有 skill**（仅超级智能体，同时删除其内容文件）。",
-		"skill 的 id（可选；按 id 定位时仍须属于该 agent 的私有空间）"))
+		"Delete a **specified agent**'s private skill (supervisor only; its content file is deleted too).",
+		"Skill id (optional; when locating by id it must still be inside that agent's private space)"))
 }
 
 func (t *deleteAgentSkillTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
@@ -725,7 +725,7 @@ func (t *listAgentsTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "list_agents",
 		Category:    CategoryAgent,
-		Description: "列出所有已注册的 agent 实例（name/description/status）。",
+		Description: "List all registered agent instances (name/description/status).",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -756,7 +756,7 @@ func (t *listSkillsTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "list_skills",
 		Category:    CategorySkill,
-		Description: "列出当前 agent 可见的 skill（本 agent 私有 + 已绑定到它的技能；开启发现能力时还包含全员可见的共享技能）。",
+		Description: "List the skills visible to the current agent (its own private skills + skills bound to it; shared skills visible to everyone are included when skill discovery is on).",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -778,8 +778,8 @@ func (t *listSkillsTool) Execute(ctx context.Context, c *Context, args map[strin
 			"skills":    list[:maxListSkills],
 			"total":     total,
 			"truncated": true,
-			"note": fmt.Sprintf("共 %d 个可见技能，这里只列出前 %d 个；如需用到的技能未列出，"+
-				"可让管理员把它绑定给本 agent（或精简可见范围）", total, maxListSkills),
+			"note": fmt.Sprintf("%d skills are visible and only the first %d are listed here; if the skill you need is missing, "+
+				"ask an admin to bind it to this agent (or narrow the visible scope)", total, maxListSkills),
 		}, nil
 	}
 	return map[string]any{"skills": list, "total": total}, nil
@@ -792,14 +792,14 @@ func (t *readAgentTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "read_agent",
 		Category: CategoryAgent,
-		Description: "读取某个 agent 的 AGENT.md 内容，并返回它当前绑定的技能名（skills）；" +
-			"超级智能体调用时还会带上该 agent 的工具授权现状（tool_grants：required 恒生效 / allow 为 pending 等待 use_skill 激活 / deny 为显式拒绝）、「不限制工具」开关（unrestricted）、" +
-			"「可发现未绑定的技能」开关（discovery），" +
-			"以及调用授权现状（can_call = 它能调用谁，called_by = 谁能调用它）。",
+		Description: "Read an agent's AGENT.md and return the names of the skills currently bound to it (skills). " +
+			"When called by a supervisor it also returns that agent's tool grants (tool_grants: required always applies / allow is pending until use_skill activates it / deny is an explicit refusal), the \"unrestricted tools\" switch (unrestricted), " +
+			"the \"discover unbound skills\" switch (discovery), " +
+			"and its call grants (can_call = whom it may call, called_by = who may call it).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "agent 名"},
+				"name": map[string]any{"type": "string", "description": "Agent name"},
 			},
 			"required": []any{"name"},
 		},
@@ -881,16 +881,16 @@ func (t *readSkillTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "read_skill",
 		Category: CategorySkill,
-		Description: "查看某个 skill 的 SKILL.md 内容，**不会**激活它声明的工具（只想知道它讲什么、或查资料时用这个）。" +
-			"返回值里的 tool_deps 是它声明的工具依赖（原样 ref，空数组 = 没声明）：只展示，不激活 —— 想用这些工具请改用 use_skill。" +
-			"要按它做事，请改用 use_skill —— 后者会返回正文并让它的工具依赖从下一轮起可用。" +
-			"按当前可见范围定位；超级智能体改别人的技能请用 *_agent_skill 系列，或直接用 read_file / edit_file 改文件。" +
-			"租户级共享 skill 还会返回可见性现状：restricted（true = 仅白名单可见）与 bound_agents（白名单，仅超级智能体可见）。",
+		Description: "View a skill's SKILL.md — **viewing only**, the tools it declares are NOT activated (use this when you just want to know what it says or look something up). " +
+			"tool_deps in the result lists the tool dependencies it declares (raw refs; an empty array means none): shown, not activated — to use those tools call use_skill instead. " +
+			"To work according to the skill, call use_skill — that returns the body and makes its tool dependencies available from the next round on. " +
+			"Locate it within the currently visible scope; a supervisor editing someone else's skill should use the *_agent_skill tools, or edit the file directly with read_file / edit_file. " +
+			"For a tenant-level shared skill the result also carries visibility state: restricted (true = whitelist only) and bound_agents (the whitelist, supervisor only).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":     map[string]any{"type": "string", "description": "skill 名，例如 english-joke-writing"},
-				"skill_id": map[string]any{"type": "string", "description": "skill 的 id（可选；仅超级智能体可按 id 跨归属定向读取）" + skillIDDefaultHint},
+				"name":     map[string]any{"type": "string", "description": "Skill name, e.g. english-joke-writing"},
+				"skill_id": map[string]any{"type": "string", "description": "Skill id (optional; only a supervisor can target across ownership by id)" + skillIDDefaultHint},
 			},
 			"required": []any{"name"},
 		},
@@ -912,14 +912,14 @@ func (t *useSkillTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "use_skill",
 		Category: CategorySkill,
-		Description: "按某个 skill 做事时调用：返回 SKILL.md 正文与它声明的工具依赖（tool_deps），并**激活**这些依赖（从下一次调用起可用，本 run 结束失效）。" +
-			"激活后实际多出哪些工具仍取决于你被授权的范围（allow），tool_deps 只是它「需要什么」。" +
-			"只查看内容、不打算按其操作，请用 read_skill（不会激活任何工具）。",
+		Description: "Call this when working according to a skill: returns the SKILL.md body and the tool dependencies it declares (tool_deps), and **activates** them (available from the next call on; expires when this run ends). " +
+			"Which tools actually show up still depends on your granted scope (allow) — tool_deps only says what the skill *needs*. " +
+			"To merely view the content without acting on it, use read_skill (it activates nothing).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":     map[string]any{"type": "string", "description": "skill 名，例如 english-joke-writing"},
-				"skill_id": map[string]any{"type": "string", "description": "skill 的 id（可选；仅超级智能体可按 id 跨归属定向读取）" + skillIDDefaultHint},
+				"name":     map[string]any{"type": "string", "description": "Skill name, e.g. english-joke-writing"},
+				"skill_id": map[string]any{"type": "string", "description": "Skill id (optional; only a supervisor can target across ownership by id)" + skillIDDefaultHint},
 			},
 			"required": []any{"name"},
 		},
@@ -947,12 +947,12 @@ func (t *callAgentTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "call_agent",
 		Category:    CategoryAgent,
-		Description: "调用另一个 agent 执行任务，同步等待并返回其最终结果。",
+		Description: "Call another agent to run a task; waits synchronously and returns its final result.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent_name": map[string]any{"type": "string", "description": "目标 agent 名"},
-				"arguments":  map[string]any{"type": "object", "description": "传给目标 agent 的参数（可选）"},
+				"agent_name": map[string]any{"type": "string", "description": "Target agent name"},
+				"arguments":  map[string]any{"type": "object", "description": "Arguments passed to the target agent (optional)"},
 			},
 			"required": []any{"agent_name"},
 		},
@@ -962,7 +962,7 @@ func (t *callAgentTool) Meta() ToolMeta {
 func (t *callAgentTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	name := argString(args, "agent_name")
 	if !ValidName(name) {
-		return nil, fmt.Errorf("invalid agent name %q (只允许字母数字横线)", name)
+		return nil, fmt.Errorf("invalid agent name %q (letters, digits and hyphens only)", name)
 	}
 	// 不允许调用自己：直接自递归没有意义
 	if name == c.AgentName {
@@ -1027,13 +1027,13 @@ func (t *bindSkillTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "bind_skill",
 		Category: CategoryAgentAdmin,
-		Description: "给某个 agent 追加绑定一个技能（幂等，已绑定则无变化）：绑定后该 skill 才会写进它的提示词。" +
-			"只接受租户级 skill 名。仅超级智能体可用。",
+		Description: "Bind one more skill to an agent (idempotent; no change when already bound): only bound skills are written into its prompt. " +
+			"Only tenant-level skill names are accepted. Supervisor only.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent": map[string]any{"type": "string", "description": "目标 agent 名"},
-				"skill": map[string]any{"type": "string", "description": "要绑定的租户级 skill 名"},
+				"agent": map[string]any{"type": "string", "description": "Target agent name"},
+				"skill": map[string]any{"type": "string", "description": "Tenant-level skill name to bind"},
 			},
 			"required": []any{"agent", "skill"},
 		},
@@ -1059,12 +1059,12 @@ func (t *unbindSkillTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "unbind_skill",
 		Category:    CategoryAgentAdmin,
-		Description: "移除某个 agent 的一个技能绑定（幂等，未绑定则无变化）。只接受租户级 skill 名。仅超级智能体可用。",
+		Description: "Remove one skill binding from an agent (idempotent; no change when not bound). Only tenant-level skill names are accepted. Supervisor only.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent": map[string]any{"type": "string", "description": "目标 agent 名"},
-				"skill": map[string]any{"type": "string", "description": "要解绑的租户级 skill 名"},
+				"agent": map[string]any{"type": "string", "description": "Target agent name"},
+				"skill": map[string]any{"type": "string", "description": "Tenant-level skill name to unbind"},
 			},
 			"required": []any{"agent", "skill"},
 		},
@@ -1098,22 +1098,22 @@ func (t *searchToolsTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "search_tools",
 		Category: CategoryToolGrant,
-		Description: "检索**可授权的**工具目录（仅超级智能体）：内置工具 / 连接（MCP、RPC）/ 插件 / 自定义工具 / 本地端点 / 工具组。" +
-			"返回的 ref 可直接粘进 grant_agent_tool（如 builtin:file 整组、mcp:fs 整条连接、mcp:fs:read_file 单个工具）。" +
-			"query 省略时只列组概览（组 ref + 成员数 + 前几个成员 ref + 是否可用），不展开到单个工具；" +
-			"给了 query 才展开匹配的工具（关键字匹配连接名 / 工具名 / 描述 / ref 片段，如 fs、read_file、mcp）。" +
-			"传 agent 会按该 agent 的身份过滤（「仅超级智能体可用」的工具不会出现在非超级智能体的候选里），" +
-			"并回填它已经授过的 ref（granted）—— 先查再授，不要凭记忆写 ref。",
+		Description: "Search the **grantable** tool catalog (supervisor only): builtin tools / connections (MCP, RPC) / plugins / custom tools / local endpoints / tool groups. " +
+			"The returned refs can be pasted straight into grant_agent_tool (e.g. builtin:file for a whole group, mcp:fs for a whole connection, mcp:fs:read_file for a single tool). " +
+			"With query omitted it only lists the group overview (group ref + member count + first member refs + availability) and does not expand to individual tools; " +
+			"with a query it expands the matching tools (the keyword matches connection name / tool name / description / ref fragment, e.g. fs, read_file, mcp). " +
+			"Passing agent filters the catalog by that agent's identity (tools marked \"supervisor only\" never appear for a non-supervisor) " +
+			"and fills in the refs it has already been granted (granted) — look it up before granting, do not write refs from memory.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{
 					"type":        "string",
-					"description": "关键字：连接名 / 工具名 / 描述 / ref 片段（如 fs、read_file、mcp、builtin:file）。省略时只列组概览",
+					"description": "Keyword: connection name / tool name / description / ref fragment (e.g. fs, read_file, mcp, builtin:file). Omit to list only the group overview",
 				},
 				"agent": map[string]any{
 					"type":        "string",
-					"description": "可选。目标 agent 名：按它的身份过滤目录，并回填它当前的授权状态。省略表示按调用者自己的身份",
+					"description": "Optional. Target agent name: filter the catalog by its identity and fill in its current grant state. Omit to use the caller's own identity",
 				},
 			},
 		},
@@ -1154,24 +1154,24 @@ func (t *grantAgentToolTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "grant_agent_tool",
 		Category: CategoryToolGrant,
-		Description: "给**指定 agent** 赋予一条工具授权（仅超级智能体，目标须处于编辑态）。" +
-			"kind 可选：required（恒注入常驻，不随技能进出）/ allow（按需：必须已有技能声明该依赖，" +
-			"use_skill 激活后才注入）/ deny（显式拒绝：即使技能声明也不注入，会覆盖该 ref 原有的行）。" +
-			"省略 kind 则由系统判定：有技能声明 → allow，否则 required。" +
-			"ref 形如 builtin:exec / builtin:file（类别组）、builtin:read_file（单工具）、mcp:<连接>:<工具>、group:<组名>。" +
-			"每个 ref 只保留一行，改 kind 即覆盖旧行（返回值会说明覆盖了什么）。" +
-			"「仅超级智能体可用」的工具不能授给非超级智能体（会被明确拒绝）。" +
-			"可以给自己加（超级智能体即管理员）：本 run 的下一轮工具集就会重算，不必等下一次会话。" +
-			"废弃的 agent 一律拒写，你自己也不例外。",
+		Description: "Grant one tool authorization to a **specified agent** (supervisor only; the target must be editable). " +
+			"kind: required (always injected, independent of skills) / allow (on demand: some skill must already declare that dependency, " +
+			"and it is injected only after use_skill activates it) / deny (explicit refusal: not injected even if a skill declares it, and it overrides the existing row for that ref). " +
+			"If kind is omitted the system decides: allow when some skill declares it, otherwise required. " +
+			"ref looks like builtin:exec / builtin:file (category group), builtin:read_file (single tool), mcp:<connection>:<tool>, group:<group name>. " +
+			"Only one row is kept per ref — changing kind overwrites the old row (the result says what was overwritten). " +
+			"Tools marked \"supervisor only\" cannot be granted to a non-supervisor (the call is explicitly refused). " +
+			"You may grant yourself (the supervisor is the admin): the tool set is recomputed on the next round of this run, no new session needed. " +
+			"Deprecated agents always refuse writes, yourself included.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent": map[string]any{"type": "string", "description": "目标 agent 名（可以是自己）"},
-				"ref":   map[string]any{"type": "string", "description": "工具引用：builtin:<工具名>、builtin:<类别>、mcp:<连接>[:<工具>]、rpc:<连接>[:<工具>]、local:rpc[:<端点>]、group:<组名>"},
+				"agent": map[string]any{"type": "string", "description": "Target agent name (may be yourself)"},
+				"ref":   map[string]any{"type": "string", "description": "Tool reference: builtin:<tool>, builtin:<category>, mcp:<connection>[:<tool>], rpc:<connection>[:<tool>], local:rpc[:<endpoint>], group:<group name>"},
 				"kind": map[string]any{
 					"type":        "string",
 					"enum":        []any{"required", "allow", "deny"},
-					"description": "可选。required=恒注入常驻；allow=按需（必须有技能声明该依赖）；deny=显式拒绝并覆盖旧行。省略则由系统判定",
+					"description": "Optional. required = always injected; allow = on demand (some skill must declare the dependency); deny = explicit refusal that overrides the old row. Omit to let the system decide",
 				},
 			},
 			"required": []any{"agent", "ref"},
@@ -1210,15 +1210,15 @@ func (t *revokeAgentToolTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "revoke_agent_tool",
 		Category: CategoryToolGrant,
-		Description: "移除**指定 agent** 的一条工具授权（仅超级智能体，目标须处于编辑态；幂等）。" +
-			"按 ref 精确移除，与它当初以 required / allow / deny 写入无关（返回值会带被删那一行的 kind，便于审计）。" +
-			"可以收回自己的（超级智能体即管理员）：本 run 的下一轮工具集随之重算。" +
-			"建议先看 read_agent 返回的 tool_grants 再收回，避免误删仍在用的授权。",
+		Description: "Remove one tool authorization from a **specified agent** (supervisor only; the target must be editable; idempotent). " +
+			"Removal is by exact ref and does not care whether the row was written as required / allow / deny (the result returns the kind of the removed row for auditing). " +
+			"You may revoke your own (the supervisor is the admin): the tool set is recomputed on the next round of this run. " +
+			"Check the tool_grants returned by read_agent first, so you don't delete a grant that is still in use.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent": map[string]any{"type": "string", "description": "目标 agent 名"},
-				"ref":   map[string]any{"type": "string", "description": "要移除的工具引用（与授权时一致）"},
+				"agent": map[string]any{"type": "string", "description": "Target agent name"},
+				"ref":   map[string]any{"type": "string", "description": "Tool reference to remove (the same one used when granting)"},
 			},
 			"required": []any{"agent", "ref"},
 		},
@@ -1279,16 +1279,16 @@ func (t *allowAgentCallTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "allow_agent_call",
 		Category: CategoryToolGrant,
-		Description: "让**指定 agent** 获得调用另一个 agent 的授权（仅超级智能体；幂等）。" +
-			"这只写入一条调用关系（agent_relations），真正调用时（call_agent）才会被校验。" +
-			"被调用方可以是任意未废弃的 agent（含超级智能体 —— 它被调起时仍是完整的管理面），但不能是自己。" +
-			"目标若尚未发布正式版本，返回里会带 warning：授权照样写入，但正式入口（MCP / RPC / 端点 / flow）调用它会失败。" +
-			"改动前可用 read_agent 看目标的 can_call / called_by 现状。",
+		Description: "Let a **specified agent** call another agent (supervisor only; idempotent). " +
+			"This only writes one call relation (agent_relations); it is enforced when the call actually happens (call_agent). " +
+			"The callee may be any non-deprecated agent (including the supervisor — when invoked it still has the full admin surface), but not yourself. " +
+			"If the target has no released version yet the result carries a warning: the grant is still written, but calling it through a formal entry point (MCP / RPC / endpoint / flow) will fail. " +
+			"Before changing anything, read_agent shows the target's current can_call / called_by.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent":  map[string]any{"type": "string", "description": "调用方 agent 名（须处于编辑态）"},
-				"target": map[string]any{"type": "string", "description": "被调用方 agent 名（含超级智能体；不能是自己）"},
+				"agent":  map[string]any{"type": "string", "description": "Caller agent name (must be editable)"},
+				"target": map[string]any{"type": "string", "description": "Callee agent name (the supervisor included; cannot be yourself)"},
 			},
 			"required": []any{"agent", "target"},
 		},
@@ -1321,7 +1321,7 @@ func (t *allowAgentCallTool) Execute(ctx context.Context, c *Context, args map[s
 	// 只有编辑页调试能调起来 —— 先提示，不拦（常见路径是「先建 agent + 授权，再发布」）。
 	if !agentHasReleasedVersion(c.Schema, info.Name) {
 		out["unreleased"] = true
-		out["warning"] = fmt.Sprintf("agent %q 还没有发布正式版本：授权已写入，但正式入口（MCP / RPC / 端点 / flow）调用它会报「尚未发布正式版本」，只有编辑页调试能调起来", info.Name)
+		out["warning"] = fmt.Sprintf("agent %q has no released version yet: the grant is written, but calling it through the live entry points (MCP / RPC / endpoint / flow) reports that no released version exists yet; only the editor debugger can run it", info.Name)
 	}
 	return out, nil
 }
@@ -1343,13 +1343,13 @@ func (t *revokeAgentCallTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "revoke_agent_call",
 		Category: CategoryToolGrant,
-		Description: "收回**指定 agent** 调用另一个 agent 的授权（仅超级智能体；幂等，返回删除条数）。" +
-			"建议先看 read_agent 的 can_call 再收回，避免误删仍在用的调用链路。",
+		Description: "Revoke a **specified agent**'s permission to call another agent (supervisor only; idempotent, returns the number of rows deleted). " +
+			"Check can_call from read_agent first, so you don't break a call chain that is still in use.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent":  map[string]any{"type": "string", "description": "调用方 agent 名"},
-				"target": map[string]any{"type": "string", "description": "被调用方 agent 名"},
+				"agent":  map[string]any{"type": "string", "description": "Caller agent name"},
+				"target": map[string]any{"type": "string", "description": "Callee agent name"},
 			},
 			"required": []any{"agent", "target"},
 		},

@@ -49,7 +49,7 @@ func storeFor(schema string) *customtoolstore.Store {
 func mustAuth(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return nil, false
 	}
 	info, ok := v.(*auth.AuthInfo)
@@ -123,7 +123,7 @@ func ListCustomTools(c *gin.Context) {
 	}
 	list, issues, err := storeFor(info.Schema).ListWithIssues()
 	if err != nil {
-		xhttp.ErrJSON(c, "读取自定义工具失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取自定义工具失败: "+err.Error(), "")
 		return
 	}
 	// 打开列表即完成存量迁移：有表行、没 TOOL.json 的补写一份（幂等；失败只记日志，
@@ -254,15 +254,15 @@ func CreateCustomTool(c *gin.Context) {
 	if !tools.ValidName(name) {
 		// 与 tools.ValidName（paths.ValidName）的实际规则一致：不含下划线。
 		// 早先的文案写成「下划线与短横线」，与校验器对不上，会让人白试。
-		xhttp.ErrJSON(c, "工具名只能包含字母、数字与短横线，且不能以短横线开头", nil, "")
+		xhttp.ErrCode(c, "tool.invalid_name", gin.H{"name": name}, "工具名只能包含字母、数字与短横线，且不能以短横线开头", "")
 		return
 	}
 	if strings.Contains(name, "__") {
-		xhttp.ErrJSON(c, "工具名不能包含连续下划线（对外名是 custom__<name>，会把前缀切乱）", nil, "")
+		xhttp.ErrCode(c, "tool.invalid_name", gin.H{"name": name}, "工具名不能包含连续下划线（对外名是 custom__<name>，会把前缀切乱）", "")
 		return
 	}
 	if _, err := storeFor(info.Schema).Get(info.Schema, name); err == nil {
-		xhttp.ErrJSON(c, "同名自定义工具已存在", nil, "")
+		xhttp.ErrCode(c, "tool.name_taken", gin.H{"name": name}, "同名自定义工具已存在", "")
 		return
 	}
 
@@ -290,20 +290,20 @@ func CreateCustomTool(c *gin.Context) {
 		t.Status = *body.Status
 	}
 	if err := storeFor(info.Schema).Create(info.Schema, t); err != nil {
-		xhttp.ErrJSON(c, "创建自定义工具失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "创建自定义工具失败: "+err.Error(), "")
 		return
 	}
 
 	// 先落库再落盘：目录建失败时回滚那一行，避免"库里有、盘上没有"的半成品。
 	if err := toolfile.WriteOf(config.Cfg.Agent.RootDir, info.Schema, t); err != nil {
 		_ = storeFor(info.Schema).Delete(info.Schema, name)
-		xhttp.ErrJSON(c, "写入契约文件失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "写入契约文件失败: "+err.Error(), "")
 		return
 	}
 	if err := writeEntry(info.Schema, t, entryContent(body.Script, t)); err != nil {
 		_ = storeFor(info.Schema).Delete(info.Schema, name)
 		_ = os.RemoveAll(toolDir(info.Schema, name))
-		xhttp.ErrJSON(c, "写入实现文件失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "写入实现文件失败: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"tool": buildView(t, toolfile.Contract{Source: "file"})}, "")
@@ -375,18 +375,20 @@ func UpdateCustomTool(c *gin.Context) {
 	}
 	// Upsert：盘上有目录、表里没行的工具也要能改状态与配置（缺行不该让编辑失败）。
 	if err := storeFor(info.Schema).Upsert(cur); err != nil {
-		xhttp.ErrJSON(c, "更新自定义工具失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "更新自定义工具失败: "+err.Error(), "")
 		return
 	}
 	if err := toolfile.WriteOf(config.Cfg.Agent.RootDir, info.Schema, cur); err != nil {
 		// 写不成就把文件删掉：读路径文件优先，留着旧文件会让这次保存在下一轮读取里失效。
 		_ = os.Remove(toolfile.Path(config.Cfg.Agent.RootDir, info.Schema, cur.Name))
-		xhttp.ErrJSON(c, "设置已保存，但写入契约文件失败（已回退为表定义）: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "tool.contract_write_failed", gin.H{"name": cur.Name},
+			"设置已保存，但写入契约文件失败（已回退为表定义）: "+err.Error(), "")
 		return
 	}
 	if body.Script != nil {
 		if err := writeEntry(info.Schema, cur, *body.Script); err != nil {
-			xhttp.ErrJSON(c, "设置已保存，但写入实现文件失败: "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "tool.entry_write_failed", gin.H{"name": cur.Name},
+				"设置已保存，但写入实现文件失败: "+err.Error(), "")
 			return
 		}
 	} else if _, serr := os.Stat(entryPath(info.Schema, cur)); serr != nil {
@@ -394,7 +396,8 @@ func UpdateCustomTool(c *gin.Context) {
 		// 不管的话就是「保存成功、一跑就报入口不存在」—— 代码由文件面板写，
 		// 表单这一侧不再携带代码，所以这个兜底必须留在后端。
 		if werr := writeEntry(info.Schema, cur, tools.SkeletonForLang(cur.Lang)); werr != nil {
-			xhttp.ErrJSON(c, "设置已保存，但入口文件不存在且补写骨架失败: "+werr.Error(), nil, "")
+			xhttp.ErrCode(c, "tool.entry_write_failed", gin.H{"name": cur.Name},
+				"设置已保存，但入口文件不存在且补写骨架失败: "+werr.Error(), "")
 			return
 		}
 	}
@@ -409,7 +412,7 @@ func DeleteCustomTool(c *gin.Context) {
 	}
 	name := c.Param("name")
 	if err := storeFor(info.Schema).Delete(info.Schema, name); err != nil {
-		xhttp.ErrJSON(c, "删除自定义工具失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "删除自定义工具失败: "+err.Error(), "")
 		return
 	}
 	// 代码目录一并删：留孤目录会让下一次同名创建困惑（也占盘）。
@@ -472,22 +475,24 @@ func RunCustomTool(c *gin.Context) {
 	// 缺了它就是「管理端可以绕过平台策略」，那是最不该有的一条旁路。
 	caps := capabilitypolicy.Snapshot(info.Schema)
 	if !caps[capability.Exec] {
-		xhttp.ErrJSON(c, fmt.Sprintf("本租户未开通 %s，自定义工具跑不起来（请在「工具能力」里开通）", capability.Exec), nil, "")
+		xhttp.ErrCode(c, "tool.capability_denied", gin.H{"capability": capability.Exec},
+			fmt.Sprintf("本租户未开通 %s，自定义工具跑不起来（请在「工具能力」里开通）", capability.Exec), "")
 		return
 	}
 	if t.Egress && !caps[capability.Egress] {
-		xhttp.ErrJSON(c, fmt.Sprintf("该工具声明了出网，但本租户未开通 %s", capability.Egress), nil, "")
+		xhttp.ErrCode(c, "tool.capability_denied", gin.H{"capability": capability.Egress},
+			fmt.Sprintf("该工具声明了出网，但本租户未开通 %s", capability.Egress), "")
 		return
 	}
 
 	// 沙箱准入：与 exec / run_skill_script 同一条「不猜环境」判据。
 	sb := tools.CurrentSandbox()
 	if sb == nil {
-		xhttp.ErrJSON(c, "沙箱未初始化（检查 sandbox.url 与 sandboxd）", nil, "")
+		xhttp.ErrCode(c, "sandbox.not_ready", nil, "沙箱未初始化（检查 sandbox.url 与 sandboxd）", "")
 		return
 	}
 	if !sandboxinfo.Ready() {
-		xhttp.ErrJSON(c, "沙箱能力未知（sandboxd 未就绪）：不猜环境，暂不执行", nil, "")
+		xhttp.ErrCode(c, "sandbox.not_ready", nil, "沙箱能力未知（sandboxd 未就绪）：不猜环境，暂不执行", "")
 		return
 	}
 
@@ -496,7 +501,7 @@ func RunCustomTool(c *gin.Context) {
 	// 且异常退出留下的目录会被启动清扫兜住（见 service/agent/janitor.go）。
 	workspace := paths.ResolveRunsDir(rootDir, info.Schema, fmt.Sprintf("tryrun-%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
-		xhttp.ErrJSON(c, "创建工作区失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "创建工作区失败: "+err.Error(), "")
 		return
 	}
 	defer os.RemoveAll(workspace)

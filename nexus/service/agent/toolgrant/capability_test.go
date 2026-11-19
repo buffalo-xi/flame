@@ -32,19 +32,26 @@ func TestCapabilityBlocked(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &Catalog{caps: tc.caps}
-			blocked, reason := c.capabilityBlocked(tc.key)
+			blocked, why := c.capabilityBlocked(tc.key)
 			if blocked != tc.blocked {
 				t.Fatalf("blocked = %v, want %v", blocked, tc.blocked)
 			}
 			if tc.blocked {
-				if !strings.Contains(reason, tc.wantWord) {
-					t.Errorf("原因里应带能力名 %q，got %q", tc.wantWord, reason)
+				if !strings.Contains(why.reason, tc.wantWord) {
+					t.Errorf("原因里应带能力名 %q，got %q", tc.wantWord, why.reason)
 				}
-				if !strings.Contains(reason, "平台") {
-					t.Errorf("原因要说明是平台未开通，got %q", reason)
+				if !strings.Contains(why.reason, "平台") {
+					t.Errorf("原因要说明是平台未开通，got %q", why.reason)
 				}
-			} else if reason != "" {
-				t.Errorf("放行时不该有原因，got %q", reason)
+				// 前端靠 code + params 本地化：缺了这两个字段就只剩中文原文
+				if why.code != UnavailableCodeCapability {
+					t.Errorf("code = %q, want %q", why.code, UnavailableCodeCapability)
+				}
+				if why.params["key"] != tc.key {
+					t.Errorf("params[key] = %q, want %q", why.params["key"], tc.key)
+				}
+			} else if !why.empty() {
+				t.Errorf("放行时不该有原因，got %+v", why)
 			}
 		})
 	}

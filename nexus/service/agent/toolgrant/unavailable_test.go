@@ -30,7 +30,7 @@ func TestPluginUnavailable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			avail, kind, reason := pluginUnavailable("web_search", tc.pol, tc.active)
+			avail, kind, why := pluginUnavailable("web_search", tc.pol, tc.active)
 			if avail != tc.avail {
 				t.Fatalf("avail = %v, want %v", avail, tc.avail)
 			}
@@ -38,19 +38,26 @@ func TestPluginUnavailable(t *testing.T) {
 				t.Fatalf("kind = %q, want %q", kind, tc.kind)
 			}
 			if tc.avail {
-				if reason != "" {
-					t.Errorf("可用时不该有原因，got %q", reason)
+				if !why.empty() {
+					t.Errorf("可用时不该有原因，got %+v", why)
 				}
 				return
 			}
 			// 原因必须指名道姓：插件名 + 该去哪修（否则用户只能猜）
-			if !strings.Contains(reason, "web_search") {
-				t.Errorf("原因里应带插件名，got %q", reason)
+			if !strings.Contains(why.reason, "web_search") {
+				t.Errorf("原因里应带插件名，got %q", why.reason)
 			}
 			for _, w := range tc.words {
-				if !strings.Contains(reason, w) {
-					t.Errorf("原因里应含 %q，got %q", w, reason)
+				if !strings.Contains(why.reason, w) {
+					t.Errorf("原因里应含 %q，got %q", w, why.reason)
 				}
+			}
+			// 编码要能落到前端语言包，且参数带上插件名（否则英文界面拼不出句子）
+			if why.code == "" {
+				t.Error("不可用原因缺 code：前端只能显示中文原文")
+			}
+			if why.params["plugin"] != "web_search" {
+				t.Errorf("params[plugin] = %q, want web_search", why.params["plugin"])
 			}
 		})
 	}
@@ -61,25 +68,33 @@ func TestExternalIssueKinds(t *testing.T) {
 	cases := []struct {
 		name  string
 		kind  string
-		issue func(string) (string, string)
+		code  string
+		param string
+		issue func(string) (string, unavail)
 		words []string
 	}{
-		{"mcp", UnavailableConnection, mcpConnIssue, []string{"MCP 连接", "设置"}},
-		{"rpc", UnavailableConnection, rpcConnIssue, []string{"RPC 连接", "设置"}},
-		{"endpoint", UnavailableEndpoint, endpointIssue, []string{"端点", "对外开放"}},
+		{"mcp", UnavailableConnection, UnavailableCodeMcpConnection, "connection", mcpConnIssue, []string{"MCP 连接", "设置"}},
+		{"rpc", UnavailableConnection, UnavailableCodeRpcConnection, "connection", rpcConnIssue, []string{"RPC 连接", "设置"}},
+		{"endpoint", UnavailableEndpoint, UnavailableCodeEndpoint, "endpoint", endpointIssue, []string{"端点", "对外开放"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			kind, reason := tc.issue("crm")
+			kind, why := tc.issue("crm")
 			if kind != tc.kind {
 				t.Fatalf("kind = %q, want %q", kind, tc.kind)
 			}
-			if !strings.Contains(reason, "crm") {
-				t.Errorf("原因里应带名字，got %q", reason)
+			if !strings.Contains(why.reason, "crm") {
+				t.Errorf("原因里应带名字，got %q", why.reason)
+			}
+			if why.code != tc.code {
+				t.Errorf("code = %q, want %q", why.code, tc.code)
+			}
+			if why.params[tc.param] != "crm" {
+				t.Errorf("params[%s] = %q, want crm", tc.param, why.params[tc.param])
 			}
 			for _, w := range tc.words {
-				if !strings.Contains(reason, w) {
-					t.Errorf("原因里应含 %q，got %q", w, reason)
+				if !strings.Contains(why.reason, w) {
+					t.Errorf("原因里应含 %q，got %q", w, why.reason)
 				}
 			}
 		})
@@ -98,6 +113,26 @@ func TestUnavailableKindValues(t *testing.T) {
 	for k, v := range want {
 		if k != v {
 			t.Errorf("归因取值变了：%q != %q（前端 mapping 需要同步）", k, v)
+		}
+	}
+}
+
+// 原因编码取值同样是产品约定（前端按 toolUnavailable.<code> 查语言包）：
+// 改了这里而没改语言包，界面上那段原因会整个消失 —— 钉住。
+func TestUnavailableCodeValues(t *testing.T) {
+	want := map[string]string{
+		"capability":           UnavailableCodeCapability,
+		"plugin_blocked":       UnavailableCodePluginBlocked,
+		"plugin_disabled":      UnavailableCodePluginDisabled,
+		"plugin_inactive":      UnavailableCodePluginInactive,
+		"policy_read_failed":   UnavailableCodePolicyReadFail,
+		"mcp_conn_disabled":    UnavailableCodeMcpConnection,
+		"rpc_conn_disabled":    UnavailableCodeRpcConnection,
+		"endpoint_not_exposed": UnavailableCodeEndpoint,
+	}
+	for k, v := range want {
+		if k != v {
+			t.Errorf("原因编码变了：%q != %q（语言包 toolUnavailable 需要同步）", k, v)
 		}
 	}
 }

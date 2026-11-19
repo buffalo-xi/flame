@@ -26,33 +26,33 @@ func (t *updateFlowArgumentsTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "update_flow_arguments",
 		Category: CategoryFlowAdmin,
-		Description: "增删改工作流的入口参数（flows.arguments）：set 按参数名整体替换（不存在就新增），" +
-			"remove 按名字删除。声明过的参数就是 run_flow 的 inputs 键，也是对外开放端点对外的 input_schema。" +
-			"**只动入口参数**：名称 / 描述 / diagram / 限额一律不碰（改结构用节点工具）。" +
-			"改动落在工作副本：run_flow 试跑与端点 input_schema 立即生效；" +
-			"但正式调用跑的是**已发布版本**，要在编辑页「发布」后才换成新声明。" +
-			"改 type / 加必填会让已有调用方传错或漏传，动手前先 read_flow 看现状。",
+		Description: "Add, change or remove a workflow's entry parameters (flows.arguments): set replaces a parameter's declaration wholesale by name (adds it when absent), " +
+			"remove deletes by name. Declared parameters are the run_flow inputs keys and the input_schema of an exposed endpoint. " +
+			"**Only entry parameters are touched**: name / description / diagram / limits are never changed (use the node tools to change structure). " +
+			"Changes land in the working copy: run_flow test runs and the endpoint input_schema pick them up immediately; " +
+			"but formal calls run the **released version**, so the new declaration only takes effect after you hit Publish in the editor. " +
+			"Changing a type or adding a required parameter makes existing callers send wrong or missing values — call read_flow first to see the current state.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"flow": map[string]any{"type": "string", "description": flowRefHint},
 				"set": map[string]any{
 					"type": "object",
-					"description": "按参数名整体替换该参数的声明（名字不存在就新增）。形状与 create_flow 的 arguments 一致：" +
-						`{"city":{"type":"string","description":"城市名"}}。` +
-						"type 只支持 string / number / boolean / object / array（array 必须带 items.type；object 可再带 properties / required）。",
+					"description": "Replace that parameter's declaration wholesale by name (adds it when the name is absent). The shape matches create_flow's arguments: " +
+						`{"city":{"type":"string","description":"city name"}}. ` +
+						"type supports string / number / boolean / object / array only (array must carry items.type; object may also carry properties / required).",
 				},
 				"remove": map[string]any{
 					"type":  "array",
 					"items": map[string]any{"type": "string"},
-					"description": "要删除的参数名。会同时从 required 里摘掉；**不会**改节点 config，" +
-						"仍在引用它的 source_type=argument 变量会变成取不到值",
+					"description": "Parameter names to delete. They are dropped from required as well; node config is **not** changed, " +
+						"so source_type=argument variables that still reference them silently resolve to nothing",
 				},
 				"required": map[string]any{
 					"type":  "array",
 					"items": map[string]any{"type": "string"},
-					"description": "必填清单，**整体替换**：不传 = 保持现状（被删的自动剔除）；传 [] = 全部改成可选。" +
-						"名字必须存在于 set 或现有参数里 —— 要先 read_flow 拿现状，别只写这次新增的那个",
+					"description": "The required list, **replaced wholesale**: omit = keep the current state (deleted ones are dropped automatically); pass [] = make everything optional. " +
+						"Every name must exist in set or in the existing parameters — call read_flow for the current state first instead of listing only this round's addition",
 				},
 			},
 			"required": []any{"flow"},
@@ -63,7 +63,7 @@ func (t *updateFlowArgumentsTool) Meta() ToolMeta {
 func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	ref := strings.TrimSpace(argString(args, "flow"))
 	if ref == "" {
-		return nil, errors.New("flow 不能为空（工作流 id 或名称）")
+		return nil, errors.New("flow must not be empty (workflow id or name)")
 	}
 	if c.Flows == nil {
 		return nil, errors.New("flow manager not available")
@@ -73,12 +73,12 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 	rawRequired, hasRequired := args["required"]
 	// required 单独给也是合法编辑：只调必填、不动声明
 	if len(setRaw) == 0 && len(remove) == 0 && !hasRequired {
-		return nil, errors.New("set / remove / required 至少要给一个；只想看现状用 read_flow")
+		return nil, errors.New("give at least one of set / remove / required; use read_flow to inspect the current state")
 	}
 	// 同一个名字既要改又要删，意图不自洽：拒掉而不是靠执行顺序决定结果。
 	for _, name := range remove {
 		if _, both := setRaw[name]; both {
-			return nil, fmt.Errorf("参数 %q 同时出现在 set 与 remove 里：一次调用里要么改要么删", name)
+			return nil, fmt.Errorf("parameter %q is in both set and remove: change it or delete it in one call, not both", name)
 		}
 	}
 
@@ -87,14 +87,14 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 		return nil, err
 	}
 	if detail == nil {
-		return nil, fmt.Errorf("工作流 %q 不存在；先用 list_flows 确认名字", ref)
+		return nil, fmt.Errorf("workflow %q does not exist: confirm the name with list_flows first", ref)
 	}
 
 	// 整份文档原样解码再改局部：人写的 description / default 等字段不能被一次编辑清洗掉。
 	doc := map[string]any{}
 	if len(detail.Arguments) > 0 {
 		if err := json.Unmarshal(detail.Arguments, &doc); err != nil {
-			return nil, fmt.Errorf("现有入口参数不是合法 JSON: %w", err)
+			return nil, fmt.Errorf("the existing input arguments are not valid JSON: %w", err)
 		}
 	}
 	doc["type"] = "object"
@@ -141,7 +141,7 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 
 	merged, err := json.Marshal(doc)
 	if err != nil {
-		return nil, fmt.Errorf("序列化入口参数失败: %w", err)
+		return nil, fmt.Errorf("failed to serialize input arguments: %w", err)
 	}
 	if _, err := c.Flows.UpdateArguments(ctx, ref, ref, json.RawMessage(merged)); err != nil {
 		return nil, err
@@ -171,6 +171,6 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 		"flow_name": detail.Name,
 		"arguments": names,
 		"changed":   touched,
-		"note":      "已写入工作副本：run_flow 立即生效；正式入口要等编辑页「发布」后才换成新声明",
+		"note":      "written to the working copy: run_flow picks it up immediately; the live entry point switches to the new declaration only after you release it in the editor",
 	}, nil
 }

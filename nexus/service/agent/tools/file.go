@@ -20,11 +20,11 @@ func (t *fileReadTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "read_file",
 		Category:    CategoryFile,
-		Description: "读取工作区内的文本文件内容，返回 content、size、exists。",
+		Description: "Read a text file in the workspace. Returns content, size and exists.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{"type": "string", "description": "相对工作区的文件路径；以 \"/\" 开头表示从租户根算：超级智能体可及全租户（如 /agents/poet/AGENT.md），非超级智能体可读自己的定义目录（如 /agents/你的名字/AGENT.md），其中只有 /agents/你的名字/skills/技能名/ 可写"},
+				"path": map[string]any{"type": "string", "description": "File path relative to the workspace; a leading \"/\" resolves from the tenant root: a supervisor reaches the whole tenant (e.g. /agents/poet/AGENT.md), a non-supervisor reads its own definition directory (e.g. /agents/<your-name>/AGENT.md), of which only /agents/<your-name>/skills/<skill>/ is writable"},
 			},
 			"required": []any{"path"},
 		},
@@ -59,13 +59,13 @@ func (t *fileWriteTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "write_file",
 		Category:    CategoryFile,
-		Description: "写入（或追加）工作区内的文本文件，自动创建父目录。",
+		Description: "Write (or append to) a text file in the workspace, creating parent directories as needed.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":    map[string]any{"type": "string", "description": "相对工作区的文件路径；以 \"/\" 开头表示从租户根算：超级智能体可及全租户（如 /agents/poet/AGENT.md），非超级智能体只能写自己的私有 skill 目录（如 /agents/你的名字/skills/技能名/），自己的 AGENT.md 只读。工作区内的文件不是 agent/skill 实体，实体须用元工具创建"},
-				"content": map[string]any{"type": "string", "description": "要写入的文本内容"},
-				"append":  map[string]any{"type": "boolean", "description": "是否追加（默认覆盖）"},
+				"path":    map[string]any{"type": "string", "description": "File path relative to the workspace; a leading \"/\" resolves from the tenant root: a supervisor reaches the whole tenant (e.g. /agents/poet/AGENT.md), a non-supervisor can only write its own private skill directory (e.g. /agents/<your-name>/skills/<skill>/), and its own AGENT.md is read-only. Files in the workspace are not agent/skill entities — create entities with the meta tools"},
+				"content": map[string]any{"type": "string", "description": "Text to write"},
+				"append":  map[string]any{"type": "boolean", "description": "Whether to append (default: overwrite)"},
 			},
 			"required": []any{"path", "content"},
 		},
@@ -143,14 +143,14 @@ func (t *fileEditTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "edit_file",
 		Category:    CategoryFile,
-		Description: "编辑文件内的文本：把 old 替换为 new（默认只替换第一处匹配）。",
+		Description: "Edit text inside a file: replace old with new (only the first match by default).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":  map[string]any{"type": "string", "description": "相对工作区的文件路径；以 \"/\" 开头表示从租户根算：超级智能体可及全租户（如 /agents/poet/AGENT.md），非超级智能体只能写自己的私有 skill 目录（如 /agents/你的名字/skills/技能名/），自己的 AGENT.md 只读。工作区内的文件不是 agent/skill 实体，实体须用元工具创建"},
-				"old":   map[string]any{"type": "string", "description": "要替换的旧文本片段"},
-				"new":   map[string]any{"type": "string", "description": "替换后的新文本片段"},
-				"count": map[string]any{"type": "number", "description": "替换次数（默认 1，-1=全部）"},
+				"path":  map[string]any{"type": "string", "description": "File path relative to the workspace; a leading \"/\" resolves from the tenant root: a supervisor reaches the whole tenant (e.g. /agents/poet/AGENT.md), a non-supervisor can only write its own private skill directory (e.g. /agents/<your-name>/skills/<skill>/), and its own AGENT.md is read-only. Files in the workspace are not agent/skill entities — create entities with the meta tools"},
+				"old":   map[string]any{"type": "string", "description": "Old text fragment to replace"},
+				"new":   map[string]any{"type": "string", "description": "Replacement text fragment"},
+				"count": map[string]any{"type": "number", "description": "How many matches to replace (default 1; -1 = all)"},
 			},
 			"required": []any{"path", "old", "new"},
 		},
@@ -222,11 +222,11 @@ func (t *fileListTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "list_files",
 		Category:    CategoryFile,
-		Description: "列出工作区内某个目录下的文件/目录名。",
+		Description: "List the files and directories under a directory in the workspace.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"dir": map[string]any{"type": "string", "description": "相对工作区的目录路径（空=根）；以 \"/\" 开头表示从租户根算：超级智能体可及全租户（如 /agents/poet），非超级智能体可读自己的定义目录（如 /agents/你的名字），其中只有 /agents/你的名字/skills/ 可写"},
+				"dir": map[string]any{"type": "string", "description": "Directory path relative to the workspace (empty = root); a leading \"/\" resolves from the tenant root: a supervisor reaches the whole tenant (e.g. /agents/poet), a non-supervisor reads its own definition directory (e.g. /agents/<your-name>), of which only /agents/<your-name>/skills/ is writable"},
 			},
 		},
 	}
@@ -251,11 +251,11 @@ func (t *fileDeleteTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "delete_file",
 		Category:    CategoryFile,
-		Description: "删除工作区内的文件；若目标是目录则连同其全部内容递归删除（不可恢复）。",
+		Description: "Delete a file in the workspace; if the target is a directory, it is deleted recursively with everything inside (not recoverable).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{"type": "string", "description": "相对工作区的路径；以 \"/\" 开头表示从租户根算：超级智能体可及全租户（如 /agents/poet/AGENT.md），非超级智能体只能写自己的私有 skill 目录（如 /agents/你的名字/skills/技能名/），自己的 AGENT.md 只读"},
+				"path": map[string]any{"type": "string", "description": "Path relative to the workspace; a leading \"/\" resolves from the tenant root: a supervisor reaches the whole tenant (e.g. /agents/poet/AGENT.md), a non-supervisor can only write its own private skill directory (e.g. /agents/<your-name>/skills/<skill>/), and its own AGENT.md is read-only"},
 			},
 			"required": []any{"path"},
 		},
@@ -288,7 +288,7 @@ func (t *fileDeleteTool) Execute(ctx context.Context, c *Context, args map[strin
 	// delete_shared_skill。
 	if fromRoot && strings.EqualFold(path.Base(rel), skillEntryFile) {
 		if tgt, e := resolveTarget(rel); e == nil && tgt.kind == "skill" {
-			return nil, fmt.Errorf("%s 是技能入口文件，不允许单独删除；删除整个技能请用 delete_own_skill / delete_agent_skill / delete_shared_skill", skillEntryFile)
+			return nil, fmt.Errorf("%s is the skill entry file and cannot be deleted on its own; use delete_own_skill / delete_agent_skill / delete_shared_skill to delete the whole skill", skillEntryFile)
 		}
 	}
 	_ = c.Storage.Delete(ctx, sp)
@@ -305,11 +305,11 @@ func (t *fileExistsTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "file_exists",
 		Category:    CategoryFile,
-		Description: "判断工作区内的文件是否存在。",
+		Description: "Check whether a file exists in the workspace.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{"type": "string", "description": "相对工作区的文件路径；以 \"/\" 开头表示从租户根算：超级智能体可及全租户（如 /agents/poet/AGENT.md），非超级智能体可读自己的定义目录（如 /agents/你的名字/AGENT.md），其中只有 /agents/你的名字/skills/技能名/ 可写"},
+				"path": map[string]any{"type": "string", "description": "File path relative to the workspace; a leading \"/\" resolves from the tenant root: a supervisor reaches the whole tenant (e.g. /agents/poet/AGENT.md), a non-supervisor reads its own definition directory (e.g. /agents/<your-name>/AGENT.md), of which only /agents/<your-name>/skills/<skill>/ is writable"},
 			},
 			"required": []any{"path"},
 		},

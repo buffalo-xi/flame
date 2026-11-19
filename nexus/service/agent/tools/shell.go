@@ -19,18 +19,17 @@ func (t *shellTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "shell",
 		Category: CategoryShell, // 独立成组：常驻进程与一次性命令的资源形态不同
-		Description: "在持久 shell 会话中执行命令，状态（cwd / 环境变量 / 后台任务）跨调用保留。" +
-			"命令语法取决于沙箱环境（见系统提示中的沙箱实测信息）：Linux 用 bash/ls，Windows 用 cmd/dir，" +
-			"首次调用请用 shell 参数显式指定（bash/sh/cmd/powershell）。" +
-			"有会话的调用跨对话复用；无会话的调用在本次任务内复用，任务结束即销毁。用 kill 关闭会话。" +
-			"这是常驻进程：只在命令之间需要保持状态（cd / export / 后台任务 / 交互式 REPL）时才用，" +
-			"一次性命令请用 exec（起完即退，不占常驻进程）；不再需要时用 kill 关闭 —— 有会话时它跨对话保留。",
+		Description: "Run commands in a persistent shell session: cwd, environment variables and background jobs survive across calls. " +
+			"Command syntax depends on the sandbox (see the sandbox facts in the system prompt): bash/ls on Linux, cmd/dir on Windows — pass the shell explicitly on the first call (bash/sh/cmd/powershell). " +
+			"Calls with a session reuse the process across conversations; calls without one reuse it for this task only and destroy it when the task ends. Close it with kill. " +
+			"This is a long-lived process: use it only when state has to survive between commands (cd / export / background jobs / interactive REPL); " +
+			"for one-shot commands use exec (exits when done, no resident process). Close it with kill when it is no longer needed — with a session it stays alive across conversations.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"command": map[string]any{"type": "string", "description": "要执行的命令"},
-				"shell":   map[string]any{"type": "string", "description": "首次创建时的 shell：bash/sh/cmd/powershell（默认按操作系统）"},
-				"kill":    map[string]any{"type": "boolean", "description": "true = 关闭会话（忽略 command）"},
+				"command": map[string]any{"type": "string", "description": "Command to run"},
+				"shell":   map[string]any{"type": "string", "description": "Shell used when the session is created: bash/sh/cmd/powershell (defaults by operating system)"},
+				"kill":    map[string]any{"type": "boolean", "description": "true = close the session (command is ignored)"},
 			},
 			"required": []any{"command"},
 		},

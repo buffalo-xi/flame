@@ -32,17 +32,17 @@ func (t *execTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:        "exec",
 		Category:    CategoryExec,
-		Description: "在工作区内执行 shell 命令（跨平台），返回 stdout、stderr、exit_code。",
+		Description: "Run a shell command in the workspace (cross-platform). Returns stdout, stderr and exit_code.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"command": map[string]any{"type": "string", "description": "要执行的命令"},
-				"shell":   map[string]any{"type": "string", "description": "shell 类型：cmd / powershell / sh / bash（默认按操作系统）"},
-				"cwd":     map[string]any{"type": "string", "description": "工作目录（相对工作区，默认工作区根）"},
-				"timeout": map[string]any{"type": "number", "description": "超时秒数（默认继承 Context.Timeout）"},
+				"command": map[string]any{"type": "string", "description": "Command to run"},
+				"shell":   map[string]any{"type": "string", "description": "Shell type: cmd / powershell / sh / bash (defaults by operating system)"},
+				"cwd":     map[string]any{"type": "string", "description": "Working directory (relative to the workspace; defaults to the workspace root)"},
+				"timeout": map[string]any{"type": "number", "description": "Timeout in seconds (defaults to Context.Timeout)"},
 				"egress": map[string]any{
 					"type":        "boolean",
-					"description": "是否允许访问外网（默认否）。需要管理员先为本租户开通出网能力，否则会被拒绝。",
+					"description": "Whether to allow outbound network access (default: no). A platform admin must have enabled egress for this tenant first, otherwise the call is rejected.",
 				},
 			},
 			"required": []any{"command"},
@@ -115,8 +115,9 @@ func (t *execTool) Execute(ctx context.Context, c *Context, args map[string]any)
 	// 不能由模型默认获得。Caps 为 nil 表示调用方没接平台策略（不限制，与工具级能力闸同口径）。
 	egress := argBool(args, "egress")
 	if egress && c.Caps != nil && !c.Caps[capability.Egress] {
-		return nil, fmt.Errorf("工具 exec 需要能力 %s（%s），当前租户未开通",
-			capability.Egress, capability.Label(capability.Egress))
+		// 执行层报错用 ShortLabel（只描述能力本身），与工具级闸门同口径。
+		return nil, fmt.Errorf("the exec tool requires capability %s (%s), which this tenant does not have",
+			capability.Egress, capability.ShortLabel(capability.Egress))
 	}
 
 	// 挂载表：工作区（rw、cwd）+ 本 agent 定义域（ro）

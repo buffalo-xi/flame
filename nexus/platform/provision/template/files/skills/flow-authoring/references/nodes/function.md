@@ -1,44 +1,46 @@
-# `function` 节点
+# The `function` node
 
-可被 `call` 调用的内联函数容器（**不是**子流程调用，子节点仍是本 flow 的图形节点）。
+An inline function container callable by `call` (**not** a sub-flow invocation; its children are still graph nodes of this flow).
 
-## config 形状
+## config shape
 
 ```json
 {
-  "params": {"a": {"type": "number", "description": "第一个加数"}},
-  "outputs": {"sum": {"type": "number", "description": "和"}},
+  "params": {"a": {"type": "number", "description": "first addend"}},
+  "outputs": {"sum": {"type": "number", "description": "sum"}},
   "locals": {}
 }
 ```
 
-## 字段
+## Fields
 
-| 键 | 必填 | 缺省 | 说明 |
+| Key | Required | Default | Meaning |
 |---|---|---|---|
-| `params` | — | `{}` | 形参声明 `{type, required, description}`；`required` 缺省 `true`，`call` 的 `args` 必须与其键集合一致 |
-| `outputs` | — | `{}` | 返回值声明；`call` 会把目标函数的 `outputs` 同步成自己的输出 |
-| `locals` | — | `{}` | 局部变量 |
+| `params` | — | `{}` | parameter declarations `{type, required, description}`; `required` defaults to `true`, and the `call`'s `args` key set must match exactly |
+| `outputs` | — | `{}` | return value declarations; `call` syncs the target function's `outputs` into its own outputs |
+| `locals` | — | `{}` | local variables |
 
-**不读** `inputs`。直接进入 `function` 节点（不是由 `call` 进来）时参数为空。
+It **does not read** `inputs`. Entering a `function` node directly (not through a `call`) leaves the parameters empty.
 
-## 结构要求
+## Structural requirements
 
-- 必须有 `entry` 子节点（`parentNode = function.id`，`label: 开始`）。
-- 体内链从 entry 沿第一条出边跑到底；每次调用新建子进程。
+- it must have an `entry` child (`parentNode = function.id`, `label: start`).
+- the body chain runs from that entry along the first outgoing edge to the end; each invocation gets a fresh child process.
 
-## 控制信号（与 process 不同）
+## Control signals (unlike `process`)
 
-| 节点 | 效果 |
+| Node | Effect |
 |---|---|
-| `return` | 函数**正常返回**（信号被吞掉），`call` 拿到输出 |
-| `exit` | 一路向上传播，终止外层 |
-| `break` / `continue` | 函数体内报 `config` 错误（只能在 loop 里用） |
+| `return` | the function **returns normally** (the signal is swallowed) and `call` receives the outputs |
+| `exit` | propagates all the way up, terminating the outer level |
+| `break` / `continue` | a `config` error inside the function body (usable only inside a loop) |
 
-## 出边
+## Outgoing edges
 
-作为普通节点也有第一条出边；但通常只通过 `call` 进入，外部不必连。
+As an ordinary node it has a first outgoing edge too; but it is normally entered only through `call`, so the outside does not
+need to connect it.
 
-注意：后端对 `function` 也读 `on_error`，但**前端没有 on_error 面板**，需要在别处（如 API）写。
+Note: the backend reads `on_error` for `function` as well, but **the front end has no on_error panel for it**, so it has to be
+written elsewhere (e.g. through the API).
 
-源码：`service/flow/executors/function.go`
+Source: `service/flow/executors/function.go`

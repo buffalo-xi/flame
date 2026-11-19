@@ -235,7 +235,7 @@ func GlobalVarUsage(c *gin.Context) {
 	}
 	name := strings.TrimSpace(c.Param("name"))
 	if name == "" {
-		xhttp.ErrJSON(c, "变量名不能为空", nil, "")
+		xhttp.ErrCode(c, "globalvar.name_required", nil, "变量名不能为空", "")
 		return
 	}
 

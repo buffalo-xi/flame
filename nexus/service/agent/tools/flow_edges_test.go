@@ -91,15 +91,15 @@ func TestCreateEdgeRequiresHandles(t *testing.T) {
 		args  map[string]any
 		wantE string
 	}{
-		{"缺 target_handle", map[string]any{"flow": "demo", "source": "2", "target": "3", "source_handle": "source2right"}, "target_handle 必填"},
-		{"缺 source_handle", map[string]any{"flow": "demo", "source": "2", "target": "3", "target_handle": "target3top"}, "source_handle 必填"},
-		{"自连", map[string]any{"flow": "demo", "source": "2", "target": "2", "source_handle": "source2right", "target_handle": "target2top"}, "连到它自己"},
+		{"缺 target_handle", map[string]any{"flow": "demo", "source": "2", "target": "3", "source_handle": "source2right"}, "target_handle is required"},
+		{"缺 source_handle", map[string]any{"flow": "demo", "source": "2", "target": "3", "target_handle": "target3top"}, "source_handle is required"},
+		{"自连", map[string]any{"flow": "demo", "source": "2", "target": "2", "source_handle": "source2right", "target_handle": "target2top"}, "to itself"},
 		{"function 节点", map[string]any{"flow": "demo", "source": "2", "target": "9", "source_handle": "source2right", "target_handle": "target9left"}, "function"},
-		{"跨父节点", map[string]any{"flow": "demo", "source": "8", "target": "4", "source_handle": "source8right", "target_handle": "target4left"}, "跨父节点"},
-		{"终止节点没有出边", map[string]any{"flow": "demo", "source": "5", "target": "3", "source_handle": "source5right", "target_handle": "target3top"}, "没有出边"},
-		{"子分支位置非法", map[string]any{"flow": "demo", "source": "3", "target": "4", "source_handle": "sourcec1bottom", "target_handle": "target4left"}, "出边位置只能是"},
-		{"owner 不认识", map[string]any{"flow": "demo", "source": "3", "target": "4", "source_handle": "sourcezzright", "target_handle": "target4left"}, "既不是节点"},
-		{"入边位置不是该节点的", map[string]any{"flow": "demo", "source": "2", "target": "4", "source_handle": "source2right", "target_handle": "target4bottom"}, "入边位置只能是"},
+		{"跨父节点", map[string]any{"flow": "demo", "source": "8", "target": "4", "source_handle": "source8right", "target_handle": "target4left"}, "across parents"},
+		{"终止节点没有出边", map[string]any{"flow": "demo", "source": "5", "target": "3", "source_handle": "source5right", "target_handle": "target3top"}, "no outgoing handle"},
+		{"子分支位置非法", map[string]any{"flow": "demo", "source": "3", "target": "4", "source_handle": "sourcec1bottom", "target_handle": "target4left"}, "as an outgoing position"},
+		{"owner 不认识", map[string]any{"flow": "demo", "source": "3", "target": "4", "source_handle": "sourcezzright", "target_handle": "target4left"}, "neither node"},
+		{"入边位置不是该节点的", map[string]any{"flow": "demo", "source": "2", "target": "4", "source_handle": "source2right", "target_handle": "target4bottom"}, "as an incoming position"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,7 +122,7 @@ func TestCreateEdgeRejectsDuplicatePair(t *testing.T) {
 		"flow": "demo", "source": "1", "target": "2",
 		"source_handle": "source1bottom", "target_handle": "target2top",
 	})
-	if err == nil || !strings.Contains(err.Error(), "最多一条边") {
+	if err == nil || !strings.Contains(err.Error(), "at most one edge") {
 		t.Fatalf("err = %v, want 最多一条边", err)
 	}
 }
@@ -134,7 +134,7 @@ func TestCreateEdgeRejectsSecondInboundOnSameHandle(t *testing.T) {
 		"flow": "demo", "source": "3", "target": "2",
 		"source_handle": "source3right", "target_handle": "target2left",
 	})
-	if err == nil || !strings.Contains(err.Error(), "只能有一条入边") {
+	if err == nil || !strings.Contains(err.Error(), "exactly one incoming edge") {
 		t.Fatalf("err = %v, want 只能有一条入边", err)
 	}
 	if len(fk.updatedDiagram) != 0 {
@@ -173,7 +173,7 @@ func TestCreateEdgeRejectsDuplicateSourceHandle(t *testing.T) {
 		"flow": "demo", "source": "1", "target": "3",
 		"source_handle": "source1right", "target_handle": "target3top",
 	})
-	if err == nil || !strings.Contains(err.Error(), "出口") {
+	if err == nil || !strings.Contains(err.Error(), "one outlet takes exactly one edge") {
 		t.Fatalf("err = %v, want 出口重复", err)
 	}
 }
@@ -191,7 +191,7 @@ func TestCreateEdgeRejectsCycle(t *testing.T) {
 		"flow": "demo", "source": "3", "target": "2",
 		"source_handle": "source3left", "target_handle": "target2top",
 	})
-	if err == nil || !strings.Contains(err.Error(), "环") {
+	if err == nil || !strings.Contains(err.Error(), "creates a cycle") {
 		t.Fatalf("err = %v, want 成环", err)
 	}
 }
@@ -232,7 +232,7 @@ func TestUpdateEdgeNotFound(t *testing.T) {
 	_, err := (&updateEdgeTool{}).Execute(context.Background(), c, map[string]any{
 		"flow": "demo", "edge_id": "99999", "source_handle": "source1right",
 	})
-	if err == nil || !strings.Contains(err.Error(), "找不到") {
+	if err == nil || !strings.Contains(err.Error(), "no edge with edge_id") {
 		t.Fatalf("err = %v, want 找不到", err)
 	}
 }
@@ -257,7 +257,7 @@ func TestDeleteEdge(t *testing.T) {
 func TestDeleteEdgeNotFound(t *testing.T) {
 	c, _ := edgeTestCtx(edgeTestDiagram)
 	_, err := (&deleteEdgeTool{}).Execute(context.Background(), c, map[string]any{"flow": "demo", "edge_id": "99999"})
-	if err == nil || !strings.Contains(err.Error(), "找不到") {
+	if err == nil || !strings.Contains(err.Error(), "no edge with edge_id") {
 		t.Fatalf("err = %v, want 找不到", err)
 	}
 }
@@ -281,7 +281,13 @@ func TestEdgeToolsShareRuleText(t *testing.T) {
 		if !strings.Contains(meta.Description, edgeRuleText) {
 			t.Errorf("%s 的描述没有复用 edgeRuleText（连边规则只能有一个出处）", meta.Name)
 		}
-		for _, want := range []string{"各类型可用位置", "硬拦项", "handle 按位置选"} {
+		// 位置建议也是共享常量：只给规则不给怎么选位置，模型照样得猜 handle
+		if !strings.Contains(meta.Description, handleLayoutAdvice) {
+			t.Errorf("%s 的描述没有复用 handleLayoutAdvice", meta.Name)
+		}
+		// 断言只钉 ASCII 事实（handle 前缀与位置表），不钉散文：
+		// 描述会随产品主语言翻译，中文小标题不该成为接口契约。
+		for _, want := range []string{"source_handle", "target_handle", "left|top / right|bottom"} {
 			if !strings.Contains(meta.Description, want) {
 				t.Errorf("%s 描述缺 %q", meta.Name, want)
 			}
@@ -367,7 +373,7 @@ func TestSuggestHandlesByPosition(t *testing.T) {
 
 	// 退位置的说法要回显出来，否则调用方会以为「按建议连上了」。
 	fallback := suggestHandles(mk("1", "loop", 0, 500), mk("2", "loop", 300, 0))
-	if !strings.Contains(fallback.Reason, "退到") {
+	if !strings.Contains(fallback.Reason, "falling back") {
 		t.Errorf("退位置时 reason 应说明退到哪：%q", fallback.Reason)
 	}
 }

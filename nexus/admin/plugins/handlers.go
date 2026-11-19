@@ -75,7 +75,7 @@ func ListPlugins(c *gin.Context) {
 	snap := src.Snapshot()
 	rows, err := repo.List(authInfo)
 	if err != nil {
-		xhttp.ErrJSON(c, "读取插件配置失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取插件配置失败: "+err.Error(), "")
 		return
 	}
 	byName := make(map[string]*models.Plugin, len(rows))
@@ -141,13 +141,13 @@ func UpdatePlugin(c *gin.Context) {
 	name := c.Param("name")
 	m, found := lookupManifest(name)
 	if !found {
-		xhttp.ErrJSON(c, fmt.Sprintf("插件 %s 不在磁盘清单里（先放进 plugins/tools/%s/ 再刷新）", name, name), nil, "")
+		xhttp.ErrCode(c, "plugin.not_found", gin.H{"name": name}, fmt.Sprintf("插件 %s 不在磁盘清单里（先放进 plugins/tools/%s/ 再刷新）", name, name), "")
 		return
 	}
 
 	var req updateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "请求体格式不对", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "请求体格式不对", "")
 		return
 	}
 	if msg := validateSelection(m, req.Impl, req.Fallbacks, req.Configs); msg != "" {
@@ -159,7 +159,7 @@ func UpdatePlugin(c *gin.Context) {
 	if p, err := repo.Get(authInfo, m.Kind, m.Name); err == nil {
 		old = p
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		xhttp.ErrJSON(c, "读取插件配置失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取插件配置失败: "+err.Error(), "")
 		return
 	}
 
@@ -173,7 +173,7 @@ func UpdatePlugin(c *gin.Context) {
 	}
 	// 启用一个没选实现的插件 = 建了一条调用必然失败的配置，直接挡在保存前
 	if active && impl == "" {
-		xhttp.ErrJSON(c, "启用前请先选择主实现", nil, "")
+		xhttp.ErrCode(c, "plugin.main_impl_required", nil, "启用前请先选择主实现", "")
 		return
 	}
 
@@ -187,13 +187,13 @@ func UpdatePlugin(c *gin.Context) {
 		IsActive:  active,
 	}
 	if err := repo.Upsert(authInfo, row); err != nil {
-		xhttp.ErrJSON(c, "保存失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "保存失败: "+err.Error(), "")
 		return
 	}
 
 	saved, err := repo.Get(authInfo, m.Kind, m.Name)
 	if err != nil {
-		xhttp.ErrJSON(c, "保存后读取失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "保存后读取失败: "+err.Error(), "")
 		return
 	}
 	// 保存已经成功，策略读失败不该把这次写入回报成失败；但也别回显成「开放」——
@@ -224,18 +224,18 @@ func TestPlugin(c *gin.Context) {
 	name := c.Param("name")
 	m, found := lookupManifest(name)
 	if !found {
-		xhttp.ErrJSON(c, fmt.Sprintf("插件 %s 不在磁盘清单里", name), nil, "")
+		xhttp.ErrCode(c, "plugin.not_found", gin.H{"name": name}, fmt.Sprintf("插件 %s 不在磁盘清单里", name), "")
 		return
 	}
 
 	var req testReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "请求体格式不对", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "请求体格式不对", "")
 		return
 	}
 	impl := strings.TrimSpace(req.Impl)
 	if _, ok := m.ImplementationOf(impl); !ok {
-		xhttp.ErrJSON(c, fmt.Sprintf("实现 %q 不在插件清单里", impl), nil, "")
+		xhttp.ErrCode(c, "plugin.invalid_impl", gin.H{"impl": impl}, fmt.Sprintf("实现 %q 不在插件清单里", impl), "")
 		return
 	}
 	query := strings.TrimSpace(req.Query)
@@ -247,15 +247,15 @@ func TestPlugin(c *gin.Context) {
 	// 这里不要求 is_active：该接口存在的意义就是「保存之前先验一下能不能通」。
 	pol, err := pluginpolicy.Resolve(authInfo.Schema, m.Name)
 	if err != nil {
-		xhttp.ErrJSON(c, "读取插件授权失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取插件授权失败: "+err.Error(), "")
 		return
 	}
 	if !pol.Allowed {
 		if pol.Blocked {
-			xhttp.ErrJSON(c, fmt.Sprintf("插件 %s 已被平台全局停用", m.Name), nil, "")
+			xhttp.ErrCode(c, "plugin.globally_disabled", gin.H{"name": m.Name}, fmt.Sprintf("插件 %s 已被平台全局停用", m.Name), "")
 			return
 		}
-		xhttp.ErrJSON(c, fmt.Sprintf("插件 %s 未对本租户开放（请联系平台管理员开通）", m.Name), nil, "")
+		xhttp.ErrCode(c, "plugin.not_enabled_for_tenant", gin.H{"name": m.Name}, fmt.Sprintf("插件 %s 未对本租户开放（请联系平台管理员开通）", m.Name), "")
 		return
 	}
 
@@ -320,11 +320,11 @@ func TestPlugin(c *gin.Context) {
 func RefreshPlugins(c *gin.Context) {
 	reg := plugin.Current()
 	if reg == nil {
-		xhttp.ErrJSON(c, "插件注册表未初始化（检查 plugin.dir / 启动日志）", nil, "")
+		xhttp.ErrCode(c, "plugin.registry_not_initialized", nil, "插件注册表未初始化（检查 plugin.dir / 启动日志）", "")
 		return
 	}
 	if err := reg.Refresh(c.Request.Context(), true); err != nil {
-		xhttp.ErrJSON(c, "刷新失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "刷新失败: "+err.Error(), "")
 		return
 	}
 	snap := reg.Snapshot()
@@ -338,7 +338,7 @@ func RefreshPlugins(c *gin.Context) {
 func mustAuth(c *gin.Context) (*auth.AuthInfo, bool) {
 	v, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication information not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication information not found", "")
 		return nil, false
 	}
 	info, ok := v.(*auth.AuthInfo)

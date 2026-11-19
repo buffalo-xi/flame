@@ -103,7 +103,8 @@ func ResetMyTenantPrimaryPassword(c *gin.Context) {
 	}
 	switch {
 	case len(req.Password) < account.MinPasswordLength:
-		xhttp.ErrJSON(c, fmt.Sprintf("密码至少 %d 位", account.MinPasswordLength), nil, "")
+		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": account.MinPasswordLength},
+			fmt.Sprintf("密码至少 %d 位", account.MinPasswordLength), "")
 		return
 	case len(req.Password) > account.MaxPasswordBytes:
 		xhttp.ErrJSON(c, account.ErrPasswordTooLong.Error(), nil, "")
@@ -112,7 +113,7 @@ func ResetMyTenantPrimaryPassword(c *gin.Context) {
 
 	hash, herr := account.HashPassword(req.Password)
 	if herr != nil {
-		xhttp.ErrJSON(c, "设置密码失败: "+herr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
 		return
 	}
 
@@ -164,13 +165,13 @@ func ChangeMyPassword(c *gin.Context) {
 	}
 	switch {
 	case len(req.NewPassword) < account.MinPasswordLength:
-		xhttp.ErrJSON(c, "新密码至少 8 位", nil, "")
+		xhttp.ErrCode(c, "user.password_too_short", gin.H{"min": account.MinPasswordLength}, "新密码至少 8 位", "")
 		return
 	case len(req.NewPassword) > account.MaxPasswordBytes:
 		xhttp.ErrJSON(c, account.ErrPasswordTooLong.Error(), nil, "")
 		return
 	case req.NewPassword == req.OldPassword:
-		xhttp.ErrJSON(c, "新密码不能与当前密码相同", nil, "")
+		xhttp.ErrCode(c, "user.password_unchanged", nil, "新密码不能与当前密码相同", "")
 		return
 	}
 
@@ -187,13 +188,13 @@ func ChangeMyPassword(c *gin.Context) {
 
 	// 校验旧密码（兼容历史 MD5；通过后下面写入 bcrypt，等于顺手完成升级）
 	if okOld, _ := account.VerifyPassword(u.Password, req.OldPassword); !okOld {
-		xhttp.ErrJSON(c, "当前密码不正确", nil, "")
+		xhttp.ErrCode(c, "user.password_incorrect", nil, "当前密码不正确", "")
 		return
 	}
 
 	hash, herr := account.HashPassword(req.NewPassword)
 	if herr != nil {
-		xhttp.ErrJSON(c, "设置密码失败: "+herr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "设置密码失败: "+herr.Error(), "")
 		return
 	}
 	if err := pmusers.UpdatePassword(info.ID, hash); err != nil {

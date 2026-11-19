@@ -19,7 +19,7 @@ var repo = repository.NewRepository()
 func GetSvcEndpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -28,7 +28,7 @@ func GetSvcEndpoint(c *gin.Context) {
 	svcEndpoint, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Service endpoint not found", nil, "")
+			xhttp.ErrCode(c, "endpoint.not_found", gin.H{"name": id}, "Service endpoint not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -42,7 +42,7 @@ func GetSvcEndpoint(c *gin.Context) {
 func CreateSvcEndpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -55,7 +55,7 @@ func CreateSvcEndpoint(c *gin.Context) {
 		InputSchema xsql.JSONB `json:"input_schema"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -82,7 +82,7 @@ func CreateSvcEndpoint(c *gin.Context) {
 func UpdateSvcEndpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -95,7 +95,7 @@ func UpdateSvcEndpoint(c *gin.Context) {
 		Exposed     *bool      `json:"exposed"` // 指针区分未传；用于对外开放 / 收回切换
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -103,7 +103,7 @@ func UpdateSvcEndpoint(c *gin.Context) {
 	if req.Exposed != nil {
 		if err := repo.UpdateExposed(authInfo.(*auth.AuthInfo), id, *req.Exposed); err != nil {
 			if err == sql.ErrNoRows {
-				xhttp.ErrJSON(c, "Service endpoint not found", nil, "")
+				xhttp.ErrCode(c, "endpoint.not_found", gin.H{"name": id}, "Service endpoint not found", "")
 				return
 			}
 			xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -122,7 +122,7 @@ func UpdateSvcEndpoint(c *gin.Context) {
 	err := repo.Update(authInfo.(*auth.AuthInfo), id, &svcEndpoint)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "Service endpoint not found", nil, "")
+			xhttp.ErrCode(c, "endpoint.not_found", gin.H{"name": id}, "Service endpoint not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -136,7 +136,7 @@ func UpdateSvcEndpoint(c *gin.Context) {
 func DeleteSvcEndpointsByTarget(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -145,7 +145,7 @@ func DeleteSvcEndpointsByTarget(c *gin.Context) {
 		TargetID   string `json:"target_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -162,7 +162,7 @@ func DeleteSvcEndpointsByTarget(c *gin.Context) {
 func RetractSvcEndpoints(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -171,7 +171,7 @@ func RetractSvcEndpoints(c *gin.Context) {
 		TargetID   string `json:"target_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -187,7 +187,7 @@ func RetractSvcEndpoints(c *gin.Context) {
 func DeleteSvcEndpoint(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
@@ -206,14 +206,14 @@ func DeleteSvcEndpoint(c *gin.Context) {
 func ListSvcEndpoints(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 
 	// 解析请求参数
 	var req repository.ListSvcEndpointsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "Invalid request parameters", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 

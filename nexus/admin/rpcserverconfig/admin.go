@@ -25,7 +25,7 @@ func validAuthType(t string) bool {
 func getServerConfig(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info, ok := authInfo.(*auth.AuthInfo)
@@ -67,7 +67,7 @@ type putRequest struct {
 func putServerConfig(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return
 	}
 	info, ok := authInfo.(*auth.AuthInfo)

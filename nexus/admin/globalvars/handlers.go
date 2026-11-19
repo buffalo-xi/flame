@@ -71,7 +71,7 @@ func ListGlobalVars(c *gin.Context) {
 	}
 	list, err := store.List(info.Schema)
 	if err != nil {
-		xhttp.ErrJSON(c, "读取全局变量失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取全局变量失败: "+err.Error(), "")
 		return
 	}
 	items := make([]gin.H, 0, len(list))
@@ -101,12 +101,12 @@ func UpsertGlobalVar(c *gin.Context) {
 
 	var req saveRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrJSON(c, "请求格式错误: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "请求格式错误: "+err.Error(), "")
 		return
 	}
 	name := strings.TrimSpace(req.Name)
 	if !nameRe.MatchString(name) {
-		xhttp.ErrJSON(c, "变量名只能用字母、数字、下划线，不能以数字开头（≤64）", nil, "")
+		xhttp.ErrCode(c, "globalvar.invalid_name", nil, "变量名只能用字母、数字、下划线，不能以数字开头（≤64）", "")
 		return
 	}
 
@@ -118,13 +118,13 @@ func UpsertGlobalVar(c *gin.Context) {
 	case globalvarsrepo.KindText, globalvarsrepo.KindSecret,
 		globalvarsrepo.KindNumber, globalvarsrepo.KindBool:
 	default:
-		xhttp.ErrJSON(c, "类型只能是 text / secret / number / bool", nil, "")
+		xhttp.ErrCode(c, "globalvar.invalid_type", nil, "类型只能是 text / secret / number / bool", "")
 		return
 	}
 
 	prev, err := store.Get(info.Schema, name)
 	if err != nil {
-		xhttp.ErrJSON(c, "读取全局变量失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取全局变量失败: "+err.Error(), "")
 		return
 	}
 
@@ -150,7 +150,7 @@ func UpsertGlobalVar(c *gin.Context) {
 		UpdatedBy:   xsql.UUID(info.ID),
 	}
 	if err := store.Upsert(info.Schema, row); err != nil {
-		xhttp.ErrJSON(c, "保存全局变量失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "保存全局变量失败: "+err.Error(), "")
 		return
 	}
 
@@ -175,7 +175,7 @@ func DeleteGlobalVar(c *gin.Context) {
 	}
 	name := strings.TrimSpace(c.Param("name"))
 	if name == "" {
-		xhttp.ErrJSON(c, "变量名不能为空", nil, "")
+		xhttp.ErrCode(c, "globalvar.name_required", nil, "变量名不能为空", "")
 		return
 	}
 
@@ -183,24 +183,24 @@ func DeleteGlobalVar(c *gin.Context) {
 	if c.Query("force") != "1" {
 		hits, uerr := ScanUsage(info.Schema, name)
 		if uerr != nil {
-			xhttp.ErrJSON(c, "无法确认引用面，已拒绝删除（确认要删请带 force=1）: "+uerr.Error(), nil, "")
+			xhttp.ErrCode(c, "globalvar.in_use", nil, "无法确认引用面，已拒绝删除（确认要删请带 force=1）: "+uerr.Error(), "")
 			return
 		}
 		if len(hits) > 0 {
-			xhttp.ErrJSON(c, fmt.Sprintf(
-				"「%s」仍被 %d 处引用：%s。删除后这些地方运行时会直接失败；确认要删请带 force=1",
-				name, len(hits), describeHits(hits)), nil, "")
+			xhttp.ErrCode(c, "globalvar.referenced", gin.H{"name": name, "count": len(hits)},
+				fmt.Sprintf("「%s」仍被 %d 处引用：%s。删除后这些地方运行时会直接失败；确认要删请带 force=1",
+					name, len(hits), describeHits(hits)), "")
 			return
 		}
 	}
 
 	removed, err := store.Delete(info.Schema, name)
 	if err != nil {
-		xhttp.ErrJSON(c, "删除全局变量失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "删除全局变量失败: "+err.Error(), "")
 		return
 	}
 	if !removed {
-		xhttp.ErrJSON(c, "全局变量不存在: "+name, nil, "")
+		xhttp.ErrCode(c, "globalvar.not_found", gin.H{"name": name}, "全局变量不存在: "+name, "")
 		return
 	}
 
@@ -241,7 +241,7 @@ func isNumber(s string) bool {
 func authInfo(c *gin.Context) (*auth.AuthInfo, bool) {
 	value, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return nil, false
 	}
 	info, ok := value.(*auth.AuthInfo)

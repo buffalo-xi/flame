@@ -67,7 +67,7 @@ func buildNodeJSON(id, typ, label string, cfg map[string]any, parentID string, p
 func defaultNodeLabel(typ string) string {
 	switch typ {
 	case "http":
-		return "HTTP 请求"
+		return "HTTP request"
 	case "mcp":
 		return "MCP"
 	case "rpc":
@@ -75,45 +75,45 @@ func defaultNodeLabel(typ string) string {
 	case "llm":
 		return "LLM"
 	case "code":
-		return "代码"
+		return "Code"
 	case "branch":
-		return "条件分支"
+		return "Branch"
 	case "intent":
-		return "意图"
+		return "Intent"
 	case "loop":
-		return "循环"
+		return "Loop"
 	case "process":
-		return "嵌入流程"
+		return "Embedded flow"
 	case "function":
-		return "函数"
+		return "Function"
 	case "call":
-		return "调用"
+		return "Call"
 	case "assign":
-		return "赋值"
+		return "Assign"
 	case "memory":
-		return "记忆"
+		return "Memory"
 	case "wait":
-		return "并发同步"
+		return "Wait"
 	case "fork":
-		return "并发组"
+		return "Fork"
 	case "result":
-		return "结果输出"
+		return "Result"
 	case "progress":
-		return "进度输出"
+		return "Progress"
 	case "break":
-		return "跳出"
+		return "Break"
 	case "continue":
-		return "跳过"
+		return "Continue"
 	case "return":
-		return "返回"
+		return "Return"
 	case "exit":
-		return "终止"
+		return "Terminate"
 	case "layout":
-		return "布局"
+		return "Layout"
 	case "knowledge":
-		return "知识"
+		return "Knowledge"
 	case "comment":
-		return "注释"
+		return "Comment"
 	}
 	return typ
 }
@@ -123,18 +123,18 @@ func defaultNodeConfig(typ string, newID func() string) map[string]any {
 	switch typ {
 	case "http":
 		return map[string]any{"outputs": map[string]any{
-			"mode":            map[string]any{"type": "string", "description": "响应模式"},
-			"status":          map[string]any{"type": "number", "description": "HTTP 状态码"},
-			"headers":         map[string]any{"type": "string", "description": "响应头"},
-			"body":            map[string]any{"type": "string", "description": "响应体"},
-			"sse_events":      map[string]any{"type": "array[string]", "description": "SSE 事件列表"},
-			"stream_finished": map[string]any{"type": "boolean", "description": "流式传输是否完成"},
+			"mode":            map[string]any{"type": "string", "description": "Response mode"},
+			"status":          map[string]any{"type": "number", "description": "HTTP status code"},
+			"headers":         map[string]any{"type": "string", "description": "Response headers"},
+			"body":            map[string]any{"type": "string", "description": "Response body"},
+			"sse_events":      map[string]any{"type": "array[string]", "description": "SSE event list"},
+			"stream_finished": map[string]any{"type": "boolean", "description": "Whether streaming finished"},
 		}}
 	case "mcp", "rpc":
 		return map[string]any{"outputs": map[string]any{
-			"result":   map[string]any{"type": "string", "description": "工具返回结果"},
-			"progress": map[string]any{"type": "array[string]", "description": "进度通知数组"},
-			"error":    map[string]any{"type": "string", "description": "调用错误信息"},
+			"result":   map[string]any{"type": "string", "description": "Tool result"},
+			"progress": map[string]any{"type": "array[string]", "description": "Progress notifications"},
+			"error":    map[string]any{"type": "string", "description": "Call error message"},
 		}}
 	case "memory":
 		return map[string]any{
@@ -147,11 +147,11 @@ func defaultNodeConfig(typ string, newID func() string) map[string]any {
 	case "loop":
 		return map[string]any{
 			"loop":      map[string]any{"type": "count", "total_times": 10},
-			"loop_vars": map[string]any{"index": map[string]any{"type": "number", "description": "循环下标"}},
+			"loop_vars": map[string]any{"index": map[string]any{"type": "number", "description": "Loop index"}},
 		}
 	case "branch":
 		return map[string]any{"children": []any{
-			map[string]any{"id": newID(), "label": "分支 1", "condition": "", "exclusive": true},
+			map[string]any{"id": newID(), "label": "Branch 1", "condition": "", "exclusive": true},
 		}}
 	case "intent":
 		return map[string]any{
@@ -161,10 +161,10 @@ func defaultNodeConfig(typ string, newID func() string) map[string]any {
 			},
 			"llm": map[string]any{
 				"gateway_model": "",
-				"system_prompt": "你是意图分类器，请根据对话历史和用户输入判断用户意图。\n\n对话历史：\n{{json .input.messages}}\n\n用户输入：\n{{.input.input}}",
+				"system_prompt": "You classify the user's intent from the conversation history and the user input.\n\nConversation history:\n{{json .input.messages}}\n\nUser input:\n{{.input.input}}",
 				"params":        map[string]any{},
 			},
-			"children": []any{map[string]any{"id": newID(), "label": "意图 1", "description": ""}},
+			"children": []any{map[string]any{"id": newID(), "label": "Intent 1", "description": ""}},
 			"outputs":  map[string]any{"intent": map[string]any{"type": "string"}, "index": map[string]any{"type": "number"}},
 		}
 	}
@@ -284,12 +284,12 @@ func nodeConfigOf(raw json.RawMessage) map[string]any {
 func patchNodeJSON(raw json.RawMessage, apply func(node, data map[string]json.RawMessage) error) (json.RawMessage, error) {
 	var node map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &node); err != nil {
-		return nil, fmt.Errorf("节点 JSON 解析失败: %w", err)
+		return nil, fmt.Errorf("failed to parse node JSON: %w", err)
 	}
 	data := map[string]json.RawMessage{}
 	if d := node["data"]; len(d) > 0 {
 		if err := json.Unmarshal(d, &data); err != nil {
-			return nil, fmt.Errorf("节点 data 解析失败: %w", err)
+			return nil, fmt.Errorf("failed to parse node data: %w", err)
 		}
 	}
 	if err := apply(node, data); err != nil {
@@ -319,15 +319,15 @@ func (d *flowDoc) referencesTo(targets map[string]bool) []string {
 					continue
 				}
 				if ref, _ := in["source_ref"].(string); ref != "" && targets[ref] {
-					refs = append(refs, fmt.Sprintf("节点 %s（%s）的 config.inputs.%s.source_ref", n.ID, n.Type, key))
+					refs = append(refs, fmt.Sprintf("node %s (%s) config.inputs.%s.source_ref", n.ID, n.Type, key))
 				}
 			}
 		}
 		if ref, _ := cfg["target"].(string); ref != "" && targets[ref] {
-			refs = append(refs, fmt.Sprintf("节点 %s（%s）的 config.target（call 调用目标）", n.ID, n.Type))
+			refs = append(refs, fmt.Sprintf("node %s (%s) config.target (call target)", n.ID, n.Type))
 		}
 		if ref, _ := cfg["fork_node_id"].(string); ref != "" && targets[ref] {
-			refs = append(refs, fmt.Sprintf("节点 %s（%s）的 config.fork_node_id（并发组）", n.ID, n.Type))
+			refs = append(refs, fmt.Sprintf("node %s (%s) config.fork_node_id (concurrency group)", n.ID, n.Type))
 		}
 	}
 	return refs
@@ -394,30 +394,30 @@ func creatableTypeList() string {
 // 返回新节点 id、新容器的 entry id、给父容器补的 entry id、告警。
 func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[string]any, concurrency string) (id, entryID, parentEntryID string, warnings []string, err error) {
 	if typ == "" {
-		return "", "", "", nil, errors.New("type 不能为空")
+		return "", "", "", nil, errors.New("type must not be empty")
 	}
 	if !creatableNodeTypes[typ] {
-		hint := "start 由 create_flow 自动生成，entry 由容器自动带出"
+		hint := "start is generated by create_flow, entry comes with the container"
 		if typ == "knowledge" {
-			hint = "knowledge 后端没有执行器（连进链路只会报 no executor registered），只为渲染存量流程图保留；" +
-				"需要知识检索请用 mcp / rpc 节点调对应服务，或让 llm 节点自己带上下文"
+			hint = "knowledge has no executor on the backend (wiring it in only fails with no executor registered) and is kept for rendering existing diagrams; " +
+				"for knowledge retrieval call the matching service from an mcp / rpc node, or let the llm node carry the context"
 		}
-		return "", "", "", nil, fmt.Errorf("不能建 %q 类型的节点。可以建：%s（%s）", typ, creatableTypeList(), hint)
+		return "", "", "", nil, fmt.Errorf("cannot create a node of type %q. Creatable types: %s (%s)", typ, creatableTypeList(), hint)
 	}
 	if parentID != "" {
 		p, ok := doc.node(parentID)
 		if !ok {
-			return "", "", "", nil, fmt.Errorf("parent_node %q 不存在：id 从 read_flow 的 diagram.nodes[].id 里取", parentID)
+			return "", "", "", nil, fmt.Errorf("parent_node %q does not exist: take the id from diagram.nodes[].id in read_flow", parentID)
 		}
 		if !containerTypes[p.Type] {
-			return "", "", "", nil, fmt.Errorf("parent_node %q 是 %s，不能装子节点：只有 loop / process / function 是容器", parentID, p.Type)
+			return "", "", "", nil, fmt.Errorf("parent_node %q is %s and cannot hold children: only loop / process / function are containers", parentID, p.Type)
 		}
 	}
 	if typ == "function" && parentID != "" {
-		return "", "", "", nil, errors.New("function 节点只能建在顶层：它靠 call 节点按 config.target 调用，不参与连线")
+		return "", "", "", nil, errors.New("a function node can only be created at the top level: call nodes invoke it through config.target and it takes no edges")
 	}
 	if typ == "return" && !doc.ancestorIs(parentID, "function") {
-		return "", "", "", nil, errors.New("return 节点只能建在 function 容器内部（直接子节点或更深）")
+		return "", "", "", nil, errors.New("a return node can only be created inside a function container (a direct child or deeper)")
 	}
 
 	cfg := defaultNodeConfig(typ, doc.newNodeID)
@@ -429,7 +429,7 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	}
 	// 并发默认关闭：与 create_flow 同口径，按调用方声明的策略处理 concurrency，
 	// 没声明就摘掉并回显；容器一律不带这一项。
-	if w := applyConcurrencyPolicy(cfg, typ, concurrency, "新节点"); w != "" {
+	if w := applyConcurrencyPolicy(cfg, typ, concurrency, "new node"); w != "" {
 		warnings = append(warnings, w)
 	}
 	// branch / intent 的 children 允许调用方自己给；给了就要保证每项都有 id。
@@ -439,8 +439,8 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	if label != "" {
 		if owner := doc.labelOwner(label); owner != "" {
 			return "", "", "", nil, fmt.Errorf(
-				"label %q 已被节点 %s 使用：全流程节点 label 必须唯一"+
-					"（source_ref / call.target / fork_node_id 都能按 label 写，重名会指错节点）；换一个，或留空让工具自动加后缀",
+				"label %q is already used by node %s: node labels must be unique across the flow"+
+					" (source_ref / call.target / fork_node_id can all be written as labels, and a duplicate points at the wrong node); pick another one, or leave it empty so the tool adds a suffix",
 				label, owner)
 		}
 	} else {
@@ -465,7 +465,7 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	// 父容器没有 entry 时顺手补一个：否则这个新子节点永远跑不到（执行器直接成功返回）。
 	if parentID != "" && !doc.hasEntryOf(parentID) {
 		pid := doc.newNodeID()
-		praw, err := buildNodeJSON(pid, "entry", doc.uniqueLabel("入口"), nil, parentID, map[string]int{"x": childBaseX, "y": childBaseY})
+		praw, err := buildNodeJSON(pid, "entry", doc.uniqueLabel("Entry"), nil, parentID, map[string]int{"x": childBaseX, "y": childBaseY})
 		if err != nil {
 			return "", "", "", nil, err
 		}
@@ -473,12 +473,12 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 			return "", "", "", nil, err
 		}
 		parentEntryID = pid
-		warnings = append(warnings, fmt.Sprintf("容器 %q 之前没有 entry，已补一个（id=%s）：容器没有 entry 会「成功但什么都不跑」", parentID, pid))
+		warnings = append(warnings, fmt.Sprintf("container %q had no entry, so one was added (id=%s): a container without an entry succeeds but runs nothing", parentID, pid))
 	}
 
 	if containerTypes[typ] {
 		entryID = doc.newNodeID()
-		eraw, err := buildNodeJSON(entryID, "entry", doc.uniqueLabel("入口"), nil, id, map[string]int{"x": childBaseX, "y": childBaseY})
+		eraw, err := buildNodeJSON(entryID, "entry", doc.uniqueLabel("Entry"), nil, id, map[string]int{"x": childBaseX, "y": childBaseY})
 		if err != nil {
 			return "", "", "", nil, err
 		}
@@ -521,7 +521,7 @@ func (d *flowDoc) labelOwner(label string) string {
 func (d *flowDoc) uniqueLabel(base string) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
-		base = "节点"
+		base = "Node"
 	}
 	if d.labelOwner(base) == "" {
 		return base
@@ -541,7 +541,7 @@ func normalizeBranchChildren(doc *flowDoc, typ string, cfg map[string]any) {
 	}
 	kids, _ := cfg["children"].([]any)
 	if len(kids) == 0 {
-		cfg["children"] = []any{map[string]any{"id": doc.newNodeID(), "label": "分支 1", "condition": "", "exclusive": true}}
+		cfg["children"] = []any{map[string]any{"id": doc.newNodeID(), "label": "Branch 1", "condition": "", "exclusive": true}}
 		return
 	}
 	for _, k := range kids {
@@ -564,24 +564,24 @@ func (t *createNodeTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "create_node",
 		Category: CategoryFlowAdmin,
-		Description: "给已有流程**加一个节点**（不连线，连线用 create_edge / insert_node）。" +
-			"loop / process / function 会自动带一个 entry 子节点 —— 容器子链必须从 entry 开始，否则运行期静默空转。" +
-			"branch / intent 会自动带一条 config.children（执行器靠 children[].id 找出边）。" +
-			"parent_node 指定容器 id 即可建子节点；只有 loop / process / function 能装子节点，" +
-			"function 只能建在顶层，return 只能建在 function 内部。" +
-			"**并发默认关闭**：config.concurrency 会被摘掉并回 warning，只有用户明确要求并发时才用 " +
-			"concurrency 参数声明（mono / group）。" +
-			"返回 node / entry / handles（该类型可用的出入 handle 位置）/ warnings。",
+		Description: "Add **one node** to an existing flow (no wiring — use create_edge / insert_node for that). " +
+			"loop / process / function automatically carry an entry child node — a container sub-chain must start from entry, otherwise it silently spins empty at run time. " +
+			"branch / intent automatically carry one config.children entry (the executor finds outgoing edges via children[].id). " +
+			"Pass a container id as parent_node to create a child node; only loop / process / function can hold children, " +
+			"function can only be created at the top level, and return can only be created inside a function. " +
+			"**Concurrency is off by default**: config.concurrency is stripped and reported in a warning; only when the user explicitly asks for concurrency, " +
+			"declare it with the concurrency parameter (mono / group). " +
+			"The result returns node / entry / handles (the in/out handle positions available for that type) / warnings.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"flow":   map[string]any{"type": "string", "description": flowRefHint},
-				"type":   map[string]any{"type": "string", "description": "节点类型：" + creatableTypeList()},
-				"label":  map[string]any{"type": "string", "description": "节点标题；不给就用类型的中文默认名"},
-				"config": map[string]any{"type": "object", "description": "节点 config（与前端该类型表单同形状）；不给就用该类型的默认模板"},
+				"type":   map[string]any{"type": "string", "description": "Node type: " + creatableTypeList()},
+				"label":  map[string]any{"type": "string", "description": "Node title; defaults to the type's default name"},
+				"config": map[string]any{"type": "object", "description": "Node config (same shape as the front-end form for that type); defaults to that type's template"},
 				"parent_node": map[string]any{
 					"type":        "string",
-					"description": "可选：容器节点 id（loop / process / function）。不传 = 建在顶层",
+					"description": "Optional: container node id (loop / process / function). Omit to create at the top level",
 				},
 				"concurrency": concurrencyParamSchema,
 			},
@@ -624,11 +624,11 @@ func (t *createNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		"handles":    handlesView(typ),
 		"node_count": len(doc.nodes),
 		"edge_count": len(doc.edges),
-		"next_step":  "用 create_edge 连它：" + edgeHint(id, typ),
+		"next_step":  "wire it with create_edge: " + edgeHint(id, typ),
 	}
 	if entryID != "" {
 		out["entry"] = map[string]any{"id": entryID, "parent_node": id}
-		out["container_note"] = "容器子链从 entry（id=" + entryID + "）开始：先 create_edge(source=" + entryID + ") 把第一个子节点接上"
+		out["container_note"] = "a container sub-chain starts from entry (id=" + entryID + "): connect the first child with create_edge(source=" + entryID + ")"
 	}
 	if parentEntryID != "" {
 		out["parent_entry"] = map[string]any{"id": parentEntryID, "parent_node": parentID}
@@ -642,13 +642,13 @@ func (t *createNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 // edgeHint 按类型给一句「下一步怎么连」的提示。
 func edgeHint(id, typ string) string {
 	if typ == "branch" || typ == "intent" {
-		return "子分支用 source<children[].id>right，默认分支用 source" + id + "right"
+		return "sub-branches use source<children[].id>right, the default branch uses source" + id + "right"
 	}
 	rule := nodeHandleRules[typ]
 	if len(rule.in) == 0 || len(rule.out) == 0 {
-		return "该类型没有入边或没有出边，不能连（function 靠 call 调用）"
+		return "this type has no incoming or no outgoing handle and cannot be wired (function is invoked by call)"
 	}
-	return "source_handle=source" + id + rule.out[0] + "，target_handle=target<目标id>" + rule.in[0]
+	return "source_handle=source" + id + rule.out[0] + ", target_handle=target<target id>" + rule.in[0]
 }
 
 // ===== insert_node =====
@@ -659,19 +659,19 @@ func (t *insertNodeTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "insert_node",
 		Category: CategoryFlowAdmin,
-		Description: "在一条**已存在的边**中间插入一个节点：删掉旧边，自动连 A→新→B（原子操作，不会留半截图）。" +
-			"新节点落在与这条边相同的 parent 下（跨容器插不进去）。" +
-			"需要入边和出边的节点才能插（function / exit / break 这类不能插）。" +
-			"**并发默认关闭**：config.concurrency 会被摘掉并回 warning，只有用户明确要求并发时才用 concurrency 参数声明。" +
-			"返回 node、两条 edge、handles 与 warnings。",
+		Description: "Insert a node in the middle of an **existing edge**: delete the old edge and wire A→new→B automatically (atomic — it never leaves a half-wired graph). " +
+			"The new node lands under the same parent as that edge (it cannot cross containers). " +
+			"Only types that take both an incoming and an outgoing edge can be inserted (function / exit / break and the like cannot). " +
+			"**Concurrency is off by default**: config.concurrency is stripped and reported in a warning; only when the user explicitly asks for concurrency, declare it with the concurrency parameter. " +
+			"The result returns node, the two edges, handles and warnings.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"flow":        map[string]any{"type": "string", "description": flowRefHint},
-				"edge_id":     map[string]any{"type": "string", "description": "被插入的那条边 id（read_flow 的 diagram.edges[].id）"},
-				"type":        map[string]any{"type": "string", "description": "新节点的类型：" + creatableTypeList()},
-				"label":       map[string]any{"type": "string", "description": "节点标题；不给就用类型的中文默认名"},
-				"config":      map[string]any{"type": "object", "description": "节点 config；不给就用该类型的默认模板"},
+				"edge_id":     map[string]any{"type": "string", "description": "Id of the edge being split (diagram.edges[].id from read_flow)"},
+				"type":        map[string]any{"type": "string", "description": "Type of the new node: " + creatableTypeList()},
+				"label":       map[string]any{"type": "string", "description": "Node title; defaults to the type's default name"},
+				"config":      map[string]any{"type": "object", "description": "Node config; defaults to that type's template"},
 				"concurrency": concurrencyParamSchema,
 			},
 			"required": []any{"flow", "edge_id", "type"},
@@ -686,19 +686,19 @@ func (t *insertNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	}
 	edgeID := strings.TrimSpace(argString(args, "edge_id"))
 	if edgeID == "" {
-		return nil, errors.New("edge_id 不能为空（read_flow 的 diagram.edges[].id）")
+		return nil, errors.New("edge_id must not be empty (diagram.edges[].id from read_flow)")
 	}
 	idx := doc.edgeIndex(edgeID)
 	if idx < 0 {
-		return nil, fmt.Errorf("找不到 edge_id=%q 的边；先 read_flow 核对 diagram.edges", edgeID)
+		return nil, fmt.Errorf("no edge with edge_id=%q: check diagram.edges with read_flow first", edgeID)
 	}
 	old := doc.edges[idx]
 	if old.SourceHandle == "" || old.TargetHandle == "" {
-		return nil, fmt.Errorf("边 %s 缺 source_handle / target_handle，插不了；先 update_edge 把它补齐", edgeID)
+		return nil, fmt.Errorf("edge %s has no source_handle / target_handle and cannot be split: fill them in with update_edge first", edgeID)
 	}
 	src, ok := doc.node(old.Source)
 	if !ok {
-		return nil, fmt.Errorf("边 %s 的 source 节点 %q 不存在", edgeID, old.Source)
+		return nil, fmt.Errorf("edge %s has a source node %q that does not exist", edgeID, old.Source)
 	}
 
 	typ := strings.ToLower(strings.TrimSpace(argString(args, "type")))
@@ -740,10 +740,10 @@ func (t *insertNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	// 先删旧边再校验：否则会撞「同一对节点最多一条边」/「一个出口一条边」。
 	doc.removeEdge(edgeID)
 	if _, err := doc.validateEdge(head, ""); err != nil {
-		return nil, fmt.Errorf("插入后的前一条边不合法: %w", err)
+		return nil, fmt.Errorf("the leading edge after the insert is invalid: %w", err)
 	}
 	if _, err := doc.validateEdge(tail, ""); err != nil {
-		return nil, fmt.Errorf("插入后的后一条边不合法: %w", err)
+		return nil, fmt.Errorf("the trailing edge after the insert is invalid: %w", err)
 	}
 	head.ID = doc.newEdgeID()
 	tail.ID = doc.newEdgeID()
@@ -778,10 +778,10 @@ func (t *insertNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 func checkInsertableType(typ string) error {
 	rule := nodeHandleRules[typ]
 	if len(rule.in) == 0 {
-		return fmt.Errorf("%s 节点没有入边，不能插在链中间（顶部节点请用 create_node 建在顶层）", typ)
+		return fmt.Errorf("a %s node has no incoming handle and cannot be inserted mid-chain (create top-level nodes with create_node)", typ)
 	}
 	if len(rule.out) == 0 {
-		return fmt.Errorf("%s 节点没有出边，不能插在链中间（终止节点请用 create_edge 连到链尾）", typ)
+		return fmt.Errorf("a %s node has no outgoing handle and cannot be inserted mid-chain (wire terminal nodes to the chain tail with create_edge)", typ)
 	}
 	return nil
 }
@@ -806,21 +806,21 @@ func (t *updateNodeTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "update_node",
 		Category: CategoryFlowAdmin,
-		Description: "改一个节点：label / config / parent_node（移到容器里或移回顶层）/ position（画布坐标）。" +
-			"config 是**整体替换**，config_patch 是**顶层合并**（只改提到的键，值为 null 表示删除该键）—— 二选一。" +
-			"改 parent_node 时，横跨新旧容器的边会被删除并在 removed_edges 里列出（跨父节点的边不合法，画布也不允许），" +
-			"移进容器后记得用 create_edge 重新连。position 是顶层节点的画布绝对坐标；容器内节点是相对父容器的坐标。" +
-			"**并发的既有配置默认不动**（存量流程保持原样）：只有显式传 concurrency 才改写这个节点的 " +
-			"config.concurrency（off = 摘掉，mono / group = 改成对应形态）。" +
-			"返回 node / config / removed_edges。",
+		Description: "Change one node: label / config / parent_node (move it into a container or back to the top level) / position (canvas coordinates). " +
+			"config is a **wholesale replacement** while config_patch is a **top-level merge** (only the keys you mention change; a null value deletes that key) — pick one of the two. " +
+			"When parent_node changes, edges that span the old and new container are deleted and listed in removed_edges (cross-parent edges are invalid and the canvas rejects them too), " +
+			"so remember to rewire with create_edge after moving a node into a container. position is the canvas-absolute coordinate for top-level nodes and the parent-relative coordinate for nodes inside a container. " +
+			"**Existing concurrency config is left alone by default** (existing flows stay as they are): only an explicit concurrency argument rewrites this node's " +
+			"config.concurrency (off = strip it, mono / group = switch to that shape). " +
+			"The result returns node / config / removed_edges.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"position": map[string]any{
 					"type": "object",
-					"description": "可选：把节点挪到 {x, y}（px）。顶层节点=画布绝对坐标；容器内节点=相对父容器坐标。" +
-						"排版建议：x / y 取 20 的倍数，主链同 y 同行、相邻叶子 x 步长 200（branch / 容器之后 380），" +
-						"分支放分支节点右下方（行间 ≥ 72），别和已有节点重叠",
+					"description": "Optional: move the node to {x, y} (px). Top-level nodes use canvas-absolute coordinates; nodes inside a container use parent-relative ones. " +
+						"Layout advice: use multiples of 20 for x / y, keep the main chain on one row (same y) with an x step of 200 between neighbouring leaves (380 after branch / container), " +
+						"place branches at the lower right of the branch node (≥ 72 between rows), and never overlap existing nodes",
 					"properties": map[string]any{
 						"x": map[string]any{"type": "number"},
 						"y": map[string]any{"type": "number"},
@@ -828,17 +828,17 @@ func (t *updateNodeTool) Meta() ToolMeta {
 					"required": []any{"x", "y"},
 				},
 				"flow":         map[string]any{"type": "string", "description": flowRefHint},
-				"node_id":      map[string]any{"type": "string", "description": "要改的节点 id（read_flow 的 diagram.nodes[].id）"},
-				"label":        map[string]any{"type": "string", "description": "可选：新标题"},
-				"config":       map[string]any{"type": "object", "description": "可选：整体替换 data.config（与 config_patch 二选一）"},
-				"config_patch": map[string]any{"type": "object", "description": "可选：顶层合并到 data.config；某个键的值给 null 表示删掉它"},
-				"parent_node":  map[string]any{"type": "string", "description": "可选：移到这个容器（loop / process / function）里；传空串 = 移回顶层"},
+				"node_id":      map[string]any{"type": "string", "description": "Id of the node to change (diagram.nodes[].id from read_flow)"},
+				"label":        map[string]any{"type": "string", "description": "Optional: new title"},
+				"config":       map[string]any{"type": "object", "description": "Optional: replace data.config wholesale (mutually exclusive with config_patch)"},
+				"config_patch": map[string]any{"type": "object", "description": "Optional: merge into data.config at the top level; give a key the value null to delete it"},
+				"parent_node":  map[string]any{"type": "string", "description": "Optional: move the node into this container (loop / process / function); pass an empty string to move it back to the top level"},
 				"concurrency": map[string]any{
 					"type": "string",
 					"enum": []any{"off", "mono", "group"},
-					"description": "可选：改写该节点的并发形态，**默认不传 = 完全不动已有的 config.concurrency**" +
-						"（存量流程保持原样）。只有用户明确要求并发/关闭并发时才传：" +
-						"off 摘掉并发、mono 改成单体并发、group 改成并发组（需要 fork_node_id）",
+					"description": "Optional: rewrite this node's concurrency shape; **omitted = leave the existing config.concurrency exactly as it is** " +
+						"(existing flows stay unchanged). Pass it only when the user explicitly asks for concurrency or to turn it off: " +
+						"off strips concurrency, mono switches to single-node concurrency, group switches to a concurrency group (needs fork_node_id)",
 				},
 			},
 			"required": []any{"flow", "node_id"},
@@ -853,18 +853,18 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	}
 	nodeID := strings.TrimSpace(argString(args, "node_id"))
 	if nodeID == "" {
-		return nil, errors.New("node_id 不能为空（read_flow 的 diagram.nodes[].id）")
+		return nil, errors.New("node_id must not be empty (diagram.nodes[].id from read_flow)")
 	}
 	idx := doc.nodeIndex(nodeID)
 	if idx < 0 {
-		return nil, fmt.Errorf("找不到 node_id=%q 的节点；先 read_flow 核对 diagram.nodes", nodeID)
+		return nil, fmt.Errorf("no node with node_id=%q: check diagram.nodes with read_flow first", nodeID)
 	}
 	cur := doc.nodes[idx]
 
 	_, hasReplace := args["config"]
 	_, hasPatch := args["config_patch"]
 	if hasReplace && hasPatch {
-		return nil, errors.New("config 与 config_patch 只能给一个：整体替换用 config，只改几项用 config_patch")
+		return nil, errors.New("give either config or config_patch: config replaces wholesale, config_patch changes a few keys")
 	}
 	var replaceCfg map[string]any
 	if hasReplace {
@@ -882,8 +882,8 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	if label != "" {
 		if owner := doc.labelOwner(label); owner != "" && owner != nodeID {
 			return nil, fmt.Errorf(
-				"label %q 已被节点 %s 使用：全流程节点 label 必须唯一"+
-					"（source_ref / call.target / fork_node_id 都能按 label 写，重名会指错节点）",
+				"label %q is already used by node %s: node labels must be unique across the flow"+
+					" (source_ref / call.target / fork_node_id can all be written as labels, and a duplicate points at the wrong node)",
 				label, owner)
 		}
 	}
@@ -900,29 +900,29 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		return nil, err
 	}
 	if !moved && label == "" && !hasReplace && !hasPatch && !hasPos && !hasConcurrencyArg {
-		return nil, errors.New("没有要改的字段：label / config / config_patch / parent_node / position / concurrency 至少给一个")
+		return nil, errors.New("nothing to change: give at least one of label / config / config_patch / parent_node / position / concurrency")
 	}
 	if moved {
 		if newParent != "" {
 			p, ok := doc.node(newParent)
 			if !ok {
-				return nil, fmt.Errorf("parent_node %q 不存在", newParent)
+				return nil, fmt.Errorf("parent_node %q does not exist", newParent)
 			}
 			if !containerTypes[p.Type] {
-				return nil, fmt.Errorf("parent_node %q 是 %s，不能装子节点：只有 loop / process / function 是容器", newParent, p.Type)
+				return nil, fmt.Errorf("parent_node %q is %s and cannot hold children: only loop / process / function are containers", newParent, p.Type)
 			}
 			if containsStr(doc.subtree(nodeID), newParent) {
-				return nil, errors.New("不能把节点移进它自己的子树")
+				return nil, errors.New("cannot move a node into its own subtree")
 			}
 		}
 		if cur.Type == "function" && newParent != "" {
-			return nil, errors.New("function 节点只能待在顶层")
+			return nil, errors.New("a function node has to stay at the top level")
 		}
 		if cur.Type == "start" {
-			return nil, errors.New("start 节点是流程的固定入口，不能移动")
+			return nil, errors.New("the start node is the fixed entry of the flow and cannot be moved")
 		}
 		if cur.Type == "entry" {
-			return nil, errors.New("entry 是容器的入口节点，跟着容器走；要换容器请移动整个容器")
+			return nil, errors.New("entry is the entry node of a container and follows it: move the whole container instead")
 		}
 	}
 
@@ -946,7 +946,7 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		default:
 			cfg = nodeConfigOf(doc.nodeRaw[idx])
 		}
-		if w := applyConcurrencyPolicy(cfg, cur.Type, concurrencyPolicy, "节点 "+nodeID); w != "" {
+		if w := applyConcurrencyPolicy(cfg, cur.Type, concurrencyPolicy, "node "+nodeID); w != "" {
 			concurrencyWarnings = append(concurrencyWarnings, w)
 		}
 		replaceCfg, hasReplace, hasPatch = cfg, true, false
@@ -1049,7 +1049,7 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	}
 	if moved {
 		out["parent_node"] = newParent
-		out["note"] = "跨容器的边已被删除：跨父节点的边不合法，请在新容器内重新 create_edge"
+		out["note"] = "edges crossing containers were removed: a cross-parent edge is invalid, so re-create it inside the new container with create_edge"
 	}
 	if len(removed) > 0 {
 		views := make([]any, 0, len(removed))
@@ -1072,15 +1072,15 @@ func (t *deleteNodeTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "delete_node",
 		Category: CategoryFlowAdmin,
-		Description: "删一个节点，连带删掉它的全部边；容器会连同整棵子树（含 entry）一起删。" +
-			"被别的节点引用时**拒绝**并列出引用方（config.inputs.*.source_ref / config.target / config.fork_node_id）——" +
-			"这些引用不会跟着节点消失，删了会在运行期报错。start / entry 不能单独删。" +
-			"返回 deleted_nodes 与 removed_edges（删错了照着它重建）。",
+		Description: "Delete a node together with all of its edges; a container is deleted along with its entire subtree (entry included). " +
+			"It is **refused** while other nodes still reference it, and the referrers are listed (config.inputs.*.source_ref / config.target / config.fork_node_id) — " +
+			"those references do not disappear with the node, so deleting it would fail at run time. start / entry cannot be deleted on their own. " +
+			"The result returns deleted_nodes and removed_edges (use them to rebuild if you deleted the wrong thing).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"flow":    map[string]any{"type": "string", "description": flowRefHint},
-				"node_id": map[string]any{"type": "string", "description": "要删的节点 id（read_flow 的 diagram.nodes[].id）"},
+				"node_id": map[string]any{"type": "string", "description": "Id of the node to delete (diagram.nodes[].id from read_flow)"},
 			},
 			"required": []any{"flow", "node_id"},
 		},
@@ -1094,18 +1094,18 @@ func (t *deleteNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	}
 	nodeID := strings.TrimSpace(argString(args, "node_id"))
 	if nodeID == "" {
-		return nil, errors.New("node_id 不能为空（read_flow 的 diagram.nodes[].id）")
+		return nil, errors.New("node_id must not be empty (diagram.nodes[].id from read_flow)")
 	}
 	idx := doc.nodeIndex(nodeID)
 	if idx < 0 {
-		return nil, fmt.Errorf("找不到 node_id=%q 的节点；先 read_flow 核对 diagram.nodes", nodeID)
+		return nil, fmt.Errorf("no node with node_id=%q: check diagram.nodes with read_flow first", nodeID)
 	}
 	n := doc.nodes[idx]
 	switch n.Type {
 	case "start":
-		return nil, errors.New("start 节点是流程的固定入口，删完整张图就跑不起来；要清空请 delete_flow")
+		return nil, errors.New("the start node is the fixed entry of the flow and the graph cannot run without it: use delete_flow to clear the flow")
 	case "entry":
-		return nil, fmt.Errorf("entry（id=%s）是容器 %q 的入口节点，随容器管理：要删请删容器本身", nodeID, n.ParentNode)
+		return nil, fmt.Errorf("entry (id=%s) is the entry node of container %q and is managed with it: delete the container itself", nodeID, n.ParentNode)
 	}
 
 	sub := doc.subtree(nodeID)
@@ -1114,7 +1114,7 @@ func (t *deleteNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		subSet[id] = true
 	}
 	if refs := doc.referencesTo(subSet); len(refs) > 0 {
-		return nil, fmt.Errorf("不能删：还有节点引用它 —— 先 update_node 改掉这些引用，再删\n - %s", strings.Join(refs, "\n - "))
+		return nil, fmt.Errorf("cannot delete: other nodes still reference it — fix those references with update_node first, then delete\n - %s", strings.Join(refs, "\n - "))
 	}
 
 	var removedEdges []flowEdge

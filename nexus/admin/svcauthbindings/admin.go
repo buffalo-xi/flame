@@ -32,7 +32,7 @@ func RegisterRoutes(router *gin.RouterGroup) {
 func authInfoOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
-		xhttp.ErrJSON(c, "Authentication info not found", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
 		return nil, false
 	}
 	info, ok := authInfo.(*auth.AuthInfo)
@@ -180,7 +180,7 @@ func updateBinding(c *gin.Context) {
 		return
 	}
 	if existing == nil {
-		xhttp.ErrJSON(c, "Binding not found", nil, "")
+		xhttp.ErrCode(c, "binding.not_found", nil, "Binding not found", "")
 		return
 	}
 
@@ -251,7 +251,7 @@ func getBindingTargets(c *gin.Context) {
 	restrict, excludeSupervisor, targets, err := repository.GetTargets(info.Schema, c.Param("id"))
 	if err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "binding not found", nil, "")
+			xhttp.ErrCode(c, "binding.not_found", nil, "binding not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, "failed to load targets: "+err.Error(), nil, "")
@@ -315,7 +315,7 @@ func setBindingTargets(c *gin.Context) {
 		}
 		key := tt + ":" + tid
 		if !valid[key] {
-			xhttp.ErrJSON(c, fmt.Sprintf("target %s 没有对外开放端点，无法授权", key), nil, "")
+			xhttp.ErrCode(c, "binding.target_not_exposed", gin.H{"target": key}, fmt.Sprintf("target %s 没有对外开放端点，无法授权", key), "")
 			return
 		}
 		if seen[key] {
@@ -328,7 +328,7 @@ func setBindingTargets(c *gin.Context) {
 	// 两档互斥：限制档下「排除超级智能体」没有意义（白名单已经精确表达），repo 会落成 false
 	if err := repository.SetTargets(info.Schema, c.Param("id"), req.Restrict, req.ExcludeSupervisor, targets); err != nil {
 		if err == sql.ErrNoRows {
-			xhttp.ErrJSON(c, "binding not found", nil, "")
+			xhttp.ErrCode(c, "binding.not_found", nil, "binding not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, "failed to save targets: "+err.Error(), nil, "")

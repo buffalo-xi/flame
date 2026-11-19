@@ -79,7 +79,7 @@ func ListToolVersions(c *gin.Context) {
 			errToolNotFound(c)
 			return
 		}
-		xhttp.ErrJSON(c, "读取自定义工具失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取自定义工具失败: "+err.Error(), "")
 		return
 	}
 
@@ -93,7 +93,7 @@ func ListToolVersions(c *gin.Context) {
 		WHERE t.name = $1
 		ORDER BY v.version DESC`, name)
 	if err != nil {
-		xhttp.ErrJSON(c, "读取版本历史失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
 		return
 	}
 	defer rows.Close()
@@ -104,13 +104,13 @@ func ListToolVersions(c *gin.Context) {
 		if err := rows.Scan(&v.Version, &v.Name, &v.DisplayName, &v.Description, &v.Lang,
 			&v.Entry, &v.IsCurrent, &v.Note, &v.CreatedBy, &v.CreatedAt,
 			&v.FilesCount, &v.TotalBytes); err != nil {
-			xhttp.ErrJSON(c, "读取版本历史失败: "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
 			return
 		}
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
-		xhttp.ErrJSON(c, "读取版本历史失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取版本历史失败: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"versions": out}, "")
@@ -134,11 +134,11 @@ func ReleaseToolVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "读取自定义工具失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取自定义工具失败: "+err.Error(), "")
 		return
 	}
 	if t.Status != models.StatusNormal {
-		xhttp.ErrJSON(c, "该工具已锁定或已废弃，不能发布版本（如需发布请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能发布版本（如需发布请先切回「正常」）", "")
 		return
 	}
 
@@ -159,12 +159,12 @@ func ReleaseToolVersion(c *gin.Context) {
 	// 所以发布前先把策略行补齐（缺行 = 正常态、无配置，见 customtoolstore）。
 	if t.ID == "" {
 		if err := store.Upsert(t); err != nil {
-			xhttp.ErrJSON(c, "登记工具失败: "+err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "登记工具失败: "+err.Error(), "")
 			return
 		}
 	}
 	if t.ID == "" {
-		xhttp.ErrJSON(c, "工具尚未登记（缺少 id），无法发布版本", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "工具尚未登记（缺少 id），无法发布版本", "")
 		return
 	}
 
@@ -195,7 +195,7 @@ func ReleaseToolVersion(c *gin.Context) {
 		return
 	}
 	if status != models.StatusNormal {
-		xhttp.ErrJSON(c, "该工具已锁定或已废弃，不能发布版本（如需发布请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能发布版本（如需发布请先切回「正常」）", "")
 		return
 	}
 
@@ -214,7 +214,7 @@ func ReleaseToolVersion(c *gin.Context) {
 	files, err := versions.Snapshot(ctx, st, draftKey, dstKey, t.Entry, nil)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, "冻结版本失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "冻结版本失败: "+err.Error(), "")
 		return
 	}
 
@@ -223,13 +223,13 @@ func ReleaseToolVersion(c *gin.Context) {
 	data, merr := models.MarshalToolFile(norm)
 	if merr != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, "生成契约文件失败: "+merr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "生成契约文件失败: "+merr.Error(), "")
 		return
 	}
 	hostDst := filepath.Join(config.Cfg.Agent.RootDir, filepath.FromSlash(dstKey))
 	if werr := toolfile.WriteAt(hostDst, norm); werr != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, "写入版本契约文件失败: "+werr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "写入版本契约文件失败: "+werr.Error(), "")
 		return
 	}
 	files = versions.PutEntry(files, models.ToolFileName, data)
@@ -325,7 +325,7 @@ func ApplyToolVersion(c *gin.Context) {
 		return
 	}
 	if status != models.StatusNormal {
-		xhttp.ErrJSON(c, "该工具已锁定或已废弃，不能载入版本（如需操作请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能载入版本（如需操作请先切回「正常」）", "")
 		return
 	}
 
@@ -347,7 +347,7 @@ func ApplyToolVersion(c *gin.Context) {
 		Scan(&rawFiles, &displayName, &desc, &rawParams, &rawOutput, &lang, &entry,
 			&timeoutMS, &maxOutput, &egress, &rawFields)
 	if errors.Is(err, sql.ErrNoRows) {
-		xhttp.ErrJSON(c, "version not found", nil, "")
+		xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 		return
 	}
 	if err != nil {
@@ -361,12 +361,12 @@ func ApplyToolVersion(c *gin.Context) {
 	}
 
 	if err := st.DeletePrefix(ctx, draftKey); err != nil {
-		xhttp.ErrJSON(c, "清空草稿目录失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "清空草稿目录失败: "+err.Error(), "")
 		return
 	}
 	missing, err := assetpack.RestoreFiles(ctx, st, srcKey, draftKey, files)
 	if err != nil {
-		xhttp.ErrJSON(c, "载入版本失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "载入版本失败: "+err.Error(), "")
 		return
 	}
 	// 契约元数据回写：只铺脚本的话，载入完仍显示「有改动」（参数 schema / 描述仍不同）。
@@ -382,7 +382,7 @@ func ApplyToolVersion(c *gin.Context) {
 		    WHERE name = $1`,
 		name, displayName, desc, string(rawParams), output, lang, entry,
 		timeoutMS, maxOutput, egress, string(rawFields)); err != nil {
-		xhttp.ErrJSON(c, "写回工具契约失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "写回工具契约失败: "+err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -420,12 +420,12 @@ func RollbackToolVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, "读取自定义工具失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取自定义工具失败: "+err.Error(), "")
 		return
 	}
 	// 切版本会改线上行为，与发布同口径
 	if t.Status != models.StatusNormal {
-		xhttp.ErrJSON(c, "该工具已锁定或已废弃，不能切换版本（如需切换请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能切换版本（如需切换请先切回「正常」）", "")
 		return
 	}
 
@@ -440,7 +440,7 @@ func RollbackToolVersion(c *gin.Context) {
 	if err := tx.QueryRow(`SELECT 1 FROM `+toolVersionTable(info.Schema)+`
 		WHERE tool_id = $1 AND version = $2 FOR UPDATE`, t.ID, target).Scan(&one); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			xhttp.ErrJSON(c, "version not found", nil, "")
+			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
 		xhttp.ErrJSON(c, err.Error(), nil, "")
@@ -503,7 +503,7 @@ func DeleteToolVersion(c *gin.Context) {
 		return
 	}
 	if status != models.StatusNormal {
-		xhttp.ErrJSON(c, "该工具已锁定或已废弃，不能删除版本（如需操作请先切回「正常」）", nil, "")
+		xhttp.ErrCode(c, "tool.deprecated", gin.H{"name": name}, "该工具已锁定或已废弃，不能删除版本（如需操作请先切回「正常」）", "")
 		return
 	}
 
@@ -513,7 +513,7 @@ func DeleteToolVersion(c *gin.Context) {
 		JOIN `+info.Schema+`.custom_tools t ON t.id = v.tool_id
 		WHERE t.name = $1 AND v.version = $2`, name, target).Scan(&toolID, &isCurrent)
 	if errors.Is(err, sql.ErrNoRows) {
-		xhttp.ErrJSON(c, "version not found", nil, "")
+		xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 		return
 	}
 	if err != nil {
@@ -528,7 +528,8 @@ func DeleteToolVersion(c *gin.Context) {
 			return
 		}
 		if total <= 1 {
-			xhttp.ErrJSON(c, fmt.Sprintf("v%d 是唯一的版本，不能删除；如需清理历史请先发布一个新版本", target), nil, "")
+			xhttp.ErrCode(c, "tool.last_version_undeletable", gin.H{"version": target},
+				fmt.Sprintf("v%d 是唯一的版本，不能删除；如需清理历史请先发布一个新版本", target), "")
 			return
 		}
 		xhttp.ErrJSON(c, versions.ErrCannotDeleteCurrentVersion.Error(), nil, "")
@@ -536,7 +537,7 @@ func DeleteToolVersion(c *gin.Context) {
 	}
 
 	if err := st.DeletePrefix(ctx, paths.VersionKey(info.Schema, paths.VersionTools, name, target)); err != nil {
-		xhttp.ErrJSON(c, "删除版本目录失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "删除版本目录失败: "+err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`DELETE FROM `+toolVersionTable(info.Schema)+`

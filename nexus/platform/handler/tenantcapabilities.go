@@ -157,8 +157,9 @@ func SetTenantCapabilityPolicy(c *gin.Context) {
 			}
 		}
 		if !ok {
-			xhttp.ErrJSON(c, key+" 依赖 "+strings.Join(deps, " 或 ")+
-				"：请先开通其中之一，否则只是「允许出网但不能执行」的空组合", nil, "")
+			xhttp.ErrCode(c, "capability.dependency_missing", gin.H{"capability": key, "deps": strings.Join(deps, " / ")},
+				key+" 依赖 "+strings.Join(deps, " 或 ")+
+					"：请先开通其中之一，否则只是「允许出网但不能执行」的空组合", "")
 			return
 		}
 	}

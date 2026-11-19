@@ -1,39 +1,42 @@
-# 结构节点与纯视觉节点
+# Structural and purely visual nodes
 
-这几类**没有执行逻辑**，但画错了会让整条链跑不起来。
+These kinds have **no execution logic**, but wiring them wrongly stops the whole chain from running.
 
-## `start`（开始）
+## `start`
 
-- 新流程约定 **id = `"1"`**，`type: "start"`，`data: {"label": "开始"}`，**没有 `config`**。
-- 运行时按 **`type == "start"`** 识别起点（`id == "1"` 仅作为优先命中，缺失时按类型兜底），
-  并直接跳过该节点（不进执行器），从它的第一条出边开始跑；跳过同样按 type 判断。
-- 流程的**入参 schema 与限额**（`arguments` / `timeout` / `max_*`）不在 diagram 里，在前端「开始」节点的
-  属性面板里编辑，落到 flow 实体上。`create_flow` **不写 `arguments`** —— 这就是工具建的流程
-  端点「没有入参说明」的原因。
+- In a new flow the convention is **id = `"1"`**, `type: "start"`, `data: {"label": "start"}`, **no `config`**.
+- At runtime the entry point is recognised by **`type == "start"`** (`id == "1"` is only a preferred hit, with the type as a
+  fallback when it is absent), and the node is skipped outright (it never reaches an executor), execution starting from its
+  first outgoing edge; skipping is decided by type in the same way.
+- The flow's **argument schema and limits** (`arguments` / `timeout` / `max_*`) are not in the diagram; they are edited in the
+  front end's "start" node property panel and land on the flow entity. `create_flow` **does not write `arguments`** — which is
+  why flows built by the tools have no argument documentation on their endpoints.
 
-## `entry`（容器入口）
+## `entry` (container entry)
 
-- 容器（`process` / `loop` / `function`）内的第一个节点，`type: "entry"`、`parentNode: <容器 id>`、
-  `data.label` 统一为 `入口`，无 `config`。
-- 前端建容器时自动生成；运行时同样被跳过，只作为容器内链的起点。
-- **每个容器有且只有一个**；没有 entry → 容器直接成功跳过。
+- The first node inside a container (`process` / `loop` / `function`): `type: "entry"`, `parentNode: <container id>`,
+  `data.label` is uniformly `entry`, no `config`.
+- Generated automatically when the front end creates a container; at runtime it is skipped too, serving only as the starting
+  point of the chain inside the container.
+- **Every container has exactly one**; without an entry the container simply succeeds and is skipped.
 
-## `comment`（注释）与 `layout`（布局）
+## `comment` and `layout`
 
-- `comment`：纯视觉，没有 Handle，**不要连线**（一旦被导入的边连上，会报
-  `no executor registered for node type: comment`）。
-- `layout`：占位/分组容器，**可以连线**；runner 跳过它本身，直接沿第一条出边继续，
-  适合把一串节点框起来而不影响执行。
-- `layout` 可以在 `create_flow` 的 `steps` 里直接建（`type: "layout"`，32px 圆点，宽按 60 算），
-  常见用法是**折行拐点**：主链一行排到 1500px 时插一个 layout，把后续节点摆到下一行，
-  让整张图方一点、别拉成 3000px 长条。
-- 两者后端都**没有执行器**。
+- `comment`: purely visual, has no Handle, **never connect it** (once an imported edge connects it, it reports
+  `no executor registered for node type: comment`).
+- `layout`: a placeholder / grouping container, **may be connected**; the runner skips the node itself and continues along its
+  first outgoing edge, which makes it suitable for framing a run of nodes without affecting execution.
+- `layout` can be created directly in `create_flow`'s `steps` (`type: "layout"`, a 32px dot, counted as 60 wide); the common
+  use is a **line-break point**: when the main chain reaches 1500px, insert a layout and place the following nodes on the next
+  row, keeping the diagram squarer instead of a 3000px strip.
+- Neither has a backend **executor**.
 
-## `knowledge`（知识）
+## `knowledge`
 
-- 前端有组件，但**后端没有注册执行器**（`RegisterExecutor` 里没有 `knowledge`）。
-  连进链路的唯一结果就是 `no executor registered for node type: knowledge`。
-- **`create_node` / `insert_node` 也不允许建它**（前端 palette 早已撤掉入口，只为渲染存量流程图保留映射）。
-- 需要知识检索请用 `mcp` / `rpc` 节点调对应服务，或让 `llm` 节点自己带上下文。
+- The front end has a component, but **no executor is registered in the backend** (`RegisterExecutor` has no `knowledge`).
+  Wiring it into a chain yields exactly one thing: `no executor registered for node type: knowledge`.
+- **`create_node` / `insert_node` refuse to create it too** (the front-end palette dropped the entry long ago; the mapping is
+  kept only to render existing diagrams).
+- For knowledge retrieval use `mcp` / `rpc` nodes calling the relevant service, or let the `llm` node carry the context itself.
 
-源码：`service/flow/executors/runner.go`（按 `type` 跳过 `start` / `entry` / `layout`）、`registry` 的注册表
+Source: `service/flow/executors/runner.go` (skips `start` / `entry` / `layout` by `type`), the `registry` registration table

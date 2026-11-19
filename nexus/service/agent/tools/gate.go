@@ -58,14 +58,14 @@ type pathTarget struct {
 func resolveTarget(tenantRel string) (pathTarget, error) {
 	seg := strings.Split(tenantRel, "/")
 	if len(seg) < 2 || seg[0] == "" || seg[1] == "" {
-		return pathTarget{}, fmt.Errorf("路径不允许（缺少目标）：%s", tenantRel)
+		return pathTarget{}, fmt.Errorf("path not allowed (missing target): %s", tenantRel)
 	}
 	switch seg[0] {
 	case paths.AgentsSubdir:
 		agent := seg[1]
 		if len(seg) >= 3 && seg[2] == paths.AgentSkillsSubdir {
 			if len(seg) < 4 || seg[3] == "" {
-				return pathTarget{}, fmt.Errorf("路径不允许（缺少 skill 名）：%s", tenantRel)
+				return pathTarget{}, fmt.Errorf("path not allowed (missing skill name): %s", tenantRel)
 			}
 			return pathTarget{kind: "skill", owner: agent, name: seg[3], isRoot: len(seg) == 4}, nil
 		}
@@ -79,7 +79,7 @@ func resolveTarget(tenantRel string) (pathTarget, error) {
 	case paths.UsersSubdir:
 		return pathTarget{kind: "user", name: seg[1], isRoot: len(seg) == 2}, nil
 	default:
-		return pathTarget{}, fmt.Errorf("路径不允许：%s", tenantRel)
+		return pathTarget{}, fmt.Errorf("path not allowed: %s", tenantRel)
 	}
 }
 
@@ -87,7 +87,7 @@ func resolveTarget(tenantRel string) (pathTarget, error) {
 // 身份分流在调用点（resolveWrite）已做，这里保留一道做纵深防御。
 func checkWrite(ctx context.Context, c *Context, tenantRel string) error {
 	if !c.IsSupervisor {
-		return errors.New("仅 supervisor 可访问工作区以外的路径")
+		return errors.New("only a supervisor may access paths outside the workspace")
 	}
 	t, err := resolveTarget(tenantRel)
 	if err != nil {
@@ -95,13 +95,13 @@ func checkWrite(ctx context.Context, c *Context, tenantRel string) error {
 	}
 	// 实体根目录本身的写/删一律拒绝，交给元工具
 	if t.isRoot {
-		return fmt.Errorf("不能直接写实体目录本身（%s）；请用对应的元工具", tenantRel)
+		return fmt.Errorf("refusing to write the entity directory itself (%s); use the matching meta tool", tenantRel)
 	}
 	switch t.kind {
 	case "user":
 		// 用户域：本人或超级智能体（已在下方分支之外确认过身份）
 		if t.name != c.UserID {
-			return fmt.Errorf("无权访问用户 %q 的文件", t.name)
+			return fmt.Errorf("not allowed to access files of user %q", t.name)
 		}
 		return nil
 	case "agent":
@@ -163,14 +163,14 @@ func checkWrite(ctx context.Context, c *Context, tenantRel string) error {
 			return err
 		}
 		if !found {
-			return fmt.Errorf("自定义工具 %q 不存在；请用 create_custom_tool（或管理端「自定义工具」）新建，不要直接建目录", t.name)
+			return fmt.Errorf("custom tool %q does not exist; create it with create_custom_tool (or the \"Custom tools\" page in the admin UI) instead of creating the directory directly", t.name)
 		}
 		if !models.IsModifiable(status) {
-			return fmt.Errorf("自定义工具 %q 已锁定或废弃；请先切回正常态", t.name)
+			return fmt.Errorf("custom tool %q is locked or deprecated; switch it back to normal first", t.name)
 		}
 		return nil
 	}
-	return fmt.Errorf("路径不允许：%s", tenantRel)
+	return fmt.Errorf("path not allowed: %s", tenantRel)
 }
 
 // checkReadOwn 根寻址的**读**闸：超级智能体不受限；非超级智能体可读自己的定义目录
@@ -194,8 +194,8 @@ func checkReadOwn(c *Context, tenantRel string) error {
 	if t.kind == "skill" && t.owner == c.AgentName {
 		return nil
 	}
-	return fmt.Errorf("无权访问 %q：你只能读自己的定义目录（/agents/%s/**），"+
-		"且其中只有 /agents/%s/skills/<skill>/... 可写", tenantRel, c.AgentName, c.AgentName)
+	return fmt.Errorf("not allowed to access %q: you may only read your own definition directory (/agents/%s/**), "+
+		"and only /agents/%s/skills/<skill>/... inside it is writable", tenantRel, c.AgentName, c.AgentName)
 }
 
 // checkWriteOwn 根寻址的**写**闸（非超级智能体档）：只放行自己的私有 skill 目录内部。
@@ -214,12 +214,12 @@ func checkWriteOwn(ctx context.Context, c *Context, tenantRel string) error {
 	}
 	// 1) 形态 + 归属
 	if t.kind != "skill" || t.owner != c.AgentName {
-		return fmt.Errorf("无权写 %q：你只能改自己的私有 skill 目录（/agents/%s/skills/<skill>/...）",
+		return fmt.Errorf("not allowed to write %q: you may only change your own private skill directory (/agents/%s/skills/<skill>/...)",
 			tenantRel, c.AgentName)
 	}
 	// 2) 实体根目录本身交给元工具
 	if t.isRoot {
-		return fmt.Errorf("不能直接写 skill 目录本身（%s）；请用 create_own_skill / update_own_skill / delete_own_skill", tenantRel)
+		return fmt.Errorf("refusing to write the skill directory itself (%s); use create_own_skill / update_own_skill / delete_own_skill", tenantRel)
 	}
 	// 3) 自己必须是正常态
 	if c.Agents == nil {
@@ -277,12 +277,12 @@ func entityLikePath(rel, selfName string) (hint string, ok bool) {
 	switch seg[0] {
 	case paths.AgentsSubdir:
 		if seg[1] == selfName {
-			return fmt.Sprintf("这是你自己定义域的写法，但缺少 \"/\" 前缀，不会生效；"+
-				"编辑自己的技能请用 /agents/%s/skills/<技能名>/...（AGENT.md 只能走元工具）", selfName), true
+			return fmt.Sprintf("this is how you address your own definition domain, but the leading \"/\" is missing, so it will not take effect; "+
+				"to edit your own skills use /agents/%s/skills/<skill-name>/... (AGENT.md can only be changed through meta tools)", selfName), true
 		}
-		return "agent 定义不能用文件工具创建（你也没有该权限）；需要新建/修改其它 agent，请让管理员或超级智能体操作。", true
+		return "agent definitions cannot be created with file tools (and you do not have that permission anyway); to create or change another agent, ask an admin or the supervisor.", true
 	case paths.TenantSkillsSubdir:
-		return fmt.Sprintf("租户级共享技能不能在这里改；你自己的私有技能请用 /agents/%s/skills/<技能名>/...", selfName), true
+		return fmt.Sprintf("tenant-level shared skills cannot be changed here; for your own private skill use /agents/%s/skills/<skill-name>/...", selfName), true
 	}
 	return "", false
 }
@@ -323,8 +323,8 @@ func resolveRead(c *Context, p string) (sp, rel string, fromRoot bool, err error
 		return sp, rel, fromRoot, err
 	}
 	if isVersionDomain(rel) {
-		return "", "", false, fmt.Errorf("版本目录不对文件工具开放：%s"+
-			"（历史版本只用于回滚与审计，读正文请走 read_skill / 对应实体的文件接口）", rel)
+		return "", "", false, fmt.Errorf("version directories are not exposed to file tools: %s"+
+			" (historical versions are only for rollback and audit; read the body through read_skill / the entity's file API)", rel)
 	}
 	if err := checkReadOwn(c, rel); err != nil {
 		return "", "", false, err
@@ -360,7 +360,7 @@ func resolveWrite(ctx context.Context, c *Context, p string) (sp, rel string, fr
 				return "", "", false, e
 			}
 			if !exists {
-				return "", "", false, fmt.Errorf("path %q 落在你的会话工作区内、不会生效：%s", rel, hint)
+				return "", "", false, fmt.Errorf("path %q resolves inside your session workspace, so it will not take effect: %s", rel, hint)
 			}
 		}
 	}

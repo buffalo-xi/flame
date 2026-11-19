@@ -31,14 +31,14 @@ type LoginResponse struct {
 func Login(c *gin.Context) {
 	// 检查请求方法
 	if c.Request.Method != http.MethodPost {
-		xhttp.ErrJSON(c, "Invalid request method, only POST is allowed", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request method, only POST is allowed", "")
 		return
 	}
 
 	// 解析请求
 	var reqBody LoginRequest
 	if err := c.ShouldBindJSON(&reqBody); err != nil {
-		xhttp.ErrJSON(c, "Invalid request body", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
 		return
 	}
 
@@ -49,7 +49,7 @@ func Login(c *gin.Context) {
 
 	// 检查字段是否存在
 	if name == "" || schema == "" {
-		xhttp.ErrJSON(c, "Missing required fields: username, password, schema", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Missing required fields: username, password, schema", "")
 		return
 	}
 
@@ -62,13 +62,13 @@ func Login(c *gin.Context) {
 		} else {
 			xlog.Info("[login] 拒绝未注册或已停用的租户: %s", schema)
 		}
-		xhttp.ErrJSON(c, "用户名或密码错误", nil, "")
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
 		return
 	}
 
 	// 检查数据库连接
 	if !db.IsConnected() {
-		xhttp.ErrJSON(c, "Database not connected", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Database not connected", "")
 		return
 	}
 
@@ -89,27 +89,27 @@ func Login(c *gin.Context) {
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// 不区分「用户不存在」与「密码错误」，避免账号枚举
-			xhttp.ErrJSON(c, "用户名或密码错误", nil, "")
+			xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
 			return
 		}
 		// 其它错误（例如尚未执行租户用户角色迁移）如实报出，便于排查
-		xhttp.ErrJSON(c, "Failed to load user: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load user: "+err.Error(), "")
 		return
 	}
 
 	// 只允许管理用户登录控制台：服务用户只用 API Key / OAuth 调接口
 	if role != RoleManage {
-		xhttp.ErrJSON(c, "该账号为服务用户，不能登录控制台", nil, "")
+		xhttp.ErrCode(c, "auth.account_not_console", nil, "该账号为服务用户，不能登录控制台", "")
 		return
 	}
 
 	// 状态校验：停用 / 锁定都拒绝
 	if status != UserStatusActive {
 		if status == UserStatusLocked {
-			xhttp.ErrJSON(c, "该账号已被锁定，请联系管理员解锁", nil, "")
+			xhttp.ErrCode(c, "auth.account_locked", nil, "该账号已被锁定，请联系管理员解锁", "")
 			return
 		}
-		xhttp.ErrJSON(c, "该账号已被停用，请联系管理员", nil, "")
+		xhttp.ErrCode(c, "auth.account_disabled", nil, "该账号已被停用，请联系管理员", "")
 		return
 	}
 
@@ -118,7 +118,7 @@ func Login(c *gin.Context) {
 	//  服务用户天然无密码，一旦存在这种行就等同于开放登录。）
 	ok, needRehash := VerifyPassword(dbPassword.String, password)
 	if !ok {
-		xhttp.ErrJSON(c, "用户名或密码错误", nil, "")
+		xhttp.ErrCode(c, "auth.invalid_credentials", nil, "用户名或密码错误", "")
 		return
 	}
 
@@ -142,7 +142,7 @@ func Login(c *gin.Context) {
 	}
 	token, err := xjwt.GenerateTokenWithMapClaims(map[string]any{"id": id, "name": dbName, "schema": schema}, jwtConfig)
 	if err != nil {
-		xhttp.ErrJSON(c, "Failed to generate token: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to generate token: "+err.Error(), "")
 		return
 	}
 

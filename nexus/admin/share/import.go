@@ -45,7 +45,7 @@ func Import(c *gin.Context) {
 
 	var payload map[string]any
 	if jerr := json.Unmarshal(pkg.Payload, &payload); jerr != nil || payload == nil {
-		xhttp.ErrJSON(c, "资产包里的 payload 不是 JSON 对象", nil, "")
+		xhttp.ErrCode(c, "asset.invalid_package", nil, "资产包里的 payload 不是 JSON 对象", "")
 		return
 	}
 	// 不信任上游做过的那一遍脱敏：包可能被手工改过，或是更老的版本导出的
@@ -71,7 +71,7 @@ func Import(c *gin.Context) {
 	defer func() { _ = st.DeletePrefix(context.Background(), snapDir) }()
 	for rel, data := range files {
 		if werr := st.WriteFile(ctx, path.Join(snapDir, rel), data); werr != nil {
-			xhttp.ErrJSON(c, "展开资产包失败: "+werr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "展开资产包失败: "+werr.Error(), "")
 			return
 		}
 	}
@@ -80,7 +80,8 @@ func Import(c *gin.Context) {
 	// 不支持的类型明确拒绝 —— 悄悄忽略这个字段会让前端以为「覆盖成功」，实际只拿到一个建议名。
 	overwrite := parseBool(c.PostForm("overwrite"))
 	if overwrite && !supportsOverwrite(kind) {
-		xhttp.ErrJSON(c, fmt.Sprintf("%s暂不支持覆盖导入：同名时会给出建议名，改名后重试即可", kindLabel(kind)), nil, "")
+		xhttp.ErrCode(c, "asset.overwrite_unsupported", map[string]any{"kind": string(kind)},
+			fmt.Sprintf("%s暂不支持覆盖导入：同名时会给出建议名，改名后重试即可", kindLabel(kind)), "")
 		return
 	}
 
@@ -112,19 +113,21 @@ func readUploadedPackage(c *gin.Context) (*assetpack.Package, map[string][]byte,
 		// 超限（MaxBytesReader）与「没选文件」是两回事
 		var mbe *http.MaxBytesError
 		if errors.As(ferr, &mbe) {
-			xhttp.ErrJSON(c, fmt.Sprintf("资产包超过上传上限（%d MiB）", maxImportUpload>>20), nil, "")
+			xhttp.ErrCode(c, "asset.package_too_large", map[string]any{"limit_mb": maxImportUpload >> 20},
+				fmt.Sprintf("资产包超过上传上限（%d MiB）", maxImportUpload>>20), "")
 			return nil, nil, noKind, false
 		}
-		xhttp.ErrJSON(c, "请选择要导入的资产包（multipart 字段名 file）", nil, "")
+		xhttp.ErrCode(c, "asset.package_required", nil, "请选择要导入的资产包（multipart 字段名 file）", "")
 		return nil, nil, noKind, false
 	}
 	if file.Size <= 0 || file.Size > maxImportUpload {
-		xhttp.ErrJSON(c, fmt.Sprintf("资产包大小非法（%d 字节，上限 %d）", file.Size, maxImportUpload), nil, "")
+		xhttp.ErrCode(c, "asset.invalid_package", map[string]any{"size": file.Size, "limit": maxImportUpload},
+			fmt.Sprintf("资产包大小非法（%d 字节，上限 %d）", file.Size, maxImportUpload), "")
 		return nil, nil, noKind, false
 	}
 	f, oerr := file.Open()
 	if oerr != nil {
-		xhttp.ErrJSON(c, "读取上传文件失败: "+oerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "读取上传文件失败: "+oerr.Error(), "")
 		return nil, nil, noKind, false
 	}
 	defer func() { _ = f.Close() }()
@@ -132,7 +135,7 @@ func readUploadedPackage(c *gin.Context) (*assetpack.Package, map[string][]byte,
 	// 包内容按清单逐条核对体积与 sha256：先整包验完再做任何写入，坏包不留痕迹
 	pkg, files, perr := assetpack.ReadPackage(f, file.Size, assetpack.DefaultLimits())
 	if perr != nil {
-		xhttp.ErrJSON(c, "资产包校验失败: "+perr.Error(), nil, "")
+		xhttp.ErrCode(c, "asset.invalid_package", nil, "资产包校验失败: "+perr.Error(), "")
 		return nil, nil, noKind, false
 	}
 	kind, verr := assetimport.ValidatePackage(pkg, files)
@@ -143,7 +146,8 @@ func readUploadedPackage(c *gin.Context) (*assetpack.Package, map[string][]byte,
 	// 列表语义：在「智能体」页点导入却装进来一个技能，只会让人以为装丢了。
 	// 类型以包为准，kind 只是「用户以为自己在导什么」的断言，不符就明说。
 	if want := strings.TrimSpace(c.PostForm("kind")); want != "" && assetpack.Kind(want) != kind {
-		xhttp.ErrJSON(c, fmt.Sprintf("这是%s的资产包，不能作为%s导入", kindLabel(kind), kindLabel(assetpack.Kind(want))), nil, "")
+		xhttp.ErrCode(c, "asset.kind_mismatch", map[string]any{"kind": string(kind), "want": want},
+			fmt.Sprintf("这是%s的资产包，不能作为%s导入", kindLabel(kind), kindLabel(assetpack.Kind(want))), "")
 		return nil, nil, noKind, false
 	}
 	return pkg, files, kind, true

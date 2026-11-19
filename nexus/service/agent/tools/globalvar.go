@@ -28,25 +28,25 @@ func (t *listGlobalVarsTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "list_global_vars",
 		Category: CategoryFlowAdmin,
-		Description: "列出本租户的全局变量名与类型（**不含值**）。写节点配置前先查一遍，把名字写准。" +
-			"工作流里的用法：在节点的 config.inputs 里加一项 " +
-			"`{\"source_type\": \"global\", \"source_key\": \"名字\"}`，模板里写 `{{ .input.变量名 }}` —— " +
-			"不是 `{{.global_vars.名字}}`，那个写法已下线，配置里留着它流程载入就会报错。" +
-			"AGENT.md / SKILL.md 里仍用 `${global_vars.名字}`。" +
-			"kind 有四种：text / number / bool / secret。" +
-			"**secret 类不要写进提示词**：放进 llm 的 messages / intent 的 system_prompt 不阻断但会记告警，" +
-			"值会进模型上下文与运行记录；密钥只用于连接 / 工具配置（http headers、mcp/rpc 连接参数）。" +
-			"名字拼错会运行期硬失败，不会静默空跑。",
+		Description: "List this tenant's global variable names and types (**values are not included**). Check it before writing node config so the names you use are exact. " +
+			"Usage in workflows: add an entry to the node's config.inputs — " +
+			"`{\"source_type\": \"global\", \"source_key\": \"<name>\"}` — and reference it in templates as `{{ .input.<name> }}`, " +
+			"not `{{.global_vars.<name>}}` (that form is retired; leaving it in a config makes the flow fail to load). " +
+			"In AGENT.md / SKILL.md keep using `${global_vars.<name>}`. " +
+			"kind has four values: text / number / bool / secret. " +
+			"**Never put secret variables into prompts**: using them in llm messages or an intent system_prompt is not blocked but logs a warning, " +
+			"and the value ends up in the model context and run records; secrets belong in connection / tool config (http headers, mcp/rpc connection params). " +
+			"A misspelled name fails hard at run time — it does not silently run empty.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"kind": map[string]any{
 					"type":        "string",
-					"description": "可选，只看某一类：text / number / bool / secret。不传 = 全部",
+					"description": "Optional: only list one kind — text / number / bool / secret. Omit for all",
 				},
 				"keyword": map[string]any{
 					"type":        "string",
-					"description": "可选，按名字或描述做子串过滤（不区分大小写）",
+					"description": "Optional: case-insensitive substring filter on name or description",
 				},
 			},
 			"required": []any{},
@@ -56,7 +56,7 @@ func (t *listGlobalVarsTool) Meta() ToolMeta {
 
 func (t *listGlobalVarsTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
 	if c == nil || c.Schema == "" {
-		return nil, errors.New("缺少租户上下文（schema 为空）")
+		return nil, errors.New("missing tenant context (schema is empty)")
 	}
 
 	kind := strings.ToLower(strings.TrimSpace(argString(args, "kind")))
@@ -90,12 +90,12 @@ func (t *listGlobalVarsTool) Execute(ctx context.Context, c *Context, args map[s
 	})
 
 	notes := []string{
-		"这里不返回值：引用靠名字，值由运行期按租户解析",
-		"工作流：节点 config.inputs 写 {\"source_type\": \"global\", \"source_key\": \"名字\"}，模板用 `{{ .input.变量名 }}`；" +
-			"AGENT.md / SKILL.md 写 `${global_vars.名字}`",
+		"Values are not returned here: references go by name, and the value is resolved per tenant at run time",
+		"Workflows: write {\"source_type\": \"global\", \"source_key\": \"<name>\"} into the node's config.inputs, and `{{ .input.<name> }}` in templates; " +
+			"AGENT.md / SKILL.md use `${global_vars.<name>}`",
 	}
 	if len(items) == 0 {
-		notes = append(notes, "本租户还没有全局变量（在「设置 → 全局变量」里创建），需要配置就用环境变量或让用户先建")
+		notes = append(notes, "This tenant has no global variables yet (create them under Settings → Global variables); for configuration use environment variables or ask the user to create one first")
 	}
 
 	return map[string]any{

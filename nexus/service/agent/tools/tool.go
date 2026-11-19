@@ -745,7 +745,7 @@ func (c *Context) MaxOutputLimit() int {
 // 路径与 ..），这里是第二道 —— 即使将来新增工具忘了过 safePath，也无法跨租户。
 func (c *Context) StoragePath(rel string) string {
 	if c.WorkKey == "" {
-		panic("storage path: WorkKey is empty (运行域未初始化)")
+		panic("storage path: WorkKey is empty (the run domain is not initialized)")
 	}
 	p := path.Join(c.WorkKey, rel)
 	if c.Schema != "" && !strings.HasPrefix(p, tenantsSubdir+"/"+c.Schema+"/") {
@@ -828,7 +828,7 @@ func (c *Context) SkillReadDir(ownerName, skillName string) (key, hostDir string
 	hostDir = c.HostPath(key)
 	if hostDir == "" {
 		return "", "", fmt.Errorf(
-			"技能 %q 的版本目录没有宿主路径（存储根未初始化，或当前为对象存储）：%s", skillName, key)
+			"skill %q version directory has no host path (the storage root is not initialized, or the current backend is object storage): %s", skillName, key)
 	}
 	return key, hostDir, nil
 }
@@ -840,7 +840,7 @@ func (c *Context) SkillReadDir(ownerName, skillName string) (key, hostDir string
 func (c *Context) ToolDir(name string) (string, error) {
 	if !c.DefinitionMode.IsCurrent() {
 		if c.ToolsRoot == "" {
-			return "", fmt.Errorf("自定义工具根目录未初始化（tools dir）")
+			return "", fmt.Errorf("custom tool root is not initialized (tools dir)")
 		}
 		return filepath.Join(c.ToolsRoot, name), nil
 	}
@@ -850,12 +850,12 @@ func (c *Context) ToolDir(name string) (string, error) {
 	}
 	dir := c.HostPath(key)
 	if dir == "" {
-		return "", fmt.Errorf("工具 %q 的版本目录没有宿主路径（存储根未初始化，或当前为对象存储）", name)
+		return "", fmt.Errorf("tool %q version directory has no host path (the storage root is not initialized, or the current backend is object storage)", name)
 	}
 	// 版本行在、目录不在（被手删 / 迁移失败）：明确说是版本目录缺失，
 	// 否则 os.Stat 只会给出一个含糊的「不可达」，排查时容易误判成存储配置问题。
 	if st, serr := os.Stat(dir); serr != nil || !st.IsDir() {
-		return "", fmt.Errorf("工具 %q 的当前版本（%s）目录不存在：版本目录可能被删除或迁移失败，请重新发布后再调用", name, key)
+		return "", fmt.Errorf("tool %q current version (%s) directory does not exist: the version directory may have been removed or the migration failed; release it again before calling", name, key)
 	}
 	return dir, nil
 }
@@ -867,7 +867,7 @@ func (c *Context) ToolDir(name string) (string, error) {
 // 与 StoragePath 一样，结果恒落在本租户内。rel 为租户根相对路径（如 agents/poet/AGENT.md）。
 func (c *Context) TenantPath(rel string) string {
 	if c.Schema == "" {
-		panic("tenant path: schema is empty (租户未初始化)")
+		panic("tenant path: schema is empty (the tenant is not initialized)")
 	}
 	return path.Join(tenantsSubdir, c.Schema, rel)
 }
@@ -909,7 +909,7 @@ func argObject(args map[string]any, key string) (map[string]any, error) {
 	}
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("%s 必须是对象（键值对），收到 %T", key, raw)
+		return nil, fmt.Errorf("%s must be an object (key/value pairs), got %T", key, raw)
 	}
 	return m, nil
 }

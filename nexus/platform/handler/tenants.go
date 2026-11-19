@@ -105,7 +105,7 @@ type createTenantRequest struct {
 func NextTenantSchema(c *gin.Context) {
 	schema, err := provision.NextSchema()
 	if err != nil {
-		xhttp.ErrJSON(c, "探索可用 schema 失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "探索可用 schema 失败: "+err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"schema": schema}, "")
@@ -122,7 +122,7 @@ func NextTenantSchema(c *gin.Context) {
 func CreateTenant(c *gin.Context) {
 	me, ok := auth.FromContext(c)
 	if !ok {
-		xhttp.ErrJSON(c, "平台身份缺失", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "平台身份缺失", "")
 		return
 	}
 
@@ -137,7 +137,7 @@ func CreateTenant(c *gin.Context) {
 	if schema == "" {
 		s, serr := provision.NextSchema()
 		if serr != nil {
-			xhttp.ErrJSON(c, "探索可用 schema 失败: "+serr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, "探索可用 schema 失败: "+serr.Error(), "")
 			return
 		}
 		schema = s
@@ -157,11 +157,12 @@ func CreateTenant(c *gin.Context) {
 			return
 		}
 		if u == nil {
-			xhttp.ErrJSON(c, "负责人不存在", nil, "")
+			xhttp.ErrCode(c, "tenant.owner_not_found", gin.H{"owner": owner}, "负责人不存在", "")
 			return
 		}
 		if u.Role != auth.RoleUser {
-			xhttp.ErrJSON(c, "负责人必须是平台「用户」身份的账号", nil, "")
+			xhttp.ErrCode(c, "tenant.owner_invalid_role", gin.H{"owner": owner},
+				"负责人必须是平台「用户」身份的账号", "")
 			return
 		}
 	}
@@ -207,7 +208,7 @@ func GetTenant(c *gin.Context) {
 		return
 	}
 	if t == nil {
-		xhttp.ErrJSON(c, "租户不存在", nil, "")
+		xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": strings.TrimSpace(c.Param("schema"))}, "租户不存在", "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", tenantView(t), "")
@@ -231,7 +232,7 @@ func UpdateTenant(c *gin.Context) {
 		return
 	}
 	if t == nil {
-		xhttp.ErrJSON(c, "租户不存在", nil, "")
+		xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "租户不存在", "")
 		return
 	}
 
@@ -250,11 +251,12 @@ func UpdateTenant(c *gin.Context) {
 			return
 		}
 		if u == nil {
-			xhttp.ErrJSON(c, "负责人不存在", nil, "")
+			xhttp.ErrCode(c, "tenant.owner_not_found", gin.H{"owner": owner}, "负责人不存在", "")
 			return
 		}
 		if u.Role != auth.RoleUser {
-			xhttp.ErrJSON(c, "负责人必须是平台「用户」身份的账号", nil, "")
+			xhttp.ErrCode(c, "tenant.owner_invalid_role", gin.H{"owner": owner},
+				"负责人必须是平台「用户」身份的账号", "")
 			return
 		}
 	}
@@ -291,7 +293,7 @@ func SetTenantStatus(c *gin.Context) {
 	}
 	status := strings.TrimSpace(req.Status)
 	if status != sharedtenants.StatusActive && status != sharedtenants.StatusSuspended {
-		xhttp.ErrJSON(c, "status 只能是 active 或 suspended", nil, "")
+		xhttp.ErrCode(c, "tenant.invalid_status", gin.H{"status": status}, "status 只能是 active 或 suspended", "")
 		return
 	}
 
@@ -301,7 +303,7 @@ func SetTenantStatus(c *gin.Context) {
 		return
 	}
 	if t == nil {
-		xhttp.ErrJSON(c, "租户不存在", nil, "")
+		xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "租户不存在", "")
 		return
 	}
 	if err := tenantsrepo.SetStatus(schema, status); err != nil {
@@ -334,7 +336,7 @@ func SetMyTenantStatus(c *gin.Context) {
 	}
 	status := strings.TrimSpace(req.Status)
 	if status != sharedtenants.StatusActive && status != sharedtenants.StatusSuspended {
-		xhttp.ErrJSON(c, "status 只能是 active 或 suspended", nil, "")
+		xhttp.ErrCode(c, "tenant.invalid_status", gin.H{"status": status}, "status 只能是 active 或 suspended", "")
 		return
 	}
 
@@ -377,7 +379,8 @@ func SetTenantQuota(c *gin.Context) {
 		return
 	}
 	if req.MaxSessionStorageBytes != nil && *req.MaxSessionStorageBytes < -1 {
-		xhttp.ErrJSON(c, "max_session_storage_bytes 只能是 -1（不限制）或非负数", nil, "")
+		xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": "max_session_storage_bytes", "min": -1},
+			"max_session_storage_bytes 只能是 -1（不限制）或非负数", "")
 		return
 	}
 
@@ -387,7 +390,7 @@ func SetTenantQuota(c *gin.Context) {
 		return
 	}
 	if t == nil {
-		xhttp.ErrJSON(c, "租户不存在", nil, "")
+		xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "租户不存在", "")
 		return
 	}
 
@@ -452,31 +455,37 @@ func UpdateMyTenantQuota(c *gin.Context) {
 		return
 	}
 	if req.MaxSessionStorageBytes != nil && *req.MaxSessionStorageBytes < -1 {
-		xhttp.ErrJSON(c, "max_session_storage_bytes 只能是 -1（不限制）或非负数", nil, "")
+		xhttp.ErrCode(c, "quota.invalid_value", gin.H{"field": "max_session_storage_bytes", "min": -1},
+			"max_session_storage_bytes 只能是 -1（不限制）或非负数", "")
 		return
 	}
 
 	// 系统顶 = 系统行（未设置 / -1 时退到代码兜底）；-1 = 不限，不做上限约束
 	sys := quota.Resolve("")
 	if req.MaxAgents != nil && sys.MaxAgents >= 0 && *req.MaxAgents > sys.MaxAgents {
-		xhttp.ErrJSON(c, fmt.Sprintf("智能体数量上限不能超过系统限额（%d）", sys.MaxAgents), nil, "")
+		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_agents", "limit": sys.MaxAgents},
+			fmt.Sprintf("智能体数量上限不能超过系统限额（%d）", sys.MaxAgents), "")
 		return
 	}
 	if req.MaxSkills != nil && sys.MaxSkills >= 0 && *req.MaxSkills > sys.MaxSkills {
-		xhttp.ErrJSON(c, fmt.Sprintf("技能数量上限不能超过系统限额（%d）", sys.MaxSkills), nil, "")
+		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_skills", "limit": sys.MaxSkills},
+			fmt.Sprintf("技能数量上限不能超过系统限额（%d）", sys.MaxSkills), "")
 		return
 	}
 	if req.MaxFlows != nil && sys.MaxFlows >= 0 && *req.MaxFlows > sys.MaxFlows {
-		xhttp.ErrJSON(c, fmt.Sprintf("工作流数量上限不能超过系统限额（%d）", sys.MaxFlows), nil, "")
+		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_flows", "limit": sys.MaxFlows},
+			fmt.Sprintf("工作流数量上限不能超过系统限额（%d）", sys.MaxFlows), "")
 		return
 	}
 	if req.MaxUserSessions != nil && sys.MaxUserSessions >= 0 && *req.MaxUserSessions > sys.MaxUserSessions {
-		xhttp.ErrJSON(c, fmt.Sprintf("单用户会话数上限不能超过系统限额（%d）", sys.MaxUserSessions), nil, "")
+		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_user_sessions", "limit": sys.MaxUserSessions},
+			fmt.Sprintf("单用户会话数上限不能超过系统限额（%d）", sys.MaxUserSessions), "")
 		return
 	}
 	if req.MaxSessionStorageBytes != nil && sys.MaxSessionStorageBytes >= 0 &&
 		*req.MaxSessionStorageBytes > sys.MaxSessionStorageBytes {
-		xhttp.ErrJSON(c, fmt.Sprintf("单会话空间上限不能超过系统限额（%d 字节）", sys.MaxSessionStorageBytes), nil, "")
+		xhttp.ErrCode(c, "quota.exceeds_system_limit", gin.H{"field": "max_session_storage_bytes", "limit": sys.MaxSessionStorageBytes},
+			fmt.Sprintf("单会话空间上限不能超过系统限额（%d 字节）", sys.MaxSessionStorageBytes), "")
 		return
 	}
 
@@ -520,16 +529,17 @@ func DeleteTenant(c *gin.Context) {
 		return
 	}
 	if t == nil {
-		xhttp.ErrJSON(c, "租户不存在", nil, "")
+		xhttp.ErrCode(c, "tenant.not_found", gin.H{"name": schema}, "租户不存在", "")
 		return
 	}
 	if t.Status == sharedtenants.StatusActive {
-		xhttp.ErrJSON(c, "租户当前是「正常」状态，请先停用再删除", nil, "")
+		xhttp.ErrCode(c, "tenant.must_suspend_first", gin.H{"name": schema},
+			"租户当前是「正常」状态，请先停用再删除", "")
 		return
 	}
 
 	if err := provision.Remove(schema); err != nil {
-		xhttp.ErrJSON(c, "删除租户失败: "+err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "删除租户失败: "+err.Error(), "")
 		return
 	}
 
