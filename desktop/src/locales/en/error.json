@@ -68,7 +68,8 @@
       "private_no_version": "Private skills have no version of their own; their version is {owner}'s version, so operate on {owner} instead"
     },
     "version": {
-      "not_found": "Version not found"
+      "not_found": "Version not found",
+      "in_use": "This is the version in use and cannot be deleted. Roll back to another version first."
     },
     "llm": {
       "preset_invalid_id": "Invalid preset id",

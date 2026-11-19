@@ -68,7 +68,8 @@
       "private_no_version": "私有技能没有独立版本号：它的版本就是{owner}的版本，请直接对{owner}执行该操作"
     },
     "version": {
-      "not_found": "版本不存在"
+      "not_found": "版本不存在",
+      "in_use": "这是正在使用的版本，不能删除。请先回滚到其它版本。"
     },
     "llm": {
       "preset_invalid_id": "非法的预设 id",

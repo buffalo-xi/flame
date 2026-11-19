@@ -119,14 +119,14 @@ func ReleaseAgentVersion(c *gin.Context) {
 	}
 	note, err := versions.NormalizeNote(body.Note)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	ctx := context.Background()
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 	srcKey := paths.AgentsKey(info.Schema, inst.Name)
@@ -134,18 +134,18 @@ func ReleaseAgentVersion(c *gin.Context) {
 	// Deprecated private skills stay out of the snapshot: the body remains in the draft, but a released version must not carry it.
 	skip, skerr := versioning.DeprecatedPrivateSkillDirs(info.Schema, inst.ID)
 	if skerr != nil {
-		xhttp.ErrJSON(c, skerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, skerr.Error(), "")
 		return
 	}
 	privates, skerr := versioning.PrivateSkillsSnapshot(info.Schema, inst.ID)
 	if skerr != nil {
-		xhttp.ErrJSON(c, skerr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, skerr.Error(), "")
 		return
 	}
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -157,7 +157,7 @@ func ReleaseAgentVersion(c *gin.Context) {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if !models.IsModifiable(status) {
@@ -168,12 +168,12 @@ func ReleaseAgentVersion(c *gin.Context) {
 	var next int
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(version),0)+1 FROM `+agentVersionTable(info.Schema)+
 		` WHERE agent_id = $1`, inst.ID).Scan(&next); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	dstKey := paths.VersionKey(info.Schema, paths.VersionAgents, inst.Name, next)
 	if err := versions.EnsureAbsent(ctx, st, dstKey); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -186,14 +186,14 @@ func ReleaseAgentVersion(c *gin.Context) {
 	rawFiles, err := versions.Encode(files)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	if _, err := tx.Exec(`UPDATE `+agentVersionTable(info.Schema)+`
 		SET is_current = false WHERE agent_id = $1 AND is_current`, inst.ID); err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -207,12 +207,12 @@ func ReleaseAgentVersion(c *gin.Context) {
 		inst.SkillDiscovery, rawFiles, privates, note, info.ID).Scan(&createdAt)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -249,20 +249,20 @@ func ApplyAgentVersion(c *gin.Context) {
 	}
 	target, perr := strconv.Atoi(c.Param("version"))
 	if perr != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
 	ctx := context.Background()
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -270,7 +270,7 @@ func ApplyAgentVersion(c *gin.Context) {
 	var status int
 	if err := tx.QueryRow(`SELECT status FROM `+info.Schema+`.agents WHERE id = $1 FOR UPDATE`, inst.ID).
 		Scan(&status); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if !models.IsModifiable(status) {
@@ -294,12 +294,12 @@ func ApplyAgentVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	files, err := versions.Decode(rawFiles)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -339,7 +339,7 @@ func ApplyAgentVersion(c *gin.Context) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
@@ -379,13 +379,13 @@ func RollbackAgentVersion(c *gin.Context) {
 	}
 	target, err := strconv.Atoi(c.Param("version"))
 	if err != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -398,21 +398,21 @@ func RollbackAgentVersion(c *gin.Context) {
 			xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`UPDATE `+agentVersionTable(info.Schema)+`
 		SET is_current = false WHERE agent_id = $1 AND is_current`, inst.ID); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if _, err := tx.Exec(`UPDATE `+agentVersionTable(info.Schema)+`
 		SET is_current = true WHERE agent_id = $1 AND version = $2`, inst.ID, target); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
@@ -434,20 +434,20 @@ func DeleteAgentVersion(c *gin.Context) {
 	}
 	target, perr := strconv.Atoi(c.Param("version"))
 	if perr != nil || target <= 0 {
-		xhttp.ErrJSON(c, "Invalid version", nil, "")
+		xhttp.ErrCode(c, "common.invalid_params", nil, "invalid version", "")
 		return
 	}
 
 	ctx := context.Background()
 	st, serr := getStorage()
 	if serr != nil {
-		xhttp.ErrJSON(c, "storage not ready: "+serr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "storage not ready: "+serr.Error(), "")
 		return
 	}
 
 	tx, err := db.DB.Begin()
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -460,21 +460,21 @@ func DeleteAgentVersion(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if isCurrent {
 		var total int
 		if err := tx.QueryRow(`SELECT count(*) FROM `+agentVersionTable(info.Schema)+
 			` WHERE agent_id = $1`, inst.ID).Scan(&total); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 		if total <= 1 {
 			xhttp.ErrCode(c, "agent.last_version_undeletable", gin.H{"version": target}, fmt.Sprintf("v%d is the only version and cannot be deleted; release a new version before cleaning up history", target), "")
 			return
 		}
-		xhttp.ErrJSON(c, versions.ErrCannotDeleteCurrentVersion.Error(), nil, "")
+		xhttp.ErrCode(c, "version.in_use", nil, versions.ErrCannotDeleteCurrentVersion.Error(), "")
 		return
 	}
 
@@ -484,11 +484,11 @@ func DeleteAgentVersion(c *gin.Context) {
 	}
 	if _, err := tx.Exec(`DELETE FROM `+agentVersionTable(info.Schema)+`
 		WHERE agent_id = $1 AND version = $2`, inst.ID, target); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
@@ -504,7 +504,7 @@ func authOf(c *gin.Context) (*auth.AuthInfo, bool) {
 	}
 	ai, ok := v.(*auth.AuthInfo)
 	if !ok || ai == nil {
-		xhttp.ErrJSON(c, "Invalid authentication information", nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, "no tenant context in the request", "")
 		return nil, false
 	}
 	return ai, true
@@ -513,7 +513,7 @@ func authOf(c *gin.Context) (*auth.AuthInfo, bool) {
 func mustAgent(c *gin.Context, info *auth.AuthInfo) (*models.Agent, bool) {
 	inst, err := repo.GetAgent(info, c.Param("id"))
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return nil, false
 	}
 	if inst == nil {
