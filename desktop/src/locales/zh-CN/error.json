@@ -6,13 +6,181 @@
     },
     "asset": {
       "not_found": "资产不存在",
-      "not_available": "该资产未对你所在的租户开放"
+      "not_available": "该资产未对你所在的租户开放",
+      "invalid_kind": "未知的资产类型：{kind}",
+      "ref_required": "缺少 ref（skill / agent / workflow 用 id，custom_tool 用名字）",
+      "invalid_action": "未知动作（只支持 approve / reject / delist）",
+      "invalid_visibility": "可见性只能是 all 或 allowlist",
+      "invalid_status": "当前状态（{status}）不允许该操作",
+      "not_owner": "只能操作本租户上架的资产",
+      "name_conflict": "本租户已有同名资产「{name}」，需要改名或确认覆盖",
+      "target_deprecated": "同名目标处于废弃态，请先把它切回「正常」",
+      "record_write_failed": "文件已写入，但写入记录失败，请重试导入",
+      "install_not_found": "安装记录不存在（可能已被删除）",
+      "stale_build": "该资产刚被另一次上架覆盖，请刷新后重试",
+      "peer_not_available": "该远端市场未对你所在的租户开放",
+      "package_required": "请选择要导入的资产包",
+      "package_too_large": "资产包超过上传上限（{limit_mb} MiB）",
+      "package_too_new": "该资产包使用了更新版本的清单格式（spec {spec}，本程序支持到 {supported}），请升级后再安装",
+      "invalid_package": "资产包校验失败：内容不完整或已损坏",
+      "kind_mismatch": "这是 {kind} 的资产包，不能作为 {want} 导入",
+      "overwrite_unsupported": "{kind}暂不支持覆盖导入：同名时会给出建议名，改名后重试即可"
     },
     "tool": {
-      "not_found": "自定义工具不存在：{name}"
+      "not_found": "自定义工具不存在：{name}",
+      "file_not_found": "文件不存在",
+      "file_exists": "文件或目录已存在：{path}",
+      "invalid_name": "工具名不合法（只允许字母、数字与短横线，不能以短横线开头，且不能含连续下划线）",
+      "name_taken": "已存在同名的自定义工具：{name}",
+      "invalid_contract": "该目录还不是合法工具（缺 TOOL.json 或契约无效），请先用「新建自定义工具」创建，或先修好 TOOL.json",
+      "deprecated": "该工具已锁定或已废弃，请先切回「正常」状态再操作",
+      "contract_readonly": "TOOL.json 是工具契约，只能通过表单修改，不能直接创建 / 编辑 / 删除 / 覆盖",
+      "entry_exists": "入口文件 {entry} 已存在；要改入口请修改表单里的 entry",
+      "entry_readonly": "入口文件 {entry} 不能删除：删了工具还在，但一跑就报「入口不存在」",
+      "invalid_path": "{path} 是目录，不能当文件写入",
+      "file_too_large": "文件过大（上限 {limit_mb} MB）",
+      "contract_write_failed": "设置已保存，但写入契约文件失败（已回退为表定义），请重试保存",
+      "entry_write_failed": "设置已保存，但写入实现文件失败，请重试保存",
+      "capability_denied": "本租户未开通 {capability}，自定义工具跑不起来（请在「工具能力」里开通）",
+      "last_version_undeletable": "v{version} 是唯一的版本，不能删除；如需清理历史请先发布一个新版本"
+    },
+    "agent": {
+      "not_found": "智能体不存在",
+      "file_not_found": "文件不存在",
+      "file_exists": "文件或目录已存在：{path}",
+      "deprecated": "智能体已废弃，请先切回「正常」状态再操作",
+      "invalid_name": "智能体名不合法（只允许字母、数字与短横线，长度 ≤ 64）",
+      "invalid_status": "状态只能是 1（正常）或 3（废弃）",
+      "file_too_large": "文件过大（上限 {limit_mb} MB）",
+      "skills_dir_readonly": "skills/ 目录只读，请到技能编辑页修改",
+      "last_version_undeletable": "v{version} 是唯一的版本，不能删除；如需清理历史请先发布一个新版本",
+      "rename_failed": "定义域/版本目录迁移失败，改名未生效"
+    },
+    "skill": {
+      "not_found": "技能不存在",
+      "file_not_found": "文件不存在",
+      "file_exists": "文件或目录已存在：{path}",
+      "deprecated": "技能已废弃，请先切回「正常」状态再操作",
+      "invalid_name": "技能名不合法（只允许字母、数字与短横线，长度 ≤ 64）",
+      "invalid_status": "状态只能是 1（正常）或 3（废弃）",
+      "last_version_undeletable": "v{version} 是唯一的版本，不能删除；如需清理历史请先发布一个新版本",
+      "rename_failed": "技能已改名，但版本目录迁移失败，请重试或手工搬运",
+      "private_no_version": "私有技能没有独立版本号：它的版本就是{owner}的版本，请直接对{owner}执行该操作"
+    },
+    "version": {
+      "not_found": "版本不存在"
+    },
+    "llm": {
+      "preset_invalid_id": "非法的预设 id",
+      "preset_not_found": "预设不存在",
+      "model_not_found": "模型不存在",
+      "provider_not_found": "模型提供方不存在",
+      "model_enabled_locked": "模型已启用，gateway_model 不可修改，请先禁用",
+      "provider_disabled": "服务商已停用，请先在「LLM 服务商」里启用后再启用模型",
+      "gateway_model_required": "网关模型名（gateway_model）不能为空，请填写后再启用",
+      "gateway_model_taken": "网关模型名 {name} 已被其它启用中的模型使用，会导致路由歧义，请换一个"
+    },
+    "user": {
+      "not_found": "用户不存在",
+      "invalid_name": "登录名只允许字母、数字、下划线、横线，长度 1-64",
+      "name_taken": "登录名已存在：{name}",
+      "primary_readonly": "primary 账号由平台开通时创建，租户侧不能修改（含配额）",
+      "cannot_modify_self": "不能停用或降级当前登录账号",
+      "last_admin_undeletable": "不能停用或降级最后一个可登录的管理用户",
+      "password_required": "该用户必须设置密码（至少 8 位）",
+      "password_too_short": "密码至少 {min} 位",
+      "password_unchanged": "新密码不能与当前密码相同",
+      "password_incorrect": "当前密码不正确",
+      "password_not_allowed": "服务用户不可登录，不能设置密码",
+      "invalid_role": "角色只能是 admin 或 user",
+      "invalid_status": "状态只能是 active / disabled / locked",
+      "protected_account": "受保护管理员账号 {name} 不可修改（由环境初始数据预置）"
+    },
+    "mcp": {
+      "connection_not_found": "MCP 连接不存在",
+      "discovery_failed": "工具发现失败，未启用该连接"
+    },
+    "rpc": {
+      "connection_not_found": "RPC 连接不存在",
+      "discovery_failed": "工具发现失败，未启用该连接"
+    },
+    "session": {
+      "not_found": "会话不存在"
+    },
+    "run": {
+      "not_found": "运行记录不存在",
+      "filter_required": "至少要给一个筛选条件（工作流 / 状态 / 时间范围），不允许无条件清空",
+      "invalid_kind": "kind 只能是 agent 或 flow",
+      "target_required": "run_id 或 session_id 至少给一个",
+      "flow_stop_needs_run_id": "工作流只能按 run_id 终止"
+    },
+    "binding": {
+      "not_found": "授权绑定不存在",
+      "target_not_exposed": "target {target} 没有对外开放端点，无法授权"
+    },
+    "toolgrant": {
+      "ref_not_found": "该 ref 下没有可用工具",
+      "item_not_found": "该项下没有可用工具"
+    },
+    "plugin": {
+      "name_required": "插件名不能为空",
+      "not_found": "插件 {name} 不在磁盘清单里（先放进 plugins/tools/{name}/ 再刷新）",
+      "invalid_impl": "实现 {impl} 不在插件清单里",
+      "main_impl_required": "启用前请先选择主实现",
+      "globally_disabled": "插件 {name} 已被平台全局停用",
+      "not_enabled_for_tenant": "插件 {name} 未对本租户开放（请联系平台管理员开通）",
+      "registry_not_initialized": "插件注册表未初始化（检查 plugin.dir 与启动日志）"
+    },
+    "peer": {
+      "not_found": "对端不存在",
+      "name_taken": "同名对端已存在：{name}",
+      "disabled": "对端已停用：{name}",
+      "unreachable": "连接对端 {peer} 失败，请检查地址与令牌",
+      "invalid_response": "对端响应无法解析（对端快照过旧或地址填错）",
+      "invalid_token_name": "令牌名只允许字母、数字、点、下划线、横线，长度 ≤64"
+    },
+    "capability": {
+      "dependency_missing": "{capability} 依赖 {deps}：请先开通其中之一，否则只是「允许出网但不能执行」的空组合"
+    },
+    "globalvar": {
+      "not_found": "全局变量不存在：{name}",
+      "invalid_name": "变量名只能用字母、数字、下划线，不能以数字开头（≤64）",
+      "name_required": "变量名不能为空",
+      "invalid_type": "类型只能是 text / secret / number / bool",
+      "in_use": "无法确认引用面，已拒绝删除（确认要删请带 force=1）",
+      "referenced": "「{name}」仍被 {count} 处引用，删除后这些地方运行时会直接失败（确认要删请带 force=1）"
     },
     "auth": {
-      "session_expired": "平台会话已失效，请重新登录"
+      "session_expired": "平台会话已失效，请重新登录",
+      "invalid_credentials": "用户名或密码错误",
+      "account_not_console": "该账号是服务账号，不能登录控制台",
+      "account_locked": "该账号已被锁定，请联系管理员解锁",
+      "account_disabled": "该账号已被停用，请联系管理员"
+    },
+    "tenant": {
+      "not_found": "租户不存在：{name}",
+      "owner_not_found": "负责人不存在",
+      "owner_invalid_role": "负责人必须是平台「用户」身份的账号",
+      "invalid_status": "状态只能是 active 或 suspended",
+      "must_suspend_first": "租户当前是「正常」状态，请先停用再删除"
+    },
+    "quota": {
+      "session_storage_exceeded": "会话工作区空间已满，请清理不再需要的文件后重试",
+      "user_sessions_exceeded": "会话数量已达上限，请删除不再使用的会话后再试",
+      "exceeded": "配额不足，请清理后重试",
+      "invalid_value": "{field} 只能是 -1（不限制）或非负数",
+      "self_lockout": "不能把自己的配额 {field} 设为 0（会把自己锁成只读，且自己再改不回来）",
+      "exceeds_tenant_limit": "{field} 不能超过租户上限（{limit}）",
+      "exceeds_system_limit": "{field} 不能超过系统限额（{limit}）"
+    },
+    "sandbox": {
+      "not_ready": "沙箱未就绪或能力未知，暂不执行（检查 sandbox.url 与 sandboxd）"
+    },
+    "flow": {
+      "not_found": "工作流不存在",
+      "invalid_status": "状态只能是 1（正常）或 3（废弃）；工作流不设「锁定」，线上由版本管理",
+      "not_released": "工作流「{name}」尚未发布正式版本，请先在编辑页发布后再调用",
+      "deprecated": "工作流「{name}」已废弃，不可调用"
     },
     "common": {
       "internal": "服务内部错误，请稍后重试",

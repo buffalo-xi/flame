@@ -1,25 +1,25 @@
 <template>
   <div ref="flowRootRef" class="flow" @click="handleFlowClick">
     <div class="flow-toolbar">
-      <el-tooltip content="添加节点" placement="right">
+      <el-tooltip :content="t('flow.canvas.addNode')" placement="right">
         <el-icon class="toolbar-icon" @click.stop="toggleNodePanel"><Plus /></el-icon>
       </el-tooltip>
-      <el-tooltip content="添加注释" placement="right">
+      <el-tooltip :content="t('flow.canvas.addComment')" placement="right">
         <el-icon class="toolbar-icon" @click.stop="addNode('comment')"><ChatLineSquare /></el-icon>
       </el-tooltip>
-      <el-tooltip content="试运行" placement="right">
+      <el-tooltip :content="t('flow.list.testRun')" placement="right">
         <el-icon class="toolbar-icon" @click.stop="toggleRunPanel"><Tools /></el-icon>
       </el-tooltip>
-      <el-tooltip content="流程变量" placement="right">
+      <el-tooltip :content="t('flow.header.flowVars')" placement="right">
         <el-icon class="toolbar-icon" @click.stop="toggleVariablesPanel('flow')"><ChromeFilled /></el-icon>
       </el-tooltip>
-      <el-tooltip content="环境变量" placement="right">
+      <el-tooltip :content="t('flow.header.envVars')" placement="right">
         <el-icon class="toolbar-icon" @click.stop="toggleVariablesPanel('environment')"><Notification /></el-icon>
       </el-tooltip>
-      <el-tooltip content="全局变量（只读）" placement="right">
+      <el-tooltip :content="t('flow.header.globalVarsReadonly')" placement="right">
         <el-icon class="toolbar-icon" @click.stop="toggleVariablesPanel('global')"><Key /></el-icon>
       </el-tooltip>
-      <el-tooltip content="更多" placement="right">
+      <el-tooltip :content="t('flow.canvas.more')" placement="right">
         <el-icon class="toolbar-icon"><MoreFilled /></el-icon>
       </el-tooltip>
     </div>
@@ -64,7 +64,7 @@
       :style="{ left: contextMenuPosition.x + 'px', top: contextMenuPosition.y + 'px' }"
       @mouseleave="hideContextMenu"
     >
-      <div class="context-menu-item" @click.stop="deleteEdge"><el-icon><Delete /></el-icon> 删除</div>
+      <div class="context-menu-item" @click.stop="deleteEdge"><el-icon><Delete /></el-icon> {{ t('flow.canvas.deleteEdge') }}</div>
     </div>
 
     <RunPanel v-if="showRunPanel" :panel-width="runPanelWidth" :flow-id="props.instanceProps?.id" :flow-arguments="flowArguments" @close="showRunPanel = false" @resize="runPanelWidth = $event" />
@@ -111,6 +111,7 @@
 import { ref, shallowRef, onMounted, onUnmounted, nextTick, watch, provide, computed } from 'vue'
 import { Plus, ChatLineSquare, MoreFilled, Collection, Promotion, User, Connection, RefreshRight, Tools, Operation, Delete, ChromeFilled, Notification, Key } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { useI18n } from 'vue-i18n'
 import RunPanel from './flow/RunPanel.vue'
 import PropsPanel from './flow/PropsPanel.vue'
 import VariablesPanel from './flow/VariablesPanel.vue'
@@ -135,6 +136,8 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:diagram', 'dirty-change'])
+
+const { t } = useI18n()
 
 const showNodePanel = ref(false)
 const showRunPanel = ref(false)
@@ -266,7 +269,7 @@ const getDefaultNodes = () => {
   return [
     {
       id: '1',
-      data: { label: '开始' },
+      data: { label: t('flow.node.defaultLabel.start') },
       position: { x: 100, y: 50 },
       type: 'start',
       zIndexGroup: '1'
@@ -284,6 +287,7 @@ const edges = ref(getDefaultEdges())
 
 // ---- 调试通道（WS 对接后端 /debug/flow/:flowId） ----
 import { useFlowDebug } from '@/tenant/composables/useFlowDebug.js'
+import { formatError } from '../../../locales'
 const flowDebug = useFlowDebug()
 flowDebug.setFlowId(props.instanceProps?.id)
 flowDebug.loadBreakpoints(props.instanceProps?.id)
@@ -364,7 +368,7 @@ const updateNodeLabel = (nodeId, newLabel) => {
   )
   const label = uniqueLabel(wanted, labelTaken)
   if (label !== wanted) {
-    ElMessage.warning(`节点名称「${wanted}」已被占用，已改为「${label}」`)
+    ElMessage.warning(t('flow.canvas.nodeLabelTaken', { wanted, label }))
   }
   updateNodes(nodes.value.map(n => (
     n.id === nodeId ? { ...n, data: { ...n.data, label } } : n
@@ -1312,7 +1316,7 @@ const handleUpdateNode = (updatedNode) => {
     )
     const label = uniqueLabel(wanted, labelTaken)
     if (label !== wanted) {
-      ElMessage.warning(`节点名称「${wanted}」已被占用，已改为「${label}」`)
+      ElMessage.warning(t('flow.canvas.nodeLabelTaken', { wanted, label }))
     }
     data.label = label
   }
@@ -1520,13 +1524,13 @@ const saveDiagram = async () => {
     // 因此不能只看 resp.ok，必须解析 body 检查 code === 200。
     const data = await resp.json()
     if (data.code !== 200) {
-      ElMessage.error('运行前自动保存失败: ' + (data.msg || '未知错误'))
+      ElMessage.error(t('flow.canvas.saveBeforeRunFailed', { msg: formatError(data) || t('flow.canvas.unknownError') }))
       return false
     }
     snapshotDiagram()
     return true
   } catch (e) {
-    ElMessage.error('运行前自动保存失败: ' + (e?.message || e))
+    ElMessage.error(t('flow.canvas.saveBeforeRunFailed', { msg: e?.message || e }))
     return false
   }
 }

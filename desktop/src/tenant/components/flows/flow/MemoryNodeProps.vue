@@ -1,28 +1,28 @@
 <template>
   <div class="memory-node-props">
     <div class="tabs">
-      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">配置</button>
-      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">执行结果</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">{{ t('flow.nodeProps.tabConfig') }}</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">{{ t('flow.nodeProps.tabResult') }}</button>
     </div>
 
     <div class="tab-content">
       <div v-if="activeTab === 'settings'" class="settings-panel">
         <!-- 输出变量（只读展示） -->
         <div class="props-section">
-          <div class="section-title"><span>输出变量</span></div>
+          <div class="section-title"><span>{{ t('flow.memoryNode.outputSection') }}</span></div>
           <div class="field-row">
-            <label class="field-label">输出变量</label>
+            <label class="field-label">{{ t('flow.memoryNode.outputSection') }}</label>
             <span class="field-value">messages</span>
             <span class="field-type-tag">array[object]</span>
           </div>
-          <div class="field-hint">每条为 { role, content, timestamp }，可直接拼进 LLM 上下文</div>
+          <div class="field-hint">{{ t('flow.memoryNode.outputHint') }}</div>
         </div>
 
         <!-- 条数限制 -->
         <div class="props-section">
-          <div class="section-title"><span>条数限制</span></div>
+          <div class="section-title"><span>{{ t('flow.memoryNode.limitSection') }}</span></div>
           <div class="field-row">
-            <label class="field-label">最多取 N 条<span class="limit-hint">/ 系统上限 {{ maxSessionRecords }}</span></label>
+            <label class="field-label">{{ t('flow.memoryNode.maxRecords') }}<span class="limit-hint">{{ t('flow.memoryNode.systemLimit', { max: maxSessionRecords }) }}</span></label>
             <div class="config-controls">
               <el-input
                 v-if="limitEnabled"
@@ -37,25 +37,25 @@
               <el-switch :model-value="limitEnabled" @update:model-value="toggleLimitEnabled" />
             </div>
           </div>
-          <div class="field-hint">关闭 = 使用系统最大值（max_session_records）</div>
+          <div class="field-hint">{{ t('flow.memoryNode.limitHint') }}</div>
         </div>
 
         <!-- 时间窗口 -->
         <div class="props-section">
-          <div class="section-title"><span>时间窗口</span></div>
+          <div class="section-title"><span>{{ t('flow.memoryNode.timeWindow') }}</span></div>
           <div class="field-row">
             <label class="checkbox-label">
               <input type="checkbox" :checked="windowEnabled" @change="handleUpdateWindowEnabled($event.target.checked)" />
-              仅取最近
+              {{ t('flow.memoryNode.lastOnly') }}
             </label>
             <input type="number" :value="windowValue" class="field-input field-input-sm" min="1" :disabled="!windowEnabled"
               @blur="handleUpdateWindowValue($event.target.value)" />
             <select :value="windowUnit" class="field-select" :disabled="!windowEnabled"
               @change="handleUpdateWindowUnit($event.target.value)">
-              <option value="second">秒</option>
-              <option value="minute">分钟</option>
-              <option value="hour">小时</option>
-              <option value="day">天</option>
+              <option value="second">{{ t('flow.memoryNode.unitSecond') }}</option>
+              <option value="minute">{{ t('flow.memoryNode.unitMinute') }}</option>
+              <option value="hour">{{ t('flow.memoryNode.unitHour') }}</option>
+              <option value="day">{{ t('flow.memoryNode.unitDay') }}</option>
             </select>
           </div>
         </div>
@@ -63,24 +63,24 @@
 
       <!-- 执行结果 -->
       <div v-if="activeTab === 'lastRun'" class="last-run-panel">
-        <div v-if="!memoryResult" class="nr-empty">暂无运行数据</div>
+        <div v-if="!memoryResult" class="nr-empty">{{ t('flow.node.run.empty') }}</div>
         <div v-else class="props-section">
           <div class="result-item result-meta-row">
             <span class="meta-item">
-              <label class="result-label">运行状态</label>
+              <label class="result-label">{{ t('flow.node.run.status') }}</label>
               <span class="result-value" :class="statusClass">{{ statusText }}</span>
             </span>
             <span class="meta-item">
-              <label class="result-label">耗时</label>
+              <label class="result-label">{{ t('flow.node.run.duration') }}</label>
               <span class="result-value">{{ memoryResult.duration_ms }}ms</span>
             </span>
           </div>
           <div class="result-item">
-            <label class="result-label">输出</label>
+            <label class="result-label">{{ t('flow.node.run.output') }}</label>
             <pre class="result-output">{{ outputText }}</pre>
           </div>
           <div v-if="memoryResult.err_msg" class="result-item">
-            <label class="result-label">错误</label>
+            <label class="result-label">{{ t('flow.node.run.error') }}</label>
             <div class="nr-log nr-error">{{ memoryResult.err_msg }}</div>
           </div>
         </div>
@@ -92,6 +92,9 @@
 <script setup>
 import { ref, computed, watch, inject } from 'vue'
 import { nodeResults } from '@/tenant/composables/runData.js'
+import { useI18n } from 'vue-i18n'
+
+const { t, te } = useI18n()
 
 const props = defineProps({
   selectedNode: { type: Object, default: null },
@@ -197,8 +200,9 @@ const memoryResult = computed(() => {
   return nodeResults.value?.[props.selectedNode.id] || null
 })
 const statusText = computed(() => {
-  const map = { success: '成功', failed: '失败', running: '运行中', skipped: '跳过', cancelled: '已取消' }
-  return map[memoryResult.value?.status] || memoryResult.value?.status || ''
+  const status = memoryResult.value?.status
+  if (!status) return ''
+  return te(`flow.node.run.statusMap.${status}`) ? t(`flow.node.run.statusMap.${status}`) : status
 })
 const statusClass = computed(() => {
   const map = { success: 'status-success', failed: 'status-failed', running: 'status-running' }

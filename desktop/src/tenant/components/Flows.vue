@@ -5,40 +5,40 @@
       <div ref="headerRef" class="full-screen-header" :class="'header--' + headerSize">
         <div class="header-actions">
           <el-button size="small" @click="handleBack">
-            <el-icon><ArrowLeft /></el-icon>返回列表
+            <el-icon><ArrowLeft /></el-icon>{{ t('flow.list.backToList') }}
           </el-button>
         </div>
         <el-icon class="header-icon"><Share /></el-icon>
         <div class="header-info">
           <div class="header-name-wrapper">
             <span v-if="!isEditingName" class="header-name"
-                  :title="instanceProps.name || (currentWFId ? '编辑工作流' : '新增工作流')"
-                  @click="startEditName">{{ instanceProps.name || (currentWFId ? '编辑工作流' : '新增工作流') }}</span>
+                  :title="instanceProps.name || (currentWFId ? t('flow.list.editFlow') : t('flow.list.newFlow'))"
+                  @click="startEditName">{{ instanceProps.name || (currentWFId ? t('flow.list.editFlow') : t('flow.list.newFlow')) }}</span>
             <el-input v-else v-model="editName" size="small" class="header-name-input"
-                      maxlength="64" placeholder="如 daily-sales-report"
+                      maxlength="64" :placeholder="t('flow.list.namePlaceholder')"
                       @blur="saveEditName" @keyup.enter="saveEditName" ref="nameInputRef" />
           </div>
           <div class="header-desc-wrapper">
             <span class="header-desc"
-                  :title="instanceProps.description || '作者很懒，什么都没有留下！'"
-                  @click="openDescDialog">{{ instanceProps.description || '作者很懒，什么都没有留下！' }}</span>
+                  :title="instanceProps.description || t('flow.list.noDescription')"
+                  @click="openDescDialog">{{ instanceProps.description || t('flow.list.noDescription') }}</span>
           </div>
         </div>
         <div class="header-buttons">
-          <span v-if="isDirty" class="dirty-indicator" title="有未保存的修改">未保存</span>
-          <el-button size="small" class="header-action-btn run-panel-btn" @click="openRunPanel">试运行</el-button>
+          <span v-if="isDirty" class="dirty-indicator" :title="t('flow.list.dirtyTip')">{{ t('flow.list.unsaved') }}</span>
+          <el-button size="small" class="header-action-btn run-panel-btn" @click="openRunPanel">{{ t('flow.list.testRun') }}</el-button>
           <div class="variables-card">
-            <el-tooltip content="流程变量" placement="bottom">
+            <el-tooltip :content="t('flow.header.flowVars')" placement="bottom">
               <el-icon class="variable-icon" @click="flowRef.toggleVariablesPanel('flow')"><ChromeFilled /></el-icon>
             </el-tooltip>
-            <el-tooltip content="环境变量" placement="bottom">
+            <el-tooltip :content="t('flow.header.envVars')" placement="bottom">
               <el-icon class="variable-icon" @click="flowRef.toggleVariablesPanel('environment')"><Notification /></el-icon>
             </el-tooltip>
-            <el-tooltip content="全局变量（只读）" placement="bottom">
+            <el-tooltip :content="t('flow.header.globalVarsReadonly')" placement="bottom">
               <el-icon class="variable-icon" @click="flowRef.toggleVariablesPanel('global')"><Key /></el-icon>
             </el-tooltip>
           </div>
-          <el-button size="small" class="header-action-btn" @click="handleSave">保存</el-button>
+          <el-button size="small" class="header-action-btn" @click="handleSave">{{ t('flow.list.save') }}</el-button>
           <!-- 版本：正式调用只运行已发布的那一版，所以「现在是第几版」必须随时可见 -->
           <el-tooltip :content="versionTip" placement="bottom">
             <el-button size="small" class="header-action-btn version-btn"
@@ -46,18 +46,18 @@
                        @click="openVersionPanel">{{ currentVersionLabel }}</el-button>
           </el-tooltip>
           <el-button size="small" type="primary" class="header-action-btn" @click="handleExposeWF()">
-            端点
+            {{ t('flow.list.endpoints') }}
           </el-button>
           <!-- 窄档：只有变量面板收进「⋯」—— 试运行是主操作，始终平铺 -->
           <el-dropdown class="header-more" trigger="click" @command="onHeaderMore">
-            <el-button size="small" class="header-action-btn more-btn" title="更多操作">
+            <el-button size="small" class="header-action-btn more-btn" :title="t('flow.list.more')">
               <el-icon><MoreFilled /></el-icon>
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="vars-flow">流程变量</el-dropdown-item>
-                <el-dropdown-item command="vars-env">环境变量</el-dropdown-item>
-                <el-dropdown-item command="vars-global">全局变量</el-dropdown-item>
+                <el-dropdown-item command="vars-flow">{{ t('flow.header.flowVars') }}</el-dropdown-item>
+                <el-dropdown-item command="vars-env">{{ t('flow.header.envVars') }}</el-dropdown-item>
+                <el-dropdown-item command="vars-global">{{ t('flow.header.globalVars') }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -78,29 +78,29 @@
              不用 el-drawer —— 那是整屏抽屉，跟编辑器里的面板不是一套视觉语言 -->
         <div v-if="versionPanelVisible" class="version-panel">
           <div class="version-panel-header">
-            <span class="version-panel-title">版本</span>
+            <span class="version-panel-title">{{ t('flow.versionPanel.title') }}</span>
             <el-icon class="version-panel-close" @click="versionPanelVisible = false"><Close /></el-icon>
           </div>
           <div class="version-panel-body">
             <div class="ver-release">
               <el-input v-model="releaseNote" size="small" maxlength="200" clearable
-                        placeholder="这一版改了什么（可留空）" />
+                        :placeholder="t('flow.versionPanel.notePlaceholder')" />
               <el-button size="small" type="primary" :loading="releasing" @click="doRelease">
-                发布当前内容
+                {{ t('flow.versionPanel.publish') }}
               </el-button>
             </div>
             <div class="ver-hint">
-              发布后正式调用（MCP / RPC / 其它流程）立刻运行这一版；画布上的草稿改动不影响线上，下次发布才生效。
-              只想试一下草稿，用头部的「试运行」。
-              当前版本不能删除（正式调用读的就是它），要删先把线上切到别的版本。
+              {{ t('flow.versionPanel.publishHint') }}
+              {{ t('flow.versionPanel.publishHint2') }}
+              {{ t('flow.versionPanel.publishHint3') }}
             </div>
-            <el-empty v-if="!versions.length && !versionLoading" description="还没有发布过版本" />
+            <el-empty v-if="!versions.length && !versionLoading" :description="t('flow.versionPanel.empty')" />
             <div v-else v-loading="versionLoading" class="ver-list">
               <div v-for="v in versions" :key="v.version" class="ver-item">
                 <div class="ver-main">
                   <span class="ver-no">v{{ v.version }}</span>
-                  <el-tag v-if="v.is_current" size="small" type="success">当前版本</el-tag>
-                  <span class="ver-note">{{ v.note || '未填说明' }}</span>
+                  <el-tag v-if="v.is_current" size="small" type="success">{{ t('flow.versionPanel.current') }}</el-tag>
+                  <span class="ver-note">{{ v.note || t('flow.versionPanel.noNote') }}</span>
                 </div>
                 <div class="ver-meta">
                   <span>{{ v.created_by_name || '—' }}</span>
@@ -109,16 +109,16 @@
                        「载入画布」对当前版本同样有用：丢掉草稿、回到线上那一份 -->
                   <el-button v-if="!v.is_current" link type="primary" size="small"
                              :loading="rollingBack === v.version" @click="doSwitchVersion(v)">
-                    切到线上
+                    {{ t('flow.versionPanel.switchToOnline') }}
                   </el-button>
                   <el-button link size="small"
                              :loading="applyingVersion === v.version" @click="doApplyVersion(v)">
-                    载入画布
+                    {{ t('flow.versionPanel.loadToCanvas') }}
                   </el-button>
                   <!-- 删除只清历史行：线上（当前版本）与画布都不动，所以当前版本不给删 -->
                   <el-button v-if="!v.is_current" link type="danger" size="small"
                              :loading="deletingVersion === v.version" @click="doDeleteVersion(v)">
-                    删除
+                    {{ t('flow.versionPanel.delete') }}
                   </el-button>
                 </div>
               </div>
@@ -140,7 +140,7 @@
         <div class="status-filters">
           <el-button :class="{ active: selectedType === 'all' }" @click="selectType('all')">
             <el-icon><Refresh /></el-icon>
-            <span>全部{{ statusCounts.all ? ` (${statusCounts.all})` : '' }}</span>
+            <span>{{ t('flow.list.tabAll') }}{{ statusCounts.all ? ` (${statusCounts.all})` : '' }}</span>
           </el-button>
           <el-button class="btn-enable" :class="{ active: selectedType === 'normal' }" @click="selectType('normal')">
             <el-icon><CircleCheck /></el-icon>
@@ -172,7 +172,7 @@
           <el-input
             ref="listSearchInputRef"
             v-model="searchQuery"
-            placeholder="搜索工作流"
+            :placeholder="t('flow.list.searchPlaceholder')"
             prefix-icon="Search"
             clearable
             @keydown.esc="closeListSearch"
@@ -182,26 +182,26 @@
         <el-button
           class="search-toggle"
           :class="{ active: !!searchQuery }"
-          title="搜索"
+          :title="t('flow.list.search')"
           @click="toggleListSearch"
         >
           <el-icon><component :is="listSearchOpen ? Close : Search" /></el-icon>
         </el-button>
         <!-- 导入：从资产包装一个工作流。次要动作，不抢「新增」的主色 -->
-        <el-button class="header-import-btn" @click="importVisible = true" round title="从资产包导入工作流">
+        <el-button class="header-import-btn" @click="importVisible = true" round :title="t('flow.list.importFlow')">
           <el-icon><Upload /></el-icon>
-          <span>导入</span>
+          <span>{{ t('flow.list.import') }}</span>
         </el-button>
         <!-- 新增工作流按钮（窄档 sm/xs 只留 +，文字由 CSS 收起；title 兜住语义） -->
-        <el-button class="header-create-btn" type="primary" @click="addFlow" round title="新增工作流">
+        <el-button class="header-create-btn" type="primary" @click="addFlow" round :title="t('flow.list.newFlow')">
           <el-icon><Plus /></el-icon>
-          <span>新增工作流</span>
+          <span>{{ t('flow.list.newFlow') }}</span>
         </el-button>
 
       </div>
       
       <div class="wf-instances-content">
-        <div v-if="isLoading" class="loading">加载中...</div>
+        <div v-if="isLoading" class="loading">{{ t('flow.list.loading') }}</div>
         <div v-else-if="filteredflows.length === 0" class="no-data">
           {{ emptyText }}
         </div>
@@ -209,7 +209,7 @@
           <!-- 悬停提示：鼠标进入整张卡片即显示。
                鼠标压到卡片体上的操作浮层时关掉它（见 actionsHovered），避免与按钮自己的 tip 打架 -->
           <el-tooltip v-for="instance in filteredflows" :key="instance.id"
-                      :content="instance.status === 3 ? '点击查看工作流（已废弃·只读）' : '点击编辑工作流'"
+                      :content="instance.status === 3 ? t('flow.list.cardTipDeprecated') : t('flow.list.cardTipEditable')"
                       placement="top" :disabled="actionsHovered">
               <div class="wf-instance-card" @click="handleEditFlow(instance)"
                    @mousemove="onCardMove" @mouseleave="actionsHovered = false">
@@ -225,8 +225,8 @@
                     <!-- 当前发布版本：0 表示还没发布（正式调用不可用，只能调试）。
                          用原生 title 而不是 el-tooltip —— 整卡已有一个 tooltip，嵌套 popper 会打架 -->
                     <el-tag size="small" effect="plain" type="info" class="tag-version"
-                            :title="instance.current_version ? `当前发布版本 v${instance.current_version}` : '尚未发布正式版本（线上不可调用）'">
-                      {{ instance.current_version ? `v${instance.current_version}` : '未发布' }}
+                            :title="instance.current_version ? t('flow.list.versionTip', { version: instance.current_version }) : t('flow.list.versionTipNone')">
+                      {{ instance.current_version ? `v${instance.current_version}` : t('flow.list.unpublished') }}
                     </el-tag>
                     <template v-if="(instance.endpoints || []).length > 0">
                       <span
@@ -238,45 +238,45 @@
                         {{ (p.protocol || '').toLowerCase() }}
                       </span>
                     </template>
-                    <span v-else>未设置端点</span>
+                    <span v-else>{{ t('flow.list.noEndpoints') }}</span>
                   </div>
                 </div>
             </div>
             <div class="card-body">
               <div class="card-body-bottom">
                 <div class="info-item">
-                  <span class="info-label">描述：</span>
-                  <span class="info-value description-value">{{ instance.description || '很懒，什么都没写！' }}</span>
+                  <span class="info-label">{{ t('flow.list.descLabel') }}</span>
+                  <span class="info-value description-value">{{ instance.description || t('flow.list.emptyDesc') }}</span>
                 </div>
                 <div class="info-item">
-                  <span class="info-label">更新：</span>
-                  <span class="info-value">{{ instance.updated_by_name || '未知' }} · {{ formatDate(instance.updated_at) }}</span>
+                  <span class="info-label">{{ t('flow.list.updatedLabel') }}</span>
+                  <span class="info-value">{{ instance.updated_by_name || t('flow.list.unknown') }} · {{ formatDate(instance.updated_at) }}</span>
                 </div>
               </div>
               <!-- 操作浮层：只覆盖「卡片头下方」那块（card-body），按钮居中（与技能卡片一致） -->
               <div class="card-actions" @click.stop>
                 <!-- 两态：正常(1) / 废弃(3)。「锁定」已取消：线上由版本管理，改草稿不影响线上 -->
-                <el-tooltip v-if="instance.status !== 1" content="切回正常（可修改、可运行）" placement="top">
+                <el-tooltip v-if="instance.status !== 1" :content="t('flow.list.enableTip')" placement="top">
                   <button class="card-action-btn" @click="handleSetWFStatus(instance, 1)">
                     <el-icon><CircleCheck /></el-icon>
                   </button>
                 </el-tooltip>
-                <el-tooltip v-if="instance.status !== 3" content="废弃（不可修改、不可运行）" placement="top">
+                <el-tooltip v-if="instance.status !== 3" :content="t('flow.list.disableTip')" placement="top">
                   <button class="card-action-btn" @click="handleSetWFStatus(instance, 3)">
                     <el-icon><CircleClose /></el-icon>
                   </button>
                 </el-tooltip>
-                <el-tooltip content="端点" placement="top">
+                <el-tooltip :content="t('flow.list.endpoints')" placement="top">
                   <button class="card-action-btn" @click="handleExposeWF(instance)">
                     <el-icon><Connection /></el-icon>
                   </button>
                 </el-tooltip>
-                <el-tooltip content="导出为资产包（.zip）" placement="top">
+                <el-tooltip :content="t('flow.list.exportTip')" placement="top">
                   <button class="card-action-btn" @click="exportEntity('workflow', instance.id, instance.name)">
                     <el-icon><Download /></el-icon>
                   </button>
                 </el-tooltip>
-                <el-tooltip content="删除" placement="top">
+                <el-tooltip :content="t('flow.list.deleteTip')" placement="top">
                   <button class="card-action-btn danger" @click="handleDeleteFlow(instance)">
                     <el-icon><Delete /></el-icon>
                   </button>
@@ -301,17 +301,17 @@
     <AssetImportDialog v-model="importVisible" kind="workflow" @imported="fetchflows" />
 
     <!-- 描述单独用大框编辑：头部那行字号只有 12px、还被单行省略，长描述在原位输入框里基本没法看 -->
-    <el-dialog v-model="descDialogVisible" title="编辑工作流描述" width="640px" append-to-body
+    <el-dialog v-model="descDialogVisible" :title="t('flow.descDialog.title')" width="640px" append-to-body
                :close-on-click-modal="false" class="wf-desc-dialog">
       <el-input v-model="descDraft" type="textarea" :rows="8" resize="vertical"
-                placeholder="一句话说明这个流程干什么：列表卡片、端点面板、授权面板都靠它区分用途"
+                :placeholder="t('flow.descDialog.placeholder')"
                 @keydown.ctrl.enter="confirmDescDialog" />
       <div class="wf-desc-hint">
-        描述会显示在工作流列表卡片上。点「确定」后还需要点「保存」才会落库（与名称编辑一致）；Ctrl+Enter 可快速确定。
+        {{ t('flow.descDialog.hint') }}
       </div>
       <template #footer>
-        <el-button size="small" @click="descDialogVisible = false">取消</el-button>
-        <el-button size="small" type="primary" @click="confirmDescDialog">确定</el-button>
+        <el-button size="small" @click="descDialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button size="small" type="primary" @click="confirmDescDialog">{{ t('common.confirm') }}</el-button>
       </template>
     </el-dialog>
 
@@ -320,6 +320,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onActivated, onUnmounted, onDeactivated, nextTick, watch, provide } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElButton, ElInput, ElIcon, ElMessage, ElMessageBox, ElDialog } from 'element-plus'
 import { Plus, Search, Refresh, Delete, Grape, Magnet, Management, Paperclip, Connection, Link, HotWater, Share, ArrowLeft, ChromeFilled, Notification, CircleCheck, CircleClose, ArrowDown, Close, Upload, Download, Key } from '@element-plus/icons-vue'
 import adminApi from '../config/admin.js'
@@ -333,6 +334,10 @@ import {
 } from '../utils/flowFormat.js'
 import Flow from './flows/Flow.vue'
 import FlowEndpointsPanel from './flows/FlowEndpointsPanel.vue'
+import { formatError } from '../../locales'
+import { formatDateTime } from '@/utils/datetime.js'
+
+const { t } = useI18n()
 
 // 搜索关键词
 const searchQuery = ref('')
@@ -396,15 +401,15 @@ const filteredflows = computed(() => {
 // 空列表提示文案（区分「搜索无结果」与「该状态下暂无数据」）
 const emptyText = computed(() => {
   if (searchQuery.value) {
-    return '没有找到匹配的工作流'
+    return t('flow.list.emptySearch')
   }
   if (selectedType.value === 'normal') {
-    return '暂无工作流'
+    return t('flow.list.emptyNone')
   }
   if (selectedType.value === 'deprecated') {
-    return '暂无废弃的工作流'
+    return t('flow.list.emptyDeprecated')
   }
-  return '暂无工作流'
+  return t('flow.list.emptyNone')
 })
 // 加载状态
 const isLoading = ref(false)
@@ -435,12 +440,12 @@ const closeListSearch = () => { listSearchOpen.value = false }
 // 离开最窄档后收起搜索展开态，避免隐藏状态下残留
 watch(listHeaderSize, (s) => { if (s !== 'xs') listSearchOpen.value = false })
 // 状态筛选项（紧凑下拉用；与模板里的平铺按钮一一对应）
-const STATUS_FILTERS = [
-  { key: 'all', label: '全部', icon: Refresh, cls: '' },
+const STATUS_FILTERS = computed(() => [
+  { key: 'all', label: t('flow.list.tabAll'), icon: Refresh, cls: '' },
   { key: 'normal', label: statusMeta(1).text, icon: CircleCheck, cls: 'btn-enable' },
   { key: 'deprecated', label: statusMeta(3).text, icon: CircleClose, cls: 'btn-disable' }
-]
-const activeStatus = computed(() => STATUS_FILTERS.find(o => o.key === selectedType.value) || STATUS_FILTERS[0])
+])
+const activeStatus = computed(() => STATUS_FILTERS.value.find(o => o.key === selectedType.value) || STATUS_FILTERS.value[0])
 const activeStatusLabel = computed(() => {
   const o = activeStatus.value
   const n = statusCounts.value[o.key]
@@ -552,11 +557,11 @@ const fetchFlowDetail = async (flowId) => {
     }
   })
   if (!response.ok) {
-    throw new Error('获取工作流数据失败')
+    throw new Error(t('flow.save.loadFailed'))
   }
   const data = await response.json()
   if (data.code !== 200 || !data.data) {
-    ElMessage.error(data.msg || '获取工作流数据失败')
+    ElMessage.error(formatError(data) || t('flow.save.loadFailed'))
     return null
   }
   return data.data
@@ -581,13 +586,15 @@ const draftDirty = ref(false)
 
 const currentVersion = computed(() => versions.value.find(v => v.is_current) || null)
 const currentVersionLabel = computed(() => {
-  if (!releasedVersion.value) return '未发布'
-  return draftDirty.value ? `v${releasedVersion.value} · 有改动` : `v${releasedVersion.value}`
+  if (!releasedVersion.value) return t('flow.list.unpublished')
+  return draftDirty.value
+    ? t('flow.release.draftDirty', { version: releasedVersion.value })
+    : `v${releasedVersion.value}`
 })
 const versionTip = computed(() => {
-  if (!releasedVersion.value) return '尚未发布：正式调用不可用，只能试运行'
-  if (draftDirty.value) return `线上跑的是 v${releasedVersion.value}；你已保存的改动还没发布，点这里发布`
-  return `当前版本 v${releasedVersion.value}：正式调用跑的就是它`
+  if (!releasedVersion.value) return t('flow.release.notReleasedTip')
+  if (draftDirty.value) return t('flow.release.dirtyTip', { version: releasedVersion.value })
+  return t('flow.release.currentTip', { version: releasedVersion.value })
 })
 
 // 只刷新版本状态，不动画布（保存后调用：内容已经落库，但还没发布）
@@ -603,12 +610,12 @@ const refreshVersionState = async () => {
   }
 }
 
-const fmtVersionTime = (t) => (t ? new Date(t).toLocaleString() : '—')
+const fmtVersionTime = (value) => (value ? (formatDateTime(value) || '—') : '—')
 
 // 后端错误响应也是 HTTP 200，业务码在 body 里（与 fetchFlowDetail 同口径）
 const versionRequest = async (url, options = {}) => {
   const token = getToken()
-  if (!token) throw new Error('未登录')
+  if (!token) throw new Error(t('flow.save.notSignedIn'))
   const response = await fetch(url, {
     ...options,
     headers: {
@@ -616,9 +623,9 @@ const versionRequest = async (url, options = {}) => {
       'Authorization': `Bearer ${token}`
     }
   })
-  if (!response.ok) throw new Error('请求失败')
+  if (!response.ok) throw new Error(t('flow.save.requestFailed'))
   const data = await response.json()
-  if (data.code !== 200) throw new Error(data.msg || '请求失败')
+  if (data.code !== 200) throw new Error(formatError(data) || t('flow.save.requestFailed'))
   return data.data
 }
 
@@ -640,7 +647,7 @@ const loadVersions = async () => {
 
 const openVersionPanel = async () => {
   if (!currentWFId.value) {
-    ElMessage.warning({ message: '请先保存工作流再管理版本', duration: 3000 })
+    ElMessage.warning({ message: t('flow.save.saveFirstForVersion'), duration: 3000 })
     return
   }
   // 再点一次按钮就收起（外面那层 document 监听排除了按钮本身，所以这里自己 toggle）
@@ -676,7 +683,7 @@ onUnmounted(() => {
 const doRelease = async () => {
   // 发布冻结的是「已保存」的内容：有未保存改动时先保存，否则发出去的不是眼前这份
   if (isDirty.value) {
-    ElMessage.warning({ message: '有未保存的修改，请先点「保存」再发布', duration: 3000 })
+    ElMessage.warning({ message: t('flow.save.dirtyBeforePublish'), duration: 3000 })
     return
   }
   releasing.value = true
@@ -689,7 +696,7 @@ const doRelease = async () => {
     await loadVersions()
     await refreshVersionState()
     ElMessage.success({
-      message: `已发布 v${currentVersion.value?.version ?? ''}，正式调用即刻生效`,
+      message: t('flow.save.published', { version: currentVersion.value?.version ?? '' }),
       duration: 2500
     })
   } catch (error) {
@@ -703,9 +710,9 @@ const doRelease = async () => {
 const doSwitchVersion = async (v) => {
   try {
     await ElMessageBox.confirm(
-      `线上会立刻改用 v${v.version}，画布上的草稿不受影响（它仍是你的最新内容，只是还没发布）。确认切换？`,
-      `切到 v${v.version}`,
-      { type: 'warning', confirmButtonText: '切到线上', cancelButtonText: '取消' }
+      t('flow.save.switchConfirm', { version: v.version }),
+      t('flow.save.switchConfirmTitle', { version: v.version }),
+      { type: 'warning', confirmButtonText: t('flow.versionPanel.switchToOnline'), cancelButtonText: t('common.cancel') }
     )
   } catch {
     return
@@ -718,7 +725,7 @@ const doSwitchVersion = async (v) => {
     })
     await loadVersions()
     await refreshVersionState()
-    ElMessage.success({ message: `线上已切到 v${v.version}`, duration: 2500 })
+    ElMessage.success({ message: t('flow.save.switched', { version: v.version }), duration: 2500 })
   } catch (error) {
     ElMessage.error(error.message)
   } finally {
@@ -730,13 +737,13 @@ const doSwitchVersion = async (v) => {
 const doApplyVersion = async (v) => {
   // 载入当前版本 = 丢掉草稿、回到线上那一份；载入旧版本 = 以旧版本为起点继续改
   const tip = v.is_current
-    ? `画布上的草稿会被线上 v${v.version} 覆盖（未保存的改动会丢失），线上不受影响。确认载入？`
-    : `画布会被 v${v.version} 的内容覆盖（未保存的改动会丢失），并且不会发布 —— 改完需要再点「发布当前内容」。确认载入？`
+    ? t('flow.save.loadConfirmDirty', { version: v.version })
+    : t('flow.save.loadConfirmClean', { version: v.version })
   try {
-    await ElMessageBox.confirm(tip, `载入 v${v.version} 到画布`, {
+    await ElMessageBox.confirm(tip, t('flow.save.loadTitle', { version: v.version }), {
       type: 'warning',
-      confirmButtonText: '载入',
-      cancelButtonText: '取消'
+      confirmButtonText: t('flow.versionPanel.loadToCanvas'),
+      cancelButtonText: t('common.cancel')
     })
   } catch {
     return
@@ -754,8 +761,8 @@ const doApplyVersion = async (v) => {
     flowRef.value?.snapshotDiagram?.()
     ElMessage.success({
       message: v.is_current
-        ? `画布已回到线上 v${v.version}，草稿改动已丢弃`
-        : `已把 v${v.version} 载入画布，发布后才会生效`,
+        ? t('flow.save.loadedDirty', { version: v.version })
+        : t('flow.save.loadedClean', { version: v.version }),
       duration: 2500
     })
   } catch (error) {
@@ -770,9 +777,9 @@ const doApplyVersion = async (v) => {
 const doDeleteVersion = async (v) => {
   try {
     await ElMessageBox.confirm(
-      `v${v.version} 会被永久删除，无法恢复。线上运行的版本与画布草稿都不受影响。确认删除？`,
-      `删除 v${v.version}`,
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      t('flow.save.deleteVersionConfirm', { version: v.version }),
+      t('flow.save.deleteVersionTitle', { version: v.version }),
+      { type: 'warning', confirmButtonText: t('flow.versionPanel.delete'), cancelButtonText: t('common.cancel') }
     )
   } catch {
     return
@@ -784,7 +791,7 @@ const doDeleteVersion = async (v) => {
       method: 'DELETE'
     })
     await loadVersions()
-    ElMessage.success({ message: `已删除 v${v.version}`, duration: 2500 })
+    ElMessage.success({ message: t('flow.save.versionDeleted', { version: v.version }), duration: 2500 })
   } catch (error) {
     ElMessage.error(error.message)
   } finally {
@@ -834,7 +841,7 @@ const handleEditFlow = async (instance, focusNodeId = '') => {
   // 废弃（status=3）不可进入编辑（后端 UpdateFlow 同样会拦截写入）。
   // 「锁定」态已取消：线上由版本管理，改草稿不影响线上，不需要再挡编辑
   if ((instance.status || 1) === 3) {
-    ElMessage.warning({ message: `工作流「${instance.name}」已废弃，不可进入编辑`, duration: 3000 })
+    ElMessage.warning({ message: t('flow.save.deprecatedCannotEdit', { name: instance.name }), duration: 3000 })
     return
   }
   // 已经在这个工作流的编辑页：Agent 可能刚改过服务端 diagram，必须重新拉一次再定位
@@ -870,7 +877,7 @@ const startEditName = () => {
 
 // 保存名字编辑
 const saveEditName = () => {
-  instanceProps.value.name = editName.value.trim() || (currentWFId.value ? '编辑工作流' : '新增工作流')
+  instanceProps.value.name = editName.value.trim() || (currentWFId.value ? t('flow.list.editFlow') : t('flow.list.newFlow'))
   isEditingName.value = false
 }
 
@@ -884,7 +891,7 @@ const openDescDialog = () => {
 const confirmDescDialog = () => {
   const next = (descDraft.value || '').trim()
   if (!next) {
-    ElMessage.warning({ message: '描述不能为空：列表与授权面板都靠它区分用途', duration: 3000 })
+    ElMessage.warning({ message: t('flow.descDialog.empty'), duration: 3000 })
     return
   }
   instanceProps.value.description = next
@@ -932,7 +939,7 @@ const syncCardEndpoints = (wfId, endpoints) => {
 const handleExposeWF = (instance) => {
   const wf = instance || { ...instanceProps.value, id: currentWFId.value }
   if (!wf.id) {
-    ElMessage.error({ message: '请先保存工作流再管理端点', duration: 3000, offset: 20, showClose: true })
+    ElMessage.error({ message: t('flow.save.saveFirstForEndpoints'), duration: 3000, offset: 20, showClose: true })
     return
   }
   currentExposeWF.value = wf
@@ -963,13 +970,13 @@ const hasExposedEndpoint = computed(() => {
 const handleSave = async () => {
   // 编辑期间被别处切成了废弃：后端也会拦，这里提前给一句能纠正的提示
   if (currentWFStatus.value === 3) {
-    ElMessage.warning({ message: `工作流已废弃，请先切回「${statusMeta(1).text}」状态再保存`, duration: 3000 })
+    ElMessage.warning({ message: t('flow.save.deprecatedBeforeSave', { status: statusMeta(1).text }), duration: 3000 })
     return null
   }
   const flowName = (instanceProps.value.name || '').trim()
   if (!flowName) {
     ElMessage.error({
-      message: '请输入工作流名称',
+      message: t('flow.save.nameRequired'),
       duration: 3000,
       offset: 20,
       showClose: true
@@ -981,7 +988,7 @@ const handleSave = async () => {
   // local__<name>，后者只认 ASCII —— 中文写描述。
   if (!NAME_RE.test(flowName)) {
     ElMessage.error({
-      message: '工作流名只能用字母、数字与横线（不能以横线开头，≤64）。它会作为对外工具名，中文说明请填到「描述」里',
+      message: t('flow.save.nameInvalid'),
       duration: 5000,
       offset: 20,
       showClose: true
@@ -997,11 +1004,10 @@ const handleSave = async () => {
     try {
       await ElMessageBox.confirm(
         renamed
-          ? `该工作流有端点已对外开放。改名会改变对外工具名：local__${originalWFName.value} → local__${flowName}，` +
-            '外部 MCP / RPC 调用方需要同步更新。平台内 agent 授权、skill 依赖与工具组里的引用会自动跟着改。确认继续？'
-          : '该工作流有端点已对外开放，保存会立即影响线上调用方。确认继续？',
-        renamed ? '改名并保存' : '端点已对外开放',
-        { confirmButtonText: '确认保存', cancelButtonText: '取消', type: 'warning' }
+          ? t('flow.save.renameExposedConfirm', { old: originalWFName.value, new: flowName })
+          : t('flow.save.exposedSaveConfirm'),
+        renamed ? t('flow.save.renameExposedTitle') : t('flow.save.exposedTitle'),
+        { confirmButtonText: t('flow.save.confirmSave'), cancelButtonText: t('common.cancel'), type: 'warning' }
       )
     } catch {
       return null
@@ -1012,7 +1018,7 @@ const handleSave = async () => {
     const token = getToken()
     if (!token) {
       ElMessage.error({
-        message: '请先登录',
+        message: t('flow.save.notSignedIn'),
         duration: 5000,
         offset: 20,
         showClose: true
@@ -1059,13 +1065,13 @@ const handleSave = async () => {
     })
 
     if (!response.ok) {
-      throw new Error('保存失败')
+      throw new Error(t('flow.save.saveFailed'))
     }
 
     const data = await response.json()
     if (data.code === 200) {
       ElMessage.success({
-        message: currentWFId.value ? '工作流更新成功' : '工作流创建成功',
+        message: currentWFId.value ? t('flow.save.savedUpdated') : t('flow.save.savedCreated'),
         duration: 700
       })
       // 新建成功后必须把 id 回写进 instanceProps：试运行面板的 flowId 取自它
@@ -1090,16 +1096,16 @@ const handleSave = async () => {
       return savedId || null
     }
     ElMessage.error({
-      message: `保存失败: ${data.msg}`,
+      message: t('flow.save.saveFailedReason', { msg: formatError(data) }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
     return null
   } catch (error) {
-    console.error('保存工作流失败:', error)
+    console.error(t('flow.save.saveFailedLog'), error)
     ElMessage.error({
-      message: '保存失败，请稍后重试',
+      message: t('flow.save.saveFailedRetry'),
       duration: 5000,
       offset: 20,
       showClose: true
@@ -1126,8 +1132,8 @@ const handleSetWFStatus = async (instance, status) => {
   if (status === 3) {
     try {
       await ElMessageBox.confirm(
-        `废弃「${instance.name}」？废弃后不可修改、不可运行，并自动收回全部端点的对外。`,
-        '提示',
+        t('flow.save.deprecateConfirm', { name: instance.name }),
+        t('flow.save.confirmTitle'),
         { type: status === 1 ? 'info' : 'warning' }
       )
     } catch {
@@ -1137,7 +1143,7 @@ const handleSetWFStatus = async (instance, status) => {
   try {
     const token = getToken()
     if (!token) {
-      ElMessage.error({ message: '请先登录', duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('flow.save.notSignedIn'), duration: 5000, offset: 20, showClose: true })
       return
     }
     const response = await fetch(adminApi.flows.status(instance.id), {
@@ -1148,18 +1154,18 @@ const handleSetWFStatus = async (instance, status) => {
       },
       body: JSON.stringify({ status })
     })
-    if (!response.ok) throw new Error('更新失败')
+    if (!response.ok) throw new Error(t('flow.save.updateFailed'))
     const data = await response.json()
     if (data.code === 200) {
       instance.status = status
-      ElMessage.success({ message: `已切到「${meta.text}」`, duration: 700 })
+      ElMessage.success({ message: t('flow.save.statusChanged', { status: meta.text }), duration: 700 })
       await fetchflows()
     } else {
-      ElMessage.error({ message: `更新失败: ${data.msg}`, duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('flow.save.updateFailedReason', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
     }
   } catch (error) {
-    console.error('切换工作流状态失败:', error)
-    ElMessage.error({ message: '更新失败，请稍后重试', duration: 5000, offset: 20, showClose: true })
+    console.error(t('flow.save.statusToggleLog'), error)
+    ElMessage.error({ message: t('flow.save.updateFailedRetry'), duration: 5000, offset: 20, showClose: true })
   }
 }
 
@@ -1202,10 +1208,10 @@ const fetchflows = async () => {
         flowsList.value = data.data.items || []
       }
     } catch (jsonError) {
-      console.error('解析响应 JSON 失败:', jsonError)
+      console.error(t('flow.save.parseJsonFailed'), jsonError)
     }
   } catch (error) {
-    console.error('获取工作流实例列表失败:', error)
+    console.error(t('flow.save.loadListFailed'), error)
   } finally {
     isLoading.value = false
   }
@@ -1218,11 +1224,11 @@ const fetchflows = async () => {
 const handleDeleteFlow = (instance) => {
   // 弹出确认对话框
   ElMessageBox.confirm(
-    `确定要删除工作流 "${instance.name}" 吗？未对外的端点会随之一并删除；仍有对外端点时需先「收回对外」。此操作不可恢复。`,
-    '删除确认',
+    t('flow.save.deleteConfirm', { name: instance.name }),
+    t('flow.save.deleteConfirmTitle'),
     {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
       type: 'warning'
     }
   ).then(async () => {
@@ -1230,7 +1236,7 @@ const handleDeleteFlow = (instance) => {
       const token = getToken()
       if (!token) {
         ElMessage.error({
-        message: '请先登录',
+        message: t('flow.save.notSignedIn'),
         duration: 5000,
         offset: 20,
         showClose: true
@@ -1247,29 +1253,29 @@ const handleDeleteFlow = (instance) => {
       })
 
       if (!response.ok) {
-        throw new Error('删除失败')
+        throw new Error(t('flow.save.deleteFailed'))
       }
 
       const data = await response.json()
       if (data.code === 200) {
         ElMessage.success({
-          message: '工作流删除成功',
+          message: t('flow.save.deleted'),
           duration: 700
         })
         // 刷新工作流列表
         fetchflows()
       } else {
         ElMessage.error({
-          message: `删除失败: ${data.msg}`,
+          message: t('flow.save.deleteFailedReason', { msg: formatError(data) }),
           duration: 5000,
           offset: 20,
           showClose: true
         })
       }
     } catch (error) {
-      console.error('删除工作流失败:', error)
+      console.error(t('flow.save.deleteFailedLog'), error)
       ElMessage.error({
-        message: '删除失败，请稍后重试',
+        message: t('flow.save.deleteFailedRetry'),
         duration: 5000,
         offset: 20,
         showClose: true

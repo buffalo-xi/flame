@@ -10,36 +10,33 @@
 
       <div class="picker">
         <input ref="fileRef" type="file" accept=".zip,application/zip" class="file-native" @change="onPick" />
-        <el-button size="small" @click="pick">选择资产包…</el-button>
-        <span class="file-name" :class="{ empty: !file }">{{ file ? file.name : '未选择文件（.zip）' }}</span>
+        <el-button size="small" @click="pick">{{ t('assetImport.pick') }}</el-button>
+        <span class="file-name" :class="{ empty: !file }">{{ file ? file.name : t('assetImport.noFile') }}</span>
       </div>
 
       <div class="name-row">
-        <span class="name-label">装成</span>
+        <span class="name-label">{{ t('assetImport.asLabel') }}</span>
         <el-input v-model="name" size="small" clearable
-                  :placeholder="`留空 = 沿用包里的名字（${kindLabel}，撞名时可在这里改）`" />
+                  :placeholder="t('assetImport.namePlaceholder', { kind: kindLabel })" />
       </div>
 
-      <div v-if="inspecting" class="dep-hint">正在检查包内依赖…</div>
+      <div v-if="inspecting" class="dep-hint">{{ t('assetImport.inspecting') }}</div>
       <!-- 与市场安装同一份预检渲染：同名提示 / 分组依赖 / 随包自带 / notes 都在这一个组件里 -->
-      <AssetDepCheck v-else-if="deps" :inspect="deps" :kind-label="kindLabel" verb="导入" />
+      <AssetDepCheck v-else-if="deps" :inspect="deps" :kind-label="kindLabel" verb="import" />
 
       <!-- 只有自定义工具有「停用」这一态（工作流 / 智能体 / 技能只有正常 / 废弃） -->
       <div v-if="kind === 'custom_tool'" class="name-row">
-        <span class="name-label">状态</span>
+        <span class="name-label">{{ t('assetImport.statusLabel') }}</span>
         <el-radio-group v-model="status" size="small">
-          <el-radio :value="1">启用（默认）</el-radio>
-          <el-radio :value="2">停用（先复核脚本与配置）</el-radio>
+          <el-radio :value="1">{{ t('assetImport.enable') }}</el-radio>
+          <el-radio :value="2">{{ t('assetImport.disable') }}</el-radio>
         </el-radio-group>
       </div>
 
       <!-- 发布是独立动作：默认不发，装进来先当草稿；勾了才在导入成功后顺手发一版 -->
       <div class="publish-row">
-        <el-checkbox v-model="publishNow">导入成功后立刻发布一个版本</el-checkbox>
-        <div class="publish-hint">
-          默认不发：装进来的是草稿，正式入口（端点 / MCP / 工具调用）用的是已发布版本。
-          停用或废弃的实体发不出去，会在这里给出原因。
-        </div>
+        <el-checkbox v-model="publishNow">{{ t('assetImport.publishNow') }}</el-checkbox>
+        <div class="publish-hint">{{ t('assetImport.publishHint') }}</div>
       </div>
 
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
@@ -47,12 +44,12 @@
 
     <!-- 装完：一律留在窗口里让人看完再走，别让 warnings / 跳过文件一闪而过 -->
     <AssetInstallResult v-else :name="installedName" :overwritten="overwritten" :warnings="warnings"
-                        :skipped="skipped" :published="published" verb="导入" />
+                        :skipped="skipped" :published="published" verb="import" />
 
     <template #footer>
-      <el-button @click="onVisible(false)">{{ done ? '完成' : '取消' }}</el-button>
+      <el-button @click="onVisible(false)">{{ done ? t('assetImport.done') : t('common.cancel') }}</el-button>
       <el-button v-if="!done" type="primary" :loading="submitting" :disabled="!file" @click="submit">
-        导入
+        {{ t('assetImport.import') }}
       </el-button>
     </template>
   </el-dialog>
@@ -60,6 +57,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
 import AssetDepCheck from './AssetDepCheck.vue'
 import AssetInstallResult from './AssetInstallResult.vue'
@@ -68,7 +66,7 @@ import {
   inspectImport,
   ImportError,
   publishAssetVersion,
-  OVERWRITE_COPY
+  ASSET_KIND_SUFFIX
 } from '../utils/assetTransfer.js'
 
 const props = defineProps({
@@ -78,19 +76,19 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:modelValue', 'imported'])
 
-const KIND_META = {
-  agent: { label: '智能体', title: '导入智能体' },
-  skill: { label: '技能', title: '导入技能' },
-  workflow: { label: '工作流', title: '导入工作流' },
-  custom_tool: { label: '自定义工具', title: '导入自定义工具' }
-}
-const kindMeta = computed(() => KIND_META[props.kind] || { label: '资产', title: '导入资产' })
-const kindLabel = computed(() => kindMeta.value.label)
-const title = computed(() => kindMeta.value.title)
-const hint = computed(() =>
-  `选择之前用「导出」得到的 ${kindLabel.value}资产包。装完就是本租户自己的${kindLabel.value}，` +
-  `来源与平台市场无关；同名时会先问一句，确认即覆盖既有${kindLabel.value}。`
-)
+const { t } = useI18n()
+
+// 四类资产各有各的文案 key（kindAgent / titleSkill / overwriteDetailWorkflow …），
+// 未知 kind 一律落到 *Asset 兜底，不让取值崩掉
+const suffix = computed(() => ASSET_KIND_SUFFIX[props.kind] || 'Asset')
+const kindLabel = computed(() => t(`assetImport.kind${suffix.value}`))
+const title = computed(() => t(`assetImport.title${suffix.value}`))
+const hint = computed(() => t('assetImport.desc', { kind: kindLabel.value }))
+// 覆盖确认：替换范围按类型不同，笼统一句「会覆盖」等于没说
+const overwriteCopy = computed(() => ({
+  title: t(`assetImport.overwriteTitle${suffix.value}`),
+  detail: t(`assetImport.overwriteDetail${suffix.value}`)
+}))
 
 const fileRef = ref(null)
 const file = ref(null)
@@ -122,7 +120,7 @@ const loadDeps = async () => {
   try {
     deps.value = await inspectImport(props.kind, file.value, { name: name.value.trim() })
   } catch (err) {
-    deps.value = { error: err?.message || '依赖检查失败' }
+    deps.value = { error: err?.message || t('assetTransfer.inspectFailed') }
   } finally {
     inspecting.value = false
   }
@@ -172,7 +170,9 @@ const applyInstalled = (data, { publishedVersion = null, publishError = '' } = {
   published.value = publishedVersion
   skipped.value = Array.isArray(data.skipped_files) ? data.skipped_files : []
   const list = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : []
-  if (publishError) list.push(`导入已完成，但发布版本失败：${publishError}（可到版本面板手动发布）`)
+  if (publishError) {
+    list.push(t('assetTransfer.publishFailedInline', { verb: t('assetAction.import'), msg: publishError }))
+  }
   warnings.value = list
   emit('imported', data)
   // 与市场安装一致：结果页常驻，由用户点「完成」离开
@@ -189,12 +189,15 @@ const submit = async () => {
       data = await doImport(false)
     } catch (err) {
       const info = err instanceof ImportError ? err.data : null
-      const copy = OVERWRITE_COPY[props.kind]
-      if (!info?.can_overwrite || !copy) throw err
+      // 只有认识这个 kind 才谈得上覆盖：不认识的类型没有对应文案，原样抛出
+      if (!info?.can_overwrite || !ASSET_KIND_SUFFIX[props.kind]) throw err
       // 同名不是失败，而是「要你确认」：覆盖是破坏性动作，先把替换范围说清楚
+      const copy = overwriteCopy.value
       try {
         await ElMessageBox.confirm(`${err.message}。${copy.detail}`, copy.title, {
-          type: 'warning', confirmButtonText: '覆盖', cancelButtonText: '取消'
+          type: 'warning',
+          confirmButtonText: t('assetImport.overwrite'),
+          cancelButtonText: t('common.cancel')
         })
       } catch {
         return // 用户取消：当作没发生，不弹错误
@@ -208,9 +211,9 @@ const submit = async () => {
     if (publishNow.value) {
       const ref = props.kind === 'custom_tool' ? data?.installed?.name : data?.installed?.id
       try {
-        publishedVersion = await publishAssetVersion(props.kind, ref)
+        publishedVersion = await publishAssetVersion(props.kind, ref, t('assetImport.publishNote'))
       } catch (err) {
-        publishError = err?.message || '发布版本失败'
+        publishError = err?.message || t('assetTransfer.publishFailed')
       }
     }
     applyInstalled(data, { publishedVersion, publishError })
@@ -220,9 +223,9 @@ const submit = async () => {
     const suggested = info?.suggested_name || ''
     if (suggested) {
       name.value = suggested
-      error.value = `${err.message}（已填入建议名 ${suggested}，可直接重试）`
+      error.value = t('assetImport.errorSuggested', { msg: err.message, name: suggested })
     } else {
-      error.value = err?.message || '导入失败'
+      error.value = err?.message || t('assetTransfer.importFailed')
     }
   } finally {
     submitting.value = false

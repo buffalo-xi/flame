@@ -36,28 +36,33 @@
 </template>
 
 <script setup>
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ArrowRight } from '@element-plus/icons-vue'
 import SysFlowConfigsCard from './system/SysFlowConfigsCard.vue'
 import SysAgentConfigsCard from './system/SysAgentConfigsCard.vue'
 import SysQuotaCard from './system/SysQuotaCard.vue'
 import SysLlmPresetsCard from './system/SysLlmPresetsCard.vue'
 
+const { t } = useI18n()
+
 // 域清单：新增一个域 = 这里加一行（带组件）+ 写一个域组件（后端加一对 /platform/system/* 接口），互不影响。
 // 域组件自带加载/校验/保存，卡片头只提供折叠与跳转。
 // desc 会同时出现在左导航和卡片头，是这张卡唯一的「它管什么」标识 ——
 // 三张硬顶卡写同一句「所有租户的硬顶与兜底」等于没有标识，所以各写各的对象。
-const DOMAINS = [
-  { key: 'quota', label: '配额上限', desc: '一个租户最多能建多少个智能体 / 技能 / 工作流，以及单用户会话数与单会话空间', component: SysQuotaCard },
-  { key: 'flowconfigs', label: '工作流运行参数', desc: '单次运行的多项安全阀：超时、递归深度、节点数、循环次数', component: SysFlowConfigsCard },
-  { key: 'agentconfigs', label: '智能体运行参数', desc: '单次运行的轮次、调用深度、可用工具数与命令输出上限', component: SysAgentConfigsCard },
-  { key: 'llm-presets', label: 'LLM 服务商预设', desc: '全局共享，租户选服务商时的快捷模板', component: SysLlmPresetsCard }
-]
+// 键名单独列出：activeDomain / openDomain 的初值不该跟着语言包重新计算。
+const DOMAIN_KEYS = ['quota', 'flowconfigs', 'agentconfigs', 'llm-presets']
+const DOMAINS = computed(() => [
+  { key: 'quota', label: t('platform.system.nav.quota'), desc: t('platform.system.nav.quotaDesc'), component: SysQuotaCard },
+  { key: 'flowconfigs', label: t('platform.system.nav.flowConfigs'), desc: t('platform.system.nav.flowConfigsDesc'), component: SysFlowConfigsCard },
+  { key: 'agentconfigs', label: t('platform.system.nav.agentConfigs'), desc: t('platform.system.nav.agentConfigsDesc'), component: SysAgentConfigsCard },
+  { key: 'llm-presets', label: t('platform.system.nav.llmPresets'), desc: t('platform.system.nav.llmPresetsDesc'), component: SysLlmPresetsCard }
+])
 
-const activeDomain = ref(DOMAINS[0].key)
+const activeDomain = ref(DOMAIN_KEYS[0])
 
 // 每张折叠卡的展开状态（默认都展开）
-const openDomain = ref(Object.fromEntries(DOMAINS.map((d) => [d.key, true])))
+const openDomain = ref(Object.fromEntries(DOMAIN_KEYS.map((k) => [k, true])))
 
 // 卡片 DOM：左导航点击后滚过去用（保存按钮在各域卡片内部，不做 ref 转发）
 const cardEls = {}

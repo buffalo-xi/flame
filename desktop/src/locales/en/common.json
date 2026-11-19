@@ -10,7 +10,19 @@
     "loading": "Loading…",
     "empty": "No data",
     "language": "Language",
-    "placeholder": "Content will appear here"
+    "placeholder": "Content will appear here",
+    "loginRequired": "Please sign in first",
+    "refresh": "Refresh",
+    "close": "Close",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "remove": "Remove",
+    "export": "Export",
+    "config": "Config",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyFailed": "Copy failed; select the text manually",
+    "listJoiner": ", "
   },
   "login": {
     "title": "Flame Desk",
@@ -24,7 +36,54 @@
     "platformTab": "Platform",
     "platformTitle": "Platform sign-in",
     "platformSubmit": "Sign in to admin",
-    "platformHint": "Platform accounts are separate from tenant accounts and are managed under Platform Users. There is no self-service reset — ask a platform administrator to reset it under Platform Users → Reset password."
+    "platformHint": "Platform accounts are separate from tenant accounts and are managed under Platform Users. There is no self-service reset — ask a platform administrator to reset it under Platform Users → Reset password.",
+    "accountPasswordRequired": "Account and password are required",
+    "missingToken": "The login response is missing a token or user info"
+  },
+  "password": {
+    "current": "Current password",
+    "new": "New password",
+    "confirm": "Confirm new password",
+    "currentPlaceholder": "Enter your current password",
+    "newPlaceholder": "At least 8 characters",
+    "hint": "Other signed-in sessions stay valid after the change (tokens are not revoked). To sign them out immediately, ask the admin to disable the account.",
+    "requiredCurrent": "Enter your current password",
+    "minLength": "The new password needs at least 8 characters",
+    "mismatch": "The two new passwords do not match",
+    "sameAsOld": "The new password must differ from the current one",
+    "failed": "Change failed",
+    "changed": "Password changed"
+  },
+  "user": {
+    "notSignedIn": "Not signed in",
+    "withAccount": "{name} (account {account})",
+    "copyTip": "{name}, click to copy the account",
+    "copied": "Account copied: {account}",
+    "copyFailed": "Copy failed, please select the account name manually",
+    "logoutClick": "User clicked sign out"
+  },
+  "llmCheck": {
+    "requestFailed": "[llm-check] Request failed, skipping the hint:",
+    "hasDefault": "[llm-check] Default model present:",
+    "skipNotice": "[llm-check] Response is not \"missing default model\", skipping the hint:",
+    "noDefault": "[llm-check] No default model found, prompting the user to configure one",
+    "prompt": "This tenant has no default LLM configured, so agents cannot start a conversation. Add a provider and model in Settings → LLM configuration now?",
+    "title": "No LLM configured",
+    "goConfig": "Configure",
+    "later": "Later"
+  },
+  "apiError": {
+    "network": "Network request failed: {reason}",
+    "sessionExpired": "Platform session expired, please sign in again",
+    "requestFailed": "Request failed",
+    "requestFailedHttp": "Request failed (HTTP {status})",
+    "downloadFailed": "Download failed (HTTP {status})"
+  },
+  "loginError": {
+    "success": "Signed in",
+    "failed": "Sign-in failed, please try again",
+    "failedReason": "Sign-in failed: {reason}",
+    "required": "Tenant, username and password are required"
   },
   "nav": {
     "agents": "Agents",

@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -21,13 +21,13 @@
       <div v-if="activeTab === 'settings'" class="settings-panel">
         <!-- 目标函数 -->
         <div class="props-section">
-          <div class="section-title"><span>目标函数</span></div>
+          <div class="section-title"><span>{{ t('flow.call.targetSection') }}</span></div>
           <div class="target-select-row">
             <el-select
               :model-value="targetId"
               @change="handleTargetChange"
               class="prop-select"
-              placeholder="选择函数节点"
+              :placeholder="t('flow.call.selectPlaceholder')"
               filterable
             >
               <el-option
@@ -40,7 +40,7 @@
             <button
               v-if="targetId"
               class="clear-btn"
-              title="清除选择"
+              :title="t('flow.common.clearSelection')"
               @click="clearTargetSelection"
             >
               ✕
@@ -50,13 +50,13 @@
 
         <!-- 参数绑定 -->
         <div class="props-section">
-          <div class="section-title"><span>参数绑定</span></div>
+          <div class="section-title"><span>{{ t('flow.call.paramSection') }}</span></div>
           <div class="input-variables-list">
             <div v-if="!targetId" class="input-empty-state">
-              <p>请先选择目标函数</p>
+              <p>{{ t('flow.call.selectTargetFirst') }}</p>
             </div>
             <div v-else-if="Object.keys(targetParams).length === 0" class="input-empty-state">
-              <p>该函数没有参数</p>
+              <p>{{ t('flow.call.noParams') }}</p>
             </div>
 
             <div
@@ -67,7 +67,7 @@
               <div class="param-name-box" :title="param.description || ''">
                 <span class="input-type-badge" :class="getDataTypeIconClass(param.type)">{{ getDataTypeIcon(param.type) }}</span>
                 <span class="param-name-text">{{ name }}</span>
-                <span v-if="param.required" class="required-dot" title="必填">*</span>
+                <span v-if="param.required" class="required-dot" :title="t('flow.common.required')">*</span>
               </div>
               <div class="input-variable-content">
                 <button
@@ -92,13 +92,13 @@
                     </template>
                   </template>
                   <template v-else>
-                    选择变量
+                    {{ t('flow.common.selectVar') }}
                   </template>
                 </button>
                 <button
                   v-if="argsVariables[name] && argsVariables[name].source_key"
                   class="input-delete-btn"
-                  title="清除绑定"
+                  :title="t('flow.common.clearBinding')"
                   @click="handleClearArg(name)"
                 >
                   <el-icon><Delete /></el-icon>
@@ -139,6 +139,9 @@ import OutputVarsConfig from './OutputVarsConfig.vue'
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

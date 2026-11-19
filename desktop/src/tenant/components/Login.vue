@@ -59,6 +59,10 @@ import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import apiConfig from '../config/api'
 import { saveAuth } from '../utils/auth'
 import { ElMessage } from 'element-plus'
+import { useI18n } from 'vue-i18n'
+import { formatError } from '../../locales'
+
+const { t } = useI18n()
 
 const emit = defineEmits(['login-success'])
 
@@ -93,7 +97,7 @@ const handleLogin = async () => {
       })
       
       if (!response.ok) {
-        throw new Error(`登录失败: ${response.status}`)
+        throw new Error(t('loginError.failedReason', { reason: response.status }))
       }
       
       const result = await response.json()
@@ -115,13 +119,13 @@ const handleLogin = async () => {
           localStorage.removeItem('app_flame_auth_remember_me')
         }
         
-        console.log('登录成功')
+        console.log(t('loginError.success'))
         loading.value = false
         emit('login-success')
       } else {
-        // 登录失败，显示错误信息
-        const errorMessage = result.msg || '登录失败，请重试'
-        console.error('登录失败:', errorMessage)
+        // 登录失败，显示错误信息：后端带了 error 编码就按当前语言翻译，没带才回退 msg
+        const errorMessage = formatError(result) || t('loginError.failed')
+        console.error(t('loginError.failed'), errorMessage)
         ElMessage({
           message: errorMessage,
           type: 'error',
@@ -130,8 +134,8 @@ const handleLogin = async () => {
         loading.value = false
       }
     } catch (err) {
-      console.error('登录失败:', err)
-      const errorMessage = `登录失败: ${err.message}`
+      console.error(t('loginError.failed'), err)
+      const errorMessage = t('loginError.failedReason', { reason: err.message })
       ElMessage({
         message: errorMessage,
         type: 'error',
@@ -140,8 +144,8 @@ const handleLogin = async () => {
       loading.value = false
     }
   } else {
-    const errorMessage = '租户、用户名和密码不能为空'
-    console.error('登录失败:', errorMessage)
+    const errorMessage = t('loginError.required')
+    console.error(t('loginError.failed'), errorMessage)
     ElMessage({
       message: errorMessage,
       type: 'error',

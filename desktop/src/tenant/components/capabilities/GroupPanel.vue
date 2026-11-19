@@ -7,13 +7,13 @@
       <!-- 左：可选目录 -->
       <div class="gp-left">
         <div class="gp-toolbar">
-          <el-input v-model="search" size="small" placeholder="搜索名称或 ref" clearable style="width:100%" />
+          <el-input v-model="search" size="small" :placeholder="t('groupPanel.search')" clearable style="width:100%" />
           <el-radio-group v-model="kindFilter" size="small" class="gp-kinds">
-            <el-radio-button value="">全部</el-radio-button>
-            <el-radio-button value="builtin">内置</el-radio-button>
-            <el-radio-button value="preset">预设</el-radio-button>
-            <el-radio-button value="ext">插件/脚本</el-radio-button>
-            <el-radio-button value="conn">连接/端点</el-radio-button>
+            <el-radio-button value="">{{ t('groupPanel.filterAll') }}</el-radio-button>
+            <el-radio-button value="builtin">{{ t('toolsTab.kindBuiltin') }}</el-radio-button>
+            <el-radio-button value="preset">{{ t('toolsTab.kindPreset') }}</el-radio-button>
+            <el-radio-button value="ext">{{ t('groupPanel.filterExt') }}</el-radio-button>
+            <el-radio-button value="conn">{{ t('groupPanel.filterConn') }}</el-radio-button>
           </el-radio-group>
         </div>
 
@@ -25,14 +25,14 @@
                        @click.stop="toggleCollapse(c.ref)"><CaretRight /></el-icon>
               <div class="gp-main">
                 <div class="gp-name">
-                  {{ c.name }}
-                  <span class="ref-tag">{{ c.synthetic ? '类别' : '组' }}</span>
-                  <span class="ref-tag">{{ (c.items || []).length }} 个</span>
+                  {{ groupName(t, te, c) }}
+                  <span class="ref-tag">{{ c.synthetic ? t('groupPanel.badgeCategory') : t('groupPanel.badgeGroup') }}</span>
+                  <span class="ref-tag">{{ t('groupPanel.badgeCount', { n: (c.items || []).length }) }}</span>
                   <!-- 类别卡的名字本身就是类别名（插件 / 自定义工具），不再重复标 kind -->
                   <span v-if="!c.synthetic" class="ref-tag">{{ kindLabel(c.kind) }}</span>
-                  <span v-if="c.available === false" class="ref-tag warn">不可用</span>
+                  <span v-if="c.available === false" class="ref-tag warn">{{ t('toolsTab.unavailable') }}</span>
                 </div>
-                <div class="gp-desc" :title="c.ref">{{ c.synthetic ? '勾选下面的具体工具' : c.ref }}</div>
+                <div class="gp-desc" :title="c.ref">{{ c.synthetic ? t('groupPanel.hintSynthetic') : c.ref }}</div>
               </div>
               <template v-if="!c.synthetic">
                 <el-icon v-if="inDraft(c.ref)" class="gp-check"><Check /></el-icon>
@@ -41,39 +41,39 @@
             </div>
 
             <div v-if="!isCollapsed(c.ref) && (c.items || []).length" class="gp-card-body">
-              <div v-for="t in c.items" :key="t.ref" class="gp-tool"
-                   :class="{ on: inDraft(t.ref), covered: !c.synthetic && inDraft(c.ref) }" @click="toggleTool(c, t)">
-                <span class="gp-tool-name" :title="t.description || t.ref">{{ t.label || t.name }}</span>
-                <span class="gp-tool-ref">{{ t.ref }}</span>
-                <span class="gp-tool-mark">{{ inDraft(t.ref) || inDraft(c.ref) ? '✓' : '+' }}</span>
+              <div v-for="tool in c.items" :key="tool.ref" class="gp-tool"
+                   :class="{ on: inDraft(tool.ref), covered: !c.synthetic && inDraft(c.ref) }" @click="toggleTool(c, tool)">
+                <span class="gp-tool-name" :title="tool.description || tool.ref">{{ tool.label || tool.name }}</span>
+                <span class="gp-tool-ref">{{ tool.ref }}</span>
+                <span class="gp-tool-mark">{{ inDraft(tool.ref) || inDraft(c.ref) ? '✓' : '+' }}</span>
               </div>
             </div>
           </div>
-          <div v-if="!pickerCards.length" class="editor-tip">没有匹配的项</div>
+          <div v-if="!pickerCards.length" class="editor-tip">{{ t('groupPanel.noMatch') }}</div>
         </div>
       </div>
 
       <!-- 右：组信息 + 已选成员 -->
       <div class="gp-right">
         <div class="gp-field">
-          <div class="gp-label">组名</div>
-          <el-input v-model="form.name" size="small" maxlength="64" placeholder="如 fs-basic（名称即 group:组名）" />
-          <div class="editor-tip">字母或数字开头，可用 <code>_ . -</code>；名称等同引用里的 <code>group:&lt;名&gt;</code>。</div>
+          <div class="gp-label">{{ t('groupPanel.nameLabel') }}</div>
+          <el-input v-model="form.name" size="small" maxlength="64" :placeholder="t('groupPanel.namePlaceholder')" />
+          <div class="editor-tip">{{ t('groupPanel.nameHint', { ref: 'group:<name>' }) }}</div>
         </div>
         <div class="gp-field">
-          <div class="gp-label">描述</div>
-          <el-input v-model="form.description" type="textarea" :rows="2" placeholder="可选" />
+          <div class="gp-label">{{ t('customTools.descLabel') }}</div>
+          <el-input v-model="form.description" type="textarea" :rows="2" :placeholder="t('groupPanel.descPlaceholder')" />
         </div>
 
         <div class="gp-field">
-          <div class="gp-label">已选成员（{{ items.length }}）</div>
-          <div v-if="!items.length" class="editor-tip">（空）—— 左侧点组或工具加入</div>
+          <div class="gp-label">{{ t('groupPanel.membersTitle', { n: items.length }) }}</div>
+          <div v-if="!items.length" class="editor-tip">{{ t('groupPanel.membersEmpty') }}</div>
           <div v-else class="gp-selected">
             <div v-for="d in sortedItems" :key="d.ref" class="gp-sel-row">
               <el-icon v-if="d.item_type === 'group'" class="gp-group-icon"><Folder /></el-icon>
               <el-icon v-else class="gp-tool-icon"><Tools /></el-icon>
               <div class="gp-main">
-                <div class="gp-name">{{ d.label || d.ref }}</div>
+                <div class="gp-name">{{ groupName(t, te, d) || d.ref }}</div>
                 <div class="gp-desc" :title="d.ref">{{ d.ref }}</div>
               </div>
               <el-icon class="gp-del" @click="removeItem(d.ref)"><Delete /></el-icon>
@@ -84,26 +84,31 @@
     </div>
 
     <template #footer>
-      <el-button v-if="editing" type="danger" plain :loading="deleting" @click="removeGroup">删除组</el-button>
+      <el-button v-if="editing" type="danger" plain :loading="deleting" @click="removeGroup">{{ t('groupPanel.deleteGroup') }}</el-button>
       <span style="flex:1"></span>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button @click="visible = false">{{ t('common.cancel') }}</el-button>
+      <el-button type="primary" :loading="saving" @click="save">{{ t('common.save') }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CaretRight, Check, Plus, Delete, Folder, Tools } from '@element-plus/icons-vue'
 import adminApi from '../../config/admin.js'
 import { getToken } from '../../utils/auth.js'
+import { formatError } from '../../../locales'
+import { groupName, groupDesc } from '../../utils/groupText.js'
 
 const props = defineProps({
   // 可引用目录（/admin/toolcatalog/ 的 groups：内置类 / 预设 / 连接 / 本地端点 / 自定义组）
   groups: { type: Array, default: () => [] }
 })
 const emit = defineEmits(['saved'])
+
+const { t, te } = useI18n()
 
 const visible = ref(false)
 const saving = ref(false)
@@ -115,17 +120,23 @@ const form = ref({ name: '', description: '' })
 const items = ref([])          // 草稿：[{ ref, item_type, label, kind, count, description }]
 const editing = computed(() => !!originalName.value)
 const originalName = ref('')
-const title = computed(() => (editing.value ? `编辑工具组 · ${originalName.value}` : '新建工具组'))
+const title = computed(() => (editing.value
+  ? t('groupPanel.titleEdit', { name: originalName.value })
+  : t('toolsTab.newGroup')))
 
 const authHeaders = () => ({
   'Content-Type': 'application/json',
   'Authorization': `Bearer ${getToken()}`
 })
 
-const kindLabel = (k) => ({
-  builtin: '内置', mcp: 'MCP', rpc: 'RPC', local: '本地端点', group: '工具组', preset: '预设',
-  plugin: '插件', custom: '自定义工具'
-}[k] || k)
+// mcp / rpc 是协议名，中英一致；其余按领域词表取
+const KIND_LABEL_KEYS = { builtin: 'kindBuiltin', local: 'kindLocal', group: 'kindGroup', preset: 'kindPreset' }
+const kindLabel = (k) => {
+  if (KIND_LABEL_KEYS[k]) return t(`toolsTab.${KIND_LABEL_KEYS[k]}`)
+  if (k === 'plugin') return t('groupPanel.kindPlugin')
+  if (k === 'custom') return t('assetImport.kindCustomTool')
+  return k
+}
 
 // ===== 目录索引：把 ref 翻成可展示的 label / 描述 =====
 const groupByRef = computed(() => {
@@ -144,14 +155,15 @@ const describe = (ref, itemType) => {
   if (itemType === 'group') {
     const g = groupByRef.value.get(ref)
     return {
-      ref, item_type: 'group', label: g?.name || ref, kind: g?.kind || '',
-      count: (g?.items || []).length, description: g?.description || ''
+      ref, item_type: 'group', label: groupName(t, te, g) || ref, kind: g?.kind || '',
+      count: (g?.items || []).length, description: groupDesc(t, te, g)
     }
   }
-  const t = toolIndex.value.get(ref)
+  // 局部变量别叫 t：会遮蔽 i18n 的 t()，上面组分支要用它查语言包
+  const tool = toolIndex.value.get(ref)
   return {
-    ref, item_type: 'tool', label: t?.label || t?.name || ref, kind: '',
-    count: 0, description: t?.description || ''
+    ref, item_type: 'tool', label: tool?.label || tool?.name || ref, kind: '',
+    count: 0, description: tool?.description || ''
   }
 }
 
@@ -173,7 +185,8 @@ const pickerCards = computed(() => {
       ? g.kind
       : (['plugin', 'script'].includes(g.kind) ? 'ext' : 'conn')
     if (kindFilter.value && kindFilter.value !== bucket) continue
-    const groupHit = !kw || hit(g.name) || hit(g.ref)
+    // 译名也要能搜到：英文界面下搜 built-in 应该命中「Built-in · file」
+    const groupHit = !kw || hit(groupName(t, te, g)) || hit(g.name) || hit(g.ref)
     const tools = (g.items || []).filter((t) => groupHit || hit(t.label) || hit(t.name) || hit(t.ref))
     if (!groupHit && !tools.length) continue
     out.push({ ...g, items: groupHit ? (g.items || []) : tools })
@@ -237,9 +250,9 @@ const onClosed = () => {
 
 const save = async () => {
   const name = (form.value.name || '').trim()
-  if (!name) { ElMessage.warning('请填写组名'); return }
+  if (!name) { ElMessage.warning(t('groupPanel.needName')); return }
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)) {
-    ElMessage.warning('组名需以字母或数字开头，仅含字母数字与 _ . -'); return
+    ElMessage.warning(t('groupPanel.nameInvalid')); return
   }
   saving.value = true
   try {
@@ -254,12 +267,12 @@ const save = async () => {
       })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '保存失败')
-    ElMessage.success('工具组已保存')
+    if (body.code !== 200) throw new Error(formatError(body) || t('groupPanel.saveFailed'))
+    ElMessage.success(t('groupPanel.saved'))
     visible.value = false
     emit('saved')
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('groupPanel.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -269,8 +282,9 @@ const removeGroup = async () => {
   if (!originalName.value) return
   try {
     await ElMessageBox.confirm(
-      `确定删除工具组 ${originalName.value} ？被 agent / 技能 / 其它组引用时会拒绝删除。`,
-      '删除确认', { type: 'warning' }
+      t('groupPanel.deleteConfirm', { name: originalName.value }),
+      t('endpoint.deleteTitle'),
+      { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
     )
   } catch {
     return
@@ -281,12 +295,12 @@ const removeGroup = async () => {
       method: 'DELETE', headers: authHeaders()
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '删除失败')
-    ElMessage.success('工具组已删除')
+    if (body.code !== 200) throw new Error(formatError(body) || t('groupPanel.deleteFailed'))
+    ElMessage.success(t('groupPanel.deleted'))
     visible.value = false
     emit('saved')
   } catch (e) {
-    ElMessage.error(e.message || '删除失败')
+    ElMessage.error(e.message || t('groupPanel.deleteFailed'))
   } finally {
     deleting.value = false
   }

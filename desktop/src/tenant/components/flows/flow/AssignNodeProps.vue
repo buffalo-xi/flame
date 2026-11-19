@@ -1,8 +1,8 @@
 <template>
   <div class="assign-node-props">
     <div class="tabs">
-      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">配置</button>
-      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">执行结果</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">{{ t('flow.nodeProps.tabConfig') }}</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">{{ t('flow.nodeProps.tabResult') }}</button>
     </div>
 
     <div class="tab-content">
@@ -10,19 +10,19 @@
         <!-- 输入变量 -->
         <div class="props-section">
           <div class="section-title">
-            <span>输入变量</span>
+            <span>{{ t('flow.common.inputVars') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddInputVariable">
               <el-icon><Plus /></el-icon>
             </button>
           </div>
           <div class="input-variables-list">
             <div v-if="Object.keys(inputVariables).length === 0" class="input-empty-state">
-              <p>暂无输入变量</p>
+              <p>{{ t('flow.common.noInputVars') }}</p>
             </div>
             <div v-for="(variable, name) in inputVariables" :key="name" class="input-variable-row">
               <input type="text" :value="name" class="input-variable-name-input"
                 @focus="handleInputVariableFocus(name)"
-                @blur="handleUpdateInputVariableName(name, $event.target.value)" placeholder="变量名" />
+                @blur="handleUpdateInputVariableName(name, $event.target.value)" :placeholder="t('flow.common.varName')" />
               <div class="input-variable-content">
                 <button class="show-content-btn input-variable-btn" @click="handleShowInputVariableSelect(name, $event)">
                   <template v-if="variable.source_key">
@@ -42,7 +42,7 @@
                       </template>
                     </template>
                   </template>
-                  <template v-else>选择变量</template>
+                  <template v-else>{{ t('flow.common.selectVar') }}</template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteInputVariable(name)">
                   <el-icon><Delete /></el-icon>
@@ -55,7 +55,7 @@
         <!-- 赋值列表 -->
         <div class="props-section">
           <div class="section-title">
-            <span>赋值列表</span>
+            <span>{{ t('flow.assignNode.listTitle') }}</span>
             <button class="add-variable-icon-btn add-assign-btn" ref="assignAddBtnRef" @click="toggleAssignDropdown">
               <el-icon><Plus /></el-icon>
             </button>
@@ -63,20 +63,20 @@
 
           <div class="assignments-list">
             <div v-if="sortedAssignments.length === 0" class="input-empty-state">
-              <p>暂无赋值，点击 + 添加</p>
+              <p>{{ t('flow.assignNode.empty') }}</p>
             </div>
             <div v-for="assignment in sortedAssignments" :key="assignment._key" class="assignment-row">
               <!-- 第一行：字段 -->
               <div class="assignment-fields">
                 <span class="assign-kind-tag" :class="assignment.kind === 'output' ? 'kind-output' : 'kind-target'">
-                  {{ assignment.kind === 'output' ? '输出变量' : '其他变量' }}
+                  {{ assignment.kind === 'output' ? t('flow.outputVars.title') : t('flow.assignNode.otherVar') }}
                 </span>
 
                 <!-- 变量列 -->
                 <template v-if="assignment.kind === 'output'">
                   <input type="text" :value="assignment.target" class="assign-target-input"
                     @focus="handleAssignTargetFocus()"
-                    @blur="handleUpdateAssignTarget(assignment, $event.target.value)" placeholder="变量名" />
+                    @blur="handleUpdateAssignTarget(assignment, $event.target.value)" :placeholder="t('flow.common.varName')" />
                 </template>
                 <template v-else>
                   <button class="show-content-btn input-variable-btn" @click="handleShowTargetSelect(assignment, $event)">
@@ -97,7 +97,7 @@
                         </template>
                       </template>
                     </template>
-                    <template v-else>选择变量</template>
+                    <template v-else>{{ t('flow.common.selectVar') }}</template>
                   </button>
                 </template>
 
@@ -138,7 +138,7 @@
 
               <!-- 其他变量路径（独占一行） -->
               <div v-if="assignment.kind === 'target'" class="assign-target-path-row">
-                <span class="target-path-label">变量路径</span>
+                <span class="target-path-label">{{ t('flow.assignNode.targetPath') }}</span>
                 <input type="text" :value="assignment.path" class="assign-path-input assign-path-full"
                   :disabled="!isPathEditable(assignment)"
                   :placeholder="getPathPlaceholder(assignment)"
@@ -148,7 +148,7 @@
               <!-- 值编辑区 -->
               <div class="assign-value-row">
                 <textarea :value="assignment.value" class="assign-value-input"
-                  placeholder="输入模板表达式..." rows="2"
+                  :placeholder="t('flow.assignNode.templatePlaceholder')" rows="2"
                   @blur="handleUpdateAssignValue(assignment, $event.target.value)"></textarea>
               </div>
             </div>
@@ -158,47 +158,47 @@
 
       <!-- 执行结果 -->
       <div v-if="activeTab === 'lastRun'" class="last-run-panel">
-        <div v-if="!assignResult" class="nr-empty">暂无运行数据</div>
+        <div v-if="!assignResult" class="nr-empty">{{ t('flow.node.run.empty') }}</div>
         <div v-else class="props-section">
           <div class="result-item result-meta-row">
             <span class="meta-item">
-              <label class="result-label">运行状态</label>
+              <label class="result-label">{{ t('flow.node.run.status') }}</label>
               <span class="result-value" :class="assignStatusClass">{{ assignStatusText }}</span>
             </span>
             <span class="meta-item">
-              <label class="result-label">运行时间</label>
+              <label class="result-label">{{ t('flow.node.run.time') }}</label>
               <span class="result-value">{{ assignStartTimeText || '-' }}</span>
             </span>
             <span class="meta-item">
-              <label class="result-label">耗时</label>
+              <label class="result-label">{{ t('flow.node.run.duration') }}</label>
               <span class="result-value">{{ assignResult.duration_ms }}ms</span>
             </span>
           </div>
 
           <div class="result-item">
-            <label class="result-label">输入</label>
+            <label class="result-label">{{ t('flow.node.run.input') }}</label>
             <pre class="result-output">{{ assignInputText }}</pre>
           </div>
 
           <div class="result-item">
-            <label class="result-label">输出</label>
+            <label class="result-label">{{ t('flow.node.run.output') }}</label>
             <pre class="result-output">{{ assignOutputText }}</pre>
           </div>
 
           <div v-if="assignLocalText" class="result-item">
-            <label class="result-label">本地变量</label>
+            <label class="result-label">{{ t('flow.node.run.localVars') }}</label>
             <pre class="result-output">{{ assignLocalText }}</pre>
           </div>
 
           <div v-if="assignLogs.length" class="result-item">
-            <label class="result-label">日志</label>
+            <label class="result-label">{{ t('flow.node.run.logs') }}</label>
             <div class="nr-logs">
               <div v-for="(log, i) in assignLogs" :key="i" class="nr-log">{{ log }}</div>
             </div>
           </div>
 
           <div v-if="assignResult.err_msg" class="result-item">
-            <label class="result-label">错误</label>
+            <label class="result-label">{{ t('flow.node.run.error') }}</label>
             <div class="nr-log nr-error">{{ assignResult.err_msg }}</div>
           </div>
         </div>
@@ -208,19 +208,19 @@
     <Teleport to="body">
       <div v-if="showAssignDropdown" class="assign-dropdown-overlay" @click="closeAssignDropdown">
         <div class="assign-dropdown-menu" :style="assignDropdownStyle" @click.stop>
-          <div class="assign-dropdown-group-title">输出变量组</div>
-          <div class="assign-dropdown-item" @click="handleAddAssignment('string')"><span class="dropdown-icon icon-string-inline">S</span>字符串</div>
-          <div class="assign-dropdown-item" @click="handleAddAssignment('number')"><span class="dropdown-icon icon-number-inline">N</span>数字</div>
-          <div class="assign-dropdown-item" @click="handleAddAssignment('boolean')"><span class="dropdown-icon icon-boolean-inline">B</span>布尔值</div>
-          <div class="assign-dropdown-item" @click="handleAddAssignment('object')"><span class="dropdown-icon icon-object-inline">O</span>对象</div>
+          <div class="assign-dropdown-group-title">{{ t('flow.assignNode.outputGroup') }}</div>
+          <div class="assign-dropdown-item" @click="handleAddAssignment('string')"><span class="dropdown-icon icon-string-inline">S</span>{{ t('flow.typeOptions.string') }}</div>
+          <div class="assign-dropdown-item" @click="handleAddAssignment('number')"><span class="dropdown-icon icon-number-inline">N</span>{{ t('flow.typeOptions.number') }}</div>
+          <div class="assign-dropdown-item" @click="handleAddAssignment('boolean')"><span class="dropdown-icon icon-boolean-inline">B</span>{{ t('flow.typeOptions.boolean') }}</div>
+          <div class="assign-dropdown-item" @click="handleAddAssignment('object')"><span class="dropdown-icon icon-object-inline">O</span>{{ t('flow.typeOptions.object') }}</div>
           <div class="assign-dropdown-divider"></div>
-          <div class="assign-dropdown-item" @click="handleAddAssignment('array[string]')"><span class="dropdown-icon icon-string-array-inline">S</span>字符串数组</div>
-          <div class="assign-dropdown-item" @click="handleAddAssignment('array[number]')"><span class="dropdown-icon icon-number-array-inline">N</span>数字数组</div>
-          <div class="assign-dropdown-item" @click="handleAddAssignment('array[boolean]')"><span class="dropdown-icon icon-boolean-array-inline">B</span>布尔数组</div>
+          <div class="assign-dropdown-item" @click="handleAddAssignment('array[string]')"><span class="dropdown-icon icon-string-array-inline">S</span>{{ t('flow.typeOptions.arrayString') }}</div>
+          <div class="assign-dropdown-item" @click="handleAddAssignment('array[number]')"><span class="dropdown-icon icon-number-array-inline">N</span>{{ t('flow.typeOptions.arrayNumber') }}</div>
+          <div class="assign-dropdown-item" @click="handleAddAssignment('array[boolean]')"><span class="dropdown-icon icon-boolean-array-inline">B</span>{{ t('flow.typeOptions.arrayBoolean') }}</div>
           <div class="assign-dropdown-divider"></div>
-          <div class="assign-dropdown-item" @click="handleAddAssignment('array[object]')"><span class="dropdown-icon icon-object-array-inline">O</span>对象数组</div>
+          <div class="assign-dropdown-item" @click="handleAddAssignment('array[object]')"><span class="dropdown-icon icon-object-array-inline">O</span>{{ t('flow.typeOptions.arrayObject') }}</div>
           <div class="assign-dropdown-divider"></div>
-          <div class="assign-dropdown-item" @click="handleAddAssignment('target')">写目标变量</div>
+          <div class="assign-dropdown-item" @click="handleAddAssignment('target')">{{ t('flow.codeNode.writeTargets') }}</div>
         </div>
       </div>
     </Teleport>
@@ -235,6 +235,10 @@ import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
 import { useEscClose } from '../../../composables/useEscClose'
+import { useI18n } from 'vue-i18n'
+import { formatDateTime } from '@/utils/datetime.js'
+
+const { t, te } = useI18n()
 
 const props = defineProps({
   selectedNode: { type: Object, default: null },
@@ -267,8 +271,9 @@ watch(() => props.selectedNode?.id, (id) => {
   }
 }, { immediate: true })
 const assignStatusText = computed(() => {
-  const map = { success: '成功', failed: '失败', skipped: '跳过', running: '运行中', cancelled: '已取消' }
-  return map[assignResult.value?.status] || assignResult.value?.status || ''
+  const status = assignResult.value?.status
+  if (!status) return ''
+  return te(`flow.node.run.statusMap.${status}`) ? t(`flow.node.run.statusMap.${status}`) : status
 })
 const assignStatusClass = computed(() => {
   const map = { success: 'status-success', failed: 'status-failed', running: 'status-running', skipped: 'status-default', cancelled: 'status-default' }
@@ -277,7 +282,8 @@ const assignStatusClass = computed(() => {
 const assignStartTimeText = computed(() => {
   const t = assignResult.value?.start_time
   if (!t) return ''
-  try { return new Date(t).toLocaleString() } catch (e) { return t }
+  // 解析失败时退回原串（比印 "Invalid Date" 有意义）
+  return formatDateTime(t) || t
 })
 const assignInputText = computed(() => {
   const v = assignResult.value?.input_vars
@@ -353,9 +359,9 @@ const isPathEditable = (assignment) => {
 }
 
 const getPathPlaceholder = (assignment) => {
-  const t = assignment.kind === 'output' ? getOutputType(assignment.target) : getTargetType(assignment)
-  if (t === 'object') return '字段名 或 a.b'
-  if (t && t.startsWith('array[')) return '[0] 或 [0].字段名'
+  const type = assignment.kind === 'output' ? getOutputType(assignment.target) : getTargetType(assignment)
+  if (type === 'object') return t('flow.assignNode.pathHintObject')
+  if (type && type.startsWith('array[')) return t('flow.assignNode.pathHintArray')
   return '—'
 }
 
@@ -368,9 +374,9 @@ const isFirstOutputRow = (assignment) => {
 }
 
 // 短类型名（不含字母前缀，用于 el-dropdown 显示）
-const typeLabelShort = (t) => {
-  const labels = { string: '字符串', number: '数字', boolean: '布尔值', object: '对象', 'array[string]': '字符串数组', 'array[number]': '数字数组', 'array[boolean]': '布尔数组', 'array[object]': '对象数组' }
-  return labels[t] || t
+const typeLabelShort = (type) => {
+  const labels = { string: 'string', number: 'number', boolean: 'boolean', object: 'object', 'array[string]': 'arrayString', 'array[number]': 'arrayNumber', 'array[boolean]': 'arrayBoolean', 'array[object]': 'arrayObject' }
+  return labels[type] ? t(`flow.typeOptions.${labels[type]}`) : type
 }
 
 // 类型图标 CSS class（与 [+] 下拉菜单的 dropdown-icon 一致）
@@ -390,7 +396,7 @@ const handleOutputTypeChange = (assignment, newType) => {
   if (wasComplex && isSimple) {
     const sameRows = assignments.value.filter(a => a.kind === 'output' && a.target === assignment.target && a._key !== assignment._key && a.path)
     if (sameRows.length > 0) {
-      if (!confirm(`变量 "${assignment.target}" 从 ${oldType} 改为 ${newType}。还有 ${sameRows.length} 条赋值行使用了路径配置，路径将被清空，值保留不变。`)) {
+      if (!confirm(t('flow.assignNode.typeChangeConfirm', { name: assignment.target, oldType, newType, count: sameRows.length }))) {
         // 取消：不做任何变更，select 值通过 v-bind:value 自然恢复
         return
       }
@@ -456,7 +462,7 @@ const handleUpdateAssignTarget = (assignment, value) => {
 
   // 检查是否已存在同名 output
   if (assignments.value.some(a => a.kind === 'output' && a.target === trimmed && a._key !== assignment._key)) {
-    alert('变量名已存在')
+    alert(t('flow.assignNode.nameExists'))
     return
   }
 

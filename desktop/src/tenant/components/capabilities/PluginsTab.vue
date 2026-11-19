@@ -4,12 +4,14 @@
     <!-- 顶部：计数 + 两个动作 -->
     <div class="pv-bar">
       <div class="pv-summary">
-        共 <strong>{{ items.length }}</strong> 个插件工具 · <strong>{{ activeCount }}</strong> 个已启用
-        <span v-if="refreshedAt" class="pv-muted">清单刷新于 {{ formatTime(refreshedAt) }}</span>
+        {{ t('pluginsTab.summary', { n: items.length, active: activeCount }) }}
+        <span v-if="refreshedAt" class="pv-muted">
+          {{ t('pluginsTab.refreshedAt', { time: formatTime(refreshedAt) }) }}
+        </span>
       </div>
       <div class="pv-actions">
-        <el-button size="small" :loading="loading" @click="load">刷新列表</el-button>
-        <el-button size="small" type="primary" :loading="rescanning" @click="rescan">重扫磁盘</el-button>
+        <el-button size="small" :loading="loading" @click="load">{{ t('pluginsTab.refreshList') }}</el-button>
+        <el-button size="small" type="primary" :loading="rescanning" @click="rescan">{{ t('pluginsTab.rescan') }}</el-button>
       </div>
     </div>
 
@@ -17,8 +19,7 @@
     <div v-if="refreshError" class="pv-error">{{ refreshError }}</div>
 
     <div v-if="!items.length && !loading" class="pv-empty">
-      还没有发现任何插件。把插件放进 <code>{root_dir}/plugins/tools/&lt;name&gt;/</code>
-      （<code>tool.py</code> + 至少一个实现目录），再点「重扫磁盘」。
+      {{ t('pluginsTab.empty', { dir: '{root_dir}/plugins/tools/<name>/' }) }}
     </div>
 
     <div class="pv-grid">
@@ -28,39 +29,41 @@
             {{ p.display_name || p.name }}
             <span class="ref-tag">{{ p.name }}</span>
             <span class="ref-tag" :class="p.allowed ? (p.is_active ? 'ok' : '') : 'off'">
-              {{ p.blocked ? '平台全局停用' : !p.allowed ? '平台已停用' : p.is_active ? '已启用' : '未启用' }}
+              {{ statusText(p) }}
             </span>
           </div>
           <el-switch
             :model-value="p.is_active"
             :disabled="!p.allowed"
             :loading="busy === p.name"
-            :title="p.allowed ? '' : p.blocked ? '平台已全局停用该插件' : '平台已对本租户停用该插件'"
+            :title="p.allowed ? '' : p.blocked
+              ? t('pluginsTab.toggleBlockedGlobal')
+              : t('pluginsTab.toggleBlockedTenant')"
             @change="(v) => toggle(p, v)"
           />
         </div>
 
-        <div class="pv-card-desc" :title="p.description">{{ p.description || '无描述' }}</div>
+        <div class="pv-card-desc" :title="p.description">{{ p.description || t('customTools.noDescription') }}</div>
 
         <div class="pv-card-meta">
-          <span>{{ (p.implementations || []).length }} 个实现</span>
-          <span v-if="p.impl">主实现：{{ implLabel(p, p.impl) }}</span>
-          <span v-else class="pv-warn">未选择实现</span>
+          <span>{{ t('pluginsTab.implCount', { n: (p.implementations || []).length }) }}</span>
+          <span v-if="p.impl">{{ t('pluginsTab.mainImpl', { name: implLabel(p, p.impl) }) }}</span>
+          <span v-else class="pv-warn">{{ t('pluginsTab.noImplSelected') }}</span>
           <span v-if="(p.fallbacks || []).length">
-            兜底：{{ p.fallbacks.map((n) => implLabel(p, n)).join(' → ') }}
+            {{ t('pluginsTab.fallbacks', { list: p.fallbacks.map((n) => implLabel(p, n)).join(' → ') }) }}
           </span>
         </div>
 
         <!-- 平台策略：只读。缺省开放，只有平台显式停用才需要提示（本站改不了）。 -->
         <div v-if="p.blocked || !p.allowed" class="pv-card-meta">
-          <span v-if="p.blocked" class="pv-warn">平台已全局停用该插件，需平台管理员解除</span>
-          <span v-else class="pv-warn">平台已对本租户停用该插件，需平台管理员恢复</span>
+          <span v-if="p.blocked" class="pv-warn">{{ t('pluginsTab.blockedGlobalHint') }}</span>
+          <span v-else class="pv-warn">{{ t('pluginsTab.blockedTenantHint') }}</span>
         </div>
 
         <div v-if="scanErrorOf(p.name)" class="pv-card-error">{{ scanErrorOf(p.name) }}</div>
 
         <div class="pv-card-actions">
-          <el-button size="small" text @click="openEditor(p)">配置</el-button>
+          <el-button size="small" text @click="openEditor(p)">{{ t('common.config') }}</el-button>
         </div>
       </div>
     </div>
@@ -70,11 +73,11 @@
       <div class="panel-resizer" @mousedown="startResize"></div>
       <div class="panel-header">
         <div class="panel-title">
-          配置插件 · {{ editing.display_name || editing.name }}
+          {{ t('pluginsTab.panelTitle', { name: editing.display_name || editing.name }) }}
           <span class="ref-tag">{{ editing.name }}</span>
         </div>
-        <span v-if="formDirty" class="dirty-tip">未保存</span>
-        <el-button size="small" type="primary" :loading="saving" @click="save">保存</el-button>
+        <span v-if="formDirty" class="dirty-tip">{{ t('customTools.unsaved') }}</span>
+        <el-button size="small" type="primary" :loading="saving" @click="save">{{ t('common.save') }}</el-button>
         <span class="close-icon" @click="closeEditor">&#xd7;</span>
       </div>
 
@@ -82,20 +85,20 @@
         <!-- 标题在 header 上，这里只放状态与描述，避免同一个名字出现两次 -->
         <div class="panel-head-line">
           <span class="ref-tag" :class="editing.allowed ? (editing.is_active ? 'ok' : '') : 'off'">
-            {{ editing.blocked ? '平台全局停用' : !editing.allowed ? '平台已停用' : editing.is_active ? '已启用' : '未启用' }}
+            {{ statusText(editing) }}
           </span>
-          <span class="panel-desc">{{ editing.description || '无描述' }}</span>
+          <span class="panel-desc">{{ editing.description || t('customTools.noDescription') }}</span>
         </div>
         <div class="panel-meta">
-          {{ (editing.implementations || []).length }} 个实现
+          {{ t('pluginsTab.implCount', { n: (editing.implementations || []).length }) }}
         </div>
-        <div v-if="editing.blocked" class="panel-warn">平台已全局停用该插件，需平台管理员解除后才能启用。</div>
-        <div v-else-if="!editing.allowed" class="panel-warn">平台已对本租户停用该插件，需平台管理员恢复后才能启用。</div>
+        <div v-if="editing.blocked" class="panel-warn">{{ t('pluginsTab.blockedGlobalPanel') }}</div>
+        <div v-else-if="!editing.allowed" class="panel-warn">{{ t('pluginsTab.blockedTenantPanel') }}</div>
         <div v-if="scanErrorOf(editing.name)" class="panel-warn">{{ scanErrorOf(editing.name) }}</div>
 
         <!-- 主实现 -->
         <div class="pv-field">
-          <div class="pv-label">主实现</div>
+          <div class="pv-label">{{ t('pluginsTab.mainImplLabel') }}</div>
           <el-select v-model="form.impl" size="small" style="width: 100%" @change="ensureDefaults">
             <el-option
               v-for="im in editing.implementations || []"
@@ -104,13 +107,13 @@
               :value="im.name"
             />
           </el-select>
-          <div class="pv-hint">模型只看得到 <code>{{ editing.name }}</code> 这一个工具，换实现不影响工具名与参数。</div>
+          <div class="pv-hint">{{ t('pluginsTab.implHint', { name: editing.name }) }}</div>
         </div>
 
         <!-- 该实现的配置 -->
         <div class="pv-field">
-          <div class="pv-label">实现配置</div>
-          <div v-if="!fields.length" class="pv-hint">该实现不需要配置。</div>
+          <div class="pv-label">{{ t('pluginsTab.implConfig') }}</div>
+          <div v-if="!fields.length" class="pv-hint">{{ t('pluginsTab.implNoConfig') }}</div>
           <div v-for="f in fields" :key="f.key" class="pv-cfg-row">
             <div class="pv-cfg-label">
               {{ f.label || f.key }}
@@ -135,7 +138,7 @@
               :type="f.secret ? 'password' : 'text'"
               :show-password="!!f.secret"
               size="small"
-              :placeholder="f.secret ? '已保存（留空/打码表示不改）' : (f.default ?? '')"
+              :placeholder="f.secret ? t('customTools.secretSaved') : (f.default ?? '')"
               @update:model-value="(v) => setCfg(f.key, v)"
             />
             <div v-if="f.help" class="pv-hint">{{ f.help }}</div>
@@ -144,46 +147,51 @@
 
         <!-- 兜底链 -->
         <div class="pv-field">
-          <div class="pv-label">兜底链</div>
-          <div class="pv-hint">主实现失败（鉴权 / 限流 / 网络）时按顺序再试；缺 key 这类配置错误不会降级。</div>
+          <div class="pv-label">{{ t('pluginsTab.fallbackChain') }}</div>
+          <div class="pv-hint">{{ t('pluginsTab.fallbackHint') }}</div>
           <div v-for="(name, i) in form.fallbacks" :key="name" class="pv-chain-row">
             <span class="pv-chain-name">{{ implLabel(editing, name) }}</span>
-            <el-button text size="small" :disabled="i === 0" @click="moveFallback(i, -1)">上移</el-button>
-            <el-button text size="small" :disabled="i === form.fallbacks.length - 1" @click="moveFallback(i, 1)">下移</el-button>
-            <el-button text size="small" @click="form.fallbacks.splice(i, 1)">移除</el-button>
+            <el-button text size="small" :disabled="i === 0" @click="moveFallback(i, -1)">{{ t('pluginsTab.moveUp') }}</el-button>
+            <el-button text size="small" :disabled="i === form.fallbacks.length - 1" @click="moveFallback(i, 1)">{{ t('pluginsTab.moveDown') }}</el-button>
+            <el-button text size="small" @click="form.fallbacks.splice(i, 1)">{{ t('common.remove') }}</el-button>
           </div>
           <el-select
             v-if="addableImpls.length"
             :model-value="''"
-            placeholder="添加兜底实现"
+            :placeholder="t('pluginsTab.addFallback')"
             size="small"
             style="width: 220px"
             @change="(v) => { if (v) form.fallbacks.push(v) }"
           >
             <el-option v-for="im in addableImpls" :key="im.name" :label="im.display_name || im.name" :value="im.name" />
           </el-select>
-          <div v-if="!addableImpls.length" class="pv-hint">没有可再添加的实现。</div>
+          <div v-if="!addableImpls.length" class="pv-hint">{{ t('pluginsTab.noAddable') }}</div>
         </div>
 
         <!-- 试一次 -->
         <div class="pv-field">
-          <div class="pv-label">测试连接</div>
+          <div class="pv-label">{{ t('pluginsTab.testTitle') }}</div>
           <div class="pv-test-row">
-            <el-input v-model="testQuery" size="small" placeholder="检索词" style="flex: 1" />
-            <el-button size="small" :loading="testing" @click="runTest">试一次</el-button>
+            <el-input v-model="testQuery" size="small" :placeholder="t('pluginsTab.testPlaceholder')" style="flex: 1" />
+            <el-button size="small" :loading="testing" @click="runTest">{{ t('pluginsTab.testRun') }}</el-button>
           </div>
           <div v-if="testError" class="pv-test-error">{{ testError }}</div>
           <div v-if="testResult" class="pv-test-result">
             <div class="pv-test-meta">
-              实现 {{ testResult.provider || form.impl }} · 耗时 {{ testResult.elapsed_ms }}ms
+              {{ t('pluginsTab.testMeta', {
+                impl: testResult.provider || form.impl,
+                ms: testResult.elapsed_ms
+              }) }}
             </div>
             <div v-for="(r, i) in testResult.results || []" :key="i" class="pv-test-item">
-              <div class="pv-test-title">{{ r.title || '(无标题)' }}</div>
+              <div class="pv-test-title">{{ r.title || t('pluginsTab.untitled') }}</div>
               <div class="pv-test-url">{{ r.url }}</div>
               <div class="pv-test-snippet">{{ r.snippet }}</div>
             </div>
             <div v-if="testResult.answer" class="pv-test-answer">{{ testResult.answer }}</div>
-            <div v-if="(testResult.notes || []).length" class="pv-hint">{{ testResult.notes.join('；') }}</div>
+            <div v-if="(testResult.notes || []).length" class="pv-hint">
+              {{ testResult.notes.join(t('common.listJoiner')) }}
+            </div>
           </div>
         </div>
       </div>
@@ -194,12 +202,16 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import adminApi from '../../config/admin.js'
 import { getToken } from '../../utils/auth.js'
 import { useEscClose } from '../../composables/useEscClose'
+import { formatError } from '../../../locales'
 
 const emit = defineEmits(['count'])
+
+const { t } = useI18n()
 
 const items = ref([])
 const scanErrors = ref([])
@@ -226,7 +238,7 @@ const baseline = ref('')
 const formSnapshot = () => JSON.stringify({ impl: form.impl, fallbacks: form.fallbacks, configs: form.configs })
 const formDirty = computed(() => !!editing.value && baseline.value !== formSnapshot())
 
-const testQuery = ref('flame 插件')
+const testQuery = ref(t('pluginsTab.testQueryDefault'))
 const testing = ref(false)
 const testResult = ref(null)
 const testError = ref('')
@@ -234,6 +246,14 @@ const testError = ref('')
 const authHeaders = () => ({ Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' })
 
 const activeCount = computed(() => items.value.filter((p) => p.is_active).length)
+
+// 状态徽标：平台策略优先于本站开关（平台停用时本站改不动，先说清谁停的）
+const statusText = (p) => {
+  if (!p) return ''
+  if (p.blocked) return t('pluginsTab.statusBlockedGlobal')
+  if (!p.allowed) return t('pluginsTab.statusBlockedTenant')
+  return p.is_active ? t('customTools.statusEnabled') : t('toolsTab.notEnabled')
+}
 const formatTime = (t) => (t ? String(t).replace('T', ' ').slice(0, 19) : '—')
 
 const implLabel = (p, name) => {
@@ -244,7 +264,7 @@ const implLabel = (p, name) => {
 // 扫描错误是按路径记的（tools/web_search/tavily），卡片上只显示与当前工具相关的
 const scanErrorOf = (toolName) => {
   const hit = scanErrors.value.filter((e) => String(e.path || '').endsWith('/' + toolName) || String(e.path || '').includes('/' + toolName + '/'))
-  return hit.length ? hit.map((e) => `${e.path}: ${e.error}`).join('；') : ''
+  return hit.length ? hit.map((e) => `${e.path}: ${e.error}`).join(t('common.listJoiner')) : ''
 }
 
 const load = async () => {
@@ -253,14 +273,14 @@ const load = async () => {
   try {
     const res = await fetch(adminApi.plugins.list, { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '读取插件清单失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('pluginsTab.loadFailed'))
     items.value = body.data?.plugins || []
     scanErrors.value = body.data?.errors || []
     refreshedAt.value = body.data?.refreshed_at || ''
     refreshError.value = body.data?.refresh_error || ''
     // 平台策略表读不到时后端按「已停用」处理并回带原因，这里照实提示
     const policyErr = body.data?.policy_error
-    if (policyErr) loadError.value = `平台插件策略读取失败（当前按「已停用」展示）：${policyErr}`
+    if (policyErr) loadError.value = t('pluginsTab.policyFailed', { msg: policyErr })
     // 面板开着时刷新列表：把 editing 换成新对象，状态徽标与额度才不会过期
     // （表单是独立副本，用户已填的内容不受影响）
     if (editing.value) {
@@ -268,7 +288,7 @@ const load = async () => {
       if (fresh) editing.value = fresh
     }
   } catch (e) {
-    loadError.value = e.message || '读取插件清单失败'
+    loadError.value = e.message || t('pluginsTab.loadFailed')
   } finally {
     loading.value = false
     emit('count', items.value.length)
@@ -280,11 +300,11 @@ const rescan = async () => {
   try {
     const res = await fetch(adminApi.plugins.refresh, { method: 'POST', headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '重扫失败')
-    ElMessage.success(`已重扫：${body.data?.tools ?? 0} 个工具`)
+    if (body.code !== 200) throw new Error(formatError(body) || t('pluginsTab.rescanFailed'))
+    ElMessage.success(t('pluginsTab.rescanned', { n: body.data?.tools ?? 0 }))
     await load()
   } catch (e) {
-    ElMessage.error(e.message || '重扫失败')
+    ElMessage.error(e.message || t('pluginsTab.rescanFailed'))
   } finally {
     rescanning.value = false
   }
@@ -295,7 +315,9 @@ const toggle = async (p, isActive) => {
   // 开关在平台停用时是 disabled 的，这里再挡一道：执行层本来也会拒，
   // 但没必要让用户看到「保存成功却调不动」。
   if (!p.allowed) {
-    ElMessage.warning(p.blocked ? '该插件已被平台全局停用，请联系平台管理员' : '该插件已被平台对本租户停用，请联系平台管理员')
+    ElMessage.warning(p.blocked
+      ? t('pluginsTab.blockedWarnGlobal')
+      : t('pluginsTab.blockedWarnTenant'))
     return
   }
   busy.value = p.name
@@ -306,11 +328,11 @@ const toggle = async (p, isActive) => {
       body: JSON.stringify({ impl: p.impl || '', fallbacks: p.fallbacks || [], configs: {}, is_active: isActive })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '保存失败')
-    ElMessage.success(isActive ? '已启用' : '已停用')
+    if (body.code !== 200) throw new Error(formatError(body) || t('pluginsTab.saveFailed'))
+    ElMessage.success(t(isActive ? 'customTools.statusEnabled' : 'customTools.statusDisabled'))
     await load()
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('pluginsTab.saveFailed'))
   } finally {
     busy.value = ''
   }
@@ -333,7 +355,11 @@ const openEditor = (p) => {
 const closeEditor = async () => {
   if (formDirty.value) {
     try {
-      await ElMessageBox.confirm('配置有未保存的修改，确定关闭？', '关闭配置', { type: 'warning' })
+      await ElMessageBox.confirm(
+        t('pluginsTab.closeConfirm'),
+        t('pluginsTab.closeTitle'),
+        { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
+      )
     } catch {
       return
     }
@@ -422,11 +448,16 @@ const runTest = async () => {
       })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '测试失败')
-    if (!body.data?.ok) throw new Error(`${body.data?.error || '测试失败'}${body.data?.error_code ? `（${body.data.error_code}）` : ''}`)
+    if (body.code !== 200) throw new Error(formatError(body) || t('pluginsTab.testFailed'))
+    if (!body.data?.ok) {
+      const msg = body.data?.error || t('pluginsTab.testFailed')
+      throw new Error(body.data?.error_code
+        ? t('pluginsTab.testFailedCode', { msg, code: body.data.error_code })
+        : msg)
+    }
     testResult.value = body.data
   } catch (e) {
-    testError.value = e.message || '测试失败'
+    testError.value = e.message || t('pluginsTab.testFailed')
   } finally {
     testing.value = false
   }
@@ -447,13 +478,13 @@ const save = async () => {
       })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '保存失败')
-    ElMessage.success('已保存')
+    if (body.code !== 200) throw new Error(formatError(body) || t('pluginsTab.saveFailed'))
+    ElMessage.success(t('customTools.saved'))
     // 保存后直接收起面板回到列表：插件的配置是一次性表单，不像技能设置那样边改边生效
     editing.value = null
     await load()
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('pluginsTab.saveFailed'))
   } finally {
     saving.value = false
   }

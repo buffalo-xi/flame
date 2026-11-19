@@ -9,6 +9,7 @@
 
 import { SESSION_KEYS } from '../mode'
 import { resetTitle, setTitle } from '../title'
+import i18n from '../locales'
 
 const TOKEN_KEY = SESSION_KEYS.manage.token
 const USER_KEY = SESSION_KEYS.manage.user
@@ -26,7 +27,7 @@ export const saveAuth = (newToken, newUser) => {
     console.error('[platform-auth] 保存会话失败:', err)
   }
   // 管理台固定后缀：这个页签是"管理台"，不属于某个具体租户
-  setTitle('平台管理')
+  setTitle(i18n.global.t('platform.app.consoleTitle'))
 }
 
 export const getToken = () => {

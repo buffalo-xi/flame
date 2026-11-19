@@ -1,7 +1,7 @@
 <template>
   <div class="on-error-config" v-if="availableActions.length > 0 || supportsPost">
     <div class="section-header" @click="toggleExpanded">
-      <span class="section-title-text">错误处理</span>
+      <span class="section-title-text">{{ t('flow.onError.title') }}</span>
       <span class="expand-icon">{{ expanded ? '▼' : '▶' }}</span>
     </div>
 
@@ -10,15 +10,15 @@
       <div class="error-section" v-if="canUseAction('retry')">
         <div class="section-row">
           <el-switch v-model="retryEnabled" @change="handleRetryEnabledChange" />
-          <label class="field-label">节点重试</label>
+          <label class="field-label">{{ t('flow.onError.retryToggle') }}</label>
           <button v-if="retryEnabled && retryCodes.length < availableErrorCodes.length"
-                  class="action-link-btn" @click="handleSelectAllCodes('retry')">全选</button>
+                  class="action-link-btn" @click="handleSelectAllCodes('retry')">{{ t('flow.onError.selectAll') }}</button>
           <button v-if="retryEnabled && retryCodes.length > 0"
-                  class="action-link-btn" @click="handleDeselectAllCodes('retry')">取消</button>
+                  class="action-link-btn" @click="handleDeselectAllCodes('retry')">{{ t('flow.onError.deselectAll') }}</button>
         </div>
         <div v-if="retryEnabled" class="section-content">
           <div class="error-codes">
-            <label class="field-label">错误码:</label>
+            <label class="field-label">{{ t('flow.onError.errorCodes') }}</label>
             <div class="checkbox-group">
               <el-checkbox
                 v-for="code in availableErrorCodes"
@@ -30,8 +30,8 @@
           </div>
           <div v-if="retryCodes.includes('other')" class="patterns-section">
             <label class="field-label">
-              关键词匹配
-              <span class="hint-text">% 表示通配: timeout%=开头 %=refused=结尾</span>
+              {{ t('flow.onError.patterns') }}
+              <span class="hint-text">{{ t('flow.onError.patternHint') }}</span>
             </label>
             <div class="patterns-input">
               <el-tag
@@ -46,13 +46,13 @@
                 class="pattern-input"
                 v-model="retryPatternInput"
                 @keydown.enter="addPattern('retry')"
-                placeholder="输入关键词后回车"
+                :placeholder="t('flow.onError.patternPlaceholder')"
               />
             </div>
           </div>
           <div class="retry-options">
             <div class="option-item">
-              <label class="field-label">次数:</label>
+              <label class="field-label">{{ t('flow.onError.maxRetries') }}</label>
               <el-input
                 type="number"
                 v-model.number="retryMax"
@@ -63,7 +63,7 @@
               />
             </div>
             <div class="option-item">
-              <label class="field-label">间隔(ms):</label>
+              <label class="field-label">{{ t('flow.onError.delayMs') }}</label>
               <el-input
                 type="number"
                 v-model.number="retryDelayMs"
@@ -81,15 +81,15 @@
       <div class="error-section" v-if="canUseAction('skip')">
         <div class="section-row">
           <el-switch v-model="skipEnabled" @change="handleSkipEnabledChange" />
-          <label class="field-label">节点跳过</label>
+          <label class="field-label">{{ t('flow.onError.skipToggle') }}</label>
           <button v-if="skipEnabled && skipCodes.length < availableErrorCodes.length"
-                  class="action-link-btn" @click="handleSelectAllCodes('skip')">全选</button>
+                  class="action-link-btn" @click="handleSelectAllCodes('skip')">{{ t('flow.onError.selectAll') }}</button>
           <button v-if="skipEnabled && skipCodes.length > 0"
-                  class="action-link-btn" @click="handleDeselectAllCodes('skip')">取消</button>
+                  class="action-link-btn" @click="handleDeselectAllCodes('skip')">{{ t('flow.onError.deselectAll') }}</button>
         </div>
         <div v-if="skipEnabled" class="section-content">
           <div class="error-codes">
-            <label class="field-label">错误码:</label>
+            <label class="field-label">{{ t('flow.onError.errorCodes') }}</label>
             <div class="checkbox-group">
               <el-checkbox
                 v-for="code in availableErrorCodes"
@@ -101,8 +101,8 @@
           </div>
           <div v-if="skipCodes.includes('other')" class="patterns-section">
             <label class="field-label">
-              关键词匹配
-              <span class="hint-text">% 表示通配: timeout%=开头 %=refused=结尾</span>
+              {{ t('flow.onError.patterns') }}
+              <span class="hint-text">{{ t('flow.onError.patternHint') }}</span>
             </label>
             <div class="patterns-input">
               <el-tag
@@ -117,7 +117,7 @@
                 class="pattern-input"
                 v-model="skipPatternInput"
                 @keydown.enter="addPattern('skip')"
-                placeholder="输入关键词后回车"
+                :placeholder="t('flow.onError.patternPlaceholder')"
               />
             </div>
           </div>
@@ -128,15 +128,15 @@
       <div class="error-section" v-if="canUseAction('handler')">
         <div class="section-row">
           <el-switch v-model="handlerEnabled" @change="handleHandlerEnabledChange" />
-          <label class="field-label">处理脚本</label>
+          <label class="field-label">{{ t('flow.onError.handlerToggle') }}</label>
           <button v-if="handlerEnabled && handlerCodes.length < availableErrorCodes.length"
-                  class="action-link-btn" @click="handleSelectAllCodes('handler')">全选</button>
+                  class="action-link-btn" @click="handleSelectAllCodes('handler')">{{ t('flow.onError.selectAll') }}</button>
           <button v-if="handlerEnabled && handlerCodes.length > 0"
-                  class="action-link-btn" @click="handleDeselectAllCodes('handler')">取消</button>
+                  class="action-link-btn" @click="handleDeselectAllCodes('handler')">{{ t('flow.onError.deselectAll') }}</button>
         </div>
         <div v-if="handlerEnabled" class="section-content">
           <div class="error-codes">
-            <label class="field-label">错误码:</label>
+            <label class="field-label">{{ t('flow.onError.errorCodes') }}</label>
             <div class="checkbox-group">
               <el-checkbox
                 v-for="code in availableErrorCodes"
@@ -148,8 +148,8 @@
           </div>
           <div v-if="handlerCodes.includes('other')" class="patterns-section">
             <label class="field-label">
-              关键词匹配
-              <span class="hint-text">留空匹配所有 other</span>
+              {{ t('flow.onError.patterns') }}
+              <span class="hint-text">{{ t('flow.onError.handlerPatternHint') }}</span>
             </label>
             <div class="patterns-input">
               <el-tag
@@ -164,13 +164,13 @@
                 class="pattern-input"
                 v-model="handlerPatternInput"
                 @keydown.enter="addPattern('handler')"
-                placeholder="输入关键词后回车"
+                :placeholder="t('flow.onError.patternPlaceholder')"
               />
             </div>
           </div>
           <div class="handler-options">
             <div class="option-item">
-              <label class="field-label">语言:</label>
+              <label class="field-label">{{ t('flow.onError.language') }}</label>
               <el-select v-model="handlerLang" class="small-select" @change="saveConfig">
                 <el-option v-for="lang in handlerLanguages" :key="lang" :label="lang" :value="lang" />
               </el-select>
@@ -185,8 +185,8 @@
               placeholder="if error_code == 'other' then&#10;  return 'skip'&#10;else&#10;  return 'fail'&#10;end"
             ></textarea>
             <div class="script-hints">
-              <span>可用变量: error_code, error_message, error_node_id, error_node_type, retry_count</span>
-              <span>返回值: skip / fail</span>
+              <span>{{ t('flow.onError.availableVars') }}</span>
+              <span>{{ t('flow.onError.returnValues') }}</span>
             </div>
           </div>
         </div>
@@ -196,16 +196,16 @@
       <div class="error-section" v-if="supportsPost">
         <div class="section-row">
           <el-switch v-model="postEnabled" @change="handlePostEnabledChange" />
-          <label class="field-label">后处理</label>
+          <label class="field-label">{{ t('flow.onError.postToggle') }}</label>
         </div>
         <div v-if="postEnabled" class="section-content">
           <div class="post-outputs">
             <div class="post-outputs-header">
-              <label class="field-label">设置输出变量:</label>
-              <button v-if="getAvailableOutputVarsForSelect('').length > 0" class="add-btn" @click="addPostOutput">+ 添加变量</button>
+              <label class="field-label">{{ t('flow.onError.setOutputs') }}</label>
+              <button v-if="getAvailableOutputVarsForSelect('').length > 0" class="add-btn" @click="addPostOutput">{{ t('flow.onError.addVar') }}</button>
             </div>
             <div v-if="availableOutputVars.length === 0" class="empty-hint">
-              该节点无输出变量定义
+              {{ t('flow.onError.noOutputVars') }}
             </div>
             <div
               v-for="(item, index) in postOutputItems"
@@ -215,7 +215,7 @@
               <el-select
                 v-model="item.name"
                 class="output-var-select"
-                placeholder="选择变量"
+                :placeholder="t('flow.onError.selectVar')"
                 @change="() => handlePostOutputNameChange(index)"
               >
                 <el-option
@@ -229,7 +229,7 @@
               <el-input
                 v-model="item.value"
                 class="output-val-input"
-                placeholder="值"
+                :placeholder="t('flow.onError.value')"
                 @blur="saveConfig"
               />
               <button class="remove-btn" @click="removePostOutput(index)">×</button>
@@ -238,11 +238,11 @@
 
           <div class="post-script-section">
             <div class="section-row">
-              <el-checkbox v-model="postScriptEnabled" @change="handlePostScriptEnabledChange">脚本</el-checkbox>
+              <el-checkbox v-model="postScriptEnabled" @change="handlePostScriptEnabledChange">{{ t('flow.onError.script') }}</el-checkbox>
             </div>
             <div v-if="postScriptEnabled" class="script-section">
               <div class="option-item">
-                <label class="field-label">语言:</label>
+                <label class="field-label">{{ t('flow.onError.language') }}</label>
                 <el-select v-model="postScriptLang" class="small-select" @change="saveConfig">
                   <el-option v-for="lang in handlerLanguages" :key="lang" :label="lang" :value="lang" />
                 </el-select>
@@ -267,6 +267,9 @@ import { ref, watch, computed, onMounted, nextTick, inject } from 'vue'
 import { ElCheckbox, ElInput, ElSelect, ElOption, ElTag, ElSwitch } from 'element-plus'
 import { apiBase } from '@/tenant/config/base.js'
 import { getAuthHeader } from '@/tenant/utils/auth.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

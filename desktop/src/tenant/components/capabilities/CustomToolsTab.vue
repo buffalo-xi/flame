@@ -6,39 +6,36 @@
     <!-- 顶部：计数 + 两个动作 -->
     <div class="st-bar">
       <div class="st-summary">
-        共 <strong>{{ items.length }}</strong> 个自定义工具 · <strong>{{ activeCount }}</strong> 个已启用
-        <span class="st-muted">对外工具名 custom__&lt;名&gt;，授权 ref 为 custom:&lt;名&gt;</span>
+        {{ t('customTools.summary', { n: items.length, active: activeCount }) }}
+        <span class="st-muted">{{ t('customTools.refHint', { fn: FN_NAME, ref: GRANT_REF }) }}</span>
       </div>
       <div class="st-actions">
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
-        <el-button size="small" @click="importVisible = true" title="从资产包导入自定义工具">导入</el-button>
-        <el-button size="small" type="primary" @click="openNew">新建自定义工具</el-button>
+        <el-button size="small" :loading="loading" @click="load">{{ t('common.refresh') }}</el-button>
+        <el-button size="small" @click="importVisible = true"
+                   :title="t('customTools.importTooltip')">{{ t('assetAction.import') }}</el-button>
+        <el-button size="small" type="primary" @click="openNew">{{ t('customTools.newTool') }}</el-button>
       </div>
     </div>
 
     <!-- 沙箱语言事实：来自 sandboxd 能力快照，不是本页猜的。
          未知时不判死（选项照常可选），只提示"可用性无法确认"。 -->
     <div v-if="sandbox.ready" class="st-meta-line">
-      沙箱 {{ sandbox.mode || '未知' }} · 可执行语言 {{ sandboxText }}
+      {{ t('customTools.sandboxLine', { mode: sandbox.mode || t('customTools.unknown'), langs: sandboxText }) }}
     </div>
-    <div v-else class="st-warnbar">
-      沙箱能力未知（sandboxd 未就绪）：语言可用性无法确认，选错解释器会在调用时才报错。
-    </div>
+    <div v-else class="st-warnbar">{{ t('customTools.sandboxWarn') }}</div>
 
     <div v-if="loadError" class="st-error">{{ loadError }}</div>
 
     <!-- 目录问题：tools/ 下有东西但没能成为工具。列出来，否则它们就是隐形的。 -->
     <div v-if="issues.length" class="st-contract warn" style="margin-bottom: 12px">
-      <strong>目录问题（{{ issues.length }}）</strong>
+      <strong>{{ t('customTools.issues', { n: issues.length }) }}</strong>
       <div v-for="i in issues" :key="i.path + '|' + i.error">
         <code>{{ i.path }}</code>：{{ i.error }}
       </div>
     </div>
 
     <div v-if="!items.length && !loading" class="st-empty">
-      还没有自定义工具。点右上「新建自定义工具」创建；代码会写到
-      <code>{root_dir}/tenants/&lt;schema&gt;/tools/&lt;name&gt;/&lt;entry&gt;</code>，
-      对外工具名是 <code>custom__&lt;名&gt;</code>。
+      {{ t('customTools.empty', { dir: TOOL_DIR, fn: FN_NAME }) }}
     </div>
 
     <div class="st-grid">
@@ -50,8 +47,10 @@
             <span class="ref-tag" :class="p.status === 1 ? 'ok' : 'off'">{{ statusLabel(p.status) }}</span>
             <!-- 当前发布版本：0 表示还没发布（模型看到的仍是旧版 / 无版本） -->
             <span class="ref-tag ver"
-                  :title="p.current_version ? `当前发布版本 v${p.current_version}` : '尚未发布正式版本'">
-              {{ p.current_version ? `v${p.current_version}` : '未发布' }}
+                  :title="p.current_version
+                    ? t('customTools.versionTip', { v: p.current_version })
+                    : t('customTools.versionNoneTip')">
+              {{ p.current_version ? `v${p.current_version}` : t('customTools.unreleased') }}
             </span>
           </div>
           <el-switch
@@ -62,25 +61,25 @@
           />
         </div>
 
-        <div class="st-card-desc" :title="p.description">{{ p.description || '无描述' }}</div>
+        <div class="st-card-desc" :title="p.description">{{ p.description || t('customTools.noDescription') }}</div>
 
         <!-- 卡片先说「这个工具对外是什么」（参数 / 配置 / 出网），
              实现细节（语言 / 入口 / 限制）降为次要信息 —— 卡片不是脚本站。 -->
         <div class="st-card-meta">
-          <span>{{ paramCount(p) }} 个参数</span>
-          <span>{{ configCount(p) }} 项配置</span>
-          <span v-if="p.egress" class="st-warn">允许出网</span>
+          <span>{{ t('customTools.paramCount', { n: paramCount(p) }) }}</span>
+          <span>{{ t('customTools.configCount', { n: configCount(p) }) }}</span>
+          <span v-if="p.egress" class="st-warn">{{ t('customTools.egressAllowed') }}</span>
           <span v-if="p.contract && p.contract.source !== 'file'" class="st-muted"
-                title="还没有 TOOL.json，契约暂时来自数据库">未文件化</span>
-          <span class="st-muted" :title="`超时 ${p.timeout_ms}ms · 输出上限 ${p.max_output_bytes} 字节`">
+                :title="t('customTools.notFileBackedTip')">{{ t('customTools.notFileBacked') }}</span>
+          <span class="st-muted" :title="t('customTools.limitsTip', { ms: p.timeout_ms, bytes: p.max_output_bytes })">
             {{ p.lang }} · {{ p.entry }}
           </span>
         </div>
 
         <div class="st-card-actions">
-          <el-button size="small" text @click="exportEntity('custom_tool', p.name, p.name)">导出</el-button>
-          <el-button size="small" text @click="openConfig(p)">配置</el-button>
-          <el-button size="small" text @click="openEdit(p)">编辑</el-button>
+          <el-button size="small" text @click="exportEntity('custom_tool', p.name, p.name)">{{ t('common.export') }}</el-button>
+          <el-button size="small" text @click="openConfig(p)">{{ t('common.config') }}</el-button>
+          <el-button size="small" text @click="openEdit(p)">{{ t('common.edit') }}</el-button>
         </div>
       </div>
     </div>
@@ -95,14 +94,14 @@
     <div v-if="editorOpen" class="ct-editor-head">
       <!-- 与智能体 / 技能的全屏编辑同款：左上角一个「返回列表」，不用 × 关窗 -->
       <el-button size="small" class="ct-back" @click="closeEditor">
-        <el-icon><ArrowLeft /></el-icon>返回列表
+        <el-icon><ArrowLeft /></el-icon>{{ t('customTools.backToList') }}
       </el-button>
       <div class="ct-editor-title">
-        {{ isNew ? '新建自定义工具' : (form.display_name || editing.name) }}
+        {{ isNew ? t('customTools.newTool') : (form.display_name || editing.name) }}
         <span v-if="!isNew" class="ref-tag">{{ editing.name }}</span>
         <span class="ref-tag" :class="editing.status === 1 ? 'ok' : 'off'">{{ statusLabel(editing.status) }}</span>
-        <span v-if="formDirty" class="dirty-tip">配置未保存</span>
-        <span v-if="fileState.hasDirty" class="dirty-tip">文件未保存</span>
+        <span v-if="formDirty" class="dirty-tip">{{ t('customTools.dirtyConfig') }}</span>
+        <span v-if="fileState.hasDirty" class="dirty-tip">{{ t('customTools.dirtyFiles') }}</span>
       </div>
       <!-- 版本：vN / 未发布 / 有改动 三态，与工作流编辑器同口径 -->
       <VersionEntry v-if="!isNew" kind="tool" class="ct-version" :target="editing.name"
@@ -110,10 +109,10 @@
                     :can-release="editing.status === 1" @applied="onVersionApplied"
                     @changed="refreshVersionState" />
       <el-button size="small" :loading="fileState.saving" :disabled="!fileState.canSave"
-                 @click="saveFileNow">保存文件</el-button>
+                 @click="saveFileNow">{{ t('customTools.saveFiles') }}</el-button>
       <el-button size="small" :type="settingsOpen ? 'primary' : ''"
-                 @click="settingsOpen = !settingsOpen">设置</el-button>
-      <el-button size="small" type="primary" :loading="saving" @click="save">保存配置</el-button>
+                 @click="settingsOpen = !settingsOpen">{{ t('customTools.settings') }}</el-button>
+      <el-button size="small" type="primary" :loading="saving" @click="save">{{ t('customTools.saveConfig') }}</el-button>
     </div>
 
     <div v-if="editorOpen" class="ct-editor-body">
@@ -130,22 +129,22 @@
       <div class="panel-resizer" @mousedown="startResize"></div>
       <div class="panel-header">
         <div class="panel-title">
-          配置
+          {{ t('customTools.panelTitle') }}
           <span class="ref-tag">{{ namePreview }}</span>
-          <span v-if="formDirty" class="dirty-tip">未保存</span>
+          <span v-if="formDirty" class="dirty-tip">{{ t('customTools.unsaved') }}</span>
           <!-- 配置模式下没有目录编辑器头部，版本入口放这里（编辑器打开时由头部那个负责，避免重复） -->
           <VersionEntry v-if="!isNew && !editorOpen" kind="tool" :target="editing.name"
                         :current-version="toolVersion" :dirty="toolDirty"
                         :can-release="editing.status === 1" @applied="onVersionApplied"
                         @changed="refreshVersionState" />
         </div>
-        <el-button size="small" type="primary" :loading="saving" @click="save">保存</el-button>
+        <el-button size="small" type="primary" :loading="saving" @click="save">{{ t('common.save') }}</el-button>
         <span class="close-icon" @click="closeSettings">&#xd7;</span>
       </div>
 
       <div class="panel-body">
         <div v-if="!isNew" class="panel-meta">
-          {{ statusLabel(editing.status) }} · 对外工具名 <code>custom__{{ editing.name }}</code>
+          {{ t('customTools.panelMeta', { status: statusLabel(editing.status), fn: 'custom__' + editing.name }) }}
         </div>
 
         <!-- 契约来源：磁盘是唯一真源；没有文件时回退表（打开列表会自动补写一份） -->
@@ -153,80 +152,78 @@
              :class="{ warn: editing.contract.source !== 'file' }">
           <span>
             {{ editing.contract.source === 'file'
-              ? '契约读自 TOOL.json（磁盘为准，与代码同目录）'
-              : '契约读自数据库（该工具还没有 TOOL.json）' }}
+              ? t('customTools.contractFile')
+              : t('customTools.contractTable') }}
           </span>
           <div v-for="w in editing.contract.warnings || []" :key="w" class="st-warn">{{ w }}</div>
         </div>
 
         <div class="st-field">
-          <div class="st-label">展示名</div>
+          <div class="st-label">{{ t('customTools.displayName') }}</div>
           <el-input v-model="form.display_name" size="small" maxlength="64"
-                    placeholder="可选，仅用于面板展示，不影响模型" />
+                    :placeholder="t('customTools.displayNamePlaceholder')" />
         </div>
 
         <div class="st-field">
-          <div class="st-label">名称 <span class="st-req">*</span></div>
+          <div class="st-label">{{ t('customTools.nameLabel') }} <span class="st-req">*</span></div>
           <el-input v-model="form.name" size="small" maxlength="64" :disabled="!isNew"
-                    placeholder="如 sum-sales" />
+                    :placeholder="t('customTools.namePlaceholder')" />
           <div class="st-hint">
-            只允许字母、数字与短横线，不能以短横线开头。模型的工具名是
-            <code>custom__{{ namePreview }}</code>；创建后不可改
-            —— 改名会让 <code>custom:{{ namePreview }}</code> 的授权静默失效。
+            {{ t('customTools.nameHint', { fn: 'custom__' + namePreview, ref: 'custom:' + namePreview }) }}
           </div>
         </div>
 
         <div class="st-field">
-          <div class="st-label">描述</div>
+          <div class="st-label">{{ t('customTools.descLabel') }}</div>
           <el-input v-model="form.description" type="textarea" :autosize="{ minRows: 5, maxRows: 14 }"
-                    placeholder="模型据此决定何时调用，写清用途边界" />
+                    :placeholder="t('customTools.descPlaceholder')" />
         </div>
 
         <!-- 工具契约在前：模型只看得到这几项，它们决定「什么时候调用、怎么填参数」。
              实现细节（语言 / 入口 / 限制 / 代码）收进下面的折叠区。 -->
         <div class="st-field">
-          <div class="st-label">入参 schema（发给模型 · 工具契约）</div>
-          <div class="st-hint">模型据此填参数。不要设计它猜不出的东西（路径、内部 ID）。</div>
+          <div class="st-label">{{ t('customTools.inSchema') }}</div>
+          <div class="st-hint">{{ t('customTools.inSchemaHint') }}</div>
           <!-- schema 是这里最长的一段文字：给足高度，别让人在 6 行里上下蹭 -->
           <el-input v-model="form.parametersText" type="textarea" :autosize="{ minRows: 14, maxRows: 32 }"
                     class="st-code" spellcheck="false" placeholder='{"type":"object","properties":{}}' />
         </div>
 
         <div class="st-field">
-          <div class="st-label">出参 schema（不发模型，仅校验与展示）</div>
+          <div class="st-label">{{ t('customTools.outSchema') }}</div>
           <el-input v-model="form.outputText" type="textarea" :autosize="{ minRows: 9, maxRows: 24 }"
-                    class="st-code" spellcheck="false" placeholder="留空 = 不校验" />
+                    class="st-code" spellcheck="false" :placeholder="t('customTools.outSchemaPlaceholder')" />
         </div>
 
         <div class="st-field">
-          <div class="st-label">配置声明</div>
-          <div class="st-hint">声明后可在下方填值；secret 项回显打码，原样保留表示不改。</div>
+          <div class="st-label">{{ t('customTools.configDecl') }}</div>
+          <div class="st-hint">{{ t('customTools.configDeclHint') }}</div>
           <div v-for="(f, i) in form.configFields" :key="i" class="st-cfg-row">
             <div class="st-row">
               <el-input v-model="f.key" size="small" placeholder="key" style="width: 120px" />
-              <el-input v-model="f.label" size="small" placeholder="展示名" style="width: 120px" />
+              <el-input v-model="f.label" size="small" :placeholder="t('customTools.displayName')" style="width: 120px" />
               <el-select v-model="f.type" size="small" style="width: 96px">
                 <el-option label="string" value="string" />
                 <el-option label="int" value="int" />
                 <el-option label="bool" value="bool" />
               </el-select>
-              <el-checkbox v-model="f.secret" size="small">打码</el-checkbox>
-              <el-checkbox v-model="f.required" size="small">必填</el-checkbox>
-              <el-button text size="small" @click="form.configFields.splice(i, 1)">移除</el-button>
+              <el-checkbox v-model="f.secret" size="small">{{ t('customTools.masked') }}</el-checkbox>
+              <el-checkbox v-model="f.required" size="small">{{ t('customTools.required') }}</el-checkbox>
+              <el-button text size="small" @click="form.configFields.splice(i, 1)">{{ t('common.remove') }}</el-button>
             </div>
             <div class="st-row">
-              <el-input v-model="f.help" size="small" placeholder="说明（填配置的人看得到）" style="flex: 1" />
-              <el-input v-model="f.default" size="small" placeholder="默认值（可选）" style="width: 180px" />
+              <el-input v-model="f.help" size="small" :placeholder="t('customTools.helpPlaceholder')" style="flex: 1" />
+              <el-input v-model="f.default" size="small" :placeholder="t('customTools.defaultPlaceholder')" style="width: 180px" />
             </div>
           </div>
-          <el-button size="small" text type="primary" @click="addField">+ 添加配置项</el-button>
+          <el-button size="small" text type="primary" @click="addField">{{ t('customTools.addConfig') }}</el-button>
         </div>
 
         <div v-if="form.configFields.length" class="st-field">
-          <div class="st-label">配置值</div>
+          <div class="st-label">{{ t('customTools.configValues') }}</div>
           <div v-for="f in form.configFields" :key="f.key" class="st-cfg-value">
             <div class="st-cfg-name">
-              {{ f.label || f.key || '（未命名）' }}<span v-if="f.required" class="st-req">*</span>
+              {{ f.label || f.key || t('customTools.unnamed') }}<span v-if="f.required" class="st-req">*</span>
             </div>
             <el-switch v-if="f.type === 'bool'" :model-value="!!cfgValue(f.key)"
                        @update:model-value="(v) => setCfg(f.key, v)" />
@@ -236,7 +233,7 @@
                              @update:model-value="(v) => setCfg(f.key, v)" />
             <el-input v-else :model-value="cfgValue(f.key) ?? ''"
                       :type="f.secret ? 'password' : 'text'" :show-password="!!f.secret" size="small"
-                      :placeholder="f.secret ? '已保存（留空/打码表示不改）' : (f.default ?? '')"
+                      :placeholder="f.secret ? t('customTools.secretSaved') : (f.default ?? '')"
                       @update:model-value="(v) => setCfg(f.key, v)" />
             <div v-if="f.help" class="st-hint">{{ f.help }}</div>
           </div>
@@ -246,91 +243,83 @@
              这些是「怎么跑」而不是「是什么」—— 收起来之后，面板第一屏才是工具契约。 -->
         <div class="st-field">
           <div class="st-impl-head" @click="implOpen = !implOpen">
-            <span class="st-label" style="margin: 0">实现（语言 / 入口 / 限制 / 代码）</span>
-            <span class="st-muted">{{ implOpen ? '收起' : '展开' }}</span>
+            <span class="st-label" style="margin: 0">{{ t('customTools.implHead') }}</span>
+            <span class="st-muted">{{ implOpen ? t('common.collapse') : t('common.expand') }}</span>
           </div>
 
           <div v-show="implOpen" class="st-impl-body">
             <div class="st-field">
-              <div class="st-label">语言 / 入口文件</div>
+              <div class="st-label">{{ t('customTools.langEntry') }}</div>
               <div class="st-row">
                 <el-select v-model="form.lang" size="small" style="width: 200px" @change="onLangChange">
                   <el-option v-for="l in LANGS" :key="l.value"
-                             :label="l.label + (langAvailable(l.value) ? '' : '（环境不可用）')"
+                             :label="l.label + (langAvailable(l.value) ? '' : t('customTools.langUnavailable'))"
                              :value="l.value" :disabled="!langAvailable(l.value)" />
                 </el-select>
                 <el-input v-model="form.entry" size="small" placeholder="main.py" style="flex: 1" />
               </div>
-              <div class="st-hint">入口文件相对 <code>tools/&lt;name&gt;/</code>；保存时写进 TOOL.json，
-                文件不存在会自动补一份骨架，内容用「文件」面板编辑。</div>
+              <div class="st-hint">{{ t('customTools.entryHint', { dir: TOOL_DIR }) }}</div>
               <div v-if="!langAvailable(form.lang)" class="st-warn">
-                当前沙箱未声明 {{ form.lang }} 可用：执行时可能报「找不到解释器」。
-                确认部署已安装后再保存，或改用 {{ availableLangHint }}。
+                {{ t('customTools.langWarn', { lang: form.lang, alt: availableLangHint }) }}
               </div>
             </div>
 
             <div class="st-field">
-              <div class="st-label">执行限制</div>
+              <div class="st-label">{{ t('customTools.limits') }}</div>
               <div class="st-row">
                 <el-input-number v-model="form.timeout_ms" :min="1000" :step="1000" size="small"
                                  controls-position="right" style="width: 150px" />
-                <span class="st-unit">ms 超时</span>
+                <span class="st-unit">{{ t('customTools.timeoutUnit') }}</span>
                 <el-input-number v-model="form.max_output_bytes" :min="1024" :step="1024" size="small"
                                  controls-position="right" style="width: 170px" />
-                <span class="st-unit">字节输出上限</span>
+                <span class="st-unit">{{ t('customTools.bytesUnit') }}</span>
               </div>
               <div class="st-row">
                 <el-switch v-model="form.egress" />
-                <span class="st-unit">允许出网（还需平台开通 net.egress）</span>
+                <span class="st-unit">{{ t('customTools.egressToggle') }}</span>
               </div>
             </div>
 
             <div class="st-field">
-              <div class="st-label">代码与附属文件</div>
-              <div class="st-hint">
-                入口文件、<code>lib/</code>、<code>templates/</code> 都在
-                <code>tools/&lt;name&gt;/</code> 目录里 —— 就是本面板背后那棵目录树。
-                <code>TOOL.json</code> 是契约（只读，请用本表单改）。
-              </div>
-              <el-button v-if="!isNew" size="small" @click="goFiles">去编辑文件</el-button>
-              <span v-else class="st-hint">先保存，再编辑文件（目录要靠保存时创建）</span>
+              <div class="st-label">{{ t('customTools.codeSection') }}</div>
+              <div class="st-hint">{{ t('customTools.codeHint', { dir: TOOL_DIR }) }}</div>
+              <el-button v-if="!isNew" size="small" @click="goFiles">{{ t('customTools.goFiles') }}</el-button>
+              <span v-else class="st-hint">{{ t('customTools.saveFirst') }}</span>
             </div>
           </div>
         </div>
 
         <!-- 试跑：与线上同一条执行内核（同能力闸、同隔离参数、同遮蔽规则） -->
         <div class="st-field">
-          <div class="st-label">试跑</div>
-          <div class="st-hint">
-            跑盘上已保存的代码，不经过模型、不影响授权。参数就是模型会传的那个 JSON 对象。
-          </div>
+          <div class="st-label">{{ t('customTools.runSection') }}</div>
+          <div class="st-hint">{{ t('customTools.runHint') }}</div>
           <el-input v-model="runArgs" type="textarea" :rows="4" class="st-code" spellcheck="false"
                     placeholder='{"month": "2026-09"}' />
           <div v-if="runRequiredHint" class="st-hint">{{ runRequiredHint }}</div>
           <div class="st-row" style="margin-top: 8px">
-            <el-button size="small" :loading="running" :disabled="!canRun" @click="runOnce">运行一次</el-button>
+            <el-button size="small" :loading="running" :disabled="!canRun" @click="runOnce">{{ t('customTools.runOnce') }}</el-button>
             <span v-if="runHint" class="st-warn">{{ runHint }}</span>
           </div>
 
           <div v-if="runResult" class="st-run-result">
             <div class="st-run-head">
               <span class="ref-tag" :class="runResult.ok ? 'ok' : 'off'">
-                {{ runResult.ok ? '调用成功' : '调用失败' }}
+                {{ runResult.ok ? t('customTools.runOk') : t('customTools.runFail') }}
               </span>
               <span v-if="runResult.duration_ms != null" class="st-muted">{{ runResult.duration_ms }} ms</span>
-              <span v-if="runResult.exit_code" class="st-muted">退出码 {{ runResult.exit_code }}</span>
-              <span v-if="runResult.truncated" class="st-warn">输出被截断</span>
-              <span v-if="runResult.masked" class="st-muted">已遮蔽疑似密钥</span>
+              <span v-if="runResult.exit_code" class="st-muted">{{ t('customTools.exitCode', { code: runResult.exit_code }) }}</span>
+              <span v-if="runResult.truncated" class="st-warn">{{ t('customTools.runTruncated') }}</span>
+              <span v-if="runResult.masked" class="st-muted">{{ t('customTools.runMasked') }}</span>
             </div>
             <div v-for="w in runResult.warnings || []" :key="w" class="st-warn">{{ w }}</div>
             <div v-if="runResult.error" class="st-error" style="margin: 6px 0 0">{{ runResult.error }}</div>
 
             <template v-if="runResult.result !== null && runResult.result !== undefined">
-              <div class="st-label" style="margin-top: 8px">返回结果</div>
+              <div class="st-label" style="margin-top: 8px">{{ t('customTools.runResult') }}</div>
               <pre class="st-pre">{{ prettyJSON(runResult.result) }}</pre>
             </template>
             <template v-else-if="runResult.stdout">
-              <div class="st-label" style="margin-top: 8px">原始 stdout（未解析成 JSON）</div>
+              <div class="st-label" style="margin-top: 8px">{{ t('customTools.runStdout') }}</div>
               <pre class="st-pre">{{ runResult.stdout }}</pre>
             </template>
 
@@ -342,8 +331,8 @@
         </div>
 
         <div v-if="!isNew" class="st-danger">
-          <el-button size="small" type="danger" plain :loading="deleting" @click="removeTool">删除自定义工具</el-button>
-          <span class="st-hint">会一并删除盘上的 <code>tools/{{ editing.name }}/</code> 目录</span>
+          <el-button size="small" type="danger" plain :loading="deleting" @click="removeTool">{{ t('customTools.deleteTool') }}</el-button>
+          <span class="st-hint">{{ t('customTools.deleteHint', { dir: 'tools/' + editing.name + '/' }) }}</span>
         </div>
       </div>
     </div>
@@ -353,6 +342,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import adminApi from '../../config/admin.js'
 import { getToken } from '../../utils/auth.js'
@@ -362,8 +352,16 @@ import AssetImportDialog from '../AssetImportDialog.vue'
 // 目录编辑复用技能那套文件面板（同一形态：一个内容目录 + 多文件），不另写一份
 import SkillFileEditor from '../skills/SkillFileEditor.vue'
 import VersionEntry from '../versions/VersionEntry.vue'
+import { formatError } from '../../../locales'
 
 const emit = defineEmits(['count'])
+
+const { t } = useI18n()
+
+// 命名记号：对外名与授权 ref 的形态是后端约定，不是界面文案，所以只把「叫什么」交给语言包
+const FN_NAME = 'custom__<name>'
+const GRANT_REF = 'custom:<name>'
+const TOOL_DIR = 'tools/<name>/'
 
 // 跨页跳转（会话里建 / 改了自定义工具）：切到本页后直接打开该工具的全屏编辑器。
 // 页面里按短名定位（详情接口也是按 name 取），id 只作为兜底匹配。
@@ -392,7 +390,7 @@ const LANG_ALIASES = {
   lua: ['lua'],
   sh: ['sh', 'shell']
 }
-const sandboxText = computed(() => (sandbox.value.langs || []).join(' / ') || '（未配置）')
+const sandboxText = computed(() => (sandbox.value.langs || []).join(' / ') || t('customTools.notConfigured'))
 // ready=false（不知道环境）时一律视为可用：此时不判死，只靠顶部横幅提示
 const langAvailable = (v) => {
   if (!sandbox.value.ready) return true
@@ -401,7 +399,7 @@ const langAvailable = (v) => {
 }
 const availableLangHint = computed(() => {
   const hit = LANGS.find((l) => langAvailable(l.value))
-  return hit ? hit.label : '其它语言'
+  return hit ? hit.label : t('customTools.otherLang')
 })
 // 新建时的默认语言：优先 python，不可用则取第一个可用的
 const defaultLang = () => (LANGS.find((l) => langAvailable(l.value)) || LANGS[0]).value
@@ -487,9 +485,14 @@ const formDirty = computed(() => !!editing.value && baseline.value !== formSnaps
 const authHeaders = () => ({ Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' })
 
 const activeCount = computed(() => items.value.filter((p) => p.status === 1).length)
-const statusLabel = (s) => (s === 1 ? '已启用' : s === 2 ? '已停用' : s === 3 ? '已废弃' : '未知')
+const STATUS_LABEL_KEYS = {
+  1: 'statusEnabled',
+  2: 'statusDisabled',
+  3: 'statusDeprecated'
+}
+const statusLabel = (s) => (STATUS_LABEL_KEYS[s] ? t(`customTools.${STATUS_LABEL_KEYS[s]}`) : t('customTools.statusUnknown'))
 // 名字预览：不能直接在插值里写 '<名>'（会被当 HTML 实体原样输出）
-const namePreview = computed(() => form.name || '<名>')
+const namePreview = computed(() => form.name || '<name>')
 
 // 参数个数：只数 properties 的键，schema 不是对象结构时按 0
 const paramCount = (p) => {
@@ -510,10 +513,10 @@ const running = ref(false)
 
 // 试跑只跑**盘上已保存**的代码：脏表单时禁用 —— 否则看到的结果与线上跑的不是同一份代码
 const runHint = computed(() => {
-  if (isNew.value) return '先保存，再试跑（试跑跑的是盘上的代码）'
-  if (formDirty.value) return '有未保存的改动：先保存再试跑，否则跑的不是你看到的代码'
+  if (isNew.value) return t('customTools.runNeedSave')
+  if (formDirty.value) return t('customTools.runDirty')
   // 代码在文件面板里，那边的脏状态同样会让试跑跑的是旧代码
-  if (fileState.value.hasDirty) return '文件面板里有未保存的代码：先「保存文件」再试跑，否则跑的不是你看到的代码'
+  if (fileState.value.hasDirty) return t('customTools.runFileDirty')
   return ''
 })
 const canRun = computed(() => !!editing.value && !isNew.value && !formDirty.value && !running.value)
@@ -548,7 +551,7 @@ const runRequiredHint = computed(() => {
   try {
     const s = JSON.parse(form.parametersText || '{}')
     const req = Array.isArray(s.required) ? s.required : []
-    return req.length ? `必填：${req.join('、')}` : ''
+    return req.length ? t('customTools.requiredKeys', { keys: req.join(t('common.listJoiner')) }) : ''
   } catch {
     return ''
   }
@@ -562,11 +565,11 @@ const runOnce = async () => {
   try {
     args = JSON.parse(text)
   } catch {
-    ElMessage.error('参数不是合法 JSON')
+    ElMessage.error(t('customTools.argsNotJson'))
     return
   }
   if (!args || typeof args !== 'object' || Array.isArray(args)) {
-    ElMessage.error('参数必须是一个 JSON 对象')
+    ElMessage.error(t('customTools.argsNotObject'))
     return
   }
   running.value = true
@@ -578,10 +581,10 @@ const runOnce = async () => {
       body: JSON.stringify({ args })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '试跑失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('customTools.runFailed'))
     runResult.value = body.data || {}
   } catch (e) {
-    runResult.value = { ok: false, error: e.message || '试跑失败' }
+    runResult.value = { ok: false, error: e.message || t('customTools.runFailed') }
   } finally {
     running.value = false
   }
@@ -595,7 +598,7 @@ const load = async () => {
   try {
     const res = await fetch(adminApi.customTools.list, { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '读取自定义工具失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('customTools.loadFailed'))
     items.value = body.data?.tools || []
     issues.value = body.data?.issues || []
     // 沙箱语言事实：老后端没有这个字段时保持默认（未知），不影响列表
@@ -606,7 +609,7 @@ const load = async () => {
       if (fresh) editing.value = fresh
     }
   } catch (e) {
-    loadError.value = e.message || '读取自定义工具失败'
+    loadError.value = e.message || t('customTools.loadFailed')
   } finally {
     loading.value = false
     emit('count', items.value.length)
@@ -658,7 +661,7 @@ const openTool = async (p, withEditor) => {
     // 列表里只有元数据，代码要单独取
     const res = await fetch(adminApi.customTools.get(p.name), { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '读取自定义工具失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('customTools.loadFailed'))
     const t = body.data?.tool || {}
     editing.value = t
     // 版本状态与契约同一份响应：后端按「当前版本 vs 草稿」算好，前端不自己推
@@ -687,7 +690,7 @@ const openTool = async (p, withEditor) => {
     editing.value = null
     editorOpen.value = false
     settingsOpen.value = false
-    ElMessage.error(e.message || '读取自定义工具失败')
+    ElMessage.error(e.message || t('customTools.loadFailed'))
   }
 }
 
@@ -721,11 +724,15 @@ const goFiles = () => {
 const closeEditor = async () => {
   // 两处脏都要问：配置在抽屉里，代码在目录面板里，任一处丢了都是白改
   const dirty = []
-  if (formDirty.value) dirty.push('配置')
-  if (editorOpen.value && fileState.value.hasDirty) dirty.push('文件')
+  if (formDirty.value) dirty.push(t('customTools.partConfig'))
+  if (editorOpen.value && fileState.value.hasDirty) dirty.push(t('customTools.partFiles'))
   if (dirty.length) {
     try {
-      await ElMessageBox.confirm(`${dirty.join('与')}有未保存的修改，确定关闭？`, '关闭编辑', { type: 'warning' })
+      await ElMessageBox.confirm(
+        t('customTools.closeConfirm', { dirty: dirty.join(t('customTools.dirtyJoiner')) }),
+        t('customTools.closeTitle'),
+        { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
+      )
     } catch {
       return
     }
@@ -849,13 +856,13 @@ const buildPayload = () => {
     try {
       return { ok: true, value: JSON.parse(s) }
     } catch {
-      ElMessage.error(`${label} 不是合法 JSON`)
+      ElMessage.error(t('customTools.invalidJson', { label }))
       return { ok: false }
     }
   }
-  const parameters = parseJSON(form.parametersText, '入参 schema')
+  const parameters = parseJSON(form.parametersText, t('customTools.inSchemaShort'))
   if (!parameters.ok) return null
-  const output = parseJSON(form.outputText, '出参 schema')
+  const output = parseJSON(form.outputText, t('customTools.outSchemaShort'))
   if (!output.ok) return null
 
   const payload = {
@@ -882,11 +889,11 @@ const save = async () => {
   if (!editing.value) return
   const name = isNew.value ? form.name.trim() : editing.value.name
   if (!NAME_RE.test(name)) {
-    ElMessage.warning('名称只能含字母、数字与短横线，且不能以短横线开头')
+    ElMessage.warning(t('customTools.nameInvalid'))
     return
   }
   if (name.includes('__')) {
-    ElMessage.warning('名称不能包含连续下划线（对外名是 custom__<名>，会把前缀切乱）')
+    ElMessage.warning(t('customTools.nameDunder'))
     return
   }
   const payload = buildPayload()
@@ -901,16 +908,16 @@ const save = async () => {
       body: JSON.stringify(payload)
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '保存失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('customTools.saveFailed'))
     const created = isNew.value ? body.data?.tool : null
     // 目录是保存时才创建的：新建后必须重新按名字载入一次，文件面板才有目标
     if (created?.name) {
       await openEdit(created) // settingsOpen=false：把舞台让给目录
-      ElMessage.success('已保存，接着写代码吧')
+      ElMessage.success(t('customTools.savedGoCode'))
       return
     }
     // 编辑已有工具：就地更新基线，留在编辑器里（后面多半还要改代码，别把人踢回列表）
-    ElMessage.success('已保存')
+    ElMessage.success(t('customTools.saved'))
     await load()
     const fresh = items.value.find((x) => x.name === name)
     if (fresh) editing.value = { ...editing.value, ...fresh }
@@ -918,7 +925,7 @@ const save = async () => {
     // 契约元数据（参数 schema / 描述 / 入口）也是定义：改完徽标可能变成「有改动」
     refreshVersionState()
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('customTools.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -934,11 +941,11 @@ const toggle = async (p, on) => {
       body: JSON.stringify({ status: on ? 1 : 2 })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '保存失败')
-    ElMessage.success(on ? '已启用' : '已停用')
+    if (body.code !== 200) throw new Error(formatError(body) || t('customTools.saveFailed'))
+    ElMessage.success(t(on ? 'customTools.statusEnabled' : 'customTools.statusDisabled'))
     await load()
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('customTools.saveFailed'))
   } finally {
     busy.value = ''
   }
@@ -949,9 +956,13 @@ const removeTool = async () => {
   if (!name) return
   try {
     await ElMessageBox.confirm(
-      `删除后，盘上的 tools/${name}/ 目录也会一并删除，且无法恢复。`,
-      `删除自定义工具 ${name}`,
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      t('customTools.deleteBody', { dir: `tools/${name}/` }),
+      t('customTools.deleteTitle', { name }),
+      {
+        type: 'warning',
+        confirmButtonText: t('common.delete'),
+        cancelButtonText: t('common.cancel')
+      }
     )
   } catch {
     return
@@ -960,14 +971,14 @@ const removeTool = async () => {
   try {
     const res = await fetch(adminApi.customTools.remove(name), { method: 'DELETE', headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '删除失败')
-    ElMessage.success('已删除')
+    if (body.code !== 200) throw new Error(formatError(body) || t('customTools.deleteFailed'))
+    ElMessage.success(t('customTools.deleted'))
     settingsOpen.value = false
     editorOpen.value = false
     editing.value = null
     await load()
   } catch (e) {
-    ElMessage.error(e.message || '删除失败')
+    ElMessage.error(e.message || t('customTools.deleteFailed'))
   } finally {
     deleting.value = false
   }

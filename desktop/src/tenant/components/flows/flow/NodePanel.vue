@@ -6,123 +6,123 @@
         :class="{ active: activeTab === 'node' }"
         @click="activeTab = 'node'"
       >
-        节点
+        {{ t('flow.nodePanel.tabNode') }}
       </span>
       <span
         class="panel-tab"
         :class="{ active: activeTab === 'tool' }"
         @click="activeTab = 'tool'"
       >
-        工具
+        {{ t('flow.nodePanel.tabTool') }}
       </span>
     </div>
     <div class="panel-content">
       <div v-show="activeTab === 'node'" class="panel-section">
         <div class="node-group">
-          <div class="group-title">常用</div>
+          <div class="group-title">{{ t('flow.nodePanel.groupCommon') }}</div>
           <div class="group-items">
             <div class="node-card" @click="handleNodeClick('llm')">
               <span class="icon-wrapper icon-llm"><el-icon><ChatLineSquare /></el-icon></span>
-              <span class="node-label">LLM</span>
+              <span class="node-label">{{ nodeLabel('llm') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('memory')">
               <span class="icon-wrapper icon-memory"><el-icon><Clock /></el-icon></span>
-              <span class="node-label">记忆</span>
+              <span class="node-label">{{ nodeLabel('memory') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('code')">
               <span class="icon-wrapper icon-code"><el-icon><MagicStick /></el-icon></span>
-              <span class="node-label">代码</span>
+              <span class="node-label">{{ nodeLabel('code') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('assign')">
               <span class="icon-wrapper icon-assign"><el-icon><Coin /></el-icon></span>
-              <span class="node-label">赋值</span>
+              <span class="node-label">{{ nodeLabel('assign') }}</span>
             </div>            
             <div class="node-card" @click="handleNodeClick('http')">
               <span class="icon-wrapper icon-http"><el-icon><Lightning /></el-icon></span>
-              <span class="node-label">HTTP 请求</span>
+              <span class="node-label">{{ nodeLabel('http') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('mcp')">
               <span class="icon-wrapper icon-mcp"><el-icon><Tools /></el-icon></span>
-              <span class="node-label">MCP</span>
+              <span class="node-label">{{ nodeLabel('mcp') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('rpc')">
               <span class="icon-wrapper icon-rpc"><el-icon><Mouse /></el-icon></span>
-              <span class="node-label">RPC</span>
+              <span class="node-label">{{ nodeLabel('rpc') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('result')">
               <span class="icon-wrapper icon-result"><el-icon><Promotion /></el-icon></span>    
-              <span class="node-label">结果输出</span>
+              <span class="node-label">{{ nodeLabel('result') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('progress')">
               <span class="icon-wrapper icon-progress"><el-icon><RefreshRight /></el-icon></span>
-              <span class="node-label">进度输出</span>
+              <span class="node-label">{{ nodeLabel('progress') }}</span>
             </div>
             
           </div>
         </div>
         <div class="node-group">
-          <div class="group-title">逻辑</div>
+          <div class="group-title">{{ t('flow.nodePanel.groupLogic') }}</div>
           <div class="group-items">
             <div class="node-card" @click="handleNodeClick('branch')">
               <span class="icon-wrapper icon-branch"><el-icon><Connection /></el-icon></span>
-              <span class="node-label">条件分支</span>
+              <span class="node-label">{{ nodeLabel('branch') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('intent')">
               <span class="icon-wrapper icon-intent"><el-icon><Aim /></el-icon></span>
-              <span class="node-label">意图</span>
+              <span class="node-label">{{ nodeLabel('intent') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('break')">
               <span class="icon-wrapper icon-break"><el-icon><Minus /></el-icon></span>
-              <span class="node-label">跳出</span>
+              <span class="node-label">{{ nodeLabel('break') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('continue')">
               <span class="icon-wrapper icon-continue"><el-icon><Upload /></el-icon></span>
-              <span class="node-label">跳过</span>
+              <span class="node-label">{{ nodeLabel('continue') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('return')">
               <span class="icon-wrapper icon-return"><el-icon><CircleCheck /></el-icon></span>
-              <span class="node-label">返回</span>
+              <span class="node-label">{{ nodeLabel('return') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('exit')">
               <span class="icon-wrapper icon-exit"><el-icon><CircleClose /></el-icon></span>
-              <span class="node-label">终止</span>
+              <span class="node-label">{{ nodeLabel('exit') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('process')">
               <span class="icon-wrapper icon-process"><el-icon><Help /></el-icon></span>
-              <span class="node-label">嵌入流程</span>
+              <span class="node-label">{{ nodeLabel('process') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('function')">
               <span class="icon-wrapper icon-function"><el-icon><ScaleToOriginal /></el-icon></span>
-              <span class="node-label">函数</span>
+              <span class="node-label">{{ nodeLabel('function') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('fork')">
               <span class="icon-wrapper icon-fork"><el-icon><Monitor /></el-icon></span>
-              <span class="node-label">并发组</span>
+              <span class="node-label">{{ nodeLabel('fork') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('wait')">
               <span class="icon-wrapper icon-wait"><el-icon><Link /></el-icon></span>
-              <span class="node-label">并发同步</span>
+              <span class="node-label">{{ nodeLabel('wait') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('call')">
               <span class="icon-wrapper icon-call"><el-icon><Mouse /></el-icon></span>
-              <span class="node-label">调用</span>
+              <span class="node-label">{{ nodeLabel('call') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('loop')">
               <span class="icon-wrapper icon-loop"><el-icon><RefreshLeft /></el-icon></span>
-              <span class="node-label">循环</span>
+              <span class="node-label">{{ nodeLabel('loop') }}</span>
             </div>
           </div>
         </div>
         <div class="node-group">
-          <div class="group-title">其他</div>
+          <div class="group-title">{{ t('flow.nodePanel.groupOther') }}</div>
           <div class="group-items">            
             <div class="node-card" @click="handleNodeClick('layout')">
               <span class="icon-wrapper icon-layout"><el-icon><CircleClose /></el-icon></span>
-              <span class="node-label">布局</span>
+              <span class="node-label">{{ nodeLabel('layout') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('comment')">
               <span class="icon-wrapper icon-comment"><el-icon><ChatLineSquare /></el-icon></span>
-              <span class="node-label">注释</span>
+              <span class="node-label">{{ nodeLabel('comment') }}</span>
             </div>
           </div>
         </div>
@@ -135,8 +135,14 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ChatLineSquare, Clock, Promotion, RefreshRight, Connection, Link, Help, MagicStick, Lightning, CircleClose, Minus, Upload, CircleCheck, ScaleToOriginal, Monitor, Mouse, Coin, RefreshLeft, Tools, Aim } from '@element-plus/icons-vue'
 import { useEscClose } from '../../../composables/useEscClose'
+
+const { t } = useI18n()
+
+// 节点类型的显示名统一走语言包：键与 nodeIcons.js 的类型表一致
+const nodeLabel = (type) => t(`flow.nodeType.${type}`)
 
 const props = defineProps({
   visible: {

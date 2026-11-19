@@ -8,7 +8,7 @@
             <!-- 断点菜单不给：layout 运行时被跳过，设了也不会停 -->
             <el-dropdown-item @click="deleteNode">
               <el-icon><Delete /></el-icon>
-              <span>删除节点</span>
+              <span>{{ t('flow.node.action.delete') }}</span>
             </el-dropdown-item>
           </el-dropdown-menu>
         </template>
@@ -17,7 +17,7 @@
     
     <!-- 名字平时不显示（节点只是个 32px 圆点），悬停时浮在圆点上方。
          这里不用 el-tooltip：图标上挂着 el-dropdown，悬停图标会同时弹出两个 popper。 -->
-    <span class="node-name-tip">{{ data.label || '布局' }}</span>
+    <span class="node-name-tip">{{ data.label || t('flow.node.fallbackLabel.layout') }}</span>
 
     <Handle type="target" position="top" :id="'target' + id + 'top'" class="custom-handle custom-handle-top custom-handle-target" />
     <Handle type="source" position="bottom" :id="'source' + id + 'bottom'" class="custom-handle custom-handle-bottom custom-handle-source" />
@@ -31,11 +31,14 @@
 import { ref, watch, inject } from 'vue'
 import { Remove, Delete } from '@element-plus/icons-vue'
 import { Handle } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {
     type: Object,
-    default: () => ({ label: '占位' })
+    default: () => ({})
   },
   id: {
     type: String,

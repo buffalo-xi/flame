@@ -7,7 +7,13 @@
         <div class="card-switch">
           <button :class="{ active: tab === 'desk' }" @click="tab = 'desk'">{{ $t('login.tenantTab') }}</button>
           <button :class="{ active: tab === 'manage' }" @click="tab = 'manage'">{{ $t('login.platformTab') }}</button>
-          <button class="loc" type="button" :title="$t('common.language')" @click="toggleLocale">{{ nextLocaleLabel }}</button>
+          <!-- 语言：按钮写「当前」语言，点开再选目标（两种以上语言时二态按钮不成立） -->
+          <el-dropdown trigger="click" @command="setLocale">
+            <button class="loc" type="button" :title="$t('common.language')">{{ localeShort }}</button>
+            <template #dropdown>
+              <LocaleMenu :active="activeLocale" />
+            </template>
+          </el-dropdown>
         </div>
       </template>
     </Login>
@@ -17,7 +23,13 @@
         <div class="card-switch">
           <button :class="{ active: tab === 'desk' }" @click="tab = 'desk'">{{ $t('login.tenantTab') }}</button>
           <button :class="{ active: tab === 'manage' }" @click="tab = 'manage'">{{ $t('login.platformTab') }}</button>
-          <button class="loc" type="button" :title="$t('common.language')" @click="toggleLocale">{{ nextLocaleLabel }}</button>
+          <!-- 语言：按钮写「当前」语言，点开再选目标（两种以上语言时二态按钮不成立） -->
+          <el-dropdown trigger="click" @command="setLocale">
+            <button class="loc" type="button" :title="$t('common.language')">{{ localeShort }}</button>
+            <template #dropdown>
+              <LocaleMenu :active="activeLocale" />
+            </template>
+          </el-dropdown>
         </div>
       </template>
     </PlatformLogin>
@@ -28,7 +40,8 @@
 import { computed, ref } from 'vue'
 import Login from './tenant/components/Login.vue'
 import PlatformLogin from './platform/views/PlatformLogin.vue'
-import { currentLocale, setLocale } from './locales'
+import LocaleMenu from './LocaleMenu.vue'
+import { currentLocale, currentLocaleShort, setLocale } from './locales'
 
 const props = defineProps({
   // 默认停在哪个 tab：跟随上次使用的模式（App.vue 传入），首次进来是租户登录
@@ -39,9 +52,10 @@ const emit = defineEmits(['login-success'])
 
 const tab = ref(props.initialTab === 'manage' ? 'manage' : 'desk')
 
-// 语言切换：按钮显示「将要切到」的语言，避免用户误以为当前已经是英文界面
-const nextLocaleLabel = computed(() => (currentLocale() === 'zh-CN' ? 'EN' : '中'))
-const toggleLocale = () => setLocale(currentLocale() === 'zh-CN' ? 'en' : 'zh-CN')
+// 语言切换：按钮显示当前语言的短码，菜单里列出全部可选语言并标出当前项。
+// 不走「点一下翻到另一种」—— 语言多于两种时不知道要翻到哪一个。
+const localeShort = computed(() => currentLocaleShort())
+const activeLocale = computed(() => currentLocale())
 
 const onSuccess = (mode) => emit('login-success', mode)
 </script>

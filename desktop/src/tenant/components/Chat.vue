@@ -5,18 +5,18 @@
       <div v-show="chatVisible && sessionPanelVisible" class="session-panel">
         <div class="session-new" :class="{ disabled: !selectedAgentId }" @click="startNewChat">
           <el-icon><Plus /></el-icon>
-          <span>新对话</span>
+          <span>{{ t('chat.newChat') }}</span>
         </div>
         <el-input
           v-model="sessionSearch"
-          placeholder="搜索会话"
+          :placeholder="t('chat.searchSession')"
           prefix-icon="Search"
           clearable
           class="session-search"
           :disabled="!selectedAgentId"
           @input="onSessionSearch"
         />
-        <div class="session-section-title">最近对话</div>
+        <div class="session-section-title">{{ t('chat.recentSessions') }}</div>
         <div class="session-list">
           <div
             v-for="s in sessions"
@@ -25,10 +25,10 @@
             :class="{ active: s.id === currentSessionId }"
             @click="switchSession(s)"
           >
-            <span class="session-item-title">{{ s.title || '新会话' }}</span>
+            <span class="session-item-title">{{ s.title || t('chat.untitledSession') }}</span>
             <el-icon class="session-item-delete" @click.stop="deleteSession(s)"><Delete /></el-icon>
           </div>
-          <div v-if="sessions.length === 0" class="session-empty">暂无对话</div>
+          <div v-if="sessions.length === 0" class="session-empty">{{ t('chat.emptySessions') }}</div>
         </div>
       </div>
 
@@ -42,12 +42,12 @@
             size="small"
             :disabled="!selectedAgentId"
             :class="{ active: sessionPanelVisible }"
-            :title="sessionPanelVisible ? '关闭会话设置' : '打开会话设置'"
+            :title="sessionPanelVisible ? t('chat.closeSessionPanel') : t('chat.openSessionPanel')"
             @click="toggleSessionPanel"
           />
           <el-select
             v-model="selectedAgentId"
-            placeholder="选择智能体"
+            :placeholder="t('chat.selectAgent')"
             filterable
             clearable
             class="agent-select"
@@ -59,24 +59,24 @@
             <template #label="{ value }">
               <span class="agent-selected">
                 {{ agentOf(value)?.name || '' }}
-                <span v-if="agentOf(value)?.is_supervisor" class="agent-selected-hint">超级智能体</span>
+                <span v-if="agentOf(value)?.is_supervisor" class="agent-selected-hint">{{ t('chat.supervisor') }}</span>
               </span>
             </template>
             <el-option
               v-for="a in agents"
               :key="a.id"
-              :label="a.is_supervisor ? `${a.name} · 超级智能体` : a.name"
+              :label="a.is_supervisor ? t('chat.agentOption', { name: a.name }) : a.name"
               :value="a.id"
             >
               <span>{{ a.name }}</span>
-              <span v-if="a.is_supervisor" class="agent-opt-badge">超级智能体</span>
+              <span v-if="a.is_supervisor" class="agent-opt-badge">{{ t('chat.supervisor') }}</span>
             </el-option>
           </el-select>
           <el-button
             size="small"
             text
             :icon="Close"
-            title="关闭会话"
+            :title="t('chat.closeChat')"
             @click="closeChat"
           />
         </div>
@@ -84,11 +84,11 @@
         <!-- 消息区 -->
         <div class="chat-messages" ref="messagesRef">
           <div v-if="hasMore" class="load-more">
-            <el-button size="small" text :loading="loadingMore" @click="loadMore">查看更早消息</el-button>
+            <el-button size="small" text :loading="loadingMore" @click="loadMore">{{ t('chat.loadEarlier') }}</el-button>
           </div>
           <div v-if="messages.length === 0" class="chat-empty">
             <el-icon class="empty-icon"><ChatDotRound /></el-icon>
-            <p>{{ selectedAgentId ? '开始对话吧' : '选择智能体，开始对话' }}</p>
+            <p>{{ selectedAgentId ? t('chat.startChat') : t('chat.selectAgentToChat') }}</p>
           </div>
 
           <div
@@ -121,10 +121,10 @@
                 <div v-if="editingIndex !== i" class="msg-meta">
                   <span class="msg-time">{{ formatMsgTime(m.at) }}</span>
                   <div v-if="!streaming" class="msg-actions">
-                    <button class="msg-action" title="复制" @click="copyMessage(m.content)">
+                    <button class="msg-action" :title="t('chat.copy')" @click="copyMessage(m.content)">
                       <el-icon><CopyDocument /></el-icon>
                     </button>
-                    <button class="msg-action" title="编辑" @click="startEdit(i, m)">
+                    <button class="msg-action" :title="t('chat.edit')" @click="startEdit(i, m)">
                       <el-icon><EditPen /></el-icon>
                     </button>
                   </div>
@@ -140,9 +140,9 @@
                   @keydown.enter.exact.prevent="submitEdit"
                 />
                 <div class="edit-actions">
-                  <el-button size="small" text @click="cancelEdit">取消</el-button>
+                  <el-button size="small" text @click="cancelEdit">{{ t('chat.cancel') }}</el-button>
                   <el-button size="small" type="primary" :disabled="!editingText.trim()" @click="submitEdit">
-                    发送
+                    {{ t('chat.send') }}
                   </el-button>
                 </div>
               </div>
@@ -155,7 +155,7 @@
                   <div v-if="b.type === 'thinking'" class="think-block">
                     <span class="think-label" @click="b.collapsed = !b.collapsed">
                       <el-icon><ArrowRight v-if="b.collapsed" /><ArrowDown v-else /></el-icon>
-                      思考过程
+                      {{ t('chat.thinking') }}
                     </span>
                     <div v-show="!b.collapsed" class="think-text">{{ b.text }}</div>
                   </div>
@@ -173,12 +173,12 @@
                       <div v-if="b.args && b.args !== '{}'" class="tool-args">{{ b.args }}</div>
                       <!-- 子智能体执行过程（call_agent 调用时挂载） -->
                       <div v-if="(b.children || []).length" class="sub-blocks">
-                        <div class="sub-label">子智能体过程</div>
+                        <div class="sub-label">{{ t('chat.subAgentProcess') }}</div>
                         <template v-for="(c, ci) in b.children" :key="ci">
                           <div v-if="c.type === 'thinking'" class="think-block">
                             <span class="think-label" @click="c.collapsed = !c.collapsed">
                               <el-icon><ArrowRight v-if="c.collapsed" /><ArrowDown v-else /></el-icon>
-                              思考过程
+                              {{ t('chat.thinking') }}
                             </span>
                             <div v-show="!c.collapsed" class="think-text">{{ c.text }}</div>
                           </div>
@@ -216,7 +216,7 @@
                   class="text-block md-body"
                   v-html="renderMarkdown(m.content)"
                 ></div>
-                <template v-else>{{ m.content || (m.role === 'assistant' ? '思考中...' : '') }}</template>
+                <template v-else>{{ m.content || (m.role === 'assistant' ? t('chat.thinkingEllipsis') : '') }}</template>
               </template>
 
               <!-- 被终止 / 出错的一轮：正文往往是空的，必须在这里说清原因，
@@ -226,13 +226,13 @@
                 class="msg-status"
                 :class="m.status"
               >
-                {{ m.status === 'stopped' ? '本轮已终止' : '本轮执行失败' }}<template v-if="m.error">：{{ m.error }}</template>
+                {{ m.status === 'stopped' ? t('chat.stopped') : t('chat.failed') }}<template v-if="m.error">{{ t('chat.statusError', { error: m.error }) }}</template>
               </div>
 
               <!-- 本轮产物：后端扫描工作区得到的客观事实（这轮写过哪些文件），
                    点一下直接在工作台里打开；价值判断留给用户自己看 -->
               <div v-if="(m.artifacts || []).length" class="msg-artifacts">
-                <span class="artifacts-label">本轮产出 {{ m.artifacts.length }} 个文件</span>
+                <span class="artifacts-label">{{ t('chat.artifactsCount', { n: m.artifacts.length }) }}</span>
                 <div class="artifacts-list">
                   <button
                     v-for="a in m.artifacts"
@@ -264,10 +264,10 @@
                 <el-icon class="attach-icon"><Document /></el-icon>
                 <span class="attach-name">{{ a.name }}</span>
                 <span class="attach-size">{{ formatSize(a.size) }}</span>
-                <el-icon class="attach-del" title="移除" @click="removeAttachment(i)"><Close /></el-icon>
+                <el-icon class="attach-del" :title="t('chat.remove')" @click="removeAttachment(i)"><Close /></el-icon>
               </div>
               <div v-if="uploading" class="attach-item attach-loading">
-                <el-icon class="attach-icon"><Loading /></el-icon>上传中…
+                <el-icon class="attach-icon"><Loading /></el-icon>{{ t('chat.uploading') }}
               </div>
             </div>
             <el-input
@@ -276,7 +276,7 @@
               :rows="3"
               resize="none"
               class="input-textarea"
-              placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+              :placeholder="t('chat.inputPlaceholder')"
               @keydown.enter.exact.prevent="send"
             />
             <div class="input-actions">
@@ -285,15 +285,15 @@
                    超级智能体例外：它恒读草稿、子调用也恒跟草稿，开关对它无效，
                    所以直接换成只读说明 —— 留一个「关着却仍在跑草稿」的开关只会误导。 -->
               <el-tooltip v-if="selectedIsSupervisor" placement="top"
-                          content="超级智能体是管理面：任何入口都读草稿，调起的智能体 / 工作流也跟草稿">
-                <span class="follow-drafts readonly">超级智能体始终读草稿</span>
+                          :content="t('chat.supervisorDraftsTip')">
+                <span class="follow-drafts readonly">{{ t('chat.supervisorDraftsLabel') }}</span>
               </el-tooltip>
               <el-tooltip v-else placement="top" :content="followDrafts
-                ? '本次对话调起的智能体 / 工作流读草稿（含未发布的修改）'
-                : '本次对话调起的智能体 / 工作流读已发布版本（没发布过会报错）'">
+                ? t('chat.followDraftsOnTip')
+                : t('chat.followDraftsOffTip')">
                 <label class="follow-drafts">
                   <el-switch v-model="followDrafts" size="small" />
-                  <span>子调用跟草稿</span>
+                  <span>{{ t('chat.followDraftsLabel') }}</span>
                 </label>
               </el-tooltip>
               <el-button
@@ -302,7 +302,7 @@
                 :icon="Plus"
                 class="add-btn"
                 :disabled="!selectedAgentId || uploading"
-                title="添加文件（上传到本次会话的工作区，智能体可直接读取）"
+                :title="t('chat.addFile')"
                 @click="pickFiles"
               />
               <!-- 发送 / 停止：同一个按钮按 streaming 切换
@@ -313,7 +313,7 @@
                 circle
                 :icon="streaming ? VideoPause : Top"
                 :disabled="!streaming && (!selectedAgentId || (!input.trim() && !attachments.length))"
-                :title="streaming ? '停止' : '发送'"
+                :title="streaming ? t('chat.stop') : t('chat.send')"
                 @click="streaming ? stopRun() : send()"
               />
             </div>
@@ -338,6 +338,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElSelect, ElOption, ElInput, ElButton, ElIcon, ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Delete, Document, Plus, Close, Top, ArrowRight, ArrowDown, Loading, CircleCheck, CircleClose, MagicStick, VideoPause, CopyDocument, EditPen } from '@element-plus/icons-vue'
 import adminApi from '../config/admin.js'
@@ -345,6 +346,7 @@ import { getToken } from '../utils/auth.js'
 import { renderMarkdown } from '../utils/markdown.js'
 import { sessionContext, requestOpenWsFile } from '../store/sessionContext.js'
 import Workbench from './Workbench.vue'
+import { formatError } from '../../locales'
 
 // 右侧工作台：开关与宽度由父级 MainWindow 持有，这里只负责渲染与拖拽事件转发。
 // chatVisible 用于「会话已关闭、但工作台仍开着」时，只隐藏会话侧栏与对话区。
@@ -357,6 +359,9 @@ const props = defineProps({
   sessionPanelOpen: { type: Boolean, default: true },
 })
 const emit = defineEmits(['close-chat', 'session-panel-change', 'wb-resize', 'open-workbench', 'open-entity'])
+
+const { t } = useI18n()
+
 const closeChat = () => emit('close-chat')
 
 // ===== 会话 → 内容区联动：建 / 改实体就把右侧内容区切过去并定位到它 =====
@@ -513,7 +518,7 @@ const inputHeight = ref(150)
 // 所以每条消息只用「当前 agent 名」即可，不必往消息对象里塞 agent 名。
 const agentDisplayName = computed(() => {
   const a = agents.value.find((x) => x.id === selectedAgentId.value)
-  return (a && a.name) || '智能体'
+  return (a && a.name) || t('chat.defaultAgentName')
 })
 
 // 超级智能体恒读草稿（后端 resolveDefinitionMode 强制），聊天里的「子调用跟草稿」开关对它无效，
@@ -553,11 +558,11 @@ const elapsedMs = (m) => {
 const elapsedText = (m) => {
   const ms = elapsedMs(m)
   if (ms <= 0) return ''
-  if (ms < 1000) return `执行用时 ${ms} 毫秒`
-  if (ms < 60000) return `执行用时 ${(ms / 1000).toFixed(1)} 秒`
+  if (ms < 1000) return t('chat.elapsedMs', { ms })
+  if (ms < 60000) return t('chat.elapsedSeconds', { s: (ms / 1000).toFixed(1) })
   const min = Math.floor(ms / 60000)
   const sec = Math.round((ms % 60000) / 1000)
-  return `执行用时 ${min} 分 ${sec} 秒`
+  return t('chat.elapsedMinutes', { m: min, s: sec })
 }
 
 const toggleSessionPanel = () => {
@@ -568,8 +573,10 @@ const toggleSessionPanel = () => {
 // 以前这些地方是静默 return：接口一异常（401 / 500 / 路由 404），界面就只剩
 // 「暂无对话」，看起来像历史被删了，实际是没读到 —— 排查时完全无从下手。
 const reportLoadError = (what, res, body) => {
-  const detail = body?.msg || (res && !res.ok ? `HTTP ${res.status}` : '')
-  ElMessage.error(detail ? `${what}：${detail}` : `${what}，请重试`)
+  const detail = formatError(body) || (res && !res.ok ? `HTTP ${res.status}` : '')
+  ElMessage.error(detail
+    ? t('chat.loadErrorWithDetail', { what, detail })
+    : t('chat.loadErrorRetry', { what }))
 }
 
 const fetchAgents = async () => {
@@ -585,18 +592,18 @@ const fetchAgents = async () => {
       body: JSON.stringify({ page: 1, limit: -1 })
     })
     if (!response.ok) {
-      reportLoadError('获取智能体列表失败', response)
+      reportLoadError(t('chat.loadAgentsFailed'), response)
       return
     }
     const data = await response.json()
     if (data.code !== 200) {
-      reportLoadError('获取智能体列表失败', response, data)
+      reportLoadError(t('chat.loadAgentsFailed'), response, data)
       return
     }
     agents.value = data.data.items || []
   } catch (e) {
-    console.error('获取智能体列表失败:', e)
-    ElMessage.error('获取智能体列表失败：网络错误')
+    console.error('load agents failed:', e)
+    ElMessage.error(t('chat.loadAgentsNetError'))
   }
 }
 
@@ -615,18 +622,18 @@ const fetchSessions = async (keyword = '') => {
       headers: { 'Authorization': `Bearer ${token}` }
     })
     if (!response.ok) {
-      reportLoadError('获取会话列表失败', response)
+      reportLoadError(t('chat.loadSessionsFailed'), response)
       return
     }
     const data = await response.json()
     if (data.code !== 200) {
-      reportLoadError('获取会话列表失败', response, data)
+      reportLoadError(t('chat.loadSessionsFailed'), response, data)
       return
     }
     sessions.value = data.data.items || []
   } catch (e) {
-    console.error('获取会话列表失败:', e)
-    ElMessage.error('获取会话列表失败：网络错误')
+    console.error('load sessions failed:', e)
+    ElMessage.error(t('chat.loadSessionsNetError'))
   }
 }
 
@@ -718,12 +725,12 @@ const loadMessages = async (before = '') => {
       headers: { 'Authorization': `Bearer ${token}` }
     })
     if (!response.ok) {
-      reportLoadError('加载历史消息失败', response)
+      reportLoadError(t('chat.loadMessagesFailed'), response)
       return
     }
     const data = await response.json()
     if (data.code !== 200) {
-      reportLoadError('加载历史消息失败', response, data)
+      reportLoadError(t('chat.loadMessagesFailed'), response, data)
       return
     }
     // 历史消息带 duration_ms（后端 session_records.duration_ms）→ 归一化成 durationMs，
@@ -743,8 +750,8 @@ const loadMessages = async (before = '') => {
     oldestCreatedAt.value = data.data.oldest_created_at || ''
     scrollToBottom()
   } catch (e) {
-    console.error('加载历史失败:', e)
-    ElMessage.error('加载历史消息失败：网络错误')
+    console.error('load messages failed:', e)
+    ElMessage.error(t('chat.loadMessagesNetError'))
   }
 }
 
@@ -764,9 +771,9 @@ const loadMore = async () => {
 }
 
 const deleteSession = (s) => {
-  ElMessageBox.confirm('确定删除该会话吗？', '删除确认', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
+  ElMessageBox.confirm(t('chat.deleteSessionConfirm'), t('chat.deleteConfirmTitle'), {
+    confirmButtonText: t('chat.confirm'),
+    cancelButtonText: t('chat.cancel'),
     type: 'warning'
   }).then(async () => {
     try {
@@ -860,9 +867,9 @@ const formatMsgTime = (ts) => {
 const copyMessage = async (text) => {
   try {
     await navigator.clipboard.writeText(text || '')
-    ElMessage.success('已复制')
+    ElMessage.success(t('chat.copied'))
   } catch (e) {
-    ElMessage.error('复制失败')
+    ElMessage.error(t('chat.copyFailed'))
   }
 }
 
@@ -973,14 +980,14 @@ const uploadAttachments = async (picked) => {
   if (!token || !selectedAgentId.value) return
   const room = MAX_UPLOAD_FILES - attachments.value.length
   if (room <= 0) {
-    ElMessage.warning(`一条消息最多 ${MAX_UPLOAD_FILES} 个附件`)
+    ElMessage.warning(t('chat.tooManyFiles', { n: MAX_UPLOAD_FILES }))
     return
   }
   uploading.value = true
   try {
     for (const f of picked.slice(0, room)) {
       if (f.size > MAX_UPLOAD_BYTES) {
-        ElMessage.warning(`${f.name} 超过 20 MB，已跳过`)
+        ElMessage.warning(t('chat.fileTooLarge', { name: f.name, size: MAX_UPLOAD_BYTES >> 20 }))
         continue
       }
       const fd = new FormData()
@@ -994,7 +1001,7 @@ const uploadAttachments = async (picked) => {
           body: fd
         })
         const body = await res.json().catch(() => ({}))
-        if (!res.ok || body.code !== 200) throw new Error(body.msg || '上传失败')
+        if (!res.ok || body.code !== 200) throw new Error(formatError(body) || t('chat.uploadFailed'))
         const d = body.data || {}
         if (d.session_id && !currentSessionId.value) {
           currentSessionId.value = d.session_id
@@ -1002,7 +1009,9 @@ const uploadAttachments = async (picked) => {
         }
         attachments.value.push({ name: d.name || f.name, path: d.path, size: d.size || f.size })
       } catch (err) {
-        ElMessage.error(`${f.name}：${err.message || '上传失败'}`)
+        ElMessage.error(t('chat.uploadFileFailed', {
+          name: f.name, msg: err.message || t('chat.uploadFailed')
+        }))
       }
     }
   } finally {
@@ -1013,7 +1022,7 @@ const uploadAttachments = async (picked) => {
 const send = async () => {
   if (streaming.value || uploading.value || !selectedAgentId.value) return
   // 只贴文件不写字也允许：给一句中性指令，免得空消息被后端拒
-  const text = input.value.trim() || (attachments.value.length ? '请查看我上传的文件。' : '')
+  const text = input.value.trim() || (attachments.value.length ? t('chat.attachOnlyMessage') : '')
   if (!text) return
 
   input.value = ''
@@ -1042,7 +1051,7 @@ const sendMessage = async (text) => {
 
   const token = getToken()
   if (!token) {
-    assistantMsg.content = '未登录'
+    assistantMsg.content = t('chat.notLoggedIn')
     assistantMsg.durationMs = Date.now() - assistantMsg.startedAt
     streaming.value = false
     return
@@ -1073,7 +1082,7 @@ const sendMessage = async (text) => {
     })
 
     if (!response.ok) {
-      assistantMsg.content = `请求失败（${response.status}）`
+      assistantMsg.content = t('chat.requestFailed', { status: response.status })
       return
     }
 
@@ -1142,7 +1151,7 @@ const sendMessage = async (text) => {
         assistantMsg.artifacts = Array.isArray(data.artifacts) ? data.artifacts : []
       } else if (event === 'RUN_ERROR') {
         if (data.duration_ms > 0) assistantMsg.durationMs = data.duration_ms
-        const errText = data.message ? `[错误] ${data.message}` : ''
+        const errText = data.message ? t('chat.runError', { msg: data.message }) : ''
         if (errText) {
           assistantMsg.content += '\n' + errText // 留在 content：复制按钮读的是它
           // 同时进块：模板只在「无 blocks」时渲染 content，
@@ -1170,13 +1179,13 @@ const sendMessage = async (text) => {
       // 用户点了停止：连接已断，服务端据断连终止本轮并记为 stopped。
       // 断开后就收不到 RUN_ERROR 了，这里自己补一条终止标记（与 RUN_ERROR 同形状：
       // 同时进 content（复制按钮读它）和块（模板只在无 blocks 时渲染 content））。
-      const stopText = '[已终止]'
+      const stopText = t('chat.stoppedMark')
       assistantMsg.content += (assistantMsg.content ? '\n' : '') + stopText
       appendBlock(assistantMsg.blocks, 'text', stopText)
     } else {
-      console.error('对话失败:', e)
+      console.error('chat failed:', e)
       if (!assistantMsg.content) {
-        assistantMsg.content = '对话失败，请重试'
+        assistantMsg.content = t('chat.chatFailed')
       }
     }
   } finally {

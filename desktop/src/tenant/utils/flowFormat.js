@@ -1,3 +1,5 @@
+import i18n from '@/locales'
+
 /**
  * 工作流页（Flows.vue 及其子组件）共用的纯格式化 / 元数据。
  * 抽出来的原因：卡片、编辑页头部、端点面板三处都要用，留在某个组件里只能靠重复定义或层层传参。
@@ -7,9 +9,10 @@
 //   1 正常：可修改、可运行（新建默认）—— 叫「正常」而不是「编辑」：它是状态名，
 //     不是动作；列表上写「编辑」会让人以为是个按钮
 //   3 废弃：不可修改、不可运行（只由手工设置）
+// text 用 getter：STATUS_META 是模块级常量，直接取值会把初始语言写死
 export const STATUS_META = {
-  1: { text: '正常', tag: 'success' },
-  3: { text: '废弃', tag: 'danger' }
+  1: { get text() { return i18n.global.t('flow.status.normal') }, tag: 'success' },
+  3: { get text() { return i18n.global.t('flow.status.deprecated') }, tag: 'danger' }
 }
 
 export const statusMeta = (status) => STATUS_META[status] || STATUS_META[1]

@@ -1,8 +1,8 @@
 <template>
   <div class="rpc-node-props">
     <div class="tabs">
-      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">配置</button>
-      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">执行结果</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">{{ t('flow.nodeProps.tabConfig') }}</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">{{ t('flow.nodeProps.tabResult') }}</button>
     </div>
 
     <div class="tab-content">
@@ -10,19 +10,19 @@
         <!-- 输入变量 -->
         <div class="props-section">
           <div class="section-title">
-            <span>输入变量</span>
+            <span>{{ t('flow.common.inputVars') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddInputVariable">
               <el-icon><Plus /></el-icon>
             </button>
           </div>
           <div class="input-variables-list">
             <div v-if="Object.keys(inputVariables).length === 0" class="input-empty-state">
-              <p>暂无输入变量</p>
+              <p>{{ t('flow.common.noInputVars') }}</p>
             </div>
             <div v-for="(variable, name) in inputVariables" :key="name" class="input-variable-row">
               <input type="text" :value="name" class="input-variable-name-input"
                 @focus="handleInputVariableFocus(name)"
-                @blur="handleUpdateInputVariableName(name, $event.target.value)" placeholder="变量名" />
+                @blur="handleUpdateInputVariableName(name, $event.target.value)" :placeholder="t('flow.common.varName')" />
               <div class="input-variable-content">
                 <button class="show-content-btn input-variable-btn" @click="handleShowInputVariableSelect(name, $event)">
                   <template v-if="variable.source_key">
@@ -42,7 +42,7 @@
                       </template>
                     </template>
                   </template>
-                  <template v-else>选择变量</template>
+                  <template v-else>{{ t('flow.common.selectVar') }}</template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteInputVariable(name)">
                   <el-icon><Delete /></el-icon>
@@ -54,48 +54,48 @@
 
         <!-- RPC 配置 -->
         <div class="props-section">
-          <div class="section-title"><span>RPC 配置</span></div>
+          <div class="section-title"><span>{{ t('flow.rpcNode.section') }}</span></div>
           <div class="rpc-config">
             <div class="config-row">
-              <label class="config-label">目标类型</label>
+              <label class="config-label">{{ t('flow.rpcNode.targetType') }}</label>
               <el-select v-model="targetType" class="config-select" size="small" @change="handleTargetTypeChange">
-                <el-option label="外部连接" value="connection" />
-                <el-option label="本地端点" value="endpoint" />
+                <el-option :label="t('flow.rpcNode.typeConnection')" value="connection" />
+                <el-option :label="t('flow.rpcNode.typeEndpoint')" value="endpoint" />
               </el-select>
             </div>
             <template v-if="targetType === 'connection'">
               <div class="config-row">
-                <label class="config-label">RPC 连接</label>
-                <el-select v-model="connectionId" class="config-select" size="small" placeholder="选择连接" filterable @change="handleConnectionChange">
+                <label class="config-label">{{ t('flow.rpcNode.connection') }}</label>
+                <el-select v-model="connectionId" class="config-select" size="small" :placeholder="t('flow.rpcNode.connectionPlaceholder')" filterable @change="handleConnectionChange">
                   <el-option v-for="c in connections" :key="c.id" :label="c.display_name || c.name" :value="c.id" />
                 </el-select>
               </div>
               <div class="config-row">
-                <label class="config-label">工具</label>
-                <el-select v-model="toolName" class="config-select" size="small" placeholder="选择工具" filterable @change="saveRpcConfig">
+                <label class="config-label">{{ t('flow.rpcNode.tool') }}</label>
+                <el-select v-model="toolName" class="config-select" size="small" :placeholder="t('flow.rpcNode.toolPlaceholder')" filterable @change="saveRpcConfig">
                   <el-option v-for="t in tools" :key="t.name" :label="t.name" :value="t.name" />
                 </el-select>
               </div>
             </template>
             <template v-else>
               <div class="config-row">
-                <label class="config-label">端点</label>
-                <el-select v-model="endpointId" class="config-select" size="small" placeholder="选择端点" filterable @change="saveRpcConfig">
+                <label class="config-label">{{ t('flow.rpcNode.endpoint') }}</label>
+                <el-select v-model="endpointId" class="config-select" size="small" :placeholder="t('flow.rpcNode.endpointPlaceholder')" filterable @change="saveRpcConfig">
                   <!-- 存端点名而不是 id：名字租户内唯一、改名同步，导出导入后也不会变 -->
                   <el-option v-for="ep in endpoints" :key="ep.id" :label="ep.name" :value="ep.name" />
                 </el-select>
               </div>
             </template>
             <div class="config-row">
-              <label class="config-label">订阅进度</label>
+              <label class="config-label">{{ t('flow.rpcNode.subscribeProgress') }}</label>
               <el-switch v-model="progressEnabled" size="small" @change="saveRpcConfig" />
             </div>
             <div class="config-hint">
-              关闭时同步执行、不接收 progress（固定输出变量 <code>progress</code> 恒为空数组）；
-              开启后逐条接收，可用于响应处理脚本的逐条事件。
+              {{ t('flow.rpcNode.progressHint.p1') }}<code>progress</code>{{ t('flow.rpcNode.progressHint.p2') }}
+              {{ t('flow.rpcNode.progressHint.p3') }}
             </div>
             <div class="config-row config-row-col">
-              <label class="config-label" v-pre>参数 (JSON，字符串值支持 {{.input.xxx}} 模板)</label>
+              <label class="config-label">{{ t('flow.rpcNode.argsLabel') }}</label>
               <textarea :value="argumentsText" class="arguments-editor" placeholder='{"city": "{{.input.city}}"}' rows="5"
                 @blur="handleArgumentsChange($event.target.value)" spellcheck="false"></textarea>
             </div>
@@ -105,24 +105,23 @@
         <!-- Handler 脚本 -->
         <div class="props-section">
           <div class="section-title">
-            <span>响应处理脚本（可选）</span>
+            <span>{{ t('flow.httpNode.handlerSection') }}</span>
             <el-switch v-model="handlerEnabled" size="small" @change="handleHandlerToggle" />
           </div>
           <div v-if="handlerEnabled" class="handler-config">
             <div class="handler-lang-row">
-              <label class="handler-label">脚本语言</label>
+              <label class="handler-label">{{ t('flow.common.scriptLanguage') }}</label>
               <el-select v-model="handlerLang" class="handler-lang-select" size="small" @change="handleHandlerLangChange">
                 <el-option v-for="l in handlerLanguages" :key="l" :label="l" :value="l" />
               </el-select>
-              <label class="handler-label">脚本超时</label>
+              <label class="handler-label">{{ t('flow.httpNode.handlerTimeout') }}</label>
               <el-switch v-model="handlerTimeoutEnabled" size="small" @change="handleHandlerTimeoutToggle" />
               <input v-if="handlerTimeoutEnabled" type="number" :value="handlerTimeoutSeconds" class="timeout-input"
                 min="1" max="300" @blur="handleHandlerTimeoutChange($event.target.value)" />
-              <span v-if="handlerTimeoutEnabled" class="timeout-unit">秒</span>
+              <span v-if="handlerTimeoutEnabled" class="timeout-unit">{{ t('flow.common.seconds') }}</span>
             </div>
             <div class="handler-hint">
-              固定输出变量 <code>result</code> / <code>progress</code> / <code>error</code> 由节点自动写入（有没有脚本都一样），
-              脚本里 return 这三个名字会被忽略并记日志；脚本只用于处理自定义输出变量。
+              {{ t('flow.handlerHint.prefix') }}<code>result</code> / <code>progress</code> / <code>error</code>{{ t('flow.handlerHint.autoWrite') }}
             </div>
             <textarea :value="handlerScript" class="handler-editor" :placeholder="handlerPlaceholder"
               rows="8" @blur="handleHandlerScriptChange($event.target.value)" spellcheck="false"></textarea>
@@ -165,6 +164,9 @@ import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { RPC_OUTPUTS } from '../nodeFactory.js'
 import { useInputVariables } from './inputVariables.js'
 import { useHandlerConfig } from './handlerConfig.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: { type: Object, default: null },
@@ -225,22 +227,7 @@ const {
   onChange: () => saveRpcConfig()
 })
 
-const handlerPlaceholder = computed(() => {
-  return `-- 数据通过 input 传入：
--- input.result      - 工具返回文本
--- input.is_error    - 是否错误 (true/false)
--- input.error       - 错误信息（仅出错时）
--- input.progress    - 全量进度数组
--- input.done        - 收尾标记 (true)
---
--- 逐条 progress 到达时也会执行本脚本：
--- input.progress     - 本条进度结构化对象
--- input.progress_raw - 本条原始 JSON 字符串
---
--- 固定输出变量 result / progress / error 一律由节点自动写入，
--- 脚本里 return 这三个名字会被忽略。脚本只处理自定义输出变量：
--- return { myVar = value }  (string 追加到变量末尾、非 string 覆盖)`
-})
+const handlerPlaceholder = computed(() => t('flow.nodeProps.handlerPlaceholderToolCall'))
 
 // ── 输入变量：增删改 / 校验 / 快照统一在 inputVariables.js ──
 const {
@@ -275,11 +262,11 @@ const fetchConnections = async () => {
       },
       body: JSON.stringify({ page: 1, limit: -1, sort_by: ['name'], sort_order: ['desc'] })
     })
-    if (!response.ok) throw new Error('获取 RPC 连接失败')
+    if (!response.ok) throw new Error(t('flow.message.rpcConnectionsFailed'))
     const data = await response.json()
     connections.value = data?.data?.items || []
   } catch (e) {
-    console.error('获取 RPC 连接失败:', e)
+    console.error(t('flow.message.rpcConnectionsFailed') + ':', e)
   }
 }
 
@@ -292,12 +279,12 @@ const fetchTools = async (connId) => {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${token}` }
     })
-    if (!response.ok) throw new Error('获取工具列表失败')
+    if (!response.ok) throw new Error(t('flow.message.toolsFailed'))
     const data = await response.json()
     const items = data?.data?.items || data?.data || []
     tools.value = Array.isArray(items) ? items : []
   } catch (e) {
-    console.error('获取工具列表失败:', e)
+    console.error(t('flow.message.toolsFailed') + ':', e)
   }
 }
 
@@ -313,7 +300,7 @@ const fetchEndpoints = async () => {
       },
       body: JSON.stringify({ page: 1, limit: 200, protocol: 'rpc', sort_by: ['name'], sort_order: ['asc'] })
     })
-    if (!response.ok) throw new Error('获取本租户端点失败')
+    if (!response.ok) throw new Error(t('flow.message.endpointsFailed'))
     const data = await response.json()
     const items = data?.data?.items || data?.data || []
     const list = Array.isArray(items) ? items : []
@@ -321,7 +308,7 @@ const fetchEndpoints = async () => {
       ? list.filter(ep => !(ep.target_type === 'flow' && String(ep.target_id) === String(props.flowId)))
       : list
   } catch (e) {
-    console.error('获取本租户端点失败:', e)
+    console.error(t('flow.message.endpointsFailed') + ':', e)
   }
 }
 

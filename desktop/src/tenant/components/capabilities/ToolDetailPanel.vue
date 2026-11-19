@@ -9,7 +9,7 @@
     <div class="panel-resizer" @mousedown="startResize"></div>
     <div class="panel-header">
       <div class="panel-title">
-        {{ group ? '连接详情' : '工具详情' }}
+        {{ group ? t('toolDetail.titleConn') : t('toolDetail.title') }}
         <span class="ref-tag">{{ group ? group.name : (tool?.label || tool?.name || '') }}</span>
       </div>
       <span class="close-icon" @click="close">&#xd7;</span>
@@ -23,48 +23,48 @@
             {{ availableText }}
           </span>
         </div>
-        <div class="td-desc">{{ tool.description || '无描述' }}</div>
+        <div class="td-desc">{{ tool.description || t('customTools.noDescription') }}</div>
 
         <div class="td-section">
-          <div class="td-title">标识</div>
+          <div class="td-title">{{ t('toolDetail.identity') }}</div>
           <div class="td-kv">
-            <span class="td-k">授权 ref</span>
+            <span class="td-k">{{ t('toolDetail.ref') }}</span>
             <code class="td-v">{{ tool.ref }}</code>
           </div>
           <div class="td-kv">
-            <span class="td-k">模型侧工具名</span>
+            <span class="td-k">{{ t('toolDetail.modelName') }}</span>
             <code class="td-v">{{ tool.name }}</code>
           </div>
           <div v-if="groupLabel" class="td-kv">
-            <span class="td-k">归属</span>
+            <span class="td-k">{{ t('toolDetail.owner') }}</span>
             <span class="td-v td-plain">{{ groupLabel }}</span>
           </div>
         </div>
 
-        <div v-if="tool.unavailable_reason" class="td-section">
-          <div class="td-title">为什么不可用</div>
-          <div class="td-reason">{{ tool.unavailable_reason }}</div>
+        <div v-if="reasonText" class="td-section">
+          <div class="td-title">{{ t('toolDetail.whyUnavailable') }}</div>
+          <div class="td-reason">{{ reasonText }}</div>
         </div>
 
         <div class="td-section">
-          <div class="td-title">参数{{ params.length ? `（${params.length}）` : '' }}</div>
+          <div class="td-title">
+            {{ params.length ? t('toolDetail.paramsCount', { n: params.length }) : t('toolDetail.params') }}
+          </div>
           <template v-if="params.length">
             <div v-for="p in params" :key="p.name" class="td-param">
               <div class="td-param-head">
                 <code class="td-param-name">{{ p.name }}</code>
                 <span class="td-type">{{ p.type }}</span>
-                <span v-if="p.required" class="td-req">必填</span>
+                <span v-if="p.required" class="td-req">{{ t('customTools.required') }}</span>
               </div>
               <div v-if="p.desc" class="td-param-desc">{{ p.desc }}</div>
             </div>
           </template>
-          <div v-else class="td-empty">
-            没有声明参数 —— 这个工具不需要入参，调用时传空对象即可。
-          </div>
+          <div v-else class="td-empty">{{ t('toolDetail.noParams') }}</div>
         </div>
 
         <div v-if="hasRaw" class="td-section">
-          <div class="td-title">参数 schema（原始 JSON）</div>
+          <div class="td-title">{{ t('toolDetail.rawSchema') }}</div>
           <pre class="td-pre">{{ rawSchema }}</pre>
         </div>
       </div>
@@ -74,6 +74,10 @@
 
 <script setup>
 import { computed, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { unavailableText } from '../../utils/unavailable'
+
+const { t, te } = useI18n()
 
 const visible = ref(false)
 const tool = ref(null)
@@ -84,11 +88,16 @@ const panelRef = ref(null)
 const panelWidth = ref(520)
 
 // 可用性文案按来源区分：本地端点用「对外开放 / 仅内部」，其余用「可用 / 不可用」
+// 不可用原因：后端给了 unavailable_code 就本地化，没有（旧后端 / 未翻译的编码）才显示中文原文
+const reasonText = computed(() => unavailableText(t, te, tool.value, ''))
+
 const availableText = computed(() => {
   if (!tool.value) return ''
   const isLocal = String(tool.value.ref || '').startsWith('local:')
-  if (isLocal) return tool.value.available === false ? '仅内部' : '对外开放'
-  return tool.value.available === false ? '不可用' : '可用'
+  if (isLocal) {
+    return tool.value.available === false ? t('toolsTab.localInternal') : t('toolsTab.localExposed')
+  }
+  return tool.value.available === false ? t('toolDetail.unavailable') : t('toolDetail.available')
 })
 
 // 类型展示：enum 直接列可选值，数组带出元素类型
@@ -183,8 +192,8 @@ watch(visible, (v) => {
 onUnmounted(stopListeners)
 
 // 父组件调用：open(工具项, 归属说明)
-const open = (t, label = '') => {
-  tool.value = t || null
+const open = (item, label = '') => {
+  tool.value = item || null
   groupLabel.value = label
   visible.value = true
 }

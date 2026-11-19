@@ -6,27 +6,31 @@
     <!-- 顶部：计数与动作 -->
     <div class="tt-bar">
       <div class="tt-summary">
-        共 <strong>{{ toolRefCount }}</strong> 个工具 · <strong>{{ customGroups.length }}</strong> 个工具组 ·
-        <strong>{{ connGroups.length }}</strong> 个远程连接 · <strong>{{ localItems.length }}</strong> 个本地工作流端点
+        {{ t('toolsTab.summary', {
+          tools: toolRefCount,
+          groups: customGroups.length,
+          conns: connGroups.length,
+          local: localItems.length
+        }) }}
       </div>
       <div class="tt-actions">
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
-        <el-button size="small" type="primary" @click="openNewGroup">新建工具组</el-button>
+        <el-button size="small" :loading="loading" @click="load">{{ t('common.refresh') }}</el-button>
+        <el-button size="small" type="primary" @click="openNewGroup">{{ t('toolsTab.newGroup') }}</el-button>
       </div>
     </div>
 
-    <div v-if="loading" class="editor-tip">加载中...</div>
+    <div v-if="loading" class="editor-tip">{{ t('common.loading') }}</div>
     <div v-else-if="loadError" class="editor-tip">{{ loadError }}</div>
     <template v-else>
       <!-- ① 工具组（可写） -->
       <section class="tt-section">
         <div class="tt-sec-title clickable" @click="toggleSection('group')">
           <el-icon class="tt-caret" :class="{ open: !isSectionCollapsed('group') }"><CaretRight /></el-icon>
-          工具组（{{ customGroups.length }}）
-          <span class="tt-sec-hint">把常用工具打包，便于给 agent 批量授权；成员只能是天然组或单个工具</span>
+          {{ t('toolsTab.groupsTitle', { n: customGroups.length }) }}
+          <span class="tt-sec-hint">{{ t('toolsTab.groupsHint') }}</span>
         </div>
         <div v-if="!customGroups.length" v-show="!isSectionCollapsed('group')" class="editor-tip">
-          还没有工具组 —— 点右上「新建工具组」创建，例如 <code>fs-basic</code>（只含文件类工具）。
+          {{ t('toolsTab.groupsEmpty', { example: 'fs-basic' }) }}
         </div>
         <div v-else v-show="!isSectionCollapsed('group')" class="tt-list">
           <div v-for="g in customGroups" :key="g.name" class="tt-row">
@@ -34,15 +38,15 @@
             <div class="tt-main">
               <div class="tt-name">
                 {{ g.name }}
-                <span class="ref-tag">{{ (g.items || []).length }} 个成员</span>
+                <span class="ref-tag">{{ t('toolsTab.members', { n: (g.items || []).length }) }}</span>
                 <span class="ref-tag">group:{{ g.name }}</span>
               </div>
               <div class="tt-desc" :title="g.description || refsText(g)">
-                {{ g.description || refsText(g) || '无描述' }}
+                {{ g.description || refsText(g) || t('customTools.noDescription') }}
               </div>
             </div>
-            <el-button size="small" text @click="showUsage('group:' + g.name)">引用</el-button>
-            <el-button size="small" text @click="editGroup(g)">编辑</el-button>
+            <el-button size="small" text @click="showUsage('group:' + g.name)">{{ t('toolsTab.usage') }}</el-button>
+            <el-button size="small" text @click="editGroup(g)">{{ t('common.edit') }}</el-button>
           </div>
         </div>
       </section>
@@ -51,28 +55,28 @@
       <section class="tt-section">
         <div class="tt-sec-title clickable" @click="toggleSection('builtin')">
           <el-icon class="tt-caret" :class="{ open: !isSectionCollapsed('builtin') }"><CaretRight /></el-icon>
-          内置工具（{{ builtinCount }}）
-          <span class="tt-sec-hint">代码内置，不可编辑；按类目分组</span>
+          {{ t('toolsTab.builtinTitle', { n: builtinCount }) }}
+          <span class="tt-sec-hint">{{ t('toolsTab.builtinHint') }}</span>
         </div>
         <div v-for="g in builtinGroups" :key="g.ref" v-show="!isSectionCollapsed('builtin')" class="tt-group">
           <div class="tt-group-head" @click="toggle(g.ref)">
             <el-icon class="tt-caret" :class="{ open: !isCollapsed(g.ref) }"><CaretRight /></el-icon>
-            <span class="tt-group-name">{{ g.name }}（{{ (g.items || []).length }}）</span>
+            <span class="tt-group-name">{{ groupName(t, te, g) }}（{{ (g.items || []).length }}）</span>
             <span class="tt-group-ref">{{ g.ref }}</span>
-            <span v-if="g.description" class="tt-group-desc">{{ g.description }}</span>
+            <span v-if="groupDesc(t, te, g)" class="tt-group-desc">{{ groupDesc(t, te, g) }}</span>
           </div>
           <div v-show="!isCollapsed(g.ref)" class="tt-list">
-            <div v-for="t in (g.items || [])" :key="t.ref" class="tt-row sub">
+            <div v-for="tool in (g.items || [])" :key="tool.ref" class="tt-row sub">
               <el-icon class="tt-icon"><Tools /></el-icon>
               <div class="tt-main">
                 <div class="tt-name">
-                  {{ t.label || t.name }}
-                  <span class="ref-tag">{{ t.ref }}</span>
+                  {{ tool.label || tool.name }}
+                  <span class="ref-tag">{{ tool.ref }}</span>
                 </div>
-                <div class="tt-desc" :title="t.description">{{ t.description }}</div>
+                <div class="tt-desc" :title="tool.description">{{ tool.description }}</div>
               </div>
-              <el-button size="small" text class="tt-detail-btn" @click="showDetail(t, g.name)">详情</el-button>
-              <el-button size="small" text @click="showUsage(t.ref)">引用</el-button>
+              <el-button size="small" text class="tt-detail-btn" @click="showDetail(tool, groupName(t, te, g))">{{ t('toolsTab.detail') }}</el-button>
+              <el-button size="small" text @click="showUsage(tool.ref)">{{ t('toolsTab.usage') }}</el-button>
             </div>
           </div>
         </div>
@@ -82,14 +86,12 @@
       <section class="tt-section">
         <div class="tt-sec-title clickable" @click="toggleSection('conn')">
           <el-icon class="tt-caret" :class="{ open: !isSectionCollapsed('conn') }"><CaretRight /></el-icon>
-          远程连接（{{ connGroups.length }}）
-          <span class="tt-sec-hint">
-            远程 MCP / RPC 服务，我们连出去用它的工具。连接本身在「设置 → MCP / RPC 连接」管理
-          </span>
+          {{ t('toolsTab.connTitle', { n: connGroups.length }) }}
+          <span class="tt-sec-hint">{{ t('toolsTab.connHint') }}</span>
         </div>
         <div v-if="!connGroups.length" v-show="!isSectionCollapsed('conn')" class="editor-tip">
-          还没有远程 MCP / RPC 连接。
-          <el-button size="small" text type="primary" @click="$emit('nav', 'settings')">去设置页添加连接</el-button>
+          {{ t('toolsTab.connEmpty') }}
+          <el-button size="small" text type="primary" @click="$emit('nav', 'settings')">{{ t('toolsTab.connAdd') }}</el-button>
         </div>
         <div v-for="g in connGroups" :key="g.ref" v-show="!isSectionCollapsed('conn')" class="tt-group">
           <div class="tt-group-head" @click="toggle(g.ref)">
@@ -97,27 +99,29 @@
             <el-icon class="tt-icon"><Connection /></el-icon>
             <span class="tt-group-name">{{ g.name }}（{{ (g.items || []).length }}）</span>
             <span class="ref-tag">{{ kindLabel(g.kind) }}</span>
-            <span v-if="g.available === false" class="ref-tag warn">未启用</span>
+            <span v-if="g.available === false" class="ref-tag warn">{{ t('toolsTab.notEnabled') }}</span>
             <span class="tt-group-ref">{{ g.ref }}</span>
-            <span v-if="g.refreshed_at" class="tt-group-ref">最后刷新：{{ formatTime(g.refreshed_at) }}</span>
+            <span v-if="g.refreshed_at" class="tt-group-ref">
+              {{ t('toolsTab.lastRefresh', { time: formatTime(g.refreshed_at) }) }}
+            </span>
             <el-button v-if="g.source_id" size="small" text
-                       :loading="refreshing === g.ref" @click.stop="refreshTools(g)">刷新清单</el-button>
-            <el-button size="small" text @click.stop="showUsage(g.ref, true)">引用</el-button>
-            <el-button size="small" text @click.stop="$emit('nav', 'settings')">去设置</el-button>
+                       :loading="refreshing === g.ref" @click.stop="refreshTools(g)">{{ t('toolsTab.refreshList') }}</el-button>
+            <el-button size="small" text @click.stop="showUsage(g.ref, true)">{{ t('toolsTab.usage') }}</el-button>
+            <el-button size="small" text @click.stop="$emit('nav', 'settings')">{{ t('toolsTab.goSettings') }}</el-button>
           </div>
           <div v-show="!isCollapsed(g.ref)" class="tt-list">
-            <div v-for="t in (g.items || [])" :key="t.ref" class="tt-row sub">
+            <div v-for="tool in (g.items || [])" :key="tool.ref" class="tt-row sub">
               <el-icon class="tt-icon"><Tools /></el-icon>
               <div class="tt-main">
                 <div class="tt-name">
-                  {{ t.label || t.name }}
-                  <span class="ref-tag">{{ t.ref }}</span>
-                  <span v-if="t.available === false" class="ref-tag warn">不可用</span>
+                  {{ tool.label || tool.name }}
+                  <span class="ref-tag">{{ tool.ref }}</span>
+                  <span v-if="tool.available === false" class="ref-tag warn">{{ t('toolsTab.unavailable') }}</span>
                 </div>
-                <div class="tt-desc" :title="t.description">{{ t.description }}</div>
+                <div class="tt-desc" :title="tool.description">{{ tool.description }}</div>
               </div>
-              <el-button size="small" text class="tt-detail-btn" @click="showDetail(t, g.name)">详情</el-button>
-              <el-button size="small" text @click="showUsage(t.ref)">引用</el-button>
+              <el-button size="small" text class="tt-detail-btn" @click="showDetail(tool, groupName(t, te, g))">{{ t('toolsTab.detail') }}</el-button>
+              <el-button size="small" text @click="showUsage(tool.ref)">{{ t('toolsTab.usage') }}</el-button>
             </div>
           </div>
         </div>
@@ -129,32 +133,32 @@
       <section class="tt-section">
         <div class="tt-sec-title clickable" @click="toggleSection('local')">
           <el-icon class="tt-caret" :class="{ open: !isSectionCollapsed('local') }"><CaretRight /></el-icon>
-          本地工作流（{{ localItems.length }}）
-          <span class="tt-sec-hint">
-            本租户工作流对外开放的 rpc 端点，给别的 agent 当工具用；agent 之间的调用请走 call_agent。对外开放 / 收回在「端点」页
+          {{ t('toolsTab.localTitle', { n: localItems.length }) }}
+          <span class="tt-sec-hint">{{ t('toolsTab.localHint') }}</span>
+          <span v-if="localRefreshedAt" class="tt-sec-hint">
+            {{ t('toolsTab.lastRefresh', { time: formatTime(localRefreshedAt) }) }}
           </span>
-          <span v-if="localRefreshedAt" class="tt-sec-hint">最后刷新：{{ formatTime(localRefreshedAt) }}</span>
-          <el-button size="small" text @click.stop="$emit('nav', 'endpoints')">去端点页</el-button>
+          <el-button size="small" text @click.stop="$emit('nav', 'endpoints')">{{ t('toolsTab.localGoEndpoints') }}</el-button>
         </div>
         <div v-if="!localItems.length" v-show="!isSectionCollapsed('local')" class="editor-tip">
-          还没有本地工作流端点 —— 工作流对外开放 RPC 端点后会出现在这里。
+          {{ t('toolsTab.localEmpty') }}
         </div>
         <div v-show="!isSectionCollapsed('local')" class="tt-list">
-          <div v-for="t in localItems" :key="t.ref" class="tt-row sub">
+          <div v-for="tool in localItems" :key="tool.ref" class="tt-row sub">
             <el-icon class="tt-icon"><Tools /></el-icon>
             <div class="tt-main">
               <div class="tt-name">
-                {{ t.label || t.name }}
-                <span class="ref-tag">{{ t.ref }}</span>
+                {{ tool.label || tool.name }}
+                <span class="ref-tag">{{ tool.ref }}</span>
                 <!-- 本地端点：可用性即对外状态（Available = exposed），显示「对外开放 / 仅内部」更直观 -->
-                <span class="ref-tag" :class="{ ok: t.available !== false, warn: t.available === false }">
-                  {{ t.available === false ? '仅内部' : '对外开放' }}
+                <span class="ref-tag" :class="{ ok: tool.available !== false, warn: tool.available === false }">
+                  {{ tool.available === false ? t('toolsTab.localInternal') : t('toolsTab.localExposed') }}
                 </span>
               </div>
-              <div class="tt-desc" :title="t.description">{{ t.description }}</div>
+              <div class="tt-desc" :title="tool.description">{{ tool.description }}</div>
             </div>
-            <el-button size="small" text class="tt-detail-btn" @click="showDetail(t, '本地工作流')">详情</el-button>
-            <el-button size="small" text @click="showUsage(t.ref)">引用</el-button>
+            <el-button size="small" text class="tt-detail-btn" @click="showDetail(tool, t('toolsTab.localLabel'))">{{ t('toolsTab.detail') }}</el-button>
+            <el-button size="small" text @click="showUsage(tool.ref)">{{ t('toolsTab.usage') }}</el-button>
           </div>
         </div>
       </section>
@@ -171,6 +175,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { CaretRight, Folder, Tools, Connection } from '@element-plus/icons-vue'
 import adminApi from '../../config/admin.js'
@@ -178,8 +183,12 @@ import { getToken } from '../../utils/auth.js'
 import GroupPanel from './GroupPanel.vue'
 import ToolDetailPanel from './ToolDetailPanel.vue'
 import UsageView from './UsageView.vue'
+import { formatError } from '../../../locales'
+import { groupName, groupDesc } from '../../utils/groupText.js'
 
 const emit = defineEmits(['count', 'nav'])
+
+const { t, te } = useI18n()
 
 const loading = ref(false)
 const loadError = ref('')
@@ -200,7 +209,9 @@ const detailRef = ref(null)
 
 const authHeaders = () => ({ Authorization: `Bearer ${getToken()}` })
 
-const kindLabel = (k) => ({ builtin: '内置', mcp: 'MCP', rpc: 'RPC', local: '本地端点', group: '工具组', preset: '预设' }[k] || k)
+// MCP / RPC 是协议名，两种语言都不翻
+const KIND_LABEL_KEYS = { builtin: 'kindBuiltin', local: 'kindLocal', group: 'kindGroup', preset: 'kindPreset' }
+const kindLabel = (k) => (KIND_LABEL_KEYS[k] ? t(`toolsTab.${KIND_LABEL_KEYS[k]}`) : k)
 
 // synthetic = 类别容器（插件 / 自定义工具）。它们各有独立 tab，一律不在工具目录里渲染 ——
 // 除了 kind 白名单，再加一道 synthetic 兜底：即使后端某天把容器的 kind 写错，
@@ -248,12 +259,12 @@ const load = async () => {
     ])
     const cBody = await cRes.json().catch(() => ({}))
     const gBody = await gRes.json().catch(() => ({}))
-    if (cBody.code !== 200) throw new Error(cBody.msg || '读取工具目录失败')
+    if (cBody.code !== 200) throw new Error(formatError(cBody) || t('toolsTab.loadFailed'))
     catalog.value = cBody.data || { groups: [] }
     customGroups.value = gBody.code === 200 ? (gBody.data?.items || []) : []
     emit('count', toolRefCount.value)
   } catch (e) {
-    loadError.value = e.message || '读取工具目录失败'
+    loadError.value = e.message || t('toolsTab.loadFailed')
     ElMessage.error(loadError.value)
   } finally {
     loading.value = false
@@ -279,11 +290,11 @@ const refreshTools = async (g) => {
       : adminApi.rpcConnections.refreshTools(g.source_id)
     const res = await fetch(url, { method: 'POST', headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '刷新失败')
-    ElMessage.success('工具清单已刷新')
+    if (body.code !== 200) throw new Error(formatError(body) || t('toolsTab.refreshFailed'))
+    ElMessage.success(t('toolsTab.refreshed'))
     await load()
   } catch (e) {
-    ElMessage.error(e.message || '刷新失败')
+    ElMessage.error(e.message || t('toolsTab.refreshFailed'))
   } finally {
     refreshing.value = ''
   }

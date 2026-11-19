@@ -1,3 +1,8 @@
+import i18n from '@/locales'
+
+const t = (key, params) => i18n.global.t(key, params)
+const joinList = (list) => list.join(i18n.global.t('common.listJoiner'))
+
 export function parseArguments(argsStr) {
   if (!argsStr) {
     return {}
@@ -56,37 +61,37 @@ export function validateArguments(args, schema) {
     const value = args[key]
     
     if (rule.required && value === undefined) {
-      errors.push(`${key} 是必填项`)
+      errors.push(t('flow.argumentError.required', { key }))
       return
     }
     
     if (value !== undefined) {
       if (rule.type && typeof value !== rule.type) {
-        errors.push(`${key} 的类型必须是 ${rule.type}`)
+        errors.push(t('flow.argumentError.type', { key, type: rule.type }))
       }
       
       if (rule.min !== undefined && typeof value === 'number' && value < rule.min) {
-        errors.push(`${key} 不能小于 ${rule.min}`)
+        errors.push(t('flow.argumentError.min', { key, min: rule.min }))
       }
       
       if (rule.max !== undefined && typeof value === 'number' && value > rule.max) {
-        errors.push(`${key} 不能大于 ${rule.max}`)
+        errors.push(t('flow.argumentError.max', { key, max: rule.max }))
       }
       
       if (rule.minLength !== undefined && typeof value === 'string' && value.length < rule.minLength) {
-        errors.push(`${key} 的长度不能小于 ${rule.minLength}`)
+        errors.push(t('flow.argumentError.minLength', { key, min: rule.minLength }))
       }
       
       if (rule.maxLength !== undefined && typeof value === 'string' && value.length > rule.maxLength) {
-        errors.push(`${key} 的长度不能大于 ${rule.maxLength}`)
+        errors.push(t('flow.argumentError.maxLength', { key, max: rule.maxLength }))
       }
       
       if (rule.pattern && typeof value === 'string' && !rule.pattern.test(value)) {
-        errors.push(`${key} 格式不正确`)
+        errors.push(t('flow.argumentError.pattern', { key }))
       }
       
       if (rule.enum && !rule.enum.includes(value)) {
-        errors.push(`${key} 必须是 ${rule.enum.join('、')} 中的一个`)
+        errors.push(t('flow.argumentError.enum', { key, options: joinList(rule.enum) }))
       }
     }
   })
@@ -119,13 +124,13 @@ export function getArgumentKeys(args) {
 
 export function validateArgumentsSchema(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    return ['数据必须是对象类型']
+    return [t('flow.argumentError.notObject')]
   }
   if (data.type !== 'object') {
-    return ['type 属性必须是 "object"']
+    return [t('flow.argumentError.typeMustBeObject')]
   }
   if (!data.properties || typeof data.properties !== 'object' || Array.isArray(data.properties)) {
-    return ['properties 属性必须存在且为对象类型']
+    return [t('flow.argumentError.propertiesRequired')]
   }
   
   const errors = []
@@ -138,11 +143,11 @@ export function validateArgumentsSchema(data) {
   
   if (data.required) {
     if (!Array.isArray(data.required)) {
-      errors.push('required 属性必须是数组类型')
+      errors.push(t('flow.argumentError.requiredMustBeArray'))
     } else {
       for (const requiredKey of data.required) {
         if (!data.properties[requiredKey]) {
-          errors.push(`required 中的 "${requiredKey}" 不存在于 properties 中`)
+          errors.push(t('flow.argumentError.requiredMissing', { key: requiredKey }))
         }
       }
     }
@@ -155,24 +160,24 @@ function validatePropertySchema(schema, path) {
   const errors = []
   
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
-    errors.push(`${path} 必须是对象类型`)
+    errors.push(t('flow.argumentError.pathNotObject', { path }))
     return errors
   }
   
   if (!schema.type) {
-    errors.push(`${path} 缺少 type 属性`)
+    errors.push(t('flow.argumentError.missingType', { path }))
     return errors
   }
   
   const validTypes = ['string', 'number', 'array', 'object']
   if (!validTypes.includes(schema.type)) {
-    errors.push(`${path}.type 必须是 ${validTypes.join('、')} 中的一个`)
+    errors.push(t('flow.argumentError.invalidType', { path, types: joinList(validTypes) }))
     return errors
   }
   
   if (schema.type === 'array') {
     if (!schema.items) {
-      errors.push(`${path} 是数组类型时必须包含 items 属性`)
+      errors.push(t('flow.argumentError.arrayNeedsItems', { path }))
     } else {
       const itemErrors = validatePropertySchema(schema.items, `${path}.items`)
       errors.push(...itemErrors)
@@ -181,7 +186,7 @@ function validatePropertySchema(schema, path) {
   if (schema.type === 'object') {
     if (schema.properties) {
       if (typeof schema.properties !== 'object' || Array.isArray(schema.properties)) {
-        errors.push(`${path}.properties 必须为对象类型`)
+        errors.push(t('flow.argumentError.propertiesNotObject', { path }))
       } else {
         for (const key of Object.keys(schema.properties)) {
           const propertyErrors = validatePropertySchema(schema.properties[key], `${path}.properties.${key}`)
@@ -191,11 +196,11 @@ function validatePropertySchema(schema, path) {
     }    
     if (schema.required) {
       if (!Array.isArray(schema.required)) {
-        errors.push(`${path}.required 必须是数组类型`)
+        errors.push(t('flow.argumentError.nestedRequiredMustBeArray', { path }))
       } else {
         for (const requiredKey of schema.required) {
           if (!schema.properties[requiredKey]) {
-            errors.push(`${path}.required 中的 "${requiredKey}" 不存在于 ${path}.properties 中`)
+            errors.push(t('flow.argumentError.nestedRequiredMissing', { path, key: requiredKey }))
           }
         }
       }

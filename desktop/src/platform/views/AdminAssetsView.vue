@@ -13,20 +13,20 @@
              角标仍是待审数（最该被处理的那些），所以给它一句 title 说明，
              否则「全部资产」上挂个数字会让人以为是总条数 -->
         <button class="sub-tab" :class="{ 'is-active': tab === 'queue' }" @click="switchTab('queue')">
-          全部资产
+          {{ t('platform.assets.tabQueue') }}
           <span
             v-if="pendingCount"
             class="sub-tab-badge"
-            :title="`其中待审 ${pendingCount} 条`"
+            :title="t('platform.assets.tabQueueTip', { count: pendingCount })"
           >{{ pendingCount }}</span>
         </button>
         <button class="sub-tab" :class="{ 'is-active': tab === 'policy' }" @click="switchTab('policy')">
-          上架策略
+          {{ t('platform.assets.tabPolicy') }}
         </button>
         <!-- 对外接入：谁能访问我的市场。放在本地市场而不是远端市场 ——
              它与「上架策略」是同一件事的两半（上架要不要审 / 上架后谁能读） -->
         <button class="sub-tab" :class="{ 'is-active': tab === 'access' }" @click="switchTab('access')">
-          对外接入
+          {{ t('platform.assets.tabAccess') }}
         </button>
       </div>
 
@@ -50,14 +50,14 @@
           v-model="filters.origin"
           class="f-select f-select--origin"
           size="small"
-          placeholder="全部来源"
+          :placeholder="t('platform.assets.originAll')"
           clearable
           @change="load"
         >
           <el-option
             v-for="o in origins"
             :key="o.server"
-            :label="`${o.label}（${o.count}）`"
+            :label="t('platform.assets.originOption', { label: o.label, count: o.count })"
             :value="o.server || 'local'"
           />
         </el-select>
@@ -66,14 +66,14 @@
           class="f-search"
           size="small"
           clearable
-          placeholder="搜索名称 / 说明，回车搜索"
+          :placeholder="t('platform.assets.searchPlaceholder')"
           @keyup.enter="load"
           @clear="load"
         >
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
-        <el-button size="small" :icon="Upload" @click="openImport">导入资产包</el-button>
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+        <el-button size="small" :icon="Upload" @click="openImport">{{ t('platform.assets.importPackage') }}</el-button>
+        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('common.refresh') }}</el-button>
       </div>
     </div>
 
@@ -120,7 +120,7 @@
                   <!-- 说明一行：审核第一眼判断「这是不是它声称的那个东西」靠的就是这句，
                        放不下就省略，全文留在 title 里 -->
                   <div class="ac-desc" :title="row.description || ''">
-                    {{ row.description || '未填说明' }}
+                    {{ row.description || t('platform.assets.noDescription') }}
                   </div>
                   <div class="ac-meta">
                     <el-tag size="small" :type="statusType(row.status)" effect="light">
@@ -140,13 +140,13 @@
                   class="ac-actions"
                   @click.stop
                 >
-                  <el-tooltip v-if="row.file_count" content="导出包" placement="top" :show-after="300">
+                  <el-tooltip v-if="row.file_count" :content="t('platform.assets.exportPackage')" placement="top" :show-after="300">
                     <button class="ac-btn" :disabled="exportingId === row.id" @click="exportPackage(row)">
                       <el-icon><Download /></el-icon>
                     </button>
                   </el-tooltip>
                   <template v-if="row.status === 'pending'">
-                    <el-tooltip content="通过" placement="top" :show-after="300">
+                    <el-tooltip :content="t('platform.assets.approve')" placement="top" :show-after="300">
                       <button
                         class="ac-btn ac-btn--ok"
                         :disabled="reviewingKey === 'approve:' + row.id"
@@ -155,7 +155,7 @@
                         <el-icon><Check /></el-icon>
                       </button>
                     </el-tooltip>
-                    <el-tooltip content="驳回" placement="top" :show-after="300">
+                    <el-tooltip :content="t('platform.assets.reject')" placement="top" :show-after="300">
                       <button
                         class="ac-btn ac-btn--danger"
                         :disabled="reviewingKey === 'reject:' + row.id"
@@ -167,7 +167,7 @@
                   </template>
                   <el-tooltip
                     v-else-if="row.status === 'listed'"
-                    content="下架（撤出市场，已装副本不受影响）"
+                    :content="t('platform.assets.delistTip')"
                     placement="top"
                     :show-after="300"
                   >
@@ -186,7 +186,7 @@
                        「删除中…」，否则点完只是静止变淡，看着像没点上 -->
                   <el-tooltip
                     v-if="['listed', 'delisted'].includes(row.status)"
-                    :content="deletingId === row.id ? '删除中…' : '删除（不可恢复）'"
+                    :content="deletingId === row.id ? t('platform.assets.deleting') : t('platform.assets.deleteTip')"
                     placement="top"
                     :show-after="300"
                   >
@@ -206,16 +206,16 @@
               </div>
             </div>
           </section>
-          <el-empty v-if="!items.length && !loading" description="没有符合条件的资产" />
+          <el-empty v-if="!items.length && !loading" :description="t('platform.assets.emptyAssets')" />
         </div>
 
         <div class="lp-foot">
-          后端不分页（资产在百级）：默认「待审优先 + 更新时间倒序」，先在队列里裁决再进去看细节
+          {{ t('platform.assets.footHint') }}
         </div>
       </div>
 
       <section class="detail-pane">
-        <el-empty v-if="!selected" description="左侧选择一个资产" />
+        <el-empty v-if="!selected" :description="t('platform.assets.selectAsset')" />
 
         <template v-else>
           <div class="d-head">
@@ -225,26 +225,26 @@
               <el-tag size="small" :type="statusType(selected.status)">{{ statusLabel(selected.status) }}</el-tag>
               <span class="ver">v{{ selected.build }}</span>
             </div>
-            <el-button link size="small" @click="loadDetail(selected.id)">刷新</el-button>
+            <el-button link size="small" @click="loadDetail(selected.id)">{{ t('common.refresh') }}</el-button>
           </div>
           <!-- 裁决说明挂在标题下面（跟当前状态强相关），不占底部操作区的高度 -->
           <div class="d-hint">{{ actionHint }}</div>
 
           <div class="meta-grid">
             <div class="meta-cell">
-              <div class="meta-label">类型</div>
+              <div class="meta-label">{{ t('platform.assets.metaKind') }}</div>
               <div class="meta-value">{{ kindLabel(selected.kind) }}</div>
             </div>
             <div class="meta-cell">
-              <div class="meta-label">{{ selected.origin ? '来源站点' : '提供方' }}</div>
+              <div class="meta-label">{{ selected.origin ? t('platform.assets.metaOriginSite') : t('platform.assets.metaProvider') }}</div>
               <div class="meta-value">{{ selected.origin ? selected.origin.server : listerLabel(selected) }}</div>
             </div>
             <div class="meta-cell">
-              <div class="meta-label">已安装</div>
+              <div class="meta-label">{{ t('platform.assets.metaInstalled') }}</div>
               <div class="meta-value">{{ installCount }}</div>
             </div>
             <div class="meta-cell">
-              <div class="meta-label">更新时间</div>
+              <div class="meta-label">{{ t('platform.assets.metaUpdated') }}</div>
               <div class="meta-value">{{ fmtTime(selected.updated_at) }}</div>
             </div>
           </div>
@@ -252,25 +252,25 @@
           <!-- 内容：审核第一眼要判断「这是不是它声称的那个东西」 -->
           <div class="blk">
             <div class="blk-head">
-              <span class="blk-title">内容</span>
+              <span class="blk-title">{{ t('platform.assets.contentTitle') }}</span>
             </div>
             <div class="blk-body">
-              <div class="desc">{{ selected.description || '提供方没有填描述' }}</div>
+              <div class="desc">{{ selected.description || t('platform.assets.providerNoDesc') }}</div>
               <div class="kv">
-                <span class="k">入口文件</span>
+                <span class="k">{{ t('platform.assets.kEntry') }}</span>
                 <span class="v mono">{{
-                  selected.entry || (selected.kind === 'workflow' ? 'FLOW.json（工作流定义）' : '（自定义工具由 TOOL.json 决定）')
+                  selected.entry || (selected.kind === 'workflow' ? t('platform.assets.entryFlow') : t('platform.assets.entryTool'))
                 }}</span>
               </div>
               <div class="kv">
-                <span class="k">文件 / 体积</span>
-                <span class="v">{{ selected.file_count }} 个 · {{ fmtSize(selected.total_size) }}</span>
+                <span class="k">{{ t('platform.assets.kFiles') }}</span>
+                <span class="v">{{ t('platform.assets.filesCount', { count: selected.file_count, size: fmtSize(selected.total_size) }) }}</span>
               </div>
               <div v-if="selected.origin" class="kv">
-                <span class="k">来源</span>
+                <span class="k">{{ t('platform.assets.kOrigin') }}</span>
                 <span class="v">
-                  从 {{ selected.origin.server }} 导入<template v-if="selected.origin.imported_at"> · {{ fmtTime(selected.origin.imported_at) }}</template>
-                  <span v-if="selected.origin.asset_id" class="hint mono">（对方 id {{ selected.origin.asset_id }}）</span>
+                  {{ t('platform.assets.originImported', { server: selected.origin.server }) }}<template v-if="selected.origin.imported_at"> · {{ fmtTime(selected.origin.imported_at) }}</template>
+                  <span v-if="selected.origin.asset_id" class="hint mono">{{ t('platform.assets.originId', { id: selected.origin.asset_id }) }}</span>
                 </span>
               </div>
             </div>
@@ -279,26 +279,26 @@
           <!-- 依赖：审核五项里的前三项都在这一块（依赖是否可得 / 能力要求是否相符 / 是否触顶） -->
           <div class="blk">
             <div class="blk-head">
-              <span class="blk-title">依赖声明</span>
-              <span class="hint">技能按名字匹配目标租户、工具按 ref 重建授权</span>
+              <span class="blk-title">{{ t('platform.assets.depsTitle') }}</span>
+              <span class="hint">{{ t('platform.assets.depsHint') }}</span>
             </div>
             <div class="blk-body">
               <template v-if="hasDeps">
                 <div v-if="deps.skills?.length" class="dep-row">
-                  <span class="k">技能</span>
+                  <span class="k">{{ t('platform.assets.depSkills') }}</span>
                   <span class="tags">
                     <span v-for="s in deps.skills" :key="s" class="tag">{{ s }}</span>
                   </span>
                 </div>
                 <div v-if="deps.private_skills?.length" class="dep-row">
-                  <span class="k">私有技能</span>
+                  <span class="k">{{ t('platform.assets.depPrivateSkills') }}</span>
                   <span class="tags">
                     <span v-for="s in deps.private_skills" :key="s" class="tag tag--warn">{{ s }}</span>
                   </span>
-                  <span class="dep-note">不随资产迁移：装到目标租户后这些技能不存在</span>
+                  <span class="dep-note">{{ t('platform.assets.depPrivateNote') }}</span>
                 </div>
                 <div v-if="deps.tools?.length" class="dep-row">
-                  <span class="k">工具授权</span>
+                  <span class="k">{{ t('platform.assets.depTools') }}</span>
                   <span class="tags">
                     <span v-for="t in deps.tools" :key="t.type + ':' + t.ref" class="tag">
                       {{ t.ref }}<span v-if="t.grant_kind" class="tag-sub">{{ t.grant_kind }}</span>
@@ -306,31 +306,31 @@
                   </span>
                 </div>
                 <div v-if="deps.requires?.length" class="dep-row">
-                  <span class="k">能力要求</span>
+                  <span class="k">{{ t('platform.assets.depRequires') }}</span>
                   <span class="tags">
                     <span v-for="r in deps.requires" :key="r" class="tag tag--cap">{{ r }}</span>
                   </span>
-                  <span class="dep-note">目标租户没开通这项能力时，装上也会拒跑</span>
+                  <span class="dep-note">{{ t('platform.assets.depRequiresNote') }}</span>
                 </div>
                 <div v-if="deps.egress" class="dep-row">
-                  <span class="k">出网</span>
+                  <span class="k">{{ t('platform.assets.depEgress') }}</span>
                   <span class="tags"><span class="tag tag--cap">net.egress</span></span>
                 </div>
               </template>
-              <div v-else class="hint">没有声明任何依赖</div>
+              <div v-else class="hint">{{ t('platform.assets.noDeps') }}</div>
             </div>
           </div>
 
           <!-- 可见范围：allowlist 是「有行 = 允许」，没有行 = 谁都装不了 -->
           <div class="blk">
             <div class="blk-head">
-              <span class="blk-title">可见范围</span>
-              <span class="hint">只影响能不能装，已装出去的副本不受影响</span>
+              <span class="blk-title">{{ t('platform.assets.visTitle') }}</span>
+              <span class="hint">{{ t('platform.assets.visHint') }}</span>
             </div>
             <div class="blk-body">
               <el-radio-group v-model="visForm.visibility" size="small">
-                <el-radio value="all">所有租户</el-radio>
-                <el-radio value="allowlist">指定租户</el-radio>
+                <el-radio value="all">{{ t('platform.assets.visAll') }}</el-radio>
+                <el-radio value="allowlist">{{ t('platform.assets.visAllowlist') }}</el-radio>
               </el-radio-group>
               <el-select
                 v-if="visForm.visibility === 'allowlist'"
@@ -339,20 +339,20 @@
                 filterable
                 collapse-tags
                 collapse-tags-tooltip
-                placeholder="选择可见租户"
+                :placeholder="t('platform.assets.visPlaceholder')"
                 style="width: 100%; margin-top: 10px"
               >
-                <el-option v-for="t in tenants" :key="t.schema" :label="tenantLabel(t)" :value="t.schema" />
+                <el-option v-for="tn in tenants" :key="tn.schema" :label="tenantLabel(tn)" :value="tn.schema" />
               </el-select>
               <div class="row">
                 <span class="hint">
                   {{ visForm.visibility === 'allowlist'
-                    ? '白名单是「有行才可见」：一个都不勾等于谁都装不了'
-                    : '缺省口径：所有已通过审核的资产对全部租户开放' }}
+                    ? t('platform.assets.visAllowlistNote')
+                    : t('platform.assets.visAllNote') }}
                 </span>
                 <span class="spacer" />
                 <el-button size="small" :disabled="!visDirty" :loading="savingVis" @click="saveVisibility">
-                  保存可见范围
+                  {{ t('platform.assets.saveVisibility') }}
                 </el-button>
               </div>
             </div>
@@ -360,11 +360,11 @@
 
           <div class="blk">
             <div class="blk-head">
-              <span class="blk-title">审核意见</span>
-              <span class="hint">提供方在「我的资产」里能看到这段文字</span>
+              <span class="blk-title">{{ t('platform.assets.reviewNoteTitle') }}</span>
+              <span class="hint">{{ t('platform.assets.reviewNoteHint') }}</span>
             </div>
             <div class="blk-body">
-              <div class="desc">{{ selected.review_note || '（还没有留下意见）' }}</div>
+              <div class="desc">{{ selected.review_note || t('platform.assets.reviewNoteEmpty') }}</div>
             </div>
           </div>
         </template>
@@ -373,30 +373,28 @@
 
     <!-- 跨服务器搬运（手工包）：把另一台机器导出的 zip 传进来。
          导入一律落「待审核」—— 对面审过不等于本机放行，收下后仍要在左边队列里过一眼。 -->
-    <el-dialog v-model="importVisible" title="导入资产包" width="560px">
+    <el-dialog v-model="importVisible" :title="t('platform.assets.importTitle')" width="560px">
       <div class="import-form">
         <div class="import-hint">
-          在另一台服务器的「本地市场 → 导出包」拿到 zip，在这里上传。包内文件会重新校验
-          （路径 / 体积 / 清单 / sha256），受保护名与凭据会再筛一遍；换一台机器也能装。
-          同一来源已有同名资产时会先问一句，确认即覆盖（本地快照 +1，重新进入待审）。
+          {{ t('platform.assets.importHint') }}
         </div>
 
         <div class="import-row">
-          <label class="import-label">资产包</label>
+          <label class="import-label">{{ t('platform.assets.importLabelFile') }}</label>
           <div class="import-control">
             <input class="file-input" type="file" accept=".zip,application/zip" @change="onImportFileChange" />
             <div v-if="importForm.file" class="hint">
-              已选：{{ importForm.file.name }}（{{ fmtSize(importForm.file.size) }}）
+              {{ t('platform.assets.importSelected', { name: importForm.file.name, size: fmtSize(importForm.file.size) }) }}
             </div>
           </div>
         </div>
 
         <div class="import-row">
-          <label class="import-label">来源站点</label>
+          <label class="import-label">{{ t('platform.assets.importLabelOrigin') }}</label>
           <div class="import-control">
-            <el-input v-model="importForm.origin" size="small" placeholder="留空则用包内记录的服务器名" />
+            <el-input v-model="importForm.origin" size="small" :placeholder="t('platform.assets.phImportOrigin')" />
             <div class="hint">
-              只做溯源展示与去重（同一来源的同类同名资产只能有一条）；填个能认出来的名字，比如 <code>test</code>
+              {{ t('platform.assets.importOriginHint') }}
             </div>
           </div>
         </div>
@@ -406,22 +404,26 @@
             type="success"
             :closable="false"
             show-icon
-            :title="`已导入：${importResult.asset?.name} v${importResult.asset?.build}（${importResult.overwritten ? '覆盖' : '新增'}，待审核）`"
+            :title="t('platform.assets.importResultTitle', {
+              name: importResult.asset?.name,
+              build: importResult.asset?.build,
+              result: importResult.overwritten ? t('platform.assets.importResultOverwritten') : t('platform.assets.importResultNew')
+            })"
           />
           <ul v-if="importResult.warnings?.length" class="warn-list">
             <li v-for="(w, i) in importResult.warnings" :key="i">{{ w }}</li>
           </ul>
-          <div class="hint">导入的资产默认「待审核」，在左侧队列里通过后，租户市场才能看到它。</div>
+          <div class="hint">{{ t('platform.assets.importResultHint') }}</div>
         </div>
       </div>
       <template #footer>
         <template v-if="importResult">
-          <el-button type="primary" @click="importVisible = false">知道了</el-button>
+          <el-button type="primary" @click="importVisible = false">{{ t('platform.assets.gotIt') }}</el-button>
         </template>
         <template v-else>
-          <el-button @click="importVisible = false">取消</el-button>
+          <el-button @click="importVisible = false">{{ t('common.cancel') }}</el-button>
           <el-button type="primary" :loading="importing" :disabled="!importForm.file" @click="submitImport">
-            导入
+            {{ t('platform.assets.importBtn') }}
           </el-button>
         </template>
       </template>
@@ -433,56 +435,56 @@
     <div v-show="tab === 'policy'" class="policy-pane">
       <div class="pp-card pp-card--global">
         <div class="pp-head">
-          <span class="blk-title">全局默认</span>
-          <span class="hint">只影响之后的上架，不追溯已经上架的内容</span>
+          <span class="blk-title">{{ t('platform.assets.policyDefaultTitle') }}</span>
+          <span class="hint">{{ t('platform.assets.policyDefaultHint') }}</span>
         </div>
         <div class="pp-body">
           <el-switch
             v-model="policyDefault"
-            active-text="上架需审核"
-            inactive-text="上架免审"
+            :active-text="t('platform.assets.switchRequireReview')"
+            :inactive-text="t('platform.assets.switchNoReview')"
             @change="savePolicyDefault"
           />
           <div class="hint pp-note">
-            免审的租户上架后<strong>即时对市场可见</strong>（不再进待审队列）。从远端市场拉取的审核由对端的「导入策略」决定，与此无关。
+            {{ t('platform.assets.policyDefaultNote1') }}<strong>{{ t('platform.assets.policyDefaultNoteBold') }}</strong>{{ t('platform.assets.policyDefaultNote2') }}
           </div>
         </div>
       </div>
 
       <div class="pp-card">
         <div class="pp-head">
-          <span class="blk-title">按租户覆盖</span>
-          <span class="hint">共 {{ policyTenants.length }} 个租户 · 「跟随默认」不落行</span>
+          <span class="blk-title">{{ t('platform.assets.policyOverrideTitle') }}</span>
+          <span class="hint">{{ t('platform.assets.policyOverrideHint', { count: policyTenants.length }) }}</span>
         </div>
         <!-- 卡片而不是表格：每行只有一个下拉，列宽对齐反而显得空；
              卡片左侧色条直接标出当前策略（灰=跟随默认 / 橙=必须审核 / 绿=免审） -->
         <div class="pp-body pp-body--grid">
           <div
-            v-for="t in policyTenants"
-            :key="t.schema"
+            v-for="pn in policyTenants"
+            :key="pn.schema"
             class="pp-tenant"
-            :class="'pp-tenant--' + tenantPolicyValue(t.schema)"
+            :class="'pp-tenant--' + tenantPolicyValue(pn.schema)"
           >
             <!-- tenantView 的字段是 schema / display_name（不是 schema_name）；
                  没有显示名时只留 schema 一次，不重复两遍 -->
             <div class="pp-tenant-title">
-              <span class="pp-tenant-name" :title="t.display_name || t.schema">
-                {{ t.display_name || t.schema }}
+              <span class="pp-tenant-name" :title="pn.display_name || pn.schema">
+                {{ pn.display_name || pn.schema }}
               </span>
-              <span v-if="t.display_name" class="mono pp-tenant-schema">{{ t.schema }}</span>
+              <span v-if="pn.display_name" class="mono pp-tenant-schema">{{ pn.schema }}</span>
             </div>
             <el-select
-              :model-value="tenantPolicyValue(t.schema)"
+              :model-value="tenantPolicyValue(pn.schema)"
               size="small"
               style="width: 100%; margin-top: 8px"
-              @change="(v) => saveTenantPolicy(t.schema, v)"
+              @change="(v) => saveTenantPolicy(pn.schema, v)"
             >
-              <el-option label="跟随默认" value="inherit" />
-              <el-option label="必须审核" value="review" />
-              <el-option label="免审" value="noreview" />
+              <el-option :label="t('platform.assets.policyInherit')" value="inherit" />
+              <el-option :label="t('platform.assets.policyReview')" value="review" />
+              <el-option :label="t('platform.assets.policyNoReview')" value="noreview" />
             </el-select>
           </div>
-          <el-empty v-if="!policyTenants.length" description="还没有租户" />
+          <el-empty v-if="!policyTenants.length" :description="t('platform.assets.noTenants')" />
         </div>
       </div>
     </div>
@@ -492,34 +494,32 @@
     <div v-show="tab === 'access'" class="policy-pane">
       <div class="pp-card pp-card--global">
         <div class="pp-head">
-          <span class="blk-title">匿名访问</span>
-          <span class="hint">默认关闭：只允许持令牌的站点读取</span>
+          <span class="blk-title">{{ t('platform.assets.accessTitle') }}</span>
+          <span class="hint">{{ t('platform.assets.accessHint') }}</span>
         </div>
         <div class="pp-body">
           <el-switch
             v-model="marketOpen"
             :loading="savingOpen"
-            active-text="允许匿名访问（不校验令牌）"
-            inactive-text="仅限持令牌的站点"
+            :active-text="t('platform.assets.switchOpenAnonymous')"
+            :inactive-text="t('platform.assets.switchTokenOnly')"
             @change="toggleMarketOpen"
           />
           <div class="hint pp-note">
-            打开后<strong>任何知道本机地址的人</strong>都能读走已通过审核的资产目录与资产包，
-            下面的令牌也就形同虚设；只建议内网或资产本来就打算公开时使用。
-            带令牌但令牌无效的请求仍会被拒（写错的令牌不会因为开放而被放过）。
+            {{ t('platform.assets.accessNote1') }}<strong>{{ t('platform.assets.accessNoteBold') }}</strong>{{ t('platform.assets.accessNote2') }}
           </div>
         </div>
       </div>
 
       <div class="pp-card">
         <div class="pp-head">
-          <span class="blk-title">出口令牌</span>
-          <span class="hint">只读，只含已通过审核的资产；明文只在创建时显示一次</span>
+          <span class="blk-title">{{ t('platform.assets.tokenTitle') }}</span>
+          <span class="hint">{{ t('platform.assets.tokenHint') }}</span>
         </div>
         <div class="pp-body">
           <div class="token-bar">
-            <el-input v-model="tokenName" size="small" placeholder="给谁用，例如 prod-cluster" style="width: 240px" />
-            <el-button size="small" type="primary" :loading="creatingToken" @click="createToken">生成令牌</el-button>
+            <el-input v-model="tokenName" size="small" :placeholder="t('platform.assets.phTokenName')" style="width: 240px" />
+            <el-button size="small" type="primary" :loading="creatingToken" @click="createToken">{{ t('platform.assets.createToken') }}</el-button>
           </div>
           <el-alert
             v-if="plainToken"
@@ -527,32 +527,32 @@
             :closable="false"
             show-icon
             style="margin: 10px 0"
-            title="请立刻复制并交给对方：离开本页后不会再显示"
+            :title="t('platform.assets.copyNow')"
           >
             <div class="plain-token">{{ plainToken }}</div>
           </el-alert>
           <el-table :data="tokens" size="small" style="width: 100%">
-            <el-table-column label="名称" prop="name" min-width="120" />
-            <el-table-column label="状态" width="90">
+            <el-table-column :label="t('platform.assets.colName')" prop="name" min-width="120" />
+            <el-table-column :label="t('platform.assets.colStatus')" width="90">
               <template #default="{ row }">
                 <el-tag size="small" :type="row.enabled ? 'success' : 'info'" effect="plain">
-                  {{ row.enabled ? '启用' : '停用' }}
+                  {{ row.enabled ? t('platform.assets.enabledStatus') : t('platform.users.statusOff') }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="最近使用" width="160">
-              <template #default="{ row }">{{ row.last_used_at ? fmtTime(row.last_used_at) : '从未' }}</template>
+            <el-table-column :label="t('platform.assets.colLastUsed')" width="160">
+              <template #default="{ row }">{{ row.last_used_at ? fmtTime(row.last_used_at) : t('platform.assets.never') }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="130">
+            <el-table-column :label="t('platform.assets.colActions')" width="130">
               <template #default="{ row }">
                 <el-button link type="primary" size="small" @click="toggleToken(row)">
-                  {{ row.enabled ? '停用' : '启用' }}
+                  {{ row.enabled ? t('platform.users.statusOff') : t('platform.assets.enabledStatus') }}
                 </el-button>
-                <el-button link type="danger" size="small" @click="removeToken(row)">删除</el-button>
+                <el-button link type="danger" size="small" @click="removeToken(row)">{{ t('common.delete') }}</el-button>
               </template>
             </el-table-column>
           </el-table>
-          <div v-if="!tokens.length" class="hint" style="margin-top: 8px">还没有令牌</div>
+          <div v-if="!tokens.length" class="hint" style="margin-top: 8px">{{ t('platform.assets.noTokens') }}</div>
         </div>
       </div>
     </div>
@@ -561,6 +561,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowRight,
@@ -578,34 +579,35 @@ import { api } from '../api'
 
 const emit = defineEmits(['count', 'session-expired'])
 
-const KIND_META = [
-  { value: 'skill', label: '技能' },
-  { value: 'custom_tool', label: '自定义工具' },
-  { value: 'agent', label: '智能体' },
-  { value: 'workflow', label: '工作流' }
-]
+const { t } = useI18n()
+
+const KIND_META = computed(() => [
+  { value: 'skill', label: t('assetImport.kindSkill') },
+  { value: 'custom_tool', label: t('assetImport.kindCustomTool') },
+  { value: 'agent', label: t('assetImport.kindAgent') },
+  { value: 'workflow', label: t('assetImport.kindWorkflow') }
+])
 // 类型做成 chip：多一个「全部」，与资产市场的药丸筛选同款
-const KIND_FILTERS = [{ value: '', label: '全部' }, ...KIND_META]
-const STATUS_META = [
-  { value: 'pending', label: '待审核' },
-  { value: 'listed', label: '已上架' },
-  { value: 'rejected', label: '已驳回' },
-  { value: 'delisted', label: '已下架' },
-  { value: 'draft', label: '草稿' }
-]
-const KIND_LABEL = { skill: '技能', custom_tool: '自定义工具', agent: '智能体', workflow: '工作流' }
+const KIND_FILTERS = computed(() => [{ value: '', label: t('platform.market.filterAll') }, ...KIND_META.value])
+const STATUS_META = computed(() => [
+  { value: 'pending', label: t('platform.assets.statusPending') },
+  { value: 'listed', label: t('platform.assets.statusListed') },
+  { value: 'rejected', label: t('platform.assets.statusRejected') },
+  { value: 'delisted', label: t('platform.assets.statusDelisted') },
+  { value: 'draft', label: t('platform.assets.statusDraft') }
+])
 // 状态词与资产域动作词对齐（list/delist）：listed 一律叫「已上架」，
 // 不写「已通过」—— 那是审核动作的结果，同一个状态在组头与卡片上不能两种说法
-const STATUS_LABEL = {
-  draft: '草稿',
-  pending: '待审核',
-  listed: '已上架',
-  rejected: '已驳回',
-  delisted: '已下架'
-}
+const STATUS_LABEL = computed(() => ({
+  draft: t('platform.assets.statusDraft'),
+  pending: t('platform.assets.statusPending'),
+  listed: t('platform.assets.statusListed'),
+  rejected: t('platform.assets.statusRejected'),
+  delisted: t('platform.assets.statusDelisted')
+}))
 
-const kindLabel = (k) => KIND_LABEL[k] || k || '—'
-const statusLabel = (s) => STATUS_LABEL[s] || s || '—'
+const kindLabel = (k) => KIND_META.value.find((m) => m.value === k)?.label || k || '—'
+const statusLabel = (s) => STATUS_LABEL.value[s] || s || '—'
 const statusType = (s) => {
   if (s === 'listed') return 'success'
   if (s === 'rejected') return 'danger'
@@ -622,7 +624,7 @@ const fmtSize = (n) => {
 }
 const listerLabel = (a) => {
   // 导入行的「提供方」在别的机器上，本机只认来源站点名
-  if (a?.origin?.server) return `来源：${a.origin.server}`
+  if (a?.origin?.server) return t('platform.assets.providerPrefix', { server: a.origin.server })
   const user = a?.listed_by?.user?.display_name || ''
   const tenant = a?.listed_by?.tenant?.display_name || a?.listed_by?.tenant?.schema || ''
   if (user && tenant) return `${user} · ${tenant}`
@@ -658,15 +660,15 @@ const pendingCount = computed(() => items.value.filter((i) => i.status === 'pend
 // 只做归组不做排序 —— 组内保持后端「待审优先 + 更新时间倒序」的相对次序。
 // 后端将来新增状态时落进「其它」，不会把行弄丢。
 const groups = computed(() => {
-  const buckets = new Map(STATUS_META.map((s) => [s.value, []]))
+  const buckets = new Map(STATUS_META.value.map((s) => [s.value, []]))
   const others = []
   for (const row of items.value) {
     const bucket = buckets.get(row.status)
     if (bucket) bucket.push(row)
     else others.push(row)
   }
-  const out = STATUS_META.map((s) => ({ status: s.value, label: s.label, rows: buckets.get(s.value) }))
-  if (others.length) out.push({ status: 'other', label: '其它', rows: others })
+  const out = STATUS_META.value.map((s) => ({ status: s.value, label: s.label, rows: buckets.get(s.value) }))
+  if (others.length) out.push({ status: 'other', label: t('platform.assets.statusOther'), rows: others })
   return out.filter((g) => g.rows.length) // 空组不渲染
 })
 
@@ -698,18 +700,22 @@ const hasDeps = computed(() => {
     d.egress
   )
 })
-const installCount = computed(() => (detail.value?.install_count == null ? '—' : `${detail.value.install_count} 家`))
+const installCount = computed(() =>
+  detail.value?.install_count == null
+    ? '—'
+    : t('platform.assets.installedCount', { count: detail.value.install_count })
+)
 const visSnapshot = () => JSON.stringify({ v: visForm.visibility, s: [...visForm.schemas].sort() })
 const visDirty = computed(() => visBaseline.value !== '' && visBaseline.value !== visSnapshot())
 
 // 按钮为什么是灰的：直接把状态机的约束说出来，胜过去点一下再看报错
 const actionHint = computed(() => {
   const s = selected.value?.status
-  if (s === 'pending') return '通过后立即可被可见范围内的租户安装'
-  if (s === 'listed') return '已上架：可下架（撤出市场，已装副本不受影响），也可直接删除（清库，不可恢复）'
-  if (s === 'rejected') return '已驳回：提供方需要重新上架（版本 +1）后才会重新进入待审'
-  if (s === 'delisted') return '已下架：不再出现在任何租户的资产市场里；可删除（不可恢复）'
-  return '草稿尚未提交审核，不可裁决'
+  if (s === 'pending') return t('platform.assets.actionHintPending')
+  if (s === 'listed') return t('platform.assets.actionHintListed')
+  if (s === 'rejected') return t('platform.assets.actionHintRejected')
+  if (s === 'delisted') return t('platform.assets.actionHintDelisted')
+  return t('platform.assets.actionHintDraft')
 })
 
 function handleError(err) {
@@ -717,7 +723,7 @@ function handleError(err) {
     emit('session-expired')
     return
   }
-  ElMessage.error(err?.message || '请求失败')
+  ElMessage.error(err?.message || t('platform.shared.requestFailed'))
 }
 
 const load = async () => {
@@ -802,7 +808,8 @@ const loadTenants = async () => {
     handleError(err)
   }
 }
-const tenantLabel = (t) => (t.display_name ? `${t.display_name}（${t.schema}）` : t.schema)
+const tenantLabel = (tn) =>
+  tn.display_name ? `${tn.display_name}${t('platform.tenants.ownerSuffix', { name: tn.schema })}` : tn.schema
 
 /**
  * 裁决一个资产。row 由卡片传入（接口只认 id + 动作，列表行够用）。
@@ -814,7 +821,11 @@ const review = async (row, action, note) => {
   try {
     await api.reviewAsset(row.id, { action, note: note || '' })
     ElMessage.success(
-      action === 'approve' ? '已通过，可见范围内的租户现在可以安装' : action === 'reject' ? '已驳回' : '已下架'
+      action === 'approve'
+        ? t('platform.assets.msgApproved')
+        : action === 'reject'
+          ? t('platform.assets.msgRejected')
+          : t('platform.assets.msgDelisted')
     )
     await load()
   } catch (err) {
@@ -828,12 +839,12 @@ const approve = async (row) => {
   if (!row) return
   try {
     const { value } = await ElMessageBox.prompt(
-      `通过后「${row.name}」v${row.build} 可被可见范围内的租户安装。可以留一句给提供方看（可空）。`,
-      '通过审核',
+      t('platform.assets.approvePrompt', { name: row.name, build: row.build }),
+      t('platform.assets.approveTitle'),
       {
-        confirmButtonText: '通过',
-        cancelButtonText: '取消',
-        inputPlaceholder: '审核意见（可空）',
+        confirmButtonText: t('platform.assets.approveBtn'),
+        cancelButtonText: t('common.cancel'),
+        inputPlaceholder: t('platform.assets.reviewNotePlaceholder'),
         inputValue: ''
       }
     )
@@ -848,14 +859,14 @@ const reject = async (row) => {
   if (!row) return
   try {
     const { value } = await ElMessageBox.prompt(
-      '驳回原因会直接显示给提供方（租户控制台 → 资产市场 → 我的资产）。请说清楚改哪里再来。',
-      `驳回「${row.name}」`,
+      t('platform.assets.rejectPrompt'),
+      t('platform.assets.rejectTitle', { name: row.name }),
       {
-        confirmButtonText: '驳回',
-        cancelButtonText: '取消',
+        confirmButtonText: t('platform.assets.rejectBtn'),
+        cancelButtonText: t('common.cancel'),
         inputType: 'textarea',
-        inputPlaceholder: '例如：依赖的 custom:report 工具没有一起上架',
-        inputValidator: (v) => (v && v.trim() ? true : '请填写驳回原因')
+        inputPlaceholder: t('platform.assets.rejectPlaceholder'),
+        inputValidator: (v) => (v && v.trim() ? true : t('platform.assets.rejectRequired'))
       }
     )
     await review(row, 'reject', value)
@@ -868,9 +879,9 @@ const delisted = async (row) => {
   if (!row) return
   try {
     await ElMessageBox.confirm(
-      `下架「${row.name}」？它会立刻从所有租户的资产市场消失；已经装出去的副本不受影响。`,
-      '下架资产',
-      { type: 'warning', confirmButtonText: '下架', cancelButtonText: '取消' }
+      t('platform.assets.delistConfirm', { name: row.name }),
+      t('platform.assets.delistTitle'),
+      { type: 'warning', confirmButtonText: t('platform.assets.delistBtn'), cancelButtonText: t('common.cancel') }
     )
     await review(row, 'delist', '')
   } catch {
@@ -885,7 +896,7 @@ const saveVisibility = async () => {
   try {
     const schemas = visForm.visibility === 'allowlist' ? visForm.schemas : []
     await api.setAssetVisibility(a.id, { visibility: visForm.visibility, schemas })
-    ElMessage.success('可见范围已保存')
+    ElMessage.success(t('platform.assets.msgVisibilitySaved'))
     visBaseline.value = visSnapshot()
     await load()
   } catch (err) {
@@ -898,11 +909,11 @@ const saveVisibility = async () => {
 // ===== 二级 tab：全部资产 / 上架策略 / 对外接入 =====
 // 队列用 v-show 保留：切到策略再切回来不该丢筛选条件和选中项
 const tab = ref('queue')
-const switchTab = (t) => {
-  tab.value = t
-  if (t === 'policy') loadListingPolicy()
+const switchTab = (name) => {
+  tab.value = name
+  if (name === 'policy') loadListingPolicy()
   // 明文令牌只在当次可见：每次进来先清掉，避免切走再切回来还挂在屏幕上
-  if (t === 'access') {
+  if (name === 'access') {
     plainToken.value = ''
     loadTokens()
     loadMarketSettings()
@@ -919,13 +930,13 @@ const policyTenants = ref([])
 
 const loadListingPolicy = async () => {
   try {
-    const [data, t] = await Promise.all([api.getListingPolicy(), api.listTenants()])
+    const [data, tenantsResp] = await Promise.all([api.getListingPolicy(), api.listTenants()])
     // 字段缺失也按免审（与后端「没有行 = 免审」同口径）
     policyDefault.value = data?.require_review === true
     const m = {}
     for (const o of data?.overrides || []) m[o.schema_name] = !!o.require_review
     policyOverrides.value = m
-    policyTenants.value = t?.items || []
+    policyTenants.value = tenantsResp?.items || []
   } catch (e) {
     handleError(e)
   }
@@ -939,7 +950,7 @@ const tenantPolicyValue = (schema) => {
 const savePolicyDefault = async (val) => {
   try {
     await api.setListingDefault(!!val)
-    ElMessage.success(val ? '已改为：上架需审核' : '已改为：上架免审')
+    ElMessage.success(val ? t('platform.assets.msgPolicyReview') : t('platform.assets.msgPolicyNoReview'))
   } catch (e) {
     policyDefault.value = !val // 保存失败要把开关拨回去，否则界面在撒谎
     handleError(e)
@@ -954,7 +965,7 @@ const saveTenantPolicy = async (schema, v) => {
     if (v === 'inherit') delete m[schema]
     else m[schema] = require
     policyOverrides.value = m
-    ElMessage.success('已保存')
+    ElMessage.success(t('platform.assets.msgSaved'))
   } catch (e) {
     handleError(e)
   }
@@ -980,7 +991,7 @@ const runImport = (force) =>
 
 const submitImport = async () => {
   if (!importForm.file) {
-    ElMessage.warning('请选择资产包（.zip）')
+    ElMessage.warning(t('platform.assets.msgChoosePackage'))
     return
   }
   importing.value = true
@@ -994,10 +1005,9 @@ const submitImport = async () => {
       // 撞名不是失败，而是「要你确认」：说清当前快照号与覆盖后的后果，确认就带 force 重试
       try {
         await ElMessageBox.confirm(
-          `${err.message}。覆盖后本地快照升到 v${(existing.build || 0) + 1}，并重新进入待审；` +
-            '已经装到租户里的副本不受影响。',
-          '覆盖已有资产',
-          { type: 'warning', confirmButtonText: '覆盖', cancelButtonText: '取消' }
+          t('platform.assets.overwriteConfirm', { msg: err.message, version: (existing.build || 0) + 1 }),
+          t('platform.assets.overwriteTitle'),
+          { type: 'warning', confirmButtonText: t('platform.assets.overwriteBtn'), cancelButtonText: t('common.cancel') }
         )
       } catch {
         return // 用户取消：当作没发生，不弹错误
@@ -1005,7 +1015,9 @@ const submitImport = async () => {
       data = await runImport(true)
     }
     importResult.value = data
-    ElMessage.success(data?.overwritten ? '已覆盖导入，等待本机审核' : '已导入，等待本机审核')
+    ElMessage.success(
+      data?.overwritten ? t('platform.assets.msgImportedOverwrite') : t('platform.assets.msgImportedNew')
+    )
     await load()
     // 选中刚导入的那条，顺手就能裁决
     const hit = data?.asset?.id ? items.value.find((i) => i.id === data.asset.id) : null
@@ -1025,14 +1037,12 @@ const removeAsset = async (row) => {
   if (!row) return
   // 在架的直接删是「一步到位」的处置：得先说明它此刻还在所有租户的市场里，
   // 否则管理员容易以为这跟下架是同一件事（下架留档、删除清库）
-  const onShelf = row.status === 'listed' ? '它还在架，删除后会立刻从所有租户的市场里消失。' : ''
+  const onShelf = row.status === 'listed' ? t('platform.assets.onShelfNote') : ''
   try {
     await ElMessageBox.confirm(
-      `彻底删除「${row.display_name || row.name}」v${row.build}？` +
-        onShelf +
-        '快照、可见范围与安装记录都会清空，不可恢复；已经装到租户里的副本不受影响。',
-      '删除资产',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      t('platform.assets.deleteConfirm', { name: row.display_name || row.name, build: row.build, note: onShelf }),
+      t('platform.assets.deleteTitle'),
+      { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
     )
   } catch {
     return
@@ -1040,7 +1050,7 @@ const removeAsset = async (row) => {
   deletingId.value = row.id
   try {
     await api.deleteAsset(row.id)
-    ElMessage.success('已删除')
+    ElMessage.success(t('platform.market.deleted'))
     // load() 会把失效的选中项退回第一条，这里不用手动清
     await load()
   } catch (err) {
@@ -1064,7 +1074,7 @@ const exportPackage = async (row) => {
     link.click()
     link.remove()
     URL.revokeObjectURL(url)
-    ElMessage.success(`已开始下载：${filename}`)
+    ElMessage.success(t('platform.assets.msgDownloading', { filename }))
   } catch (err) {
     handleError(err)
   } finally {
@@ -1104,9 +1114,9 @@ const toggleMarketOpen = async (val) => {
   if (val) {
     try {
       await ElMessageBox.confirm(
-        '打开后，任何知道本机地址的人都能读取已通过审核的资产目录与资产包，不需要令牌。确定要开放吗？',
-        '开放匿名访问',
-        { type: 'warning', confirmButtonText: '确认打开', cancelButtonText: '取消' }
+        t('platform.assets.openConfirm'),
+        t('platform.assets.openTitle'),
+        { type: 'warning', confirmButtonText: t('platform.assets.openBtn'), cancelButtonText: t('common.cancel') }
       )
     } catch {
       marketOpen.value = false // switch 已被 v-model 改过，取消要回滚
@@ -1116,7 +1126,7 @@ const toggleMarketOpen = async (val) => {
   savingOpen.value = true
   try {
     await api.setMarketSettings(val)
-    ElMessage.success(val ? '已开放匿名访问' : '已关闭匿名访问')
+    ElMessage.success(val ? t('platform.assets.msgOpened') : t('platform.assets.msgClosed'))
   } catch (err) {
     marketOpen.value = !val
     handleError(err)
@@ -1127,7 +1137,7 @@ const toggleMarketOpen = async (val) => {
 
 const createToken = async () => {
   if (!tokenName.value.trim()) {
-    ElMessage.warning('请填写令牌名（给谁用）')
+    ElMessage.warning(t('platform.assets.tokenNameRequired'))
     return
   }
   creatingToken.value = true
@@ -1155,9 +1165,9 @@ const toggleToken = async (row) => {
 const removeToken = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `删除令牌「${row.name}」？对方立刻失去读取本机市场的能力。`,
-      '删除令牌',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      t('platform.assets.tokenDeleteConfirm', { name: row.name }),
+      t('platform.assets.tokenDeleteTitle'),
+      { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
     )
   } catch {
     return

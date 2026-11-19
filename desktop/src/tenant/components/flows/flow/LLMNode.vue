@@ -9,7 +9,7 @@
           <el-dropdown-menu>
             <el-dropdown-item @click="deleteNode">
               <el-icon><Delete /></el-icon>
-              <span>删除节点</span>
+              <span>{{ t('flow.node.action.delete') }}</span>
             </el-dropdown-item>
             <BreakpointMenuItem :id="id" />
           </el-dropdown-menu>
@@ -27,6 +27,9 @@
 import { ref, watch, inject } from 'vue'
 import { ChatLineSquare, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { Handle } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {

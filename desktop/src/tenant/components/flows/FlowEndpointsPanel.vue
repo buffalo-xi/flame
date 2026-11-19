@@ -3,7 +3,7 @@
   <div ref="panelRootRef" class="expose-panel" :style="{ width: exposePanelWidth + 'px' }">
     <div class="panel-resizer" @mousedown="startExposeResize"></div>
     <div class="panel-header">
-      <span class="panel-title">端点: {{ wf?.name }}</span>
+      <span class="panel-title">{{ t('flow.endpoints.panelTitle', { name: wf?.name }) }}</span>
       <span class="close-icon" @click="emit('close')">&#xd7;</span>
     </div>
     <div class="panel-body">
@@ -11,19 +11,18 @@
       <template v-if="showExposeForm">
         <div class="form-section">
           <div class="form-head">
-            <div class="form-title">新建端点</div>
+            <div class="form-title">{{ t('flow.endpoints.formTitle') }}</div>
             <div class="form-sub">
-              端点 = 对外调用入口，名字跟实体走（仅字母 / 数字 / 横线）；同一协议只能建一个。
-              RPC 由流程自动创建，这里通常只需建 MCP。
+              {{ t('flow.endpoints.formHint') }}
             </div>
           </div>
 
           <el-form :model="exposeFormData" label-width="64px" :rules="exposeRules" ref="exposeFormRef">
-            <el-form-item label="端点名">
+            <el-form-item :label="t('flow.endpoints.nameLabel')">
               <el-input :model-value="wf?.name || ''" disabled />
-              <div class="field-hint">与实体名一致，改名请回实体本身</div>
+              <div class="field-hint">{{ t('flow.endpoints.nameHint') }}</div>
             </el-form-item>
-            <el-form-item label="协议" prop="protocol">
+            <el-form-item :label="t('flow.endpoints.protocolLabel')" prop="protocol">
               <el-radio-group v-model="exposeFormData.protocol" class="protocol-group">
                 <el-radio-button v-for="p in availableProtocols" :key="p.value" :value="p.value">
                   {{ p.label }}
@@ -31,35 +30,35 @@
               </el-radio-group>
               <div class="field-hint">{{ protocolHint }}</div>
             </el-form-item>
-            <el-form-item label="描述">
+            <el-form-item :label="t('flow.endpoints.descLabel')">
               <el-input
                 v-model="exposeFormData.description"
                 type="textarea"
                 :rows="3"
-                placeholder="外部调用方看到的就是这段说明"
+                :placeholder="t('flow.endpoints.descPlaceholder')"
               />
             </el-form-item>
             <!-- 只读参数：端点建好后 input_schema 恒等于工作流开始节点声明的入参，
                  所以这里只做预览，不让用户手写（旧「配置」框运行时没人读，已下线） -->
-            <el-form-item label="参数">
+            <el-form-item :label="t('flow.endpoints.argsLabel')">
               <div class="arg-preview">
                 <template v-if="argRows.length">
                   <div v-for="a in argRows" :key="a.name" class="arg-row">
                     <span class="arg-name">{{ a.name }}</span>
                     <span class="arg-type">{{ a.type }}</span>
-                    <span v-if="a.required" class="arg-req">必填</span>
+                    <span v-if="a.required" class="arg-req">{{ t('flow.common.required') }}</span>
                     <span v-if="a.desc" class="arg-desc" :title="a.desc">{{ a.desc }}</span>
                   </div>
-                  <div class="arg-hint">外部调用按这些参数传值；要改参数请回工作流的「开始」节点</div>
+                  <div class="arg-hint">{{ t('flow.endpoints.argsHint') }}</div>
                 </template>
-                <div v-else class="arg-empty">尚未声明入参：外部调用可按自由 JSON 传入</div>
+                <div v-else class="arg-empty">{{ t('flow.endpoints.argsEmpty') }}</div>
               </div>
             </el-form-item>
           </el-form>
 
           <div class="form-actions">
-            <el-button @click="handleCancelExposeForm">取消</el-button>
-            <el-button type="primary" :loading="submitting" @click="submitExposeForm">创建</el-button>
+            <el-button @click="handleCancelExposeForm">{{ t('common.cancel') }}</el-button>
+            <el-button type="primary" :loading="submitting" @click="submitExposeForm">{{ t('flow.endpoints.create') }}</el-button>
           </div>
         </div>
       </template>
@@ -67,14 +66,14 @@
       <template v-else>
         <div class="endpoints-section">
           <div class="section-header">
-            <span class="section-title">端点</span>
+            <span class="section-title">{{ t('flow.endpoints.sectionTitle') }}</span>
             <div class="section-header-actions">
               <button
                 type="button"
                 v-if="!allProtocolsExposed"
                 class="add-endpoint-btn"
                 @click="openAddEndpointForm"
-                title="新增端点"
+                :title="t('flow.endpoints.addEndpoint')"
               >
                 <el-icon><Plus /></el-icon>
               </button>
@@ -84,7 +83,7 @@
                 class="expose-all-btn"
                 @click="handleExposeAll"
               >
-                全部对外开放
+                {{ t('flow.endpoints.exposeAll') }}
               </button>
               <button
                 type="button"
@@ -92,13 +91,13 @@
                 class="retract-all-btn"
                 @click="handleRetractAll"
               >
-                全部收回
+                {{ t('flow.endpoints.retractAll') }}
               </button>
             </div>
           </div>
-          <div v-if="exposeLoading" class="endpoints-loading">加载中...</div>
+          <div v-if="exposeLoading" class="endpoints-loading">{{ t('flow.runPanel.loading') }}</div>
           <div v-else-if="exposedEndpoints.length === 0" class="endpoints-empty">
-            暂无端点
+            {{ t('flow.endpoints.empty') }}
           </div>
           <div v-else class="endpoints-list">
             <div class="endpoint-item" v-for="ep in exposedEndpoints" :key="ep.id">
@@ -112,24 +111,24 @@
                   @change="(val) => handleToggleEndpointEnabled(ep, val)"
                   size="small"
                   inline-prompt
-                  active-text="外"
-                  inactive-text="内"
-                  :title="ep.exposed ? '对外开放：租户外可用凭证调用' : '仅内部：只有本租户内可调用'"
+                  :active-text="t('flow.endpoints.switchOn')"
+                  :inactive-text="t('flow.endpoints.switchOff')"
+                  :title="ep.exposed ? t('flow.endpoints.exposedTip') : t('flow.endpoints.internalTip')"
                 />
                 <!-- RPC 端点由流程托管（建流程时自动补），删掉会断掉 local:rpc:<name> 的引用 -->
                 <span
                   v-if="ep.protocol === 'rpc'"
                   class="endpoint-managed"
-                  title="随流程自动创建，不能单独删除；要停用请停用或废弃流程"
+                  :title="t('flow.endpoints.managedTip')"
                 >
-                  托管
+                  {{ t('flow.endpoints.managed') }}
                 </span>
                 <button
                   v-else
                   type="button"
                   class="endpoint-delete-btn"
                   :disabled="ep.exposed"
-                  :title="ep.exposed ? '仍在对外开放，先「收回对外」再删除' : '删除端点'"
+                  :title="ep.exposed ? t('flow.endpoints.deleteBlockedTip') : t('flow.endpoints.deleteTip')"
                   @click="handleDeleteEndpoint(ep)"
                 >
                   <el-icon><Delete /></el-icon>
@@ -137,8 +136,8 @@
               </div>
               <div v-if="ep.description" class="endpoint-desc">{{ ep.description }}</div>
               <div class="endpoint-meta">
-                <span class="endpoint-time">创建: {{ formatTime(ep.created_at) }}</span>
-                <span class="endpoint-time">更新: {{ formatTime(ep.updated_at) }}</span>
+                <span class="endpoint-time">{{ t('flow.endpoints.createdAt', { time: formatTime(ep.created_at) }) }}</span>
+                <span class="endpoint-time">{{ t('flow.endpoints.updatedAt', { time: formatTime(ep.updated_at) }) }}</span>
               </div>
             </div>
           </div>
@@ -156,6 +155,10 @@ import adminApi from '../../config/admin.js'
 import { getToken } from '../../utils/auth.js'
 import { getProtocolColor, formatTime } from '../../utils/flowFormat.js'
 import { useEscClose } from '../../composables/useEscClose'
+import { useI18n } from 'vue-i18n'
+import { formatError } from '../../../locales'
+
+const { t } = useI18n()
 
 const props = defineProps({
   // 要管理端点的工作流（{ id, name, description }）
@@ -182,7 +185,7 @@ const exposeFormData = ref({
 })
 const exposeRules = ref({
   protocol: [
-    { required: true, message: '请选择协议', trigger: 'change' }
+    { required: true, message: t('flow.endpoints.selectProtocol'), trigger: 'change' }
   ]
 })
 const exposeFormRef = ref(null)
@@ -234,8 +237,8 @@ const availableProtocols = computed(() => {
 // 两种协议的外部表现不同，选错的代价是调用方式对不上 —— 选的时候就给一句说明
 const protocolHint = computed(() => (
   exposeFormData.value.protocol === 'rpc'
-    ? 'RPC：服务端直调；工作流的 RPC 端点还会成为其它智能体可用的本地工具'
-    : 'MCP：给外部 MCP 客户端注册成工具，入参见下方「参数」'
+    ? t('flow.endpoints.protocolRpcHint')
+    : t('flow.endpoints.protocolMcpHint')
 ))
 
 // 「参数」预览：把开始节点声明的 JSON Schema 摊平成一行一个参数
@@ -290,7 +293,7 @@ const fetchExposedEndpoints = async (targetId, targetType) => {
       exposedEndpoints.value = data.data.items || []
     }
   } catch (error) {
-    console.error('获取端点列表失败:', error)
+    console.error(t('flow.endpoints.loadFailed'), error)
   } finally {
     exposeLoading.value = false
   }
@@ -311,7 +314,7 @@ const fetchArgSchema = async () => {
     if (data.code === 200) argSchema.value = data.data?.arguments || null
   } catch (error) {
     // 预览拿不到不影响创建：空着就显示「尚未声明入参」
-    console.error('获取工作流入参失败:', error)
+    console.error(t('flow.endpoints.loadArgsFailed'), error)
   }
 }
 
@@ -325,7 +328,7 @@ const submitExposeForm = async () => {
   }
   const token = getToken()
   if (!token) {
-    ElMessage.error({ message: '请先登录', duration: 5000, offset: 20, showClose: true })
+    ElMessage.error({ message: t('common.loginRequired'), duration: 5000, offset: 20, showClose: true })
     return
   }
 
@@ -349,12 +352,12 @@ const submitExposeForm = async () => {
     })
 
     if (!response.ok) {
-      throw new Error('创建端点失败')
+      throw new Error(t('flow.endpoints.createFailed'))
     }
 
     const data = await response.json()
     if (data.code === 200) {
-      ElMessage.success({ message: '端点已创建', duration: 700 })
+      ElMessage.success({ message: t('flow.endpoints.created'), duration: 700 })
       // 重置新增表单（保留工作流名称作为默认）
       exposeFormData.value = {
         name: props.wf.name || '',
@@ -370,11 +373,11 @@ const submitExposeForm = async () => {
       // 创建成功后回到端点列表视图
       showExposeForm.value = false
     } else {
-      ElMessage.error({ message: `创建端点失败: ${data.msg}`, duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('flow.endpoints.createFailedReason', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
     }
   } catch (error) {
-    console.error('创建端点失败:', error)
-    ElMessage.error({ message: '创建端点失败，请稍后重试', duration: 5000, offset: 20, showClose: true })
+    console.error(t('flow.endpoints.createFailed'), error)
+    ElMessage.error({ message: t('flow.endpoints.createFailedRetry'), duration: 5000, offset: 20, showClose: true })
   } finally {
     submitting.value = false
   }
@@ -394,7 +397,7 @@ const handleToggleEndpointEnabled = async (ep, exposed) => {
   try {
     const token = getToken()
     if (!token) {
-      ElMessage.error({ message: '请先登录', duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('common.loginRequired'), duration: 5000, offset: 20, showClose: true })
       return
     }
     const response = await fetch(`${adminApi.svcEndpoints.base}/${ep.id}`, {
@@ -405,38 +408,38 @@ const handleToggleEndpointEnabled = async (ep, exposed) => {
       },
       body: JSON.stringify({ exposed })
     })
-    if (!response.ok) throw new Error('更新失败')
+    if (!response.ok) throw new Error(t('flow.endpoints.updateFailed'))
     const data = await response.json()
     if (data.code === 200) {
       ep.exposed = exposed
-      ElMessage.success({ message: exposed ? '端点已对外开放' : '端点已收回对外', duration: 700 })
+      ElMessage.success({ message: exposed ? t('flow.endpoints.exposed') : t('flow.endpoints.retracted'), duration: 700 })
       props.syncCard(props.wf.id, exposedEndpoints.value.map(ep => ({ protocol: ep.protocol, exposed: ep.exposed })))
       // 端点对外状态变了：列表重新拉一次，卡片上的端点与状态 tag 才准
       await props.refreshList()
     } else {
-      ElMessage.error({ message: `更新失败: ${data.msg}`, duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('flow.endpoints.updateFailedReason', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
     }
   } catch (error) {
-    console.error('切换端点状态失败:', error)
-    ElMessage.error({ message: '更新失败，请稍后重试', duration: 5000, offset: 20, showClose: true })
+    console.error(t('flow.endpoints.toggleFailed'), error)
+    ElMessage.error({ message: t('flow.endpoints.updateFailedRetry'), duration: 5000, offset: 20, showClose: true })
   }
 }
 
 // 删除单个端点
 const handleDeleteEndpoint = (ep) => {
   ElMessageBox.confirm(
-    `确定要删除端点 "${ep.name}"（${(ep.protocol || '').toLowerCase()}）吗？`,
-    '删除确认',
+    t('flow.endpoints.deleteConfirm', { name: ep.name, protocol: (ep.protocol || '').toLowerCase() }),
+    t('flow.endpoints.deleteConfirmTitle'),
     {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
       type: 'warning'
     }
   ).then(async () => {
     try {
       const token = getToken()
       if (!token) {
-        ElMessage.error({ message: '请先登录', duration: 5000, offset: 20, showClose: true })
+        ElMessage.error({ message: t('common.loginRequired'), duration: 5000, offset: 20, showClose: true })
         return
       }
       const response = await fetch(`${adminApi.svcEndpoints.delete}${ep.id}`, {
@@ -446,19 +449,19 @@ const handleDeleteEndpoint = (ep) => {
           'Authorization': `Bearer ${token}`
         }
       })
-      if (!response.ok) throw new Error('删除失败')
+      if (!response.ok) throw new Error(t('flow.endpoints.deleteFailed'))
       const data = await response.json()
       if (data.code === 200) {
-        ElMessage.success({ message: '端点删除成功', duration: 700 })
+        ElMessage.success({ message: t('flow.endpoints.deleted'), duration: 700 })
         await fetchExposedEndpoints(props.wf.id, 'flow')
         // 删除后若已无端点，则同步卡片上的端点标记
         props.syncCard(props.wf.id, exposedEndpoints.value.map(ep => ({ protocol: ep.protocol, exposed: ep.exposed })))
       } else {
-        ElMessage.error({ message: `删除失败: ${data.msg}`, duration: 5000, offset: 20, showClose: true })
+        ElMessage.error({ message: t('flow.endpoints.deleteFailedReason', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
       }
     } catch (error) {
-      console.error('删除端点失败:', error)
-      ElMessage.error({ message: '删除失败，请稍后重试', duration: 5000, offset: 20, showClose: true })
+      console.error(t('flow.endpoints.deleteFailedLog'), error)
+      ElMessage.error({ message: t('flow.endpoints.deleteFailedRetry'), duration: 5000, offset: 20, showClose: true })
     }
   }).catch(() => {})
 }
@@ -467,13 +470,13 @@ const handleDeleteEndpoint = (ep) => {
 const handleExposeAll = async () => {
   const retracted = exposedEndpoints.value.filter(ep => !ep.exposed)
   if (retracted.length === 0) {
-    ElMessage.info({ message: '所有端点都已对外开放', duration: 700 })
+    ElMessage.info({ message: t('flow.endpoints.allExposed'), duration: 700 })
     return
   }
   try {
     const token = getToken()
     if (!token) {
-      ElMessage.error({ message: '请先登录', duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('common.loginRequired'), duration: 5000, offset: 20, showClose: true })
       return
     }
     for (const ep of retracted) {
@@ -485,18 +488,18 @@ const handleExposeAll = async () => {
         },
         body: JSON.stringify({ exposed: true })
       })
-      if (!response.ok) throw new Error('对外开放失败')
+      if (!response.ok) throw new Error(t('flow.endpoints.exposeAllFailed'))
       const data = await response.json()
-      if (data.code !== 200) throw new Error(data.msg || '对外开放失败')
+      if (data.code !== 200) throw new Error(formatError(data) || t('flow.endpoints.exposeAllFailed'))
     }
-    ElMessage.success({ message: '已全部对外开放', duration: 700 })
+    ElMessage.success({ message: t('flow.endpoints.allExposedDone'), duration: 700 })
     await fetchExposedEndpoints(props.wf.id, 'flow')
     props.syncCard(props.wf.id, exposedEndpoints.value.map(ep => ({ protocol: ep.protocol, exposed: ep.exposed })))
     // 端点对外开放不改定义状态（status 与「对外」无关），只刷新卡片上的端点标记
     await props.refreshList()
   } catch (error) {
-    console.error('全部对外开放失败:', error)
-    ElMessage.error({ message: '对外开放失败，请稍后重试', duration: 5000, offset: 20, showClose: true })
+    console.error(t('flow.endpoints.exposeAllFailedLog'), error)
+    ElMessage.error({ message: t('flow.endpoints.exposeAllFailedRetry'), duration: 5000, offset: 20, showClose: true })
   }
 }
 
@@ -505,7 +508,7 @@ const handleRetractAll = async () => {
   try {
     const token = getToken()
     if (!token) {
-      ElMessage.error({ message: '请先登录', duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('common.loginRequired'), duration: 5000, offset: 20, showClose: true })
       return
     }
     const response = await fetch(adminApi.svcEndpoints.retract, {
@@ -519,19 +522,19 @@ const handleRetractAll = async () => {
         target_id: props.wf.id
       })
     })
-    if (!response.ok) throw new Error('收回失败')
+    if (!response.ok) throw new Error(t('flow.endpoints.retractFailed'))
     const data = await response.json()
     if (data.code === 200) {
-      ElMessage.success({ message: '已全部收回', duration: 700 })
+      ElMessage.success({ message: t('flow.endpoints.allRetractedDone'), duration: 700 })
       await fetchExposedEndpoints(props.wf.id, 'flow')
       // 全部收回后更新卡片为「仅内部」
       props.syncCard(props.wf.id, exposedEndpoints.value.map(ep => ({ protocol: ep.protocol, exposed: ep.exposed })))
     } else {
-      ElMessage.error({ message: `收回失败: ${data.msg}`, duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('flow.endpoints.retractFailedReason', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
     }
   } catch (error) {
-    console.error('全部收回失败:', error)
-    ElMessage.error({ message: '收回失败，请稍后重试', duration: 5000, offset: 20, showClose: true })
+    console.error(t('flow.endpoints.retractAllFailedLog'), error)
+    ElMessage.error({ message: t('flow.endpoints.retractFailedRetry'), duration: 5000, offset: 20, showClose: true })
   }
 }
 

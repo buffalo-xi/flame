@@ -2,54 +2,56 @@
   <div ref="rootRef" class="et">
     <!-- 工具条：搜索 + 协议 / 目标 / 状态筛选 -->
     <div class="et-bar">
-      <el-input v-model="q.name" size="small" placeholder="搜索端点名" clearable
+      <el-input v-model="q.name" size="small" :placeholder="t('endpointsTab.searchName')" clearable
                 style="width:180px" @keyup.enter="reload" @clear="reload" />
-      <el-select v-model="q.protocol" size="small" placeholder="协议" clearable
+      <el-select v-model="q.protocol" size="small" :placeholder="t('endpoint.protocolLabel')" clearable
                  style="width:110px" @change="reload">
         <el-option label="MCP" value="mcp" />
         <el-option label="RPC" value="rpc" />
       </el-select>
-      <el-select v-model="q.target_type" size="small" placeholder="目标" clearable
+      <el-select v-model="q.target_type" size="small" :placeholder="t('endpointsTab.target')" clearable
                  style="width:110px" @change="reload">
-        <el-option label="智能体" value="agent" />
-        <el-option label="工作流" value="flow" />
+        <el-option :label="t('assetImport.kindAgent')" value="agent" />
+        <el-option :label="t('assetImport.kindWorkflow')" value="flow" />
       </el-select>
-      <el-select v-model="q.exposed" size="small" placeholder="对外状态" clearable
+      <el-select v-model="q.exposed" size="small" :placeholder="t('endpointsTab.exposedState')" clearable
                  style="width:110px" @change="reload">
-        <el-option label="对外开放" :value="true" />
-        <el-option label="仅内部" :value="false" />
+        <el-option :label="t('endpointsTab.exposed')" :value="true" />
+        <el-option :label="t('endpointsTab.internal')" :value="false" />
       </el-select>
-      <el-button size="small" :loading="loading" @click="reload">刷新</el-button>
-      <el-button size="small" text :icon="Reading" @click="openGuide()">使用说明</el-button>
-      <span class="et-count">共 <strong>{{ total }}</strong> 个端点</span>
-      <span class="et-hint">
-        <strong>端点</strong>＝把智能体 / 工作流暴露成 MCP / RPC 入口，供外部系统调用；创建入口在「智能体 / 工作流 → 端点」
-      </span>
+      <el-button size="small" :loading="loading" @click="reload">{{ t('common.refresh') }}</el-button>
+      <el-button size="small" text :icon="Reading" @click="openGuide()">{{ t('endpointsTab.guide') }}</el-button>
+      <span class="et-count">{{ t('endpointsTab.count', { n: total }) }}</span>
+      <span class="et-hint">{{ t('endpointsTab.definition') }}</span>
       <el-popover placement="bottom-start" :width="380" trigger="click">
         <template #reference>
-          <el-icon class="et-help" title="端点说明"><QuestionFilled /></el-icon>
+          <el-icon class="et-help" :title="t('endpointsTab.helpIcon')"><QuestionFilled /></el-icon>
         </template>
         <div class="et-help-body">
           <div class="et-help-sec">
-            <div class="et-help-title">什么是端点</div>
-            <p>智能体 / 工作流对外暴露的一个调用入口。外部系统按 MCP 或 RPC 协议调用它，等同于调用这个智能体或工作流。</p>
+            <div class="et-help-title">{{ t('endpointsTab.helpWhatTitle') }}</div>
+            <p>{{ t('endpointsTab.helpWhatBody') }}</p>
           </div>
           <div class="et-help-sec">
-            <div class="et-help-title">怎么创建</div>
-            <p>进对应智能体 / 工作流的编辑页 → 端点 → 新建端点。同一个目标、同一协议只能有一个端点。</p>
+            <div class="et-help-title">{{ t('endpointsTab.helpCreateTitle') }}</div>
+            <p>{{ t('endpointsTab.helpCreateBody') }}</p>
           </div>
           <div class="et-help-sec">
-            <div class="et-help-title">怎么调用</div>
-            <p>外部系统按 <code>POST /service/mcp/{租户}</code> 或 <code>POST /service/rpc/{租户}</code> 调用，请求头带 <code>Authorization: Bearer &lt;服务凭证&gt;</code>。凭证能调哪个端点在「设置 → 服务凭证」里绑定。</p>
-            <p>每行的「用法」里有可直接复制的接入配置与调用示例。</p>
+            <div class="et-help-title">{{ t('endpointsTab.helpCallTitle') }}</div>
+            <p>{{ t('endpointsTab.helpCallBody', {
+              mcp: 'POST /service/mcp/{tenant}',
+              rpc: 'POST /service/rpc/{tenant}',
+              auth: 'Authorization: Bearer <credential>'
+            }) }}</p>
+            <p>{{ t('endpointsTab.helpCallMore') }}</p>
           </div>
           <div class="et-help-sec">
-            <div class="et-help-title">对外开放 / 仅内部</div>
-            <p>「对外开放」= 租户外可用（外部凭证调用、MCP 注册为工具）；「仅内部」= 只有本租户内可调用，端点记录与配置都保留。收回对外不影响租户内调用，但对外开放后修改目标定义会立即影响外部调用方。</p>
+            <div class="et-help-title">{{ t('endpointsTab.helpExposeTitle') }}</div>
+            <p>{{ t('endpointsTab.helpExposeBody') }}</p>
           </div>
           <div class="et-help-sec">
-            <div class="et-help-title">「作为工具」是什么意思</div>
-            <p>只有工作流的 RPC 端点会被别的智能体当成本地工具调用（<code>local:rpc:&lt;名字&gt;</code>）。MCP 端点是给外部系统连的，不会出现在工具目录里。</p>
+            <div class="et-help-title">{{ t('endpointsTab.helpToolTitle') }}</div>
+            <p>{{ t('endpointsTab.helpToolBody', { ref: 'local:rpc:<name>' }) }}</p>
           </div>
         </div>
       </el-popover>
@@ -59,7 +61,7 @@
       <el-table :data="groupedRows" :span-method="spanMethod" :row-class-name="rowClassName"
                 v-loading="loading" size="small" class="et-table"
                 :height="tableHeight || undefined">
-        <el-table-column label="端点名" min-width="170">
+        <el-table-column :label="t('endpointsTab.colName')" min-width="170">
           <template #default="{ row }">
             <div class="et-name">
               {{ row.name }}<span class="et-kind">（<el-icon v-if="targetIcon(row)" class="et-kind-icon" :class="'is-' + row.target_type"><component :is="targetIcon(row)" /></el-icon>{{ targetKind(row) }}）</span>
@@ -68,58 +70,55 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="协议" width="86">
+        <el-table-column :label="t('endpointsTab.colProtocol')" width="86">
           <template #default="{ row }">
             <el-tag size="small" :type="protocolType(row.protocol)">{{ (row.protocol || '').toUpperCase() }}</el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column label="作为工具" min-width="180">
+        <el-table-column :label="t('endpointsTab.colAsTool')" min-width="180">
           <template #default="{ row }">
             <template v-if="usableAsTool(row)">
               <span class="et-tool-rpc">local:rpc:{{ row.name }}</span>
             </template>
-            <span v-else-if="row.protocol === 'rpc'" class="et-dim">—（仅工作流端点会成为工具）</span>
-            <span v-else class="et-dim">—（仅 rpc 端点会成为工具）</span>
+            <span v-else-if="row.protocol === 'rpc'" class="et-dim">{{ t('endpointsTab.notToolFlowOnly') }}</span>
+            <span v-else class="et-dim">{{ t('endpointsTab.notToolRpcOnly') }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="对外" width="80" align="center">
+        <el-table-column :label="t('endpointsTab.colExposed')" width="80" align="center">
           <template #default="{ row }">
             <el-switch :model-value="!!row.exposed" :loading="row.__busy"
                        @change="(v) => toggleExpose(row, v)" />
           </template>
         </el-table-column>
 
-        <el-table-column label="创建时间" width="160">
+        <el-table-column :label="t('endpointsTab.colCreated')" width="160">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
 
-        <el-table-column label="操作" width="360" align="right">
+        <el-table-column :label="t('endpointsTab.colActions')" width="360" align="right">
           <template #default="{ row }">
             <div class="et-actions">
-              <el-button size="small" text @click="showDetail(row)">详情</el-button>
-              <el-button size="small" text @click="openGuide(row)">用法</el-button>
-              <el-button size="small" text :disabled="!usableAsTool(row)" @click="showUsage(row)">被引用</el-button>
-              <el-button size="small" text @click="retractTarget(row)">同目标全部收回</el-button>
+              <el-button size="small" text @click="showDetail(row)">{{ t('endpointsTab.detail') }}</el-button>
+              <el-button size="small" text @click="openGuide(row)">{{ t('endpointsTab.usage') }}</el-button>
+              <el-button size="small" text :disabled="!usableAsTool(row)" @click="showUsage(row)">{{ t('endpointsTab.referenced') }}</el-button>
+              <el-button size="small" text @click="retractTarget(row)">{{ t('endpointsTab.retractTarget') }}</el-button>
               <el-button size="small" text type="danger"
                          :disabled="isManaged(row) || !!row.exposed"
                          :title="deleteHint(row)"
-                         @click="remove(row)">删除</el-button>
+                         @click="remove(row)">{{ t('common.delete') }}</el-button>
             </div>
           </template>
         </el-table-column>
 
         <template #empty>
           <div class="et-empty">
-            <div class="et-empty-title">还没有端点</div>
-            <div class="editor-tip">
-              工作流会自动带一条 RPC 端点（供别的流程按名调用）；MCP 端点在编辑页的「端点」面板按需创建。
-              这里只做查看、对外开放 / 收回与删除。
-            </div>
+            <div class="et-empty-title">{{ t('endpointsTab.emptyTitle') }}</div>
+            <div class="editor-tip">{{ t('endpointsTab.emptyTip') }}</div>
             <div class="et-empty-actions">
-              <el-button size="small" @click="emit('open', 'agents')">去智能体</el-button>
-              <el-button size="small" @click="emit('open', 'wf-instances')">去工作流</el-button>
+              <el-button size="small" @click="emit('open', 'agents')">{{ t('endpointsTab.goAgents') }}</el-button>
+              <el-button size="small" @click="emit('open', 'wf-instances')">{{ t('endpointsTab.goFlows') }}</el-button>
             </div>
           </div>
         </template>
@@ -132,21 +131,22 @@
     </div>
 
     <!-- 端点详情：input_schema 只读（它才是端点对外声明的入参） -->
-    <el-dialog v-model="detailVisible" :title="detailRow ? `端点详情 · ${detailRow.name}` : '端点详情'"
+    <el-dialog v-model="detailVisible"
+               :title="detailRow ? t('endpointsTab.detailTitle', { name: detailRow.name }) : t('endpointsTab.detailTitlePlain')"
                width="640px" append-to-body>
       <div v-if="detailRow" class="et-detail">
-        <div class="et-d-row"><span class="et-d-label">协议</span><span>{{ (detailRow.protocol || '').toUpperCase() }}</span></div>
-        <div class="et-d-row"><span class="et-d-label">目标</span><span>{{ detailRow.target_type }} · {{ targetName(detailRow) }}</span></div>
-        <div class="et-d-row"><span class="et-d-label">对外</span><span>{{ detailRow.exposed ? '对外开放（租户外可用凭证调用）' : '仅内部（只有本租户内可调用）' }}</span></div>
-        <div class="et-d-row"><span class="et-d-label">创建 / 更新</span><span>{{ formatTime(detailRow.created_at) }} / {{ formatTime(detailRow.updated_at) }}</span></div>
+        <div class="et-d-row"><span class="et-d-label">{{ t('endpointsTab.dProtocol') }}</span><span>{{ (detailRow.protocol || '').toUpperCase() }}</span></div>
+        <div class="et-d-row"><span class="et-d-label">{{ t('endpointsTab.dTarget') }}</span><span>{{ targetKind(detailRow) }} · {{ targetName(detailRow) }}</span></div>
+        <div class="et-d-row"><span class="et-d-label">{{ t('endpointsTab.dExposed') }}</span><span>{{ detailRow.exposed ? t('endpointsTab.exposedLong') : t('endpointsTab.internalLong') }}</span></div>
+        <div class="et-d-row"><span class="et-d-label">{{ t('endpointsTab.dTimes') }}</span><span>{{ formatTime(detailRow.created_at) }} / {{ formatTime(detailRow.updated_at) }}</span></div>
         <div class="et-d-block">
-          <div class="et-d-label">input_schema{{ detailRow.protocol === 'mcp' ? '（MCP 工具入参）' : '' }}</div>
+          <div class="et-d-label">input_schema{{ detailRow.protocol === 'mcp' ? t('endpointsTab.mcpInput') : '' }}</div>
           <pre class="et-pre">{{ pretty(detailRow.input_schema) }}</pre>
         </div>
       </div>
       <template #footer>
-        <el-button type="primary" plain @click="openGuide(detailRow)">调用示例</el-button>
-        <el-button @click="detailVisible = false">关闭</el-button>
+        <el-button type="primary" plain @click="openGuide(detailRow)">{{ t('endpointsTab.examples') }}</el-button>
+        <el-button @click="detailVisible = false">{{ t('common.close') }}</el-button>
       </template>
     </el-dialog>
 
@@ -159,14 +159,18 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Cpu, Share, QuestionFilled, Reading } from '@element-plus/icons-vue'
 import adminApi from '../../config/admin.js'
 import { getToken } from '../../utils/auth.js'
 import UsageView from './UsageView.vue'
 import UseGuideDrawer from './UseGuideDrawer.vue'
+import { formatError } from '../../../locales'
 
 const emit = defineEmits(['count', 'open'])
+
+const { t } = useI18n()
 
 const loading = ref(false)
 const rows = ref([])
@@ -204,7 +208,9 @@ const formatTime = (t) => (t ? String(t).replace('T', ' ').slice(0, 19) : '—')
 const targetName = (row) => row.target_name || nameMap.value[`${row.target_type}:${row.target_id}`] || row.target_id
 
 // 目标类型文案（折叠进「端点名」后面的括号里显示）
-const targetKind = (row) => (row.target_type === 'agent' ? '智能体' : row.target_type === 'flow' ? '工作流' : row.target_type)
+const targetKind = (row) => (row.target_type === 'agent'
+  ? t('assetImport.kindAgent')
+  : row.target_type === 'flow' ? t('assetImport.kindWorkflow') : row.target_type)
 
 // 目标类型图标（与主窗口导航一致：智能体 = Cpu，工作流 = Share）
 const targetIcon = (row) => (row.target_type === 'agent' ? Cpu : row.target_type === 'flow' ? Share : null)
@@ -266,12 +272,12 @@ const load = async () => {
       method: 'POST', headers: authHeaders(), body: JSON.stringify(body)
     })
     const data = await res.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '读取端点列表失败')
+    if (data.code !== 200) throw new Error(formatError(data) || t('endpointsTab.loadFailed'))
     rows.value = (data.data?.items || []).map((r) => ({ ...r, __busy: false }))
     total.value = data.data?.total || 0
     emit('count', total.value)
   } catch (e) {
-    ElMessage.error(e.message || '读取端点列表失败')
+    ElMessage.error(e.message || t('endpointsTab.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -317,11 +323,14 @@ const toggleExpose = async (row, exposed) => {
       method: 'PUT', headers: authHeaders(), body: JSON.stringify({ exposed })
     })
     const data = await res.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '更新失败')
+    if (data.code !== 200) throw new Error(formatError(data) || t('endpoint.updateFailed'))
     row.exposed = exposed
-    ElMessage.success({ message: exposed ? '端点已对外开放' : '端点已收回对外', duration: 700 })
+    ElMessage.success({
+      message: exposed ? t('endpoint.exposedOk') : t('endpoint.retractedOk'),
+      duration: 700
+    })
   } catch (e) {
-    ElMessage.error(e.message || '更新失败')
+    ElMessage.error(e.message || t('endpoint.updateFailed'))
   } finally {
     row.__busy = false
   }
@@ -332,16 +341,17 @@ const toggleExpose = async (row, exposed) => {
 const isManaged = (row) => row.target_type === 'flow' && row.protocol === 'rpc'
 
 const deleteHint = (row) => {
-  if (isManaged(row)) return 'RPC 端点随流程自动管理，不能单独删除；要停用请停用或废弃流程'
-  if (row.exposed) return '仍在对外开放，先「收回对外」再删除'
-  return '删除端点'
+  if (isManaged(row)) return t('endpointsTab.deleteManaged')
+  if (row.exposed) return t('endpoint.tipDeleteBlocked')
+  return t('endpoint.tipDelete')
 }
 
 const remove = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `确定删除端点 "${row.name}"（${(row.protocol || '').toUpperCase()}）？目标实体上的端点标记会同步清除。`,
-      '删除确认', { type: 'warning' }
+      t('endpointsTab.deleteBody', { name: row.name, protocol: (row.protocol || '').toUpperCase() }),
+      t('endpoint.deleteTitle'),
+      { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
     )
   } catch {
     return
@@ -351,11 +361,11 @@ const remove = async (row) => {
       method: 'DELETE', headers: authHeaders()
     })
     const data = await res.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '删除失败')
-    ElMessage.success('端点已删除')
+    if (data.code !== 200) throw new Error(formatError(data) || t('endpoint.deleteFailed'))
+    ElMessage.success(t('endpoint.deleteOk'))
     load()
   } catch (e) {
-    ElMessage.error(e.message || '删除失败')
+    ElMessage.error(e.message || t('endpoint.deleteFailed'))
   }
 }
 
@@ -375,7 +385,7 @@ const openGuide = (row = null) => guideRef.value?.open(row)
 
 // JSON 美化（input_schema 可能是对象或已序列化字符串）
 const pretty = (v) => {
-  if (v === null || v === undefined || v === '') return '（空）'
+  if (v === null || v === undefined || v === '') return t('endpointsTab.emptyValue')
   try {
     return typeof v === 'string' ? JSON.stringify(JSON.parse(v), null, 2) : JSON.stringify(v, null, 2)
   } catch {
@@ -398,8 +408,9 @@ const openTarget = (row) => {
 const retractTarget = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `收回 ${targetName(row)} 的全部端点（关掉「对外」）？端点记录与配置保留，租户内调用不受影响。`,
-      '批量收回确认', { type: 'warning' }
+      t('endpointsTab.retractConfirm', { name: targetName(row) }),
+      t('endpointsTab.retractTitle'),
+      { type: 'warning', confirmButtonText: t('endpointsTab.retractBtn'), cancelButtonText: t('common.cancel') }
     )
   } catch {
     return
@@ -410,11 +421,11 @@ const retractTarget = async (row) => {
       body: JSON.stringify({ target_type: row.target_type, target_id: row.target_id })
     })
     const data = await res.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '收回失败')
-    ElMessage.success('该目标的端点已全部收回对外')
+    if (data.code !== 200) throw new Error(formatError(data) || t('endpointsTab.retractFailed'))
+    ElMessage.success(t('endpointsTab.retractedAll'))
     load()
   } catch (e) {
-    ElMessage.error(e.message || '收回失败')
+    ElMessage.error(e.message || t('endpointsTab.retractFailed'))
   }
 }
 

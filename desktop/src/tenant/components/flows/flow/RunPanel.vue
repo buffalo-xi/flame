@@ -3,16 +3,16 @@
     <div class="panel-resizer" @mousedown="startResize"></div>
     <div class="panel-header">
       <div class="panel-tabs">
-        <button class="panel-tab-btn" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'">本次运行</button>
-        <button class="panel-tab-btn" :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">历史运行</button>
+        <button class="panel-tab-btn" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'">{{ t('flow.runPanel.tabDebug') }}</button>
+        <button class="panel-tab-btn" :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">{{ t('flow.runPanel.tabHistory') }}</button>
       </div>
       <span
         v-if="activeTab === 'debug' && debugRuns.length"
         class="collapse-all-btn"
-        :title="allCollapsed ? '全部展开' : '全部收起'"
+        :title="allCollapsed ? t('flow.runPanel.expandAll') : t('flow.runPanel.collapseAll')"
         @click="toggleAllCards"
-      >{{ allCollapsed ? '全部展开' : '全部收起' }}</span>
-      <span v-if="activeTab === 'debug'" class="clear-icon" title="清空所有卡片" @click="onClearRuns"><el-icon><Delete /></el-icon></span>
+      >{{ allCollapsed ? t('flow.runPanel.expandAll') : t('flow.runPanel.collapseAll') }}</span>
+      <span v-if="activeTab === 'debug'" class="clear-icon" :title="t('flow.runPanel.clearAllCards')" @click="onClearRuns"><el-icon><Delete /></el-icon></span>
       <span class="close-icon" @click="$emit('close')">×</span>
     </div>
     <template v-if="activeTab === 'debug'">
@@ -25,16 +25,16 @@
               <!-- 卡片 1：输入 -->
               <div class="run-card">
                 <div class="run-card-head">
-                  <span class="run-card-title">输入</span>
-                  <a class="run-card-toggle" @click="toggleCard(run.id + '-input')">{{ collapsedMap[run.id + '-input'] ? '展开' : '收起' }}</a>
+                  <span class="run-card-title">{{ t('flow.runPanel.input') }}</span>
+                  <a class="run-card-toggle" @click="toggleCard(run.id + '-input')">{{ collapsedMap[run.id + '-input'] ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
                 </div>
                 <pre v-show="!collapsedMap[run.id + '-input']" class="run-part-input">{{ JSON.stringify(run.input, null, 2) }}</pre>
               </div>
               <!-- 卡片 2：执行 -->
               <div class="run-card">
                 <div class="run-card-head">
-                  <span class="run-card-title">执行</span>
-                  <a class="run-card-toggle" @click="toggleCard(run.id + '-exec')">{{ collapsedMap[run.id + '-exec'] ? '展开' : '收起' }}</a>
+                  <span class="run-card-title">{{ t('flow.runPanel.exec') }}</span>
+                  <a class="run-card-toggle" @click="toggleCard(run.id + '-exec')">{{ collapsedMap[run.id + '-exec'] ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
                 </div>
                 <div v-show="!collapsedMap[run.id + '-exec']">
                   <div v-for="(log, i) in run.logs" :key="i" class="output-line" :class="log.type">{{ log.message }}</div>
@@ -43,56 +43,56 @@
               <!-- 卡片 3：流式进度 -->
               <div class="run-card">
                 <div class="run-card-head">
-                  <span class="run-card-title">过程信息-progress</span>
-                  <a class="run-card-toggle" @click="toggleCard(run.id + '-progress')">{{ collapsedMap[run.id + '-progress'] ? '展开' : '收起' }}</a>
+                  <span class="run-card-title">{{ t('flow.runPanel.cardProgress') }}</span>
+                  <a class="run-card-toggle" @click="toggleCard(run.id + '-progress')">{{ collapsedMap[run.id + '-progress'] ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
                 </div>
                 <div v-show="!collapsedMap[run.id + '-progress']">
                   <pre v-if="run.progress" class="run-part-progress pane-scroll">{{ run.progress }}</pre>
-                  <div v-else class="run-part-empty">无信息</div>
+                  <div v-else class="run-part-empty">{{ t('flow.runPanel.noInfo') }}</div>
                 </div>
               </div>
               <!-- 卡片 4：流式结果 -->
               <div class="run-card">
                 <div class="run-card-head">
-                  <span class="run-card-title">过程信息-result</span>
-                  <a class="run-card-toggle" @click="toggleCard(run.id + '-result')">{{ collapsedMap[run.id + '-result'] ? '展开' : '收起' }}</a>
+                  <span class="run-card-title">{{ t('flow.runPanel.cardResult') }}</span>
+                  <a class="run-card-toggle" @click="toggleCard(run.id + '-result')">{{ collapsedMap[run.id + '-result'] ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
                 </div>
                 <div v-show="!collapsedMap[run.id + '-result']">
                   <ResultView v-if="run.result" :text="run.result" />
-                  <div v-else class="run-part-empty">无信息</div>
+                  <div v-else class="run-part-empty">{{ t('flow.runPanel.noInfo') }}</div>
                 </div>
               </div>
               <!-- 卡片 5：结果 -->
               <div class="run-card">
                 <div class="run-card-head">
-                  <span class="run-card-title run-card-title-final">结果</span>
-                  <a class="run-card-toggle" @click="toggleCard(run.id + '-final')">{{ collapsedMap[run.id + '-final'] ? '展开' : '收起' }}</a>
+                  <span class="run-card-title run-card-title-final">{{ t('flow.runPanel.result') }}</span>
+                  <a class="run-card-toggle" @click="toggleCard(run.id + '-final')">{{ collapsedMap[run.id + '-final'] ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
                 </div>
                 <div v-show="!collapsedMap[run.id + '-final']">
                   <ResultView v-if="run.finalResult" :text="run.finalResult" />
-                  <div v-else class="run-part-empty">无结果</div>
+                  <div v-else class="run-part-empty">{{ t('flow.runPanel.noResult') }}</div>
                 </div>
               </div>
             </template>
             <!-- 运行结束：tab 卡片，默认显示结果 -->
             <template v-else>
               <div class="run-tabs">
-                <span class="run-tab" :class="{ active: (activeRunTab[run.id] || 'final') === 'final' }" @click="setRunTab(run.id, 'final')">结果</span>
-                <span class="run-tab" :class="{ active: activeRunTab[run.id] === 'progress' }" @click="setRunTab(run.id, 'progress')">过程</span>
-                <span class="run-tab" :class="{ active: activeRunTab[run.id] === 'exec' }" @click="setRunTab(run.id, 'exec')">执行</span>
-                <span class="run-tab" :class="{ active: activeRunTab[run.id] === 'input' }" @click="setRunTab(run.id, 'input')">输入</span>
+                <span class="run-tab" :class="{ active: (activeRunTab[run.id] || 'final') === 'final' }" @click="setRunTab(run.id, 'final')">{{ t('flow.runPanel.result') }}</span>
+                <span class="run-tab" :class="{ active: activeRunTab[run.id] === 'progress' }" @click="setRunTab(run.id, 'progress')">{{ t('flow.runPanel.process') }}</span>
+                <span class="run-tab" :class="{ active: activeRunTab[run.id] === 'exec' }" @click="setRunTab(run.id, 'exec')">{{ t('flow.runPanel.exec') }}</span>
+                <span class="run-tab" :class="{ active: activeRunTab[run.id] === 'input' }" @click="setRunTab(run.id, 'input')">{{ t('flow.runPanel.input') }}</span>
                 <span class="run-meta">
                   <span class="run-time">{{ run.startTime }}</span>
                   <span v-if="run.endTs" class="run-cost">{{ formatCost(run.endTs - run.startTs) }}</span>
                 </span>
                 <span class="run-status" :class="runStatusClass(run.status)">{{ runStatusText(run.status) }}</span>
-                <a class="run-card-toggle run-tabs-toggle" @click="toggleCard(run.id + '-group')">{{ collapsedMap[run.id + '-group'] ? '展开' : '收起' }}</a>
+                <a class="run-card-toggle run-tabs-toggle" @click="toggleCard(run.id + '-group')">{{ collapsedMap[run.id + '-group'] ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
               </div>
               <div v-show="!collapsedMap[run.id + '-group']" class="run-tab-body">
                 <template v-if="(activeRunTab[run.id] || 'final') === 'final'">
                   <div v-if="run.error" class="run-part-error">{{ run.error }}</div>
                   <ResultView v-else-if="run.finalResult" :text="run.finalResult" />
-                  <div v-else class="run-part-empty">无结果</div>
+                  <div v-else class="run-part-empty">{{ t('flow.runPanel.noResult') }}</div>
                 </template>
                 <template v-else-if="activeRunTab[run.id] === 'progress'">
                   <template v-if="run.progress || run.result">
@@ -105,13 +105,13 @@
                       <ResultView :text="run.result" />
                     </div>
                   </template>
-                  <div v-else class="run-part-empty">无信息</div>
+                  <div v-else class="run-part-empty">{{ t('flow.runPanel.noInfo') }}</div>
                 </template>
                 <template v-else-if="activeRunTab[run.id] === 'exec'">
                   <div v-if="run.logs.length">
                     <div v-for="(log, i) in run.logs" :key="i" class="output-line" :class="log.type">{{ log.message }}</div>
                   </div>
-                  <div v-else class="run-part-empty">无日志</div>
+                  <div v-else class="run-part-empty">{{ t('flow.runPanel.noLogs') }}</div>
                 </template>
                 <template v-else>
                   <pre class="run-part-input">{{ JSON.stringify(run.input, null, 2) }}</pre>
@@ -120,24 +120,24 @@
             </template>
           </div>
         </div>
-        <div v-else class="output-empty">暂无运行记录，点「运行」开始</div>
+        <div v-else class="output-empty">{{ t('flow.runPanel.noRuns') }}</div>
       </div>
     </div>
     <!-- 上下分区的拖动条：面板是 flex column，改 tail 的固定高度就等于改两段的比例。
          双击复位（回到「内容自适应 + 38% 上限」的默认布局）。 -->
     <div
       class="panel-splitter"
-      title="拖动调整上下高度，双击复位"
+      :title="t('flow.runPanel.resizeTooltip')"
       @pointerdown="startTailResize"
       @dblclick="resetTailHeight"
     ></div>
     <div ref="tailRef" class="panel-tail pane-scroll" :style="tailStyle">
       <div class="tail-header">
-        <span class="tail-title">输入参数</span>
+        <span class="tail-title">{{ t('flow.runPanel.tailTitle') }}</span>
         <div ref="toolbarRef" class="debug-toolbar"
              :class="{ 'debug-toolbar--floating': toolbarPos }"
              :style="toolbarPos ? { left: toolbarPos.x + 'px', top: toolbarPos.y + 'px' } : null">
-          <span class="tb-handle" title="按住拖动，双击复位"
+          <span class="tb-handle" :title="t('flow.runPanel.tbHandle')"
                 @pointerdown="onToolbarDragStart" @dblclick="resetToolbarPos">
             <i v-for="n in 6" :key="n" class="tb-dot"></i>
           </span>
@@ -151,7 +151,7 @@
           </el-tooltip>
           <!-- 步过 / 步入 / 步出：箭头 + 落点圆点（VS Code 调试条那套图标）。
                Element Plus 没有这三个字形，自己画：24 视口描边，样式见 .dbg-ico -->
-          <el-tooltip content="步过" placement="top">
+          <el-tooltip :content="t('flow.runPanel.stepOver')" placement="top">
             <button class="dbg-btn" :disabled="dbgDisabled.step" @click="onStepOver">
               <svg class="dbg-ico" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M4.6 14.6C4.6 2.8 17.2 2.8 17.2 13.6" />
@@ -160,7 +160,7 @@
               </svg>
             </button>
           </el-tooltip>
-          <el-tooltip content="步入" placement="top">
+          <el-tooltip :content="t('flow.runPanel.stepInto')" placement="top">
             <button class="dbg-btn" :disabled="dbgDisabled.step" @click="onStepIn">
               <svg class="dbg-ico" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 4.2V14.4" />
@@ -169,7 +169,7 @@
               </svg>
             </button>
           </el-tooltip>
-          <el-tooltip content="步出" placement="top">
+          <el-tooltip :content="t('flow.runPanel.stepOut')" placement="top">
             <button class="dbg-btn" :disabled="dbgDisabled.step" @click="onStepOut">
               <svg class="dbg-ico" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 14.4V4.2" />
@@ -178,10 +178,10 @@
               </svg>
             </button>
           </el-tooltip>
-          <el-tooltip content="停止" placement="top">
+          <el-tooltip :content="t('flow.runPanel.stop')" placement="top">
             <button class="dbg-btn stop" :disabled="dbgDisabled.stop" @click="onStop"><Close /></button>
           </el-tooltip>
-          <el-tooltip content="查看变量" placement="top">
+          <el-tooltip :content="t('flow.runPanel.viewVars')" placement="top">
             <button class="dbg-btn" :disabled="dbgDisabled.inspect" @click="onInspect"><Search /></button>
           </el-tooltip>
         </div>
@@ -190,21 +190,21 @@
            子流程这一项只管它调起的子流程，主流程永远是画布上这份草稿 -->
       <div v-if="flowDebug" class="debug-meta">
         <span class="dm-dot" :class="{ 'dm-dot--on': flowDebug.connected.value }"></span>
-        <span class="dm-text" :title="`模式 ${flowDebug.mode.value} · 当前 ${currentDisplay}`">
+        <span class="dm-text" :title="t('flow.runPanel.modeTitle', { mode: flowDebug.mode.value, current: currentDisplay })">
           {{ flowDebug.mode.value }} · {{ currentDisplay }}
         </span>
-        <span class="dm-scope-label">子流程</span>
+        <span class="dm-scope-label">{{ t('flow.runPanel.scopeLabel') }}</span>
         <el-tooltip :content="scopeTip" placement="top">
           <el-radio-group v-model="scopeMode" size="small" class="scope-radio">
-            <el-radio-button value="draft">草稿</el-radio-button>
-            <el-radio-button value="published">正式</el-radio-button>
+            <el-radio-button value="draft">{{ t('flow.runPanel.scopeDraft') }}</el-radio-button>
+            <el-radio-button value="published">{{ t('flow.runPanel.scopePublished') }}</el-radio-button>
           </el-radio-group>
         </el-tooltip>
       </div>
       <div class="tail-content pane-scroll">
         <div v-if="requiredFields.length === 0" class="empty-fields">
-          <p>这个工作流没有声明入参</p>
-          <span>直接点「运行」就能跑</span>
+          <p>{{ t('flow.runPanel.noInputParams') }}</p>
+          <span>{{ t('flow.runPanel.noInputParamsHint') }}</span>
         </div>
         <div v-else class="fields-container">
           <div 
@@ -234,40 +234,40 @@
                   :class="{ active: fieldValues[field.key] === true }"
                   @click="fieldValues[field.key] = true"
                 >
-                  是
+                  {{ t('flow.runPanel.boolTrue') }}
                 </button>
                 <button 
                   class="bool-btn" 
                   :class="{ active: fieldValues[field.key] === false }"
                   @click="fieldValues[field.key] = false"
                 >
-                  否
+                  {{ t('flow.runPanel.boolFalse') }}
                 </button>
               </div>
               <textarea 
                 v-else-if="field.type === 'array'"
                 class="text-input json-textarea"
                 v-model="fieldValues[field.key]"
-                :placeholder="`请输入${field.label}的JSON数组`"
+                :placeholder="t('flow.runPanel.jsonArrayPlaceholder', { label: field.label })"
               ></textarea>
               <textarea 
                 v-else-if="field.type === 'string'"
                 class="text-input string-textarea"
                 v-model="fieldValues[field.key]"
-                :placeholder="`请输入${field.label}`"
+                :placeholder="t('flow.runPanel.inputPlaceholder', { label: field.label })"
               ></textarea>
               <input 
                 v-else-if="field.type === 'number'"
                 type="number"
                 class="text-input number-input"
                 v-model="fieldValues[field.key]"
-                :placeholder="`请输入${field.label}`"
+                :placeholder="t('flow.runPanel.inputPlaceholder', { label: field.label })"
               />
               <textarea 
                 v-else
                 class="text-input json-textarea"
                 v-model="fieldValues[field.key]"
-                :placeholder="`请输入${field.label}的JSON值`"
+                :placeholder="t('flow.runPanel.jsonValuePlaceholder', { label: field.label })"
               ></textarea>
             </div>
           </div>
@@ -279,85 +279,85 @@
     <div v-else class="history-view">
       <div v-show="!runDetail" class="history-filter">
         <select v-model="historyFilter.status" class="hf-status">
-          <option value="">全部状态</option>
-          <option value="success">成功</option>
-          <option value="failed">失败</option>
-          <option value="cancelled">已取消</option>
+          <option value="">{{ t('flow.runPanel.filterAllStatus') }}</option>
+          <option value="success">{{ t('flow.runPanel.filterSuccess') }}</option>
+          <option value="failed">{{ t('flow.runPanel.filterFailed') }}</option>
+          <option value="cancelled">{{ t('flow.runPanel.filterCancelled') }}</option>
         </select>
         <select :value="historyRange" class="hf-status" @change="applyHistoryRange($event.target.value)">
-          <option value="all">全部时间</option>
-          <option value="today">今天</option>
-          <option value="7d">近 7 天</option>
-          <option value="30d">近 30 天</option>
-          <option value="custom">自定义</option>
+          <option value="all">{{ t('flow.runPanel.filterAllTime') }}</option>
+          <option value="today">{{ t('flow.runPanel.filterToday') }}</option>
+          <option value="7d">{{ t('flow.runPanel.filter7d') }}</option>
+          <option value="30d">{{ t('flow.runPanel.filter30d') }}</option>
+          <option value="custom">{{ t('flow.runPanel.filterCustom') }}</option>
         </select>
         <div class="hf-links">
-          <a v-if="hasHistoryFilter" class="hf-reset" @click="resetHistoryFilter">重置</a>
-          <a v-if="historyRuns.length" class="hf-clear" title="清空该工作流的全部历史运行记录" @click="clearAllRuns">清空</a>
+          <a v-if="hasHistoryFilter" class="hf-reset" @click="resetHistoryFilter">{{ t('flow.runPanel.filterReset') }}</a>
+          <a v-if="historyRuns.length" class="hf-clear" :title="t('flow.runPanel.filterClearTitle')" @click="clearAllRuns">{{ t('flow.runPanel.filterClear') }}</a>
         </div>
         <template v-if="historyRange === 'custom'">
           <input type="datetime-local" v-model="historyFilter.startFrom" class="hf-time" />
-          <span class="hf-sep">至</span>
+          <span class="hf-sep">{{ t('flow.runPanel.to') }}</span>
           <input type="datetime-local" v-model="historyFilter.startTo" class="hf-time" />
         </template>
       </div>
       <div v-show="!runDetail" class="history-list pane-scroll" @scroll="onHistoryScroll">
         <div v-if="!historyRuns.length && !historyLoading" class="history-empty">
-          {{ hasHistoryFilter ? '没有符合条件的记录' : '暂无历史运行记录' }}
+          {{ hasHistoryFilter ? t('flow.runPanel.noMatchingRecords') : t('flow.runPanel.noHistory') }}
         </div>
         <div v-for="run in historyRuns" :key="run.id" class="history-item"
              :class="{ active: run.id === selectedRunId }" @click="loadRunDetail(run.id)">
           <span class="hi-time">{{ formatTime(run.started_at) }}</span>
           <span class="hi-meta">
-            <span v-if="run.run_type === 'debug'" class="hi-tag">调试</span>
-            <span v-else-if="run.run_type === 'task'" class="hi-tag hi-tag-task">任务</span>
-            <span class="hi-nodes">{{ run.node_count }} 节点</span>
+            <span v-if="run.run_type === 'debug'" class="hi-tag">{{ t('flow.runPanel.tagDebug') }}</span>
+            <span v-else-if="run.run_type === 'task'" class="hi-tag hi-tag-task">{{ t('flow.runPanel.tagTask') }}</span>
+            <span class="hi-nodes">{{ t('flow.runPanel.nodeCount', { count: run.node_count }) }}</span>
           </span>
           <span class="hi-cost">{{ run.duration_ms }}ms</span>
           <span class="hi-status" :class="statusClass(run.status)">{{ statusText(run.status) }}</span>
-          <span class="hi-del" title="删除这条记录" @click.stop="deleteRun(run.id)">
+          <span class="hi-del" :title="t('flow.runPanel.deleteRecord')" @click.stop="deleteRun(run.id)">
             <el-icon><Delete /></el-icon>
           </span>
         </div>
-        <div v-if="historyLoading" class="history-more">加载中...</div>
-        <div v-else-if="historyFinished && historyRuns.length" class="history-more">没有更多了</div>
+        <div v-if="historyLoading" class="history-more">{{ t('flow.runPanel.loading') }}</div>
+        <div v-else-if="historyFinished && historyRuns.length" class="history-more">{{ t('flow.runPanel.noMore') }}</div>
       </div>
       <div v-show="runDetail" class="history-detail pane-scroll">
         <div v-if="runDetail">
           <div class="hd-back">
-            <a class="hd-back-btn" @click="closeRunDetail">← 返回列表</a>
+            <a class="hd-back-btn" @click="closeRunDetail">{{ t('flow.runPanel.backToList') }}</a>
             <span class="hd-back-info">{{ formatTime(runDetail.started_at) }} · {{ statusText(runDetail.status) }}</span>
           </div>
           <div class="hd-meta">
             <div class="hd-meta-row">
-              <span>状态: {{ statusText(runDetail.status) }}</span>
-              <span>耗时: {{ runDetail.duration_ms }}ms</span>
-              <span>节点数: {{ runDetail.node_count }}</span>
+              <span>{{ t('flow.runPanel.detailStatus', { value: statusText(runDetail.status) }) }}</span>
+              <span>{{ t('flow.runPanel.detailDuration', { value: runDetail.duration_ms }) }}</span>
+              <span>{{ t('flow.runPanel.detailNodes', { value: runDetail.node_count }) }}</span>
             </div>
             <div class="hd-meta-row">
-              <span>开始: {{ formatTime(runDetail.started_at) }}</span>
-              <span>结束: {{ formatTime(runDetail.finished_at) }}</span>
+              <span>{{ t('flow.runPanel.detailStart', { value: formatTime(runDetail.started_at) }) }}</span>
+              <span>{{ t('flow.runPanel.detailEnd', { value: formatTime(runDetail.finished_at) }) }}</span>
             </div>
           </div>
           <div v-if="runDetail.err_msg" class="hd-err">{{ runDetail.err_msg }}</div>
           <div class="hd-section">
             <div class="hd-title">
-              <span class="hd-title-text">结果</span>
-              <a class="hd-toggle" @click="toggleHdSection('result')">{{ hdCollapsed.result ? '展开' : '收起' }}</a>
+              <span class="hd-title-text">{{ t('flow.runPanel.result') }}</span>
+              <a class="hd-toggle" @click="toggleHdSection('result')">{{ hdCollapsed.result ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
             </div>
-            <ResultView v-show="!hdCollapsed.result" :text="runDetail.result || '（无）'" variant="detail" />
+            <ResultView v-show="!hdCollapsed.result" :text="runDetail.result || t('flow.runPanel.noContent')" variant="detail" />
           </div>
           <div v-if="progressText" class="hd-section">
             <div class="hd-title">
-              <span class="hd-title-text">过程信息-progress</span>
-              <a class="hd-toggle" @click="toggleHdSection('progress')">{{ hdCollapsed.progress ? '展开' : '收起' }}</a>
+              <span class="hd-title-text">{{ t('flow.runPanel.cardProgress') }}</span>
+              <a class="hd-toggle" @click="toggleHdSection('progress')">{{ hdCollapsed.progress ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
             </div>
             <pre v-show="!hdCollapsed.progress">{{ progressText }}</pre>
           </div>
           <div v-if="resultStreamText" class="hd-section">
             <div class="hd-title">
-              <span class="hd-title-text">过程信息-result</span>
-              <a class="hd-toggle" @click="toggleHdSection('resultStream')">{{ hdCollapsed.resultStream ? '展开' : '收起' }}</a>
+              <span class="hd-title-text">{{ t('flow.runPanel.cardResult') }}</span>
+              <a class="hd-toggle" @click="toggleHdSection('resultStream')">{{ hdCollapsed.resultStream ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
             </div>
             <ResultView v-show="!hdCollapsed.resultStream" :text="resultStreamText" variant="detail" />
           </div>
@@ -365,8 +365,8 @@
                逐项列出，与节点「执行结果」里的输入 / 输出变量同一套展示（VarList） -->
           <div v-if="runArgRows.length" class="hd-section">
             <div class="hd-title">
-              <span class="hd-title-text">输入</span>
-              <a class="hd-toggle" @click="toggleHdSection('input')">{{ hdCollapsed.input ? '展开' : '收起' }}</a>
+              <span class="hd-title-text">{{ t('flow.runPanel.input') }}</span>
+              <a class="hd-toggle" @click="toggleHdSection('input')">{{ hdCollapsed.input ? t('flow.runPanel.expand') : t('flow.runPanel.collapse') }}</a>
             </div>
             <VarList v-show="!hdCollapsed.input" :rows="runArgRows" />
           </div>
@@ -386,6 +386,11 @@ import { fillRunInfo, setNodeResult, clearNodeResults } from '@/tenant/composabl
 import ResultView from './ResultView.vue'
 import VarList from './VarList.vue'
 import { useEscClose } from '../../../composables/useEscClose'
+import { useI18n } from 'vue-i18n'
+import { formatError } from '../../../../locales'
+import { formatDateTime } from '@/utils/datetime.js'
+
+const { t } = useI18n()
 
 const props = defineProps({
   panelWidth: {
@@ -423,9 +428,9 @@ const HISTORY_PAGE_SIZE = 20
 // 加载中又改筛选条件时的待重查标记（见 loadHistoryRuns）
 let historyPendingReset = false
 
-function statusText(s) { return { success: '成功', failed: '失败', cancelled: '取消' }[s] || s || '-' }
+function statusText(s) { return { success: t('flow.runPanel.statusSuccess'), failed: t('flow.runPanel.statusFailed'), cancelled: t('flow.runPanel.statusCancelled') }[s] || s || '-' }
 function statusClass(s) { return { success: 'status-success', failed: 'status-failed', cancelled: 'status-cancelled' }[s] || '' }
-function formatTime(t) { if (!t) return '-'; try { return new Date(t).toLocaleString() } catch (e) { return t } }
+function formatTime(v) { if (!v) return '-'; return formatDateTime(v) || v }
 
 // 是否设过筛选条件：空列表文案要能区分"本来就没有"和"被筛掉了"
 const hasHistoryFilter = computed(() => !!(historyFilter.status || historyFilter.startFrom || historyFilter.startTo))
@@ -470,7 +475,7 @@ function toggleHdSection(key) {
 // 值的展示形态：字符串原样（避免多一层引号与转义），对象/数组缩进 JSON（与节点执行结果同一口径）
 const formatVar = (v) => {
   if (v === null) return 'null'
-  if (v === undefined) return '（未赋值）'
+  if (v === undefined) return t('flow.node.run.unassigned')
   if (typeof v === 'string') return v
   return JSON.stringify(v, null, 2)
 }
@@ -599,8 +604,8 @@ async function loadRunDetail(runId) {
 async function deleteRun(runId) {
   if (!props.flowId || !runId) return
   try {
-    await ElMessageBox.confirm('删除这条历史运行记录？删除后不可恢复。', '提示', {
-      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消'
+    await ElMessageBox.confirm(t('flow.runPanel.confirmDelete'), t('flow.runPanel.confirmTitle'), {
+      type: 'warning', confirmButtonText: t('flow.runPanel.deleteBtn'), cancelButtonText: t('flow.runPanel.cancelBtn')
     })
   } catch { return }
 
@@ -610,19 +615,19 @@ async function deleteRun(runId) {
       headers: { ...getAuthHeader() }
     })
     const data = await resp.json()
-    if (data.code !== 200) throw new Error(data.msg || '删除失败')
+    if (data.code !== 200) throw new Error(formatError(data) || t('flow.message.deleteFailed'))
 
     // 删的正好是详情里那条：先清选中，否则「列表里没了、右边还挂着」
     if (String(selectedRunId.value) === String(runId)) clearRunSelection()
     historyRuns.value = historyRuns.value.filter((r) => String(r.id) !== String(runId))
     historyTotal.value = Math.max(0, historyTotal.value - 1)
     historyOffset.value = Math.max(0, historyOffset.value - 1)
-    ElMessage.success('已删除')
+    ElMessage.success(t('flow.runPanel.deleted'))
 
     // 不满一页且后面还有：补一页，保持滚动位置不跳
     if (!historyFinished.value) loadHistoryRuns(false)
   } catch (e) {
-    ElMessage.error(e?.message || '删除失败')
+    ElMessage.error(e?.message || t('flow.message.deleteFailed'))
   }
 }
 
@@ -631,9 +636,9 @@ async function clearAllRuns() {
   if (!props.flowId) return
   try {
     await ElMessageBox.confirm(
-      '清空该工作流的全部历史运行记录（含调试与正式运行，不受当前筛选影响）？删除后不可恢复。',
-      '提示',
-      { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }
+      t('flow.runPanel.confirmClear'),
+      t('flow.runPanel.confirmTitle'),
+      { type: 'warning', confirmButtonText: t('flow.runPanel.clearBtn'), cancelButtonText: t('flow.runPanel.cancelBtn') }
     )
   } catch { return }
 
@@ -643,7 +648,7 @@ async function clearAllRuns() {
       headers: { ...getAuthHeader() }
     })
     const data = await resp.json()
-    if (data.code !== 200) throw new Error(data.msg || '清空失败')
+    if (data.code !== 200) throw new Error(formatError(data) || t('flow.message.clearFailed'))
 
     clearRunSelection()
     historyRuns.value = []
@@ -651,9 +656,9 @@ async function clearAllRuns() {
     historyOffset.value = 0
     // 必须复位，否则下次切回该 tab 会因「已加载完」直接 return，看到空列表却是旧状态
     historyFinished.value = false
-    ElMessage.success('已清空')
+    ElMessage.success(t('flow.runPanel.cleared'))
   } catch (e) {
-    ElMessage.error(e?.message || '清空失败')
+    ElMessage.error(e?.message || t('flow.message.clearFailed'))
   }
 }
 
@@ -686,8 +691,8 @@ const scopeMode = computed({
   }
 })
 const scopeTip = computed(() => scopeMode.value === 'draft'
-  ? '本次运行调起的子流程读它们自己的草稿（含未发布的修改）。切到「正式版本」可以验证线上那一套。'
-  : '本次运行调起的子流程按已发布的正式版本运行（没发布过的子流程会直接报错）。主流程仍是画布草稿。'
+  ? t('flow.runPanel.scopeDraftTip')
+  : t('flow.runPanel.scopePublishedTip')
 )
 
 // ===== 上下分区可拖（运行信息 / 输入参数）=====
@@ -921,7 +926,7 @@ const onRun = async () => {
   let flowId = props.flowId
   if (!flowId) {
     if (!ensureFlowSaved) {
-      ElMessage.error('请先保存工作流，再运行')
+      ElMessage.error(t('flow.message.saveFirst'))
       return
     }
     // 失败时 handleSave 自己已经提示了原因（如「请输入工作流名称」），
@@ -969,8 +974,8 @@ const isResume = computed(() => isRunning.value && isPaused.value)
 // 运行 / 暂停合并成一个按钮：两者互斥，任意时刻只有一个动作可用。
 // 图标同时承担状态指示：▶ 表示可以跑（运行 / 继续），⏸ 表示正在跑、可以停一下。
 const runBtn = computed(() => (isRunning.value && !isPaused.value
-  ? { mode: 'pause', tip: '暂停', onClick: onPause }
-  : { mode: 'run', tip: isResume.value ? '继续' : '运行', onClick: onRun }))
+  ? { mode: 'pause', tip: t('flow.runPanel.pause'), onClick: onPause }
+  : { mode: 'run', tip: isResume.value ? t('flow.runPanel.resume') : t('flow.runPanel.run'), onClick: onRun }))
 
 const dbgDisabled = computed(() => ({
   step: !isPaused.value,      // 仅停断点时可单步
@@ -1025,7 +1030,7 @@ function setRunTab(runId, tab) {
 }
 
 function runStatusText(s) {
-  return { finished: '成功', failed: '错误', cancelled: '取消' }[s] || s || ''
+  return { finished: t('flow.runPanel.statusSuccess'), failed: t('flow.runPanel.statusError'), cancelled: t('flow.runPanel.statusCancelled') }[s] || s || ''
 }
 function runStatusClass(s) {
   return { finished: 'run-status-success', failed: 'run-status-failed', cancelled: 'run-status-cancelled' }[s] || ''
@@ -1037,7 +1042,7 @@ function formatCost(ms) {
   const totalSec = Math.floor(ms / 1000)
   const m = Math.floor(totalSec / 60)
   const s = totalSec % 60
-  return `${m}分${s}秒`
+  return t('flow.runPanel.durationFormat', { m, s })
 }
 
 // 清空所有运行卡片

@@ -10,68 +10,68 @@
         <!-- 计数 / 筛选 / 刷新：列表卡内的第一行（本地过滤，无分页）。
              控件尺寸与「租户管理」一致：small + 固定宽度 + 搜索带图标 -->
         <div class="lp-bar">
-          <span class="lp-count">共 {{ filtered.length }} 个租户</span>
+          <span class="lp-count">{{ t('platform.myTenants.count', { n: filtered.length }) }}</span>
           <el-input
             v-model="q"
             class="f-search"
             size="small"
-            placeholder="搜索 schema / 显示名"
+            :placeholder="t('platform.myTenants.searchPlaceholder')"
             clearable
           >
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
-          <el-select v-model="statusFilter" class="f-select" size="small" placeholder="全部状态" clearable>
-            <el-option label="正常" value="active" />
-            <el-option label="已停用" value="suspended" />
-            <el-option label="待完成" value="pending" />
+          <el-select v-model="statusFilter" class="f-select" size="small" :placeholder="t('platform.users.statusAll')" clearable>
+            <el-option :label="t('platform.users.statusNormal')" value="active" />
+            <el-option :label="t('platform.users.statusDisabled')" value="suspended" />
+            <el-option :label="t('platform.users.statusPending')" value="pending" />
           </el-select>
-          <el-button size="small" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+          <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('common.refresh') }}</el-button>
         </div>
 
         <div v-loading="loading" class="t-list">
           <el-empty
             v-if="!loading && !filtered.length"
-            :description="items.length ? '没有匹配的租户' : '暂无负责的租户，请联系平台管理员'"
+            :description="items.length ? t('platform.myTenants.emptyFiltered') : t('platform.myTenants.emptyNone')"
           />
 
           <!-- 网格流式：一行放多张，每张 200px 起、随行宽浮动 -->
           <div class="t-grid">
             <button
-              v-for="t in filtered"
-              :key="t.schema"
+              v-for="tn in filtered"
+              :key="tn.schema"
               type="button"
               class="t-card"
-              :class="{ active: t.schema === selected?.schema }"
-              @click="select(t)"
+              :class="{ active: tn.schema === selected?.schema }"
+              @click="select(tn)"
             >
               <!-- 头部：显示名 + schema + 状态（对齐租户端「智能体卡片」：头部带一条下分隔线） -->
               <div class="card-header">
                 <div class="header-content">
-                  <div class="card-title">{{ t.display_name || t.schema }}</div>
+                  <div class="card-title">{{ tn.display_name || tn.schema }}</div>
                   <div class="card-description">
-                    <span class="mono tc-schema">{{ t.schema }}</span>
-                    <el-tag size="small" :type="statusType(t.status)" effect="light">{{ statusText(t.status) }}</el-tag>
+                    <span class="mono tc-schema">{{ tn.schema }}</span>
+                    <el-tag size="small" :type="statusType(tn.status)" effect="light">{{ statusText(tn.status) }}</el-tag>
                   </div>
                 </div>
               </div>
               <!-- 卡体：label/value 行（同智能体卡片的 .info-item） -->
               <div class="card-body">
                 <div class="info-item">
-                  <span class="info-label">用量：</span>
+                  <span class="info-label">{{ t('platform.myTenants.labelUsage') }}</span>
                   <span class="info-value tc-usage">
-                    <span v-for="m in QUOTA_META" :key="m.key" class="tc-u" :class="{ over: isOver(t, m) }">
-                      {{ m.short }} {{ t.usage[m.usageKey] }}/{{ limitBrief(t.quota[m.key]) }}
+                    <span v-for="m in QUOTA_META" :key="m.key" class="tc-u" :class="{ over: isOver(tn, m) }">
+                      {{ m.short }} {{ tn.usage[m.usageKey] }}/{{ limitBrief(tn.quota[m.key]) }}
                     </span>
                   </span>
                 </div>
                 <!-- 备注：没有备注也占一行（兜底文案），有备注时可悬停看全文 -->
                 <div class="info-item">
-                  <span class="info-label">备注：</span>
+                  <span class="info-label">{{ t('platform.myTenants.labelRemarkColon') }}</span>
                   <span
                     class="info-value description-value"
-                    :class="{ empty: !t.remark }"
-                    :title="t.remark || ''"
-                  >{{ t.remark || EMPTY_REMARK }}</span>
+                    :class="{ empty: !tn.remark }"
+                    :title="tn.remark || ''"
+                  >{{ tn.remark || EMPTY_REMARK }}</span>
                 </div>
               </div>
             </button>
@@ -80,7 +80,7 @@
       </div>
 
       <section class="detail-pane">
-        <el-empty v-if="!selected" description="左侧选择一个租户" />
+        <el-empty v-if="!selected" :description="t('platform.myTenants.selectTenant')" />
 
         <template v-else>
           <!-- 卡头：身份 + 状态 + 启停（本页唯一的写操作） -->
@@ -89,24 +89,24 @@
               <span class="d-name">{{ selected.display_name || selected.schema }}</span>
               <span class="mono d-sub">{{ selected.schema }}</span>
               <el-tag size="small" :type="statusType(selected.status)">{{ statusText(selected.status) }}</el-tag>
-              <span v-if="selected.plan" class="d-plan">套餐 {{ selected.plan }}</span>
+              <span v-if="selected.plan" class="d-plan">{{ t('platform.myTenants.planTag', { plan: selected.plan }) }}</span>
             </div>
             <el-button
               size="small"
               :type="selected.status === 'active' ? 'danger' : 'success'"
               @click="toggleStatus(selected)"
             >
-              {{ selected.status === 'active' ? '停用' : '启用' }}
+              {{ selected.status === 'active' ? t('platform.users.disable') : t('platform.users.enable') }}
             </el-button>
           </div>
 
           <div class="meta-grid">
             <div class="meta-cell">
-              <div class="meta-label">创建时间</div>
+              <div class="meta-label">{{ t('platform.users.labelCreatedAt')}}</div>
               <div class="meta-value">{{ fmtTime(selected.created_at) }}</div>
             </div>
             <div class="meta-cell">
-              <div class="meta-label">更新时间</div>
+              <div class="meta-label">{{ t('platform.users.labelUpdatedAt')}}</div>
               <div class="meta-value">{{ fmtTime(selected.updated_at) }}</div>
             </div>
           </div>
@@ -115,34 +115,33 @@
                超系统顶后端直接拒（不像管理员那条截断），所以这里不显示"已截断"的提示。 -->
           <div class="blk">
             <button type="button" class="blk-head" @click="open.quota = !open.quota">
-              <span class="blk-title">配额</span>
-              <span class="blk-hint">可自助修改 · 受系统顶约束</span>
+              <span class="blk-title">{{ t('platform.myTenants.quotaTitle')}}</span>
+              <span class="blk-hint">{{ t('platform.myTenants.quotaHint')}}</span>
               <el-icon class="blk-arrow" :class="{ open: open.quota }"><ArrowRight /></el-icon>
             </button>
             <div v-show="open.quota" class="blk-body">
               <div v-loading="quotaLoading" class="quota-table">
                 <div class="quota-head">
-                  <span>配置项</span>
-                  <span>当前用量</span>
-                  <span>系统顶</span>
-                  <span>本租户配置</span>
+                  <span>{{ t('platform.myTenants.quotaColItem') }}</span>
+                  <span>{{ t('platform.myTenants.quotaColUsed') }}</span>
+                  <span>{{ t('platform.myTenants.quotaColSystem') }}</span>
+                  <span>{{ t('platform.myTenants.quotaColTenant') }}</span>
                 </div>
                 <div v-for="row in quotaEditRows" :key="row.key" class="quota-grid-row">
                   <span class="flow-name">{{ row.label }}</span>
                   <span class="q-usage" :class="{ over: row.over }">{{ row.used === null ? '—' : row.used }}</span>
                   <span class="flow-sys">{{ row.systemText }}</span>
-                  <el-input v-model="tenantQuota[row.key]" size="small" placeholder="留空回退系统顶" />
+                  <el-input v-model="tenantQuota[row.key]" size="small" :placeholder="t('platform.myTenants.phFallbackSystem')" />
                 </div>
               </div>
 
               <div class="blk-tip">
-                五项都能改，但都<b>不能超过系统顶</b>（系统顶为「不限」时不受限）；留空 = 回退系统顶，
-                -1 = 不限制。空间按 MiB 填写，保存后立即生效。
+                {{ t('platform.myTenants.quotaTip1') }}<b>{{ t('platform.myTenants.quotaTipBold') }}</b>{{ t('platform.myTenants.quotaTip2') }}
               </div>
               <div class="blk-foot">
-                <span class="tip">当前生效：{{ effectiveQuotaText }}</span>
+                <span class="tip">{{ t('platform.myTenants.currentEffective', { text: effectiveQuotaText }) }}</span>
                 <el-button size="small" type="primary" :loading="quotaSaving" @click="submitQuota">
-                  保存配额
+                  {{ t('platform.myTenants.saveQuota') }}
                 </el-button>
               </div>
             </div>
@@ -151,33 +150,33 @@
           <!-- 可折叠卡片②：根账号密码（默认收起；忘记 primary 密码时的自助恢复口） -->
           <div class="blk">
             <button type="button" class="blk-head" @click="open.primaryPwd = !open.primaryPwd">
-              <span class="blk-title">根账号密码</span>
+              <span class="blk-title">{{ t('platform.myTenants.primaryPwdTitle')}}</span>
               <span class="blk-hint">primary</span>
               <el-icon class="blk-arrow" :class="{ open: open.primaryPwd }"><ArrowRight /></el-icon>
             </button>
             <div v-show="open.primaryPwd" class="blk-body">
               <div class="form-grid">
-                <label class="f-label">新密码</label>
-                <el-input v-model="pwdForm.password" size="small" type="password" show-password placeholder="至少 8 位" />
+                <label class="f-label">{{ t('password.new') }}</label>
+                <el-input v-model="pwdForm.password" size="small" type="password" show-password :placeholder="t('password.newPlaceholder')" />
 
-                <label class="f-label">确认</label>
+                <label class="f-label">{{ t('platform.users.labelConfirm')}}</label>
                 <el-input
                   v-model="pwdForm.confirm"
                   size="small"
                   type="password"
                   show-password
-                  placeholder="再输一次"
+                  :placeholder="t('platform.users.phConfirm')"
                   @keyup.enter="submitPrimaryPassword"
                 />
               </div>
 
               <div class="blk-tip">
-                只重置本租户根账号 <b>primary</b> 的密码，不动它的角色与状态；重置后请用新密码走「租户登录」。
+                {{ t('platform.myTenants.primaryPwdTip1') }}<b>primary</b>{{ t('platform.myTenants.primaryPwdTip2') }}
               </div>
               <div class="blk-foot">
-                <span class="tip">已登录的会话不会失效；需要立即踢下线就停用本租户。</span>
+                <span class="tip">{{ t('platform.myTenants.primaryPwdSessionTip')}}</span>
                 <el-button size="small" type="primary" :loading="pwdSaving" @click="submitPrimaryPassword">
-                  重置密码
+                  {{ t('platform.myTenants.resetPrimaryPwd') }}
                 </el-button>
               </div>
             </div>
@@ -186,31 +185,31 @@
           <!-- 可折叠卡片③：工作流运行参数（可自助修改；系统级只读对照） -->
           <div class="blk">
             <button type="button" class="blk-head" @click="open.flow = !open.flow">
-              <span class="blk-title">工作流运行参数</span>
-              <span class="blk-hint">可自助修改</span>
+              <span class="blk-title">{{ t('platform.myTenants.flowConfigsTitle')}}</span>
+              <span class="blk-hint">{{ t('platform.myTenants.selfService')}}</span>
               <el-icon class="blk-arrow" :class="{ open: open.flow }"><ArrowRight /></el-icon>
             </button>
             <div v-show="open.flow" class="blk-body">
               <div v-loading="flowLoading" class="flow-table">
                 <div class="flow-head">
-                  <span>配置项</span>
-                  <span>系统级</span>
-                  <span>租户配置</span>
+                  <span>{{ t('platform.myTenants.colItem') }}</span>
+                  <span>{{ t('platform.myTenants.colSystemLevel') }}</span>
+                  <span>{{ t('platform.myTenants.colTenantValue') }}</span>
                 </div>
                 <div v-for="f in FLOW_FIELDS" :key="f.key" class="flow-row">
                   <span class="flow-name">{{ f.label }}</span>
                   <span class="flow-sys">{{ flowText(systemFlow[f.key]) }}</span>
-                  <el-input v-model="tenantFlow[f.key]" size="small" placeholder="留空回退系统级" />
+                  <el-input v-model="tenantFlow[f.key]" size="small" :placeholder="t('platform.myTenants.phFallbackSystemLevel')" />
                 </div>
               </div>
 
               <div class="blk-tip">
-                留空 = 回退系统级；-1 = 不限制；租户值不能超过系统级。保存后立即生效。
+                {{ t('platform.myTenants.flowTip') }}
               </div>
               <div class="blk-foot">
-                <span class="tip">只影响本租户；系统级由平台管理员设定。</span>
+                <span class="tip">{{ t('platform.myTenants.scopeTip')}}</span>
                 <el-button size="small" type="primary" :loading="flowSaving" @click="submitFlow">
-                  保存工作流运行参数
+                  {{ t('platform.myTenants.saveFlowConfigs') }}
                 </el-button>
               </div>
             </div>
@@ -219,32 +218,31 @@
           <!-- 可折叠卡片④：智能体运行参数（可自助修改；系统级只读对照） -->
           <div class="blk">
             <button type="button" class="blk-head" @click="open.agent = !open.agent">
-              <span class="blk-title">智能体运行参数</span>
-              <span class="blk-hint">可自助修改</span>
+              <span class="blk-title">{{ t('platform.myTenants.agentConfigsTitle')}}</span>
+              <span class="blk-hint">{{ t('platform.myTenants.selfService')}}</span>
               <el-icon class="blk-arrow" :class="{ open: open.agent }"><ArrowRight /></el-icon>
             </button>
             <div v-show="open.agent" class="blk-body">
               <div v-loading="agentLoading" class="flow-table">
                 <div class="flow-head">
-                  <span>配置项</span>
-                  <span>系统级</span>
-                  <span>租户配置</span>
+                  <span>{{ t('platform.myTenants.colItem') }}</span>
+                  <span>{{ t('platform.myTenants.colSystemLevel') }}</span>
+                  <span>{{ t('platform.myTenants.colTenantValue') }}</span>
                 </div>
                 <div v-for="f in AGENT_FIELDS" :key="f.key" class="flow-row">
                   <span class="flow-name">{{ f.label }}</span>
                   <span class="flow-sys">{{ flowText(systemAgent[f.key]) }}</span>
-                  <el-input v-model="tenantAgent[f.key]" size="small" placeholder="留空回退系统级" />
+                  <el-input v-model="tenantAgent[f.key]" size="small" :placeholder="t('platform.myTenants.phFallbackSystemLevel')" />
                 </div>
               </div>
 
               <div class="blk-tip">
-                留空 = 回退系统级；<b>本组配置没有 -1</b>（都是安全阀，调成「不限制」等于拆掉防线）；
-                租户值不能超过系统级。保存后立即生效。
+                {{ t('platform.myTenants.agentTip1') }}<b>{{ t('platform.myTenants.agentTipBold') }}</b>{{ t('platform.myTenants.agentTip2') }}
               </div>
               <div class="blk-foot">
-                <span class="tip">只影响本租户；系统级由平台管理员设定。</span>
+                <span class="tip">{{ t('platform.myTenants.scopeTip')}}</span>
                 <el-button size="small" type="primary" :loading="agentSaving" @click="submitAgent">
-                  保存智能体运行参数
+                  {{ t('platform.myTenants.saveAgentConfigs') }}
                 </el-button>
               </div>
             </div>
@@ -253,7 +251,7 @@
           <!-- 可折叠卡片⑤：租户信息（纯只读，不是输入框） -->
           <div class="blk">
             <button type="button" class="blk-head" @click="open.info = !open.info">
-              <span class="blk-title">租户信息</span>
+              <span class="blk-title">{{ t('platform.myTenants.infoTitle')}}</span>
               <el-icon class="blk-arrow" :class="{ open: open.info }"><ArrowRight /></el-icon>
             </button>
             <div v-show="open.info" class="blk-body">
@@ -265,9 +263,7 @@
           </div>
 
           <div class="tip">
-            启停、工作流运行参数、根账号（primary）密码都可以在这里自助
-            （停用后该租户立即无法登录控制台，MCP/RPC 调用也会被拒）；
-            调整配额上限、转移归属请找平台管理员（他走「租户管理」页）。
+            {{ t('platform.myTenants.footTip') }}
           </div>
         </template>
       </section>
@@ -277,12 +273,15 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, Refresh, Search } from '@element-plus/icons-vue'
 import { api } from '../api'
 
 // count：把租户数上抛给顶栏导航的标签（「我的租户 (N)」，与管理员页同款）
 const emit = defineEmits(['count', 'session-expired'])
+
+const { t } = useI18n()
 
 const items = ref([])
 const loading = ref(false)
@@ -298,36 +297,42 @@ const open = reactive({ quota: false, primaryPwd: false, flow: false, agent: fal
 const pwdForm = reactive({ password: '', confirm: '' })
 const pwdSaving = ref(false)
 
-const QUOTA_META = [
-  { key: 'max_agents', usageKey: 'agents', label: '智能体', short: '智' },
-  { key: 'max_skills', usageKey: 'skills', label: '技能', short: '技' },
-  { key: 'max_flows', usageKey: 'flows', label: '工作流', short: '流' }
-]
+const QUOTA_META = computed(() => [
+  { key: 'max_agents', usageKey: 'agents', label: t('platform.myTenants.quotaFieldAgents'), short: t('platform.myTenants.quotaShortAgents') },
+  { key: 'max_skills', usageKey: 'skills', label: t('platform.myTenants.quotaFieldSkills'), short: t('platform.myTenants.quotaShortSkills') },
+  { key: 'max_flows', usageKey: 'flows', label: t('platform.myTenants.quotaFieldFlows'), short: t('platform.myTenants.quotaShortFlows') }
+])
 
 // 备注为空时的兜底文案（卡片与右卡「租户信息」共用一份，别写两遍）
-const EMPTY_REMARK = '创建者很懒，什么都没写！'
+const EMPTY_REMARK = computed(() => t('platform.myTenants.emptyRemark'))
 
 // ===== 工作流运行参数（platform.flow_configs 的租户行；系统级只读对照） =====
-const FLOW_FIELDS = [
-  { key: 'max_timeout', label: '最大超时（秒）' },
-  { key: 'max_recursion_depth', label: '最大递归深度' },
-  { key: 'max_node_count', label: '最大节点数' },
-  { key: 'max_exec_count', label: '最大执行次数' },
-  { key: 'max_loop_times', label: '最大循环次数' },
-  { key: 'max_run_records', label: '最大运行记录数' },
-  { key: 'max_session_records', label: '最大会话记忆' }
-]
+const FLOW_FIELDS = computed(() => [
+  { key: 'max_timeout', label: t('platform.system.flowConfigs.max_timeout') },
+  { key: 'max_recursion_depth', label: t('platform.system.flowConfigs.max_recursion_depth') },
+  { key: 'max_node_count', label: t('platform.system.flowConfigs.max_node_count') },
+  { key: 'max_exec_count', label: t('platform.system.flowConfigs.max_exec_count') },
+  { key: 'max_loop_times', label: t('platform.system.flowConfigs.max_loop_times') },
+  { key: 'max_run_records', label: t('platform.system.flowConfigs.max_run_records') },
+  { key: 'max_session_records', label: t('platform.system.flowConfigs.max_session_records') }
+])
 const flowLoading = ref(false)
 const flowSaving = ref(false)
 const systemFlow = ref({})
 const tenantFlow = ref({})
-const flowText = (v) => (v === null || v === undefined || v === '' ? '未设置' : String(v))
+const flowText = (v) => (v === null || v === undefined || v === '' ? t('platform.myTenants.unset') : String(v))
 
-const statusText = (s) => ({ active: '正常', suspended: '已停用', deleted: '已删除', pending: '待完成' }[s] || s)
+const statusText = (s) =>
+  ({
+    active: t('platform.users.statusNormal'),
+    suspended: t('platform.users.statusDisabled'),
+    deleted: t('platform.users.statusDeleted'),
+    pending: t('platform.users.statusPending')
+  })[s] || s
 const statusType = (s) => ({ active: 'success', suspended: 'warning', deleted: 'info', pending: 'info' }[s] || 'info')
 const limitBrief = (v) => (v === -1 ? '∞' : String(v ?? '-'))
 // 列表里的用量摘要：上限 >= 0 且用量超出才标红（-1 = 不限制）
-const isOver = (t, m) => t.quota[m.key] >= 0 && t.usage[m.usageKey] > t.quota[m.key]
+const isOver = (tn, m) => tn.quota[m.key] >= 0 && tn.usage[m.usageKey] > tn.quota[m.key]
 
 const filtered = computed(() => {
   const kw = q.value.trim().toLowerCase()
@@ -340,14 +345,14 @@ const filtered = computed(() => {
 
 // 只读键值：schema / 显示名 / 套餐 / 状态 / 备注
 const infoRows = computed(() => {
-  const t = selected.value
-  if (!t) return []
+  const tn = selected.value
+  if (!tn) return []
   return [
-    { label: 'schema', value: t.schema, mono: true },
-    { label: '显示名', value: t.display_name },
-    { label: '套餐', value: t.plan },
-    { label: '状态', value: statusText(t.status) },
-    { label: '备注', value: t.remark || EMPTY_REMARK }
+    { label: 'schema', value: tn.schema, mono: true },
+    { label: t('platform.myTenants.labelDisplayName'), value: tn.display_name },
+    { label: t('platform.myTenants.labelPlan'), value: tn.plan },
+    { label: t('platform.myTenants.labelStatus'), value: statusText(tn.status) },
+    { label: t('platform.myTenants.labelRemark'), value: tn.remark || EMPTY_REMARK.value }
   ]
 })
 
@@ -359,9 +364,9 @@ const fmtTime = (s) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-function select(t) {
-  if (!t || t.schema === selected.value?.schema) return
-  selected.value = t
+function select(tn) {
+  if (!tn || tn.schema === selected.value?.schema) return
+  selected.value = tn
 }
 
 // 选中项一变就重新拉它的工作流运行参数（select / load 都会经过这里）
@@ -380,7 +385,7 @@ function handleError(err) {
     emit('session-expired')
     return
   }
-  ElMessage.error(err?.message || '请求失败')
+  ElMessage.error(err?.message || t('platform.shared.requestFailed'))
 }
 
 async function load() {
@@ -402,24 +407,24 @@ async function load() {
 
 // 卡头快捷启停：只切 active ⇄ suspended（与后端同口径；pending / deleted 不给写）。
 // 后端只允许操作"自己名下"的租户，不是自己的一律 403。
-async function toggleStatus(t) {
-  if (!t) return
-  const next = t.status === 'active' ? 'suspended' : 'active'
-  const action = next === 'suspended' ? '停用' : '启用'
+async function toggleStatus(tn) {
+  if (!tn) return
+  const next = tn.status === 'active' ? 'suspended' : 'active'
+  const action = next === 'suspended' ? t('platform.users.actionDisable') : t('platform.users.actionEnable')
   try {
     await ElMessageBox.confirm(
       next === 'suspended'
-        ? `停用租户 ${t.schema} 后：该租户将无法登录控制台，MCP/RPC 调用也会被拒（立即生效）。`
-        : `启用租户 ${t.schema}？`,
-      `${action}确认`,
+        ? t('platform.myTenants.statusDisableConfirm', { schema: tn.schema })
+        : t('platform.myTenants.statusEnableConfirm', { schema: tn.schema }),
+      t('platform.users.actionConfirmTitle', { action }),
       { type: next === 'suspended' ? 'warning' : 'info' }
     )
   } catch {
     return
   }
   try {
-    await api.setMyTenantStatus(t.schema, next)
-    ElMessage.success(`已${action}`)
+    await api.setMyTenantStatus(tn.schema, next)
+    ElMessage.success(next === 'suspended' ? t('platform.users.disabledDone') : t('platform.users.enabledDone'))
     await load()
   } catch (err) {
     handleError(err)
@@ -432,10 +437,10 @@ async function loadFlowConfigs(schema) {
   try {
     const data = await api.getMyTenantFlowConfigs(schema)
     systemFlow.value = data?.system || {}
-    const t = data?.tenant || {}
+    const ten = data?.tenant || {}
     const obj = {}
-    for (const f of FLOW_FIELDS) {
-      const v = t[f.key]
+    for (const f of FLOW_FIELDS.value) {
+      const v = ten[f.key]
       obj[f.key] = v === null || v === undefined ? '' : String(v)
     }
     tenantFlow.value = obj
@@ -448,10 +453,10 @@ async function loadFlowConfigs(schema) {
 
 // 保存租户行：空串 → null（未设置）；前端先按"不超过系统级"拦一道（文案与后端同口径）
 async function submitFlow() {
-  const t = selected.value
-  if (!t) return
+  const tn = selected.value
+  if (!tn) return
 
-  for (const f of FLOW_FIELDS) {
+  for (const f of FLOW_FIELDS.value) {
     const sysVal = systemFlow.value[f.key]
     if (sysVal === null || sysVal === undefined || sysVal === -1) continue
     const raw = tenantFlow.value[f.key]
@@ -459,13 +464,13 @@ async function submitFlow() {
     const num = Number(raw)
     if (Number.isNaN(num) || num === -1) continue
     if (num > sysVal) {
-      ElMessage.error(`${f.label}不能超过系统级值 ${sysVal}`)
+      ElMessage.error(t('platform.myTenants.overSystemLimit', { label: f.label, value: sysVal }))
       return
     }
   }
 
   const body = {}
-  for (const f of FLOW_FIELDS) {
+  for (const f of FLOW_FIELDS.value) {
     const raw = tenantFlow.value[f.key]
     if (raw === '' || raw === null || raw === undefined) {
       body[f.key] = null
@@ -477,9 +482,9 @@ async function submitFlow() {
 
   flowSaving.value = true
   try {
-    await api.setMyTenantFlowConfigs(t.schema, body)
-    ElMessage.success('工作流运行参数已保存，立即生效')
-    await loadFlowConfigs(t.schema)
+    await api.setMyTenantFlowConfigs(tn.schema, body)
+    ElMessage.success(t('platform.myTenants.flowSaved'))
+    await loadFlowConfigs(tn.schema)
   } catch (err) {
     handleError(err)
   } finally {
@@ -489,12 +494,12 @@ async function submitFlow() {
 
 // ===== 智能体运行参数（platform.agent_configs 的租户行；与工作流运行参数同一套交互） =====
 // 唯一差异：本表没有 -1 —— 四项都是安全阀，只接受 >= 1（后端同样会拒）。
-const AGENT_FIELDS = [
-  { key: 'max_iterations', label: '最大运行轮次（轮）' },
-  { key: 'max_call_depth', label: '最大调用深度（层）' },
-  { key: 'max_tools', label: '工具数量上限（个）' },
-  { key: 'max_output_bytes', label: '命令输出上限（字节）' }
-]
+const AGENT_FIELDS = computed(() => [
+  { key: 'max_iterations', label: t('platform.system.agentConfigs.max_iterations') },
+  { key: 'max_call_depth', label: t('platform.system.agentConfigs.max_call_depth') },
+  { key: 'max_tools', label: t('platform.system.agentConfigs.max_tools') },
+  { key: 'max_output_bytes', label: t('platform.system.agentConfigs.max_output_bytes') }
+])
 const agentLoading = ref(false)
 const agentSaving = ref(false)
 const systemAgent = ref({})
@@ -505,10 +510,10 @@ async function loadAgentConfigs(schema) {
   try {
     const data = await api.getMyTenantAgentConfigs(schema)
     systemAgent.value = data?.system || {}
-    const t = data?.tenant || {}
+    const ten = data?.tenant || {}
     const obj = {}
-    for (const f of AGENT_FIELDS) {
-      const v = t[f.key]
+    for (const f of AGENT_FIELDS.value) {
+      const v = ten[f.key]
       obj[f.key] = v === null || v === undefined ? '' : String(v)
     }
     tenantAgent.value = obj
@@ -520,30 +525,30 @@ async function loadAgentConfigs(schema) {
 }
 
 async function submitAgent() {
-  const t = selected.value
-  if (!t) return
+  const tn = selected.value
+  if (!tn) return
 
-  for (const f of AGENT_FIELDS) {
+  for (const f of AGENT_FIELDS.value) {
     const raw = tenantAgent.value[f.key]
     if (raw === '' || raw === null || raw === undefined) continue
     const num = Number(raw)
     if (Number.isNaN(num)) {
-      ElMessage.error(`${f.label}必须填数字`)
+      ElMessage.error(t('platform.myTenants.agentNumRequired', { label: f.label }))
       return
     }
     if (num < 1) {
-      ElMessage.error(`${f.label}必须 >= 1（本组配置不支持 -1 不限制）`)
+      ElMessage.error(t('platform.myTenants.agentMin', { label: f.label }))
       return
     }
     const sysVal = systemAgent.value[f.key]
     if (sysVal !== null && sysVal !== undefined && num > sysVal) {
-      ElMessage.error(`${f.label}不能超过系统级值 ${sysVal}`)
+      ElMessage.error(t('platform.myTenants.overSystemLimit', { label: f.label, value: sysVal }))
       return
     }
   }
 
   const body = {}
-  for (const f of AGENT_FIELDS) {
+  for (const f of AGENT_FIELDS.value) {
     const raw = tenantAgent.value[f.key]
     if (raw === '' || raw === null || raw === undefined) {
       body[f.key] = null
@@ -555,9 +560,9 @@ async function submitAgent() {
 
   agentSaving.value = true
   try {
-    await api.setMyTenantAgentConfigs(t.schema, body)
-    ElMessage.success('智能体运行参数已保存，立即生效')
-    await loadAgentConfigs(t.schema)
+    await api.setMyTenantAgentConfigs(tn.schema, body)
+    ElMessage.success(t('platform.myTenants.agentSaved'))
+    await loadAgentConfigs(tn.schema)
   } catch (err) {
     handleError(err)
   } finally {
@@ -569,13 +574,13 @@ async function submitAgent() {
 // 五项都受系统顶约束（后端硬校验，超了直接拒）；空间界面按 MiB 输入，提交换算成字节，
 // -1（不限）原样传，不参与换算。usageKey 只有前三项有「当前用量」可看。
 const MIB = 1024 * 1024
-const QUOTA_FIELDS = [
-  { key: 'max_agents', label: '智能体（个）', unit: 'count', usageKey: 'agents', short: '智能体' },
-  { key: 'max_skills', label: '技能（个）', unit: 'count', usageKey: 'skills', short: '技能' },
-  { key: 'max_flows', label: '工作流（个）', unit: 'count', usageKey: 'flows', short: '工作流' },
-  { key: 'max_session_storage_bytes', label: '单会话空间上限（MiB）', unit: 'mib', short: '会话空间' },
-  { key: 'max_user_sessions', label: '单用户会话数上限（个）', unit: 'count', short: '会话数' }
-]
+const QUOTA_FIELDS = computed(() => [
+  { key: 'max_agents', label: t('platform.myTenants.quotaFieldAgents'), unit: 'count', usageKey: 'agents', short: t('platform.myTenants.quotaShortAgents') },
+  { key: 'max_skills', label: t('platform.myTenants.quotaFieldSkills'), unit: 'count', usageKey: 'skills', short: t('platform.myTenants.quotaShortSkills') },
+  { key: 'max_flows', label: t('platform.myTenants.quotaFieldFlows'), unit: 'count', usageKey: 'flows', short: t('platform.myTenants.quotaShortFlows') },
+  { key: 'max_session_storage_bytes', label: t('platform.myTenants.quotaFieldStorage'), unit: 'mib', short: t('platform.myTenants.quotaShortStorage') },
+  { key: 'max_user_sessions', label: t('platform.myTenants.quotaFieldSessions'), unit: 'count', short: t('platform.myTenants.quotaShortSessions') }
+])
 const quotaLoading = ref(false)
 const quotaSaving = ref(false)
 const systemQuota = ref({})
@@ -585,15 +590,15 @@ const effectiveQuota = ref({})
 
 // 字节 → 界面上的 MiB 文本（非整 MiB 保留一位小数；-1 当「不限」）
 function bytesToMibText(v) {
-  if (typeof v !== 'number' || v < 0) return '不限'
+  if (typeof v !== 'number' || v < 0) return t('platform.myTenants.unlimited')
   return Number.isInteger(v / MIB) ? String(v / MIB) : (v / MIB).toFixed(1)
 }
 
 // 「系统限额」列的文本：null = 更上层也没设（实际走代码兜底，这里只表达"跟随"）
 function quotaText(f, v) {
-  if (v === null || v === undefined) return '跟随更上层'
-  if (v === -1) return '不限'
-  return f.unit === 'mib' ? `${bytesToMibText(v)} MiB` : `${v} 个`
+  if (v === null || v === undefined) return t('platform.myTenants.followHigher')
+  if (v === -1) return t('platform.myTenants.unlimited')
+  return f.unit === 'mib' ? `${bytesToMibText(v)} MiB` : t('platform.myTenants.unitCount', { n: v })
 }
 
 // 系统限额 = 系统行，未设置时退到代码兜底值（并标注"兜底"，让人知道这不是谁配的）
@@ -601,18 +606,18 @@ function systemLimitText(f) {
   const v = systemQuota.value[f.key]
   if (v === null || v === undefined) {
     const fb = fallbackQuota.value[f.key]
-    return quotaText(f, fb) + '（兜底）'
+    return quotaText(f, fb) + t('platform.myTenants.fallbackSuffix')
   }
   return quotaText(f, v)
 }
 
 // 配额表的行：标签 / 当前用量 / 系统顶文本 / 是否超限（用量超过生效值标红）
 const quotaEditRows = computed(() => {
-  const t = selected.value
-  if (!t) return []
-  return QUOTA_FIELDS.map((f) => {
-    const used = f.usageKey ? (t.usage?.[f.usageKey] ?? 0) : null
-    const limit = t.quota?.[f.key]
+  const tn = selected.value
+  if (!tn) return []
+  return QUOTA_FIELDS.value.map((f) => {
+    const used = f.usageKey ? (tn.usage?.[f.usageKey] ?? 0) : null
+    const limit = tn.quota?.[f.key]
     return {
       ...f,
       used,
@@ -625,11 +630,11 @@ const quotaEditRows = computed(() => {
 // 「当前生效」一行：跟着后端算好的 effective 走，前端不重算 min 规则
 const effectiveQuotaText = computed(() => {
   const e = effectiveQuota.value || {}
-  return QUOTA_FIELDS.map((f) => {
+  return QUOTA_FIELDS.value.map((f) => {
     const v = e[f.key]
     const text =
       v === -1
-        ? '不限'
+        ? t('platform.myTenants.unlimited')
         : v === null || v === undefined
           ? '—'
           : f.unit === 'mib'
@@ -649,7 +654,7 @@ async function loadQuota(schema) {
     effectiveQuota.value = data?.effective || {}
     const row = data?.quota || {}
     const obj = {}
-    for (const f of QUOTA_FIELDS) {
+    for (const f of QUOTA_FIELDS.value) {
       const v = row[f.key]
       obj[f.key] = v === null || v === undefined ? '' : f.unit === 'mib' ? bytesToMibText(v) : String(v)
     }
@@ -663,17 +668,17 @@ async function loadQuota(schema) {
 
 // 保存：空串 → null（回退系统限额）；-1 原样；空间 MiB → 字节
 async function submitQuota() {
-  const t = selected.value
-  if (!t) return
+  const tn = selected.value
+  if (!tn) return
   const body = {}
-  for (const f of QUOTA_FIELDS) {
+  for (const f of QUOTA_FIELDS.value) {
     const raw = String(tenantQuota.value[f.key] ?? '').trim()
     if (raw === '') {
       body[f.key] = null
       continue
     }
     if (!/^-?\d+$/.test(raw)) {
-      ElMessage.error('只能填整数（-1 表示不限，留空表示跟随系统限额）')
+      ElMessage.error(t('platform.myTenants.quotaInteger'))
       return
     }
     const n = Number(raw)
@@ -681,9 +686,9 @@ async function submitQuota() {
   }
   quotaSaving.value = true
   try {
-    await api.setMyTenantQuota(t.schema, body)
-    ElMessage.success('会话配额已保存，立即生效')
-    await loadQuota(t.schema)
+    await api.setMyTenantQuota(tn.schema, body)
+    ElMessage.success(t('platform.myTenants.quotaSaved'))
+    await loadQuota(tn.schema)
   } catch (err) {
     handleError(err)
   } finally {
@@ -693,16 +698,16 @@ async function submitQuota() {
 
 // 给本租户根账号 primary 重置密码：只改密码（角色/状态不碰），校验与租户侧一致（≥8 位、两次一致）
 async function submitPrimaryPassword() {
-  const t = selected.value
-  if (!t) return
+  const tn = selected.value
+  if (!tn) return
   const pwd = pwdForm.password
-  if (!pwd || pwd.length < 8) return ElMessage.error('新密码至少 8 位')
-  if (pwd !== pwdForm.confirm) return ElMessage.error('两次输入的新密码不一致')
+  if (!pwd || pwd.length < 8) return ElMessage.error(t('password.minLength'))
+  if (pwd !== pwdForm.confirm) return ElMessage.error(t('password.mismatch'))
 
   pwdSaving.value = true
   try {
-    await api.resetMyTenantPrimaryPassword(t.schema, pwd)
-    ElMessage.success('primary 密码已重置，请用新密码走「租户登录」')
+    await api.resetMyTenantPrimaryPassword(tn.schema, pwd)
+    ElMessage.success(t('platform.myTenants.primaryPwdReset'))
     pwdForm.password = ''
     pwdForm.confirm = ''
   } catch (err) {

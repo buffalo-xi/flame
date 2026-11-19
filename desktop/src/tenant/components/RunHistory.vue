@@ -169,6 +169,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete } from '@element-plus/icons-vue'
 import { getAuthHeader } from '@/tenant/utils/auth.js'
 import adminApi from '@/tenant/config/admin.js'
+import { formatError } from '../../locales'
 
 const { t } = useI18n()
 
@@ -299,7 +300,7 @@ const fetchPage = async (reset) => {
 
   const resp = await fetch(adminApi.runningHistory(params.toString()), { headers: { ...getAuthHeader() } })
   const data = await resp.json()
-  if (data.code !== 200) throw new Error(data.msg || t('history.queryFailed'))
+  if (data.code !== 200) throw new Error(formatError(data) || t('history.queryFailed'))
 
   const page = data.data?.items || []
   total.value = data.data?.total || 0
@@ -345,7 +346,7 @@ const openDetail = async (row) => {
     if (data.code === 200) {
       detail.value = { run: data.data.run, nodes: data.data.nodes || [], flowName: row.flow_name }
     } else {
-      ElMessage.error(data.msg || t('history.detailFailed'))
+      ElMessage.error(formatError(data) || t('history.detailFailed'))
     }
   } catch (e) {
     ElMessage.error(e?.message || t('history.detailFailed'))
@@ -369,7 +370,7 @@ const deleteOne = async (row) => {
       headers: { ...getAuthHeader() }
     })
     const data = await resp.json()
-    if (data.code !== 200) throw new Error(data.msg || t('history.deleteFailed'))
+    if (data.code !== 200) throw new Error(formatError(data) || t('history.deleteFailed'))
 
     // 本地先剔除再回拉一页补齐：直接 reload 会把用户从列表深处弹回顶部
     items.value = items.value.filter((r) => r.id !== row.id)
@@ -413,7 +414,7 @@ const cleanup = async () => {
       headers: { ...getAuthHeader() }
     })
     const data = await resp.json()
-    if (data.code !== 200) throw new Error(data.msg || t('history.cleanupFailed'))
+    if (data.code !== 200) throw new Error(formatError(data) || t('history.cleanupFailed'))
     ElMessage.success(t('history.cleanupDone', { count: data.data?.deleted ?? 0 }))
     reload()
   } catch (e) {
@@ -431,7 +432,7 @@ const exportCsv = async () => {
     const ct = resp.headers.get('content-type') || ''
     if (!ct.includes('csv')) {
       const data = await resp.json()
-      throw new Error(data.msg || t('history.exportFailed'))
+      throw new Error(formatError(data) || t('history.exportFailed'))
     }
     const blob = await resp.blob()
     const url = URL.createObjectURL(blob)

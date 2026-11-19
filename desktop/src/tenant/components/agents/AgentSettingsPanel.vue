@@ -33,10 +33,7 @@
                     <span v-if="!boundSkillIds.length" class="bind-tags-empty">{{ $t('agentSettings.noSkills') }}</span>
                   </div>
                 </div>
-                <div class="editor-tip">
-                  只有绑定给它的技能才会写进提示词（只含名字与描述，正文由 agent 按需读取）。
-                  与「技能 → 可见性」是同一份数据；私有技能只对归属智能体可见，列表里仅作展示。
-                </div>
+                <div class="editor-tip">{{ $t('agentSettings.skillsHint') }}</div>
                 <div v-if="!agentId" class="editor-tip">{{ $t('agentSettings.needSaveSkills') }}</div>
               </div>
 
@@ -45,10 +42,7 @@
                 <el-switch v-model="agent.skill_discovery"
                            :disabled="!agentId || locked"
                            @change="saveSkillDiscovery" />
-                <div class="editor-tip">
-                  开启后该 agent 可通过 list_skills 发现「全员可见」的共享技能并按需读取（不写进提示词）；
-                  关闭时只有它自己的私有技能与被绑定给它的技能可见。
-                </div>
+                <div class="editor-tip">{{ $t('agentSettings.skillDiscoveryHint') }}</div>
                 <div v-if="!agentId" class="editor-tip">{{ $t('agentSettings.needSaveDiscovery') }}</div>
               </div>
 
@@ -57,17 +51,8 @@
                 <el-switch v-model="agent.is_supervisor"
                            :disabled="!agentId || locked"
                            @change="saveSupervisor" />
-                <div class="editor-tip">
-                  与内置超级智能体同级：可以创建 / 修改 / 删除其它 agent 与 skill、跨域写文件，
-                  缺省拥有全部内置工具，且任何入口（含被其它 agent / flow 调起）都读草稿。
-                  本租户可以授予多个 agent。不能撤销最后一个 supervisor（否则没有人能再把它授回来）。
-                </div>
-                <div class="editor-tip">
-                  授予时会自动补齐起步套件：把「必须导入」里的默认单工具换成 core 工具组
-                  （含 agent-admin），打开「不限制工具」与「允许发现未绑定的技能」，
-                  并绑定 agent-authoring / skill-authoring / custom-tool-authoring 三份技能。
-                  撤销时不回滚这些（留着也执行不了管理类工具）。
-                </div>
+                <div class="editor-tip">{{ $t('agentSettings.supervisorHint') }}</div>
+                <div class="editor-tip">{{ $t('agentSettings.supervisorGrantHint') }}</div>
                 <div v-if="!agentId" class="editor-tip">{{ $t('agentSettings.needSaveSupervisor') }}</div>
               </div>
 
@@ -81,7 +66,7 @@
                   <div class="bind-tags">
                     <el-tag v-for="id in agent.called_by_ids" :key="id" size="small"
                             :type="isAgentUnreleased(id) ? 'warning' : 'primary'"
-                            :title="isAgentUnreleased(id) ? UNRELEASED_TIP : ''"
+                            :title="isAgentUnreleased(id) ? unreleasedTip : ''"
                             :closable="!locked" :disable-transitions="true" @close="unbindAgentCall('in', id)">
                       {{ agentName(id) }}
                     </el-tag>
@@ -98,7 +83,7 @@
                   <div class="bind-tags">
                     <el-tag v-for="id in agent.can_call_ids" :key="id" size="small"
                             :type="isAgentUnreleased(id) ? 'warning' : 'primary'"
-                            :title="isAgentUnreleased(id) ? UNRELEASED_TIP : ''"
+                            :title="isAgentUnreleased(id) ? unreleasedTip : ''"
                             :closable="!locked" :disable-transitions="true" @close="unbindAgentCall('out', id)">
                       {{ agentName(id) }}
                     </el-tag>
@@ -106,8 +91,8 @@
                   </div>
                 </div>
               </div>
-              <div v-if="supervisor" class="editor-tip">supervisor 可被调用，被调起时仍是完整的管理面（恒读草稿）</div>
-              <div v-else class="editor-tip">不配置则默认谁都不能调用它</div>
+              <div v-if="supervisor" class="editor-tip">{{ $t('agentSettings.supervisorCallableTip') }}</div>
+              <div v-else class="editor-tip">{{ $t('agentSettings.callDefaultTip') }}</div>
             </template>
 
             <!-- tab 2：工具配置（工具授权体系） -->
@@ -115,29 +100,28 @@
               <!-- 详情视图：在面板内用新视图覆盖配置内容（不弹窗），带返回按钮 -->
               <template v-if="previewVisible">
                 <div class="view-back">
-                  <el-button size="small" @click="previewVisible = false">← 返回配置</el-button>
-                  <span class="view-title">生效工具详情（基于已保存配置）</span>
-                  <el-button size="small" text class="view-refresh" @click="loadEffectiveInfo">刷新</el-button>
+                  <el-button size="small" @click="previewVisible = false">{{ $t('agentSettings.previewBack') }}</el-button>
+                  <span class="view-title">{{ $t('agentSettings.previewTitle') }}</span>
+                  <el-button size="small" text class="view-refresh" @click="loadEffectiveInfo">{{ $t('agentSettings.refresh') }}</el-button>
                 </div>
-                <div v-if="!previewData" class="editor-tip">加载中...</div>
+                <div v-if="!previewData" class="editor-tip">{{ $t('agentSettings.loading') }}</div>
                 <template v-else>
                   <template v-if="previewData.no_grants && !previewData.builtin_default">
                     <div class="editor-tip">
-                      该智能体<strong>尚未配置任何工具授权</strong>，且不是 supervisor ——
-                      运行时<strong>不绑定任何工具</strong>。请返回配置界面添加授权。
+                      {{ $t('agentSettings.previewNoGrantsPre') }}<strong>{{ $t('agentSettings.previewNoGrantsStrong') }}</strong>{{ $t('agentSettings.previewNoGrantsMid') }}<strong>{{ $t('agentSettings.previewNoGrantsStrong2') }}</strong>{{ $t('agentSettings.previewNoGrantsPost') }}
                     </div>
                   </template>
                   <template v-else>
                     <div class="editor-tip">
-                      共 {{ (previewData.final_tools || []).length }} 个工具
-                      <template v-if="previewData.unrestricted"> · 不限制工具</template>
-                      <template v-if="previewData.degraded"> · allow 授权未生效：没有已注入的 skill 声明工具依赖</template>
+                      {{ $t('agentSettings.previewCount', { n: (previewData.final_tools || []).length }) }}
+                      <template v-if="previewData.unrestricted">{{ $t('agentSettings.previewUnrestricted') }}</template>
+                      <template v-if="previewData.degraded">{{ $t('agentSettings.previewDegraded') }}</template>
                     </div>
                     <div v-if="previewData.builtin_default" class="editor-tip">
-                      supervisor：<strong>内置工具是固有基线</strong>，始终可用；授权项只回答「额外还给了什么」（「拒绝」里仍可显式去掉个别工具）。
+                      {{ $t('agentSettings.previewBaselinePre') }}<strong>{{ $t('agentSettings.previewBaselineStrong') }}</strong>{{ $t('agentSettings.previewBaselinePost') }}
                     </div>
                     <div v-if="(previewData.final_tools || []).some(t => isExternalTool(t.name))" class="preview-warn">
-                      标「不执行」的是外部工具（MCP / RPC / 本地端点）：授权已生效，但运行时还没有调用通道，暂不会绑定给模型。
+                      {{ $t('agentSettings.previewExternalWarn') }}
                     </div>
                     <div v-for="w in (previewData.warnings || [])" :key="w" class="preview-warn">{{ w }}</div>
                     <!-- 按「来源组」分组展示：组标题 + 组内工具 -->
@@ -145,7 +129,7 @@
                       <div class="grant-section-title clickable" @click="togglePreviewCollapse(grp.ref)">
                         <el-icon class="picker-caret" :class="{ open: !isPreviewCollapsed(grp.ref) }"><CaretRight /></el-icon>
                         <el-icon class="grant-group-icon"><Folder /></el-icon>
-                        {{ grp.name }}（{{ grp.items.length }}）
+                        {{ $t('agentSettings.groupItemsWithCount', { name: groupName(t, te, grp), n: grp.items.length }) }}
                       </div>
                       <div v-if="!isPreviewCollapsed(grp.ref)" class="tools-list">
                         <div v-for="t in grp.items" :key="t.ref" class="tool-item">
@@ -154,61 +138,49 @@
                             <div class="tool-name" :title="t.ref + (t.description ? ' · ' + t.description : '')">
                               {{ t.label || t.name }}
                               <span class="ref-tag">{{ t.name }}</span>
-                              <span v-if="isExternalTool(t.name)" class="ref-tag warn">不执行</span>
+                              <span v-if="isExternalTool(t.name)" class="ref-tag warn">{{ $t('agentSettings.notExecuted') }}</span>
                               <span v-else-if="t.available === false" class="ref-tag warn"
-                                    :title="t.unavailable_reason || '该工具当前不可用'">{{ unavailableLabel(t.unavailable_kind) }}</span>
+                                    :title="unavailableTitle(t) || $t('agentSettings.unavailableTip')">{{ unavailableLabel(t.unavailable_kind) }}</span>
                             </div>
                             <div class="tool-desc" :title="t.description">{{ shortDesc(t) }}</div>
                           </div>
                         </div>
                       </div>
                     </div>
-                    <div v-if="!previewGroups.length" class="editor-tip">当前没有任何工具生效</div>
+                    <div v-if="!previewGroups.length" class="editor-tip">{{ $t('agentSettings.noToolsInEffect') }}</div>
                   </template>
                 </template>
               </template>
 
               <!-- 配置视图 -->
               <template v-else>
-              <div v-if="!agentId" class="editor-tip">
-                智能体保存后才能配置工具授权。未配置授权时：supervisor（内置的超级智能体与后续授予的）
-                缺省拥有全部内置工具，其他 agent 默认不绑定任何工具。
-              </div>
+              <div v-if="!agentId" class="editor-tip">{{ $t('agentSettings.needSaveGrants') }}</div>
 
               <!-- supervisor：工具与其它 agent 同源 —— 常驻 = 「必须导入」里的 builtin 行 -->
               <div v-if="supervisor" class="editor-tip">
-                这是 supervisor，工具来源与其它 agent <strong>完全同源</strong>
-                （内置的超级智能体与后续授予的走同一套，没有特殊通道）：
-                常驻集 = 下面「必须导入」里的六个 <span class="ref-tag core">core</span> 组（19 个工具）。
-                browser 与 skill-admin / tool-grant / custom-tool 都不常驻 ——
-                绑定对应技能时才拿到它们的 schema，用完解绑即收回。
-                删 core 组会让它永久失去一整类能力，会有二次确认。
+                {{ $t('agentSettings.grantToolsHintPre') }}<strong>{{ $t('agentSettings.grantToolsHintStrong') }}</strong>{{ $t('agentSettings.grantToolsHintMid') }}<span class="ref-tag core">core</span>{{ $t('agentSettings.grantToolsHintPost') }}
               </div>
 
               <div class="settings-field">
-                <div class="field-label">不限制工具（按 skill 声明放行）</div>
+                <div class="field-label">{{ $t('agentSettings.unrestrictedLabel') }}</div>
                 <el-switch v-model="grantDraft.unrestricted" :disabled="!agentId || locked"
                            @change="onUnrestrictedChange" />
                 <div class="editor-tip">
-                  <template v-if="grantDraft.unrestricted">
-                    已开启：skill 说它需要哪个工具，就直接给它，不用再加「可使用」；「拒绝」的仍然会被减掉。
-                  </template>
-                  <template v-else>
-                    未开启：skill 说需要的工具，必须在「可使用」里批准过才会给 —— 防止 agent 自己写个 skill 就给自己加权限。
-                  </template>
+                  <template v-if="grantDraft.unrestricted">{{ $t('agentSettings.unrestrictedOnHint') }}</template>
+                  <template v-else>{{ $t('agentSettings.unrestrictedOffHint') }}</template>
                 </div>
                 <div v-if="previewData && !(previewData.candidate_refs || []).length" class="editor-tip">
-                  当前没有任何 skill 声明工具依赖，这个开关暂时不产生差别。
+                  {{ $t('agentSettings.noSkillToolDeps') }}
                 </div>
               </div>
 
               <div class="tools-actions">
                 <el-button size="small" type="primary" :disabled="!agentId || locked"
-                           @click="openGrantPicker">添加工具 / 组</el-button>
-                <el-button size="small" :disabled="!agentId" @click="previewEffectiveTools">生效预览</el-button>
+                           @click="openGrantPicker">{{ $t('agentSettings.addGrants') }}</el-button>
+                <el-button size="small" :disabled="!agentId" @click="previewEffectiveTools">{{ $t('agentSettings.previewEffective') }}</el-button>
               </div>
 
-              <div v-if="toolsLoading" class="editor-tip">授权加载中...</div>
+              <div v-if="toolsLoading" class="editor-tip">{{ $t('agentSettings.grantsLoading') }}</div>
 
               <!-- 授权列表：这里刻意不用 v-if / v-else 链，两个独立 v-if，
                    否则后面的「生效摘要」会被并进同一条链（一条链只渲染一个分支，
@@ -218,25 +190,22 @@
                 <div v-if="!grantDraft.items.length" class="tools-empty">
                   <div class="editor-tip">
                     <template v-if="supervisor">
-                      尚未配置授权项 —— supervisor 会回落到「缺省全开」的<strong>保险丝</strong>分支
-                      （功能不丢，但授权表不再是真源）。内置超级智能体执行
-                      <code>sql/main_core_tool_grants.sql</code> 补齐 core 集，
-                      新建的 supervisor 在这里手工添加即可。
+                      {{ $t('agentSettings.noGrantsSupervisorPre') }}<strong>{{ $t('agentSettings.noGrantsSupervisorStrong') }}</strong>{{ $t('agentSettings.noGrantsSupervisorMid') }}<code>sql/main_core_tool_grants.sql</code>{{ $t('agentSettings.noGrantsSupervisorPost') }}
                     </template>
                     <template v-else>
-                      尚未配置任何授权项 —— 该智能体默认<strong>不绑定任何工具</strong>，添加授权后才可用。
+                      {{ $t('agentSettings.noGrantsPlainPre') }}<strong>{{ $t('agentSettings.noGrantsPlainStrong') }}</strong>{{ $t('agentSettings.noGrantsPlainPost') }}
                     </template>
                   </div>
                   <el-button v-if="!supervisor" size="small" :disabled="!agentId || locked"
                              @click="importCurrentTools">
-                    一键授权全部内置工具
+                    {{ $t('agentSettings.grantAllBuiltin') }}
                   </el-button>
                 </div>
 
                 <!-- 三段：必须导入 / 可使用 / 拒绝 —— 与左侧「工具授权」侧栏的三个区一一对应。
                      空区也照样渲染（显示「（空）」），否则零授权时三段整块消失，看起来像界面被改掉了。 -->
                 <div v-for="k in grantKinds" :key="k" class="grant-section">
-                  <div class="grant-section-title">{{ grantKindLabel(k) }}（{{ grantsByKind[k].length }}）</div>
+                  <div class="grant-section-title">{{ $t('agentSettings.groupItemsWithCount', { name: grantKindLabel(k), n: grantsByKind[k].length }) }}</div>
                   <div v-if="grantsByKind[k].length" class="tools-list">
                     <div v-for="g in grantsByKind[k]" :key="g.ref" class="tool-item">
                       <!-- 组 / 单个工具各用一个图标区分 -->
@@ -244,41 +213,41 @@
                       <el-icon v-else class="grant-tool-icon"><Tools /></el-icon>
                       <div class="tool-item-main">
                         <div class="tool-name">
-                          {{ g.label }}
-                          <span class="ref-tag">{{ g.item_type === 'group' ? '组' : '工具' }}</span>
-                          <span v-if="g.count" class="ref-tag">{{ g.count }} 个</span>
+                          {{ groupName(t, te, g) }}
+                          <span class="ref-tag">{{ g.item_type === 'group' ? $t('agentSettings.tagGroup') : $t('agentSettings.tagTool') }}</span>
+                          <span v-if="g.count" class="ref-tag">{{ $t('agentSettings.countItems', { n: g.count }) }}</span>
                           <span v-if="isMainCoreRef(g.ref)" class="ref-tag core"
-                                title="超级智能体的常驻组：删掉会让超级智能体失去这一整类工具">core</span>
+                                :title="$t('agentSettings.mainCoreTitle')">core</span>
                           <span v-if="g.available === false" class="ref-tag warn"
-                                :title="g.unavailable_reason || '该工具当前不可用'">{{ unavailableLabel(g.unavailable_kind) }}</span>
+                                :title="unavailableTitle(g) || $t('agentSettings.unavailableTip')">{{ unavailableLabel(g.unavailable_kind) }}</span>
                         </div>
-                        <div class="tool-desc" :title="(g.description ? g.description + ' · ' : '') + g.ref">
-                          {{ shortDesc(g) || g.ref }}
+                        <div class="tool-desc" :title="(groupDesc(t, te, g) ? groupDesc(t, te, g) + ' · ' : '') + g.ref">
+                          {{ shortText(groupDesc(t, te, g)) || g.ref }}
                         </div>
                       </div>
                       <el-icon v-if="!locked" class="node-del"
                                @click="removeGrant(g.ref)"><Delete /></el-icon>
                     </div>
                   </div>
-                  <div v-else class="editor-tip">（空）</div>
+                  <div v-else class="editor-tip">{{ $t('agentSettings.emptySection') }}</div>
                 </div>
 
                 <div class="tools-save-bar">
                   <el-button size="small" type="primary" :loading="savingGrants"
-                             :disabled="!agentId || locked" @click="saveGrants">保存</el-button>
-                  <span v-if="grantsDirty" class="dirty-tip">有未保存的修改</span>
-                  <span v-else class="tools-count">已保存</span>
+                             :disabled="!agentId || locked" @click="saveGrants">{{ $t('agentSettings.saveGrants') }}</el-button>
+                  <span v-if="grantsDirty" class="dirty-tip">{{ $t('agentSettings.dirtyTip') }}</span>
+                  <span v-else class="tools-count">{{ $t('agentSettings.savedTip') }}</span>
                 </div>
               </div>
 
               <!-- 常驻摘要：结论与提示一眼可见，点「详情」才进覆盖视图 -->
               <div v-if="effectiveSummary" class="effective-bar">
                 <span class="effective-text">{{ effectiveSummary.text }}</span>
-                <span v-if="effectiveSummary.warn" class="ref-tag warn">{{ effectiveSummary.warn }} 条提示</span>
-                <span v-if="effectiveSummary.degraded" class="ref-tag warn">allow 未生效</span>
-                <el-button size="small" text class="effective-detail" @click="previewEffectiveTools">详情</el-button>
+                <span v-if="effectiveSummary.warn" class="ref-tag warn">{{ $t('agentSettings.warningsCount', { n: effectiveSummary.warn }) }}</span>
+                <span v-if="effectiveSummary.degraded" class="ref-tag warn">{{ $t('agentSettings.degradedBadge') }}</span>
+                <el-button size="small" text class="effective-detail" @click="previewEffectiveTools">{{ $t('agentSettings.detail') }}</el-button>
               </div>
-              <div v-else-if="agentId" class="editor-tip">生效信息加载中...</div>
+              <div v-else-if="agentId" class="editor-tip">{{ $t('agentSettings.effectiveLoading') }}</div>
               </template>
             </template>
           </div>
@@ -291,7 +260,7 @@
         <teleport to="body">
         <div v-if="grantPickerVisible" ref="pickerPanelRef" class="picker-panel" :style="pickerStyle">
           <div class="panel-header">
-            <span class="panel-title">工具授权</span>
+            <span class="panel-title">{{ $t('agentSettings.grantsPanelTitle') }}</span>
             <span class="close-icon" @click="grantPickerVisible = false">&#xd7;</span>
           </div>
           <div class="panel-body">
@@ -305,18 +274,18 @@
 
             <!-- 添加到本区（已加入的项在右侧设置面板的工具配置里展示） -->
             <div class="picker-block-title">
-              添加到「{{ grantKindLabel(pickerKind) }}」
-              <span class="picker-block-hint">已加入 {{ grantCounts[pickerKind] || 0 }} 项</span>
+              {{ $t('agentSettings.addToKind', { kind: grantKindLabel(pickerKind) }) }}
+              <span class="picker-block-hint">{{ $t('agentSettings.addedCount', { n: grantCounts[pickerKind] || 0 }) }}</span>
             </div>
             <div class="picker-toolbar">
-              <el-input v-model="grantSearch" size="small" placeholder="搜索名称或 ref" clearable style="width:100%" />
+              <el-input v-model="grantSearch" size="small" :placeholder="$t('agentSettings.searchGrantPlaceholder')" clearable style="width:100%" />
               <el-radio-group v-model="pickerFilterKind" size="small" class="picker-kinds">
-                <el-radio-button value="">全部</el-radio-button>
-                <el-radio-button value="builtin">内置</el-radio-button>
-                <el-radio-button value="preset">预设</el-radio-button>
-                <el-radio-button value="group">工具组</el-radio-button>
-                <el-radio-button value="ext">插件/脚本</el-radio-button>
-                <el-radio-button value="conn">连接/端点</el-radio-button>
+                <el-radio-button value="">{{ $t('agentSettings.filterAll') }}</el-radio-button>
+                <el-radio-button value="builtin">{{ $t('agentSettings.filterBuiltin') }}</el-radio-button>
+                <el-radio-button value="preset">{{ $t('agentSettings.filterPreset') }}</el-radio-button>
+                <el-radio-button value="group">{{ $t('agentSettings.filterGroupNames') }}</el-radio-button>
+                <el-radio-button value="ext">{{ $t('agentSettings.filterExt') }}</el-radio-button>
+                <el-radio-button value="conn">{{ $t('agentSettings.filterConn') }}</el-radio-button>
               </el-radio-group>
             </div>
             <!-- 组卡片：点头部=整组加入（组内工具等同全选中）；点组内某一行=只加这个工具。
@@ -329,17 +298,17 @@
                            @click.stop="toggleCollapse(c.ref)"><CaretRight /></el-icon>
                   <div class="tool-item-main">
                     <div class="tool-name">
-                      {{ c.label }}
-                      <span class="ref-tag">{{ c.synthetic ? '类别' : '组' }}</span>
-                      <span class="ref-tag">{{ c.count }} 个</span>
+                      {{ groupName(t, te, c) }}
+                      <span class="ref-tag">{{ c.synthetic ? $t('agentSettings.tagCategory') : $t('agentSettings.tagGroup') }}</span>
+                      <span class="ref-tag">{{ $t('agentSettings.countItems', { n: c.count }) }}</span>
                       <!-- 类别卡的名字本身就是类别名（插件 / 自定义工具），不再重复标 kind -->
                       <span v-if="!c.synthetic" class="ref-tag">{{ kindLabel(c.kind) }}</span>
-                      <span v-if="!c.synthetic && kindOfRef(c.ref) && !inActiveKind(c.ref)" class="ref-tag warn">已在「{{ grantKindLabel(kindOfRef(c.ref)) }}」</span>
+                      <span v-if="!c.synthetic && kindOfRef(c.ref) && !inActiveKind(c.ref)" class="ref-tag warn">{{ $t('agentSettings.alreadyIn', { kind: grantKindLabel(kindOfRef(c.ref)) }) }}</span>
                       <span v-if="c.available === false" class="ref-tag warn"
-                            :title="c.unavailable_reason || '该工具当前不可用'">{{ unavailableLabel(c.unavailable_kind) }}</span>
+                            :title="unavailableTitle(c) || $t('agentSettings.unavailableTip')">{{ unavailableLabel(c.unavailable_kind) }}</span>
                     </div>
-                    <div class="tool-desc" :title="c.description || c.ref">
-                      {{ shortDesc(c) || (c.synthetic ? '勾选下面的具体工具' : c.ref) }}
+                    <div class="tool-desc" :title="groupDesc(t, te, c) || c.ref">
+                      {{ shortText(groupDesc(t, te, c)) || (c.synthetic ? $t('agentSettings.syntheticHint') : c.ref) }}
                     </div>
                   </div>
                   <el-icon v-if="!c.synthetic" class="picker-check"><Check v-if="inActiveKind(c.ref)" /><Plus v-else /></el-icon>
@@ -350,19 +319,19 @@
                        @click.stop="toggleTool(t)">
                     <span class="picker-tool-name" :title="t.description || t.ref">{{ t.label }}</span>
                     <span v-if="shortDesc(t)" class="picker-tool-desc">{{ shortDesc(t) }}</span>
-                    <span v-if="kindOfRef(t.ref) && !inActiveKind(t.ref)" class="ref-tag warn">已在「{{ grantKindLabel(kindOfRef(t.ref)) }}」</span>
-                    <span v-if="isCovered(t.ref)" class="ref-tag">组已含</span>
+                    <span v-if="kindOfRef(t.ref) && !inActiveKind(t.ref)" class="ref-tag warn">{{ $t('agentSettings.alreadyIn', { kind: grantKindLabel(kindOfRef(t.ref)) }) }}</span>
+                    <span v-if="isCovered(t.ref)" class="ref-tag">{{ $t('agentSettings.coveredByGroup') }}</span>
                     <span class="picker-tool-mark">{{ inActiveKind(t.ref) || isCovered(t.ref) ? '✓' : '+' }}</span>
                   </div>
                 </div>
               </div>
-              <div v-if="!pickerCards.length" class="editor-tip">没有可添加的项</div>
+              <div v-if="!pickerCards.length" class="editor-tip">{{ $t('agentSettings.noCandidates') }}</div>
             </div>
           </div>
           <div class="picker-footer">
-            <span class="tools-count">改动返回配置后点「保存」生效</span>
+            <span class="tools-count">{{ $t('agentSettings.pickerSaveHint') }}</span>
             <el-button size="small" type="primary" class="effective-detail"
-                       @click="grantPickerVisible = false">完成</el-button>
+                       @click="grantPickerVisible = false">{{ $t('agentSettings.done') }}</el-button>
           </div>
         </div>
         </teleport>
@@ -372,16 +341,16 @@
         <teleport to="body">
         <div v-if="skillPickerVisible" ref="skillPickerPanelRef" class="picker-panel" :style="pickerStyle">
           <div class="panel-header">
-            <span class="panel-title">可使用的技能</span>
+            <span class="panel-title">{{ $t('agentSettings.skillsPanelTitle') }}</span>
             <span class="close-icon" @click="skillPickerVisible = false">&#xd7;</span>
           </div>
           <div class="panel-body">
             <div class="picker-block-title">
-              点一项即绑定 / 解绑
-              <span class="picker-block-hint">已绑定 {{ boundSkillIds.length }} 项</span>
+              {{ $t('agentSettings.skillToggleHint') }}
+              <span class="picker-block-hint">{{ $t('agentSettings.boundCount', { n: boundSkillIds.length }) }}</span>
             </div>
             <div class="picker-toolbar">
-              <el-input v-model="skillSearch" size="small" placeholder="搜索技能名称或描述"
+              <el-input v-model="skillSearch" size="small" :placeholder="$t('agentSettings.searchSkillPlaceholder')"
                         clearable style="width:100%" />
             </div>
             <div class="picker-cards">
@@ -392,9 +361,9 @@
                     <div class="tool-name">
                       {{ s.name }}
                       <span class="ref-tag" :class="skillTagClass(s)">{{ skillTagText(s) }}</span>
-                      <span v-if="isSkillBound(s.id)" class="ref-tag core">已绑定</span>
+                      <span v-if="isSkillBound(s.id)" class="ref-tag core">{{ $t('agentSettings.boundBadge') }}</span>
                     </div>
-                    <div class="tool-desc" :title="s.description || '无描述'">{{ s.description || '无描述' }}</div>
+                    <div class="tool-desc" :title="s.description || $t('agentSettings.noDescription')">{{ s.description || $t('agentSettings.noDescription') }}</div>
                   </div>
                   <el-icon class="picker-check">
                     <Check v-if="isSkillBound(s.id)" /><Plus v-else-if="isBindableSkill(s)" />
@@ -402,12 +371,12 @@
                   </el-icon>
                 </div>
               </div>
-              <div v-if="!filteredSkills.length" class="editor-tip">没有匹配的技能</div>
+              <div v-if="!filteredSkills.length" class="editor-tip">{{ $t('agentSettings.noMatchingSkills') }}</div>
             </div>
           </div>
           <div class="picker-footer">
-            <span class="tools-count">改动即时保存</span>
-            <el-button size="small" type="primary" @click="skillPickerVisible = false">完成</el-button>
+            <span class="tools-count">{{ $t('agentSettings.savedImmediately') }}</span>
+            <el-button size="small" type="primary" @click="skillPickerVisible = false">{{ $t('agentSettings.done') }}</el-button>
           </div>
         </div>
         </teleport>
@@ -421,11 +390,11 @@
           </div>
           <div class="panel-body">
             <div class="picker-block-title">
-              点一项即授权 / 收回
-              <span class="picker-block-hint">已授权 {{ currentDirIds.length }} 个</span>
+              {{ $t('agentSettings.agentToggleHint') }}
+              <span class="picker-block-hint">{{ $t('agentSettings.grantedCount', { n: currentDirIds.length }) }}</span>
             </div>
             <div class="picker-toolbar">
-              <el-input v-model="agentSearch" size="small" placeholder="搜索智能体名称或描述"
+              <el-input v-model="agentSearch" size="small" :placeholder="$t('agentSettings.searchAgentPlaceholder')"
                         clearable style="width:100%" />
             </div>
             <div class="picker-cards">
@@ -436,22 +405,22 @@
                     <div class="tool-name">
                       {{ a.name }}
                       <span v-if="a.is_supervisor" class="ref-tag core">supervisor</span>
-                      <span v-if="isAgentUnreleased(a.id)" class="ref-tag warn" :title="UNRELEASED_TIP">未发布</span>
-                      <span v-if="isAgentBound(a.id)" class="ref-tag core">已授权</span>
+                      <span v-if="isAgentUnreleased(a.id)" class="ref-tag warn" :title="unreleasedTip">{{ $t('agentSettings.unreleasedBadge') }}</span>
+                      <span v-if="isAgentBound(a.id)" class="ref-tag core">{{ $t('agentSettings.grantedBadge') }}</span>
                     </div>
-                    <div class="tool-desc" :title="a.description || '无描述'">{{ a.description || '无描述' }}</div>
+                    <div class="tool-desc" :title="a.description || $t('agentSettings.noDescription')">{{ a.description || $t('agentSettings.noDescription') }}</div>
                   </div>
                   <el-icon class="picker-check">
                     <Check v-if="isAgentBound(a.id)" /><Plus v-else />
                   </el-icon>
                 </div>
               </div>
-              <div v-if="!filteredPickerAgents.length" class="editor-tip">没有匹配的智能体</div>
+              <div v-if="!filteredPickerAgents.length" class="editor-tip">{{ $t('agentSettings.noMatchingAgents') }}</div>
             </div>
           </div>
           <div class="picker-footer">
-            <span class="tools-count">改动即时保存</span>
-            <el-button size="small" type="primary" @click="agentPickerVisible = false">完成</el-button>
+            <span class="tools-count">{{ $t('agentSettings.savedImmediately') }}</span>
+            <el-button size="small" type="primary" @click="agentPickerVisible = false">{{ $t('agentSettings.done') }}</el-button>
           </div>
         </div>
         </teleport>
@@ -459,11 +428,15 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Folder, Tools, Delete } from '@element-plus/icons-vue'
 import adminApi from '../../config/admin.js'
+import { unavailableText } from '../../utils/unavailable'
+import { groupName, groupDesc } from '../../utils/groupText.js'
 import { getToken } from '../../utils/auth.js'
 import { useEscClose } from '../../composables/useEscClose'
+import { formatError } from '../../../locales'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -483,6 +456,9 @@ const props = defineProps({
 })
 const emit = defineEmits(['close', 'supervisor-change', 'refresh-list'])
 
+// 脚本侧文案（标签映射、toast、摘要）同样走 t()：切语言后模板重渲染时才会跟着变
+const { t, te } = useI18n()
+
 const authHeaders = () => ({
   'Content-Type': 'application/json',
   'Authorization': `Bearer ${getToken()}`
@@ -499,7 +475,8 @@ const agentPickerVisible = ref(false)
 const agentPickerDirection = ref('in') // 'in' 谁能调用它 / 'out' 它能调用谁
 const agentSearch = ref('')
 const agentPickerPanelRef = ref(null)
-const agentPickerTitle = computed(() => (agentPickerDirection.value === 'in' ? '谁能调用它' : '它能调用谁'))
+const agentPickerTitle = computed(() => t(agentPickerDirection.value === 'in'
+  ? 'agentSettings.callerPanelTitle' : 'agentSettings.calleePanelTitle'))
 // 当前方向的已授权 id：模板里的 tag 与面板里的勾选状态共用这一份
 const currentDirIds = computed(() =>
   (agentPickerDirection.value === 'in' ? props.agent.called_by_ids : props.agent.can_call_ids) || []
@@ -703,7 +680,7 @@ const agentName = (id) => props.agents.find((a) => String(a.id) === String(id))?
 // 未发布正式版本：授权能建（常见路径是「先建 agent + 授权，再发布」），但正式链
 // （MCP / RPC / 端点 / flow）调用会报「尚未发布正式版本」，只有编辑页调试能调起来。
 // 列表接口的 current_version 为 0 即未发布；字段缺失（非列表来源）按已发布处理，避免误报。
-const UNRELEASED_TIP = '尚未发布正式版本：正式调用（MCP / RPC / 端点 / flow）会失败，只有编辑页调试能调起来'
+const unreleasedTip = computed(() => t('agentSettings.unreleasedTip'))
 const isAgentUnreleased = (id) => {
   const a = props.agents.find((x) => String(x.id) === String(id))
   return !!a && a.current_version === 0
@@ -754,10 +731,11 @@ const unbindAgentCall = async (dir, id) => {
 
 // ===== 工具授权（工具授权体系）：目录 / 草稿 / 保存 / 预览 =====
 
-const kindLabel = (k) => ({
-  builtin: '内置', mcp: 'MCP', rpc: 'RPC', local: '本地端点', group: '工具组', preset: '预设',
-  plugin: '插件', custom: '自定义工具'
-}[k] || k)
+const KIND_LABEL_KEYS = {
+  builtin: 'kindBuiltin', mcp: 'kindMcp', rpc: 'kindRpc', local: 'kindLocal',
+  group: 'kindGroup', preset: 'kindPreset', plugin: 'kindPlugin', custom: 'kindCustom'
+}
+const kindLabel = (k) => (KIND_LABEL_KEYS[k] ? t(`agentSettings.${KIND_LABEL_KEYS[k]}`) : k)
 
 // 拉取可引用目录：含天然组 / 预设组 / 自定义组 / 连接（含展开成员）。
 // 按 agent 视角拉取（非超级智能体会隐藏「仅超级智能体可用」的管理类工具），
@@ -771,30 +749,44 @@ const loadToolCatalog = async (agentId = '') => {
       toolCatalog.value = body.data?.groups || []
       toolCatalogAgentId = agentId
     } else {
-      ElMessage.warning(body.msg || '获取工具目录失败')
+      ElMessage.warning(formatError(body) || t('agentSettings.catalogLoadFailed'))
     }
   } catch (e) {
     console.error('获取工具目录失败:', e)
   }
 }
 
-// 工具 / 组的一句话简述：最多 20 个字（超出截断加省略号，完整内容放 title）
-const shortDesc = (item) => {
-  const s = String(item?.description || '').trim()
+// 一句话简述：最多 20 个字（超出截断加省略号，完整内容放 title）
+const shortText = (text) => {
+  const s = String(text || '').trim()
   if (!s) return ''
   return s.length > 20 ? s.slice(0, 19) + '…' : s
 }
+const shortDesc = (item) => shortText(item?.description)
 
 // 不可用徽标文案按归因分开：用户据此知道该找平台还是找自己
 // （kind 取值见后端 toolgrant.Unavailable* 常量；不认识的新值退化成「不可用」而不是空白）
-const UNAVAILABLE_LABEL = {
-  capability: '平台未开通',
-  plugin_policy: '平台已停用',
-  plugin_inactive: '插件未启用',
-  connection: '连接未启用',
-  endpoint: '端点未对外开放'
+const UNAVAILABLE_LABEL_KEYS = {
+  capability: 'unavailableCapability',
+  plugin_policy: 'unavailablePluginPolicy',
+  plugin_inactive: 'unavailablePluginInactive',
+  connection: 'unavailableConnection',
+  endpoint: 'unavailableEndpoint'
 }
-const unavailableLabel = (kind) => UNAVAILABLE_LABEL[kind] || '不可用'
+const unavailableLabel = (kind) => t(`agentSettings.${UNAVAILABLE_LABEL_KEYS[kind] || 'unavailableGeneric'}`)
+
+// 不可用原因（可翻译）：徽标只说「归到哪一层」，具体问题在原因里。
+// 后端给了 unavailable_code 就本地化，没有（旧后端）才显示它那句中文。
+const unavailableTitle = (item) => unavailableText(t, te, item, '')
+
+// 原因三件套要一起搬：只搬 kind / reason 会让 tooltip 在英文界面里退回中文，
+// 所以下面所有「从目录拷一份展示信息」的地方都用这个展开，别再逐字段手写。
+const unavailableFields = (item) => ({
+  unavailable_reason: item?.unavailable_reason || '',
+  unavailable_kind: item?.unavailable_kind || '',
+  unavailable_code: item?.unavailable_code || '',
+  unavailable_params: item?.unavailable_params || null
+})
 
 // 按 ref 从目录里找到展示信息（label / 工具数 / 可用性 / 简述）
 const describeRef = (ref, itemType) => {
@@ -802,7 +794,7 @@ const describeRef = (ref, itemType) => {
     if (itemType !== 'tool' && g.ref === ref) {
       return { ref, item_type: 'group', label: g.name, kind: g.kind, available: g.available,
                count: (g.items || []).length, description: g.description || '',
-               unavailable_reason: g.unavailable_reason || '', unavailable_kind: g.unavailable_kind || '' }
+               ...unavailableFields(g) }
     }
     for (const t of (g.items || [])) {
       if (t.ref === ref) {
@@ -810,12 +802,12 @@ const describeRef = (ref, itemType) => {
         // （一个工具一张伪组卡片），显示时按真相纠正，下次保存会写成 tool。
         return { ref, item_type: 'tool', label: t.label || t.name,
                  kind: g.kind, available: t.available, count: 0, description: t.description || '',
-                 unavailable_reason: t.unavailable_reason || '', unavailable_kind: t.unavailable_kind || '' }
+                 ...unavailableFields(t) }
       }
     }
   }
   return { ref, item_type: itemType || 'tool', label: ref, kind: '', available: null, count: 0, description: '',
-           unavailable_reason: '', unavailable_kind: '' }
+           ...unavailableFields(null) }
 }
 
 // 读取该 agent 的授权项与「不限制工具」开关
@@ -836,7 +828,7 @@ const loadToolGrants = async () => {
     await loadToolCatalog(props.agentId)
     const res = await fetch(adminApi.agents.toolGrants(props.agentId), { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '读取工具授权失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('agentSettings.grantsLoadFailed'))
     const d = body.data || {}
     grantDraft.value = {
       unrestricted: !!d.unrestricted,
@@ -846,7 +838,7 @@ const loadToolGrants = async () => {
     grantsAgentId.value = props.agentId
     grantsDirty.value = false
   } catch (e) {
-    ElMessage.error(e.message || '读取工具授权失败')
+    ElMessage.error(e.message || t('agentSettings.grantsLoadFailed'))
   } finally {
     toolsLoading.value = false
   }
@@ -875,7 +867,8 @@ const grantsByKind = computed(() => {
 
 // 三个区（tab）
 const grantKinds = ['required', 'allow', 'deny']
-const grantKindLabel = (k) => ({ required: '必须导入', allow: '可使用', deny: '拒绝' }[k] || k)
+const GRANT_KIND_KEYS = { required: 'grantKindRequired', allow: 'grantKindAllow', deny: 'grantKindDeny' }
+const grantKindLabel = (k) => (GRANT_KIND_KEYS[k] ? t(`agentSettings.${GRANT_KIND_KEYS[k]}`) : k)
 // 本区已加入的项
 const activeGrants = computed(() => grantDraft.value.items.filter((i) => i.grant_kind === pickerKind.value))
 // 某个 ref（组或工具）当前落在哪个区（'' = 未加入）
@@ -914,11 +907,11 @@ const pickerCards = computed(() => {
     const items = (g.items || []).map((t) => ({
       ref: t.ref, item_type: 'tool', label: t.label || t.name, kind: g.kind,
       available: t.available, description: t.description || '',
-      // 不可用原因与归因原样透传（平台未开通 / 租户未启用 / 连接未启用 要能分开看）
-      unavailable_reason: t.unavailable_reason || '',
-      unavailable_kind: t.unavailable_kind || ''
+      // 不可用原因原样透传（平台未开通 / 租户未启用 / 连接未启用 要能分开看）
+      ...unavailableFields(t)
     }))
-    const groupHit = !kw || hit(g.name) || hit(g.ref)
+    // 译名也要能搜到：英文界面下搜 built-in 应该命中「Built-in · file」
+    const groupHit = !kw || hit(groupName(t, te, g)) || hit(g.name) || hit(g.ref)
     const matched = groupHit ? items : items.filter((t) => hit(t.label) || hit(t.ref))
     if (kw && !groupHit && !matched.length) continue
     cards.push({
@@ -927,8 +920,7 @@ const pickerCards = computed(() => {
       description: g.description || '', items,
       // 类别容器（插件 / 自定义工具）：不可整组授权，勾选落到成员的工具 ref 上
       synthetic: !!g.synthetic,
-      unavailable_reason: g.unavailable_reason || '',
-      unavailable_kind: g.unavailable_kind || ''
+      ...unavailableFields(g)
     })
   }
   return cards
@@ -977,7 +969,7 @@ const addGrantToKind = (opt) => {
       ref: opt.ref, item_type: opt.item_type, grant_kind: kind,
       label: opt.label, kind: opt.kind, count: opt.count || 0,
       available: opt.available, description: opt.description || '',
-      unavailable_reason: opt.unavailable_reason || '', unavailable_kind: opt.unavailable_kind || ''
+      ...unavailableFields(opt)
     })
   }
   grantsDirty.value = true
@@ -1025,13 +1017,12 @@ const removeGrant = async (ref) => {
   // 误点代价高，所以只有这一类要二次确认；按需组 / 单工具直接删。
   if (isMainCoreRef(ref)) {
     const g = toolCatalog.value.find((x) => x.ref === ref)
-    const label = g ? g.name : ref
+    const label = g ? (groupName(t, te, g) || ref) : ref
     try {
       await ElMessageBox.confirm(
-        `「${label}」是超级智能体的常驻组：删掉后超级智能体会失去这一整类工具（保存后生效，不会报错）。` +
-        `确定收回吗？`,
-        '收回常驻能力',
-        { type: 'warning', confirmButtonText: '收回', cancelButtonText: '取消' }
+        t('agentSettings.confirmRevokeCoreBody', { name: label }),
+        t('agentSettings.confirmRevokeCoreTitle'),
+        { type: 'warning', confirmButtonText: t('agentSettings.confirmRevoke'), cancelButtonText: t('agentSettings.cancel') }
       )
     } catch { return }
   }
@@ -1052,9 +1043,9 @@ const importCurrentTools = () => {
     if (!g) continue
     items.push({ ref, item_type: 'group', label: g.name, kind: g.kind, available: g.available,
                  count: (g.items || []).length, description: g.description || '', grant_kind: 'allow',
-                 unavailable_reason: g.unavailable_reason || '', unavailable_kind: g.unavailable_kind || '' })
+                 ...unavailableFields(g) })
   }
-  if (!items.length) { ElMessage.warning('未取到内置工具类，请稍后重试'); return }
+  if (!items.length) { ElMessage.warning(t('agentSettings.presetMissing')); return }
   grantDraft.value.items = items
   grantsDirty.value = true
 }
@@ -1074,7 +1065,7 @@ const saveGrants = async () => {
       })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '保存失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('agentSettings.saveFailed'))
     grantsDirty.value = false
     // 授权成功 ≠ 现在就能用：平台闸门在授权之上，别让 toast 传达错的承诺。
     // 只数平台侧（能力 / 插件授权）—— 租户自己那层（未启用插件、连接停用）用户当场就能修。
@@ -1083,13 +1074,13 @@ const saveGrants = async () => {
         && (i.unavailable_kind === 'capability' || i.unavailable_kind === 'plugin_policy')
     ).length
     if (platformBlocked) {
-      ElMessage.success(`工具授权已保存；其中 ${platformBlocked} 项因平台未开通或已停用，暂时不可用`)
+      ElMessage.success(t('agentSettings.grantsSavedPlatformBlocked', { n: platformBlocked }))
     } else {
-      ElMessage.success('工具授权已保存')
+      ElMessage.success(t('agentSettings.grantsSaved'))
     }
     await loadEffectiveInfo() // 保存后刷新常驻摘要
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('agentSettings.saveFailed'))
   } finally {
     savingGrants.value = false
   }
@@ -1146,14 +1137,17 @@ const effectiveSummary = computed(() => {
     // 内置工具是固有基线，授权项只是「额外追加」—— 因此不能只看 final_tools 的数量说成"缺省"
     const n = (d.final_tools || []).length
     return {
-      text: `supervisor：内置工具始终可用${d.unrestricted ? ' · 不限制工具' : ''}，共 ${n} 个工具生效`,
+      text: t('agentSettings.summarySupervisor', {
+        unrestricted: d.unrestricted ? t('agentSettings.unrestrictedSuffix') : '',
+        n
+      }),
       warn: (d.warnings || []).length,
       degraded: !!d.degraded
     }
   }
-  if (d.no_grants) return { text: '未配置授权：运行时不绑定任何工具', warn: 0, degraded: false }
+  if (d.no_grants) return { text: t('agentSettings.summaryNoGrants'), warn: 0, degraded: false }
   return {
-    text: `当前生效 ${(d.final_tools || []).length} 个工具`,
+    text: t('agentSettings.summaryEffective', { n: (d.final_tools || []).length }),
     warn: (d.warnings || []).length,
     degraded: !!d.degraded
   }
@@ -1192,9 +1186,9 @@ const saveRelations = async () => {
       body: JSON.stringify({ can_call_ids: f.can_call_ids, called_by_ids: f.called_by_ids })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '调用关系保存失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('agentSettings.relationsSaveFailed'))
   } catch (e) {
-    ElMessage.error(e.message || '调用关系保存失败')
+    ElMessage.error(e.message || t('agentSettings.relationsSaveFailed'))
     // 落库失败 → 回到服务端的真实状态，别让 tag 与服务端漂移
     await loadRelations()
   }
@@ -1204,13 +1198,15 @@ const saveRelations = async () => {
 // 列表全量展示，标签负责区分「看得见」与「绑得上」。
 const isBindableSkill = (s) => !s.agent_id && s.status !== 3
 const skillTagText = (s) => {
-  if (s.status === 3) return '已废弃'
+  if (s.status === 3) return t('agentSettings.skillTagDeprecated')
   if (s.agent_id) {
     return String(s.agent_id) === String(props.agentId)
-      ? '本智能体私有'
-      : `归属 ${s.agent_name || '其它智能体'}`
+      ? t('agentSettings.skillTagPrivate')
+      : t('agentSettings.skillTagOwnedBy', {
+        name: s.agent_name || t('agentSettings.skillTagOwnedByOther')
+      })
   }
-  return s.restricted ? '白名单可见' : '全员可见'
+  return s.restricted ? t('agentSettings.skillTagWhitelist') : t('agentSettings.skillTagPublic')
 }
 const skillTagClass = (s) => ({
   warn: !s.agent_id && s.status !== 3 && s.restricted,
@@ -1250,9 +1246,9 @@ const saveSkillBindings = async () => {
       body: JSON.stringify({ skill_ids: boundSkillIds.value })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '技能绑定保存失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('agentSettings.skillBindSaveFailed'))
   } catch (e) {
-    ElMessage.error(e.message || '技能绑定保存失败')
+    ElMessage.error(e.message || t('agentSettings.skillBindSaveFailed'))
     await loadSkillBindings() // 落库失败 → 回到服务端的真实状态，别让本地勾选与服务端漂移
   }
 }
@@ -1306,11 +1302,11 @@ const saveSkillDiscovery = async (val) => {
       body: JSON.stringify({ ...props.agent, skill_discovery: next })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '保存失败')
-    ElMessage.success(next ? '已允许发现未绑定的技能' : '已关闭技能发现')
+    if (body.code !== 200) throw new Error(formatError(body) || t('agentSettings.saveFailed'))
+    ElMessage.success(next ? t('agentSettings.discoveryOn') : t('agentSettings.discoveryOff'))
   } catch (e) {
     props.agent.skill_discovery = !next // 回滚开关
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('agentSettings.saveFailed'))
   }
 }
 
@@ -1327,7 +1323,7 @@ const saveSupervisor = async (val) => {
       body: JSON.stringify({ ...props.agent, is_supervisor: next })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '保存失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('agentSettings.saveFailed'))
     emit('supervisor-change', next)
     if (next) {
       // 后端在 SetSupervisor 里已经把起步套件补齐（core 工具组 + 不限制工具 +
@@ -1335,15 +1331,15 @@ const saveSupervisor = async (val) => {
       // 这里必须先失效再重拉，否则「工具配置」页还停在授予前那一套（12 条单工具）。
       resetToolGrantCache()
       await Promise.all([loadSkillBindings(props.agentId), loadToolGrants()])
-      ElMessage.success('已授予超级权限：已导入 core 工具组（含 agent-admin）、开启不限制工具与技能发现、绑定三份 authoring 技能')
+      ElMessage.success(t('agentSettings.supervisorGranted'))
     } else {
       // 撤销不回滚工具与技能：它们留在库里，但管理类工具在执行层已不可用
-      ElMessage.success('已撤销超级权限（工具授权与技能绑定保留，管理类工具不再可用）')
+      ElMessage.success(t('agentSettings.supervisorRevoked'))
     }
     emit('refresh-list')
   } catch (e) {
     props.agent.is_supervisor = !next // 回滚开关
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('agentSettings.saveFailed'))
   }
 }
 

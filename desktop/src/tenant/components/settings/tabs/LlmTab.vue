@@ -1,17 +1,17 @@
 <template>
   <div class="module-section">
           <div class="module-head">
-            <h3>LLM 配置</h3>
+            <h3>{{ t('settings.tabs.llm.title') }}</h3>
             <div class="head-actions">
-              <el-button size="small" :icon="Refresh" :loading="llmProviderLoading || llmModelLoading" @click="fetchLLMProviders(); fetchLLMModels()">刷新</el-button>
+              <el-button size="small" :icon="Refresh" :loading="llmProviderLoading || llmModelLoading" @click="fetchLLMProviders(); fetchLLMModels()">{{ t('settings.llm.refresh') }}</el-button>
               <el-button type="success" size="small" :loading="syncLLMLoading" @click="syncLLMModels">
-                <el-icon><Refresh /></el-icon> 同步
+                <el-icon><Refresh /></el-icon> {{ t('settings.llm.sync') }}
               </el-button>
               <el-button type="warning" size="small" :loading="deprovisionAllLoading" @click="deprovisionAllLLMModels">
-                <el-icon><Remove /></el-icon> 全部注销
+                <el-icon><Remove /></el-icon> {{ t('settings.llm.deprovisionAll') }}
               </el-button>
               <el-button type="primary" size="small" @click="openAddLLMProviderDialog">
-                <el-icon><Plus /></el-icon> 添加服务商
+                <el-icon><Plus /></el-icon> {{ t('settings.llm.addProvider') }}
               </el-button>
             </div>
           </div>
@@ -26,10 +26,10 @@
                   </span>
                   <span class="provider-name">{{ p.name }}</span>
                   <el-tag size="small" effect="plain" type="info">{{ p.protocol || 'openai-compatible' }}</el-tag>
-                  <el-tag v-if="p.enabled === false" size="small" type="danger" effect="light">已停用</el-tag>
+                  <el-tag v-if="p.enabled === false" size="small" type="danger" effect="light">{{ t('settings.llm.providerDisabled') }}</el-tag>
                 </div>
                 <div class="item-actions">
-                  <el-button link type="success" :icon="Plus" title="添加模型" @click="openAddLLMModelDialog(p.id)" />
+                  <el-button link type="success" :icon="Plus" :title="t('settings.llm.addModel')" @click="openAddLLMModelDialog(p.id)" />
                   <el-button link type="primary" :icon="Edit" @click="openEditLLMProviderDialog(p)" />
                   <el-button link type="danger" :icon="Delete" @click="deleteLLMProvider(p)" />
                 </div>
@@ -37,29 +37,31 @@
               <div class="provider-meta">
                 <span class="meta-value text-ellipsis">{{ p.url }}</span>
                 <span class="secret-text">{{ maskSecret(p.api_key) }}</span>
-                <el-button link size="small" :icon="CopyDocument" title="复制" @click="copyText(p.api_key)" />
+                <el-button link size="small" :icon="CopyDocument" :title="t('settings.llm.copy')" @click="copyText(p.api_key)" />
               </div>
 
               <div class="model-list">
                 <div v-if="modelsOf(p.id).length === 0" class="empty-inline">
-                  该服务商下暂无模型，点击「添加模型」创建
+                  {{ t('settings.llm.emptyModels') }}
                 </div>
                 <div v-for="m in modelsOf(p.id)" :key="m.id" class="model-item">
                   <div class="model-info">
                     <span class="model-name">{{ m.name }}</span>
-                    <el-tag v-if="m.is_default" size="small" type="success" effect="light">默认</el-tag>
-                    <el-tag v-if="m.gateway_id" size="small" type="success" effect="light">已启用</el-tag>
-                    <el-tag v-else size="small" type="info" effect="light">未启用</el-tag>
+                    <el-tag v-if="m.is_default" size="small" type="success" effect="light">{{ t('settings.llm.defaultTag') }}</el-tag>
+                    <el-tag v-if="m.gateway_id" size="small" type="success" effect="light">{{ t('settings.llm.enabledTag') }}</el-tag>
+                    <el-tag v-else size="small" type="info" effect="light">{{ t('settings.llm.disabledTag') }}</el-tag>
                   </div>
                   <div class="model-params">
-                    上下文 {{ m.context_window || '-' }}
+                    {{ t('settings.llm.modelContext', { value: m.context_window || '-' }) }}
                     <template v-if="m.base_params && Object.keys(m.base_params).length">
-                      <span v-if="Object.prototype.hasOwnProperty.call(m.base_params, 'max_tokens')"> · Max Tokens {{ m.base_params.max_tokens }}</span>
-                      <span v-if="Object.prototype.hasOwnProperty.call(m.base_params, 'temperature')"> · 温度 {{ m.base_params.temperature }}</span>
-                      <span v-if="Object.prototype.hasOwnProperty.call(m.base_params, 'top_p')"> · TopP {{ m.base_params.top_p }}</span>
+                      <span v-if="Object.prototype.hasOwnProperty.call(m.base_params, 'max_tokens')">{{ t('settings.llm.modelMaxTokens', { value: m.base_params.max_tokens }) }}</span>
+                      <span v-if="Object.prototype.hasOwnProperty.call(m.base_params, 'temperature')">{{ t('settings.llm.modelTemperature', { value: m.base_params.temperature }) }}</span>
+                      <span v-if="Object.prototype.hasOwnProperty.call(m.base_params, 'top_p')">{{ t('settings.llm.modelTopP', { value: m.base_params.top_p }) }}</span>
                     </template>
-                    <span v-else> · 生成参数未设置</span>
-                    <span v-if="m.gateway_id" class="model-gateway-id"> · 网关ID {{ m.gateway_id }} · 网关模型 {{ m.gateway_model }}</span>
+                    <span v-else>{{ t('settings.llm.noGenParams') }}</span>
+                    <span v-if="m.gateway_id" class="model-gateway-id">
+                      {{ t('settings.llm.modelGateway', { id: m.gateway_id, model: m.gateway_model }) }}
+                    </span>
                   </div>
                   <div class="item-actions">
                     <el-button
@@ -67,13 +69,13 @@
                       link type="success" size="small"
                       :loading="m._provisioning"
                       @click="provisionLLMModel(m)"
-                    >启用</el-button>
+                    >{{ t('settings.llm.enable') }}</el-button>
                     <el-button
                       v-else
                       link type="warning" size="small"
                       :loading="m._deprovisioning"
                       @click="deprovisionLLMModel(m)"
-                    >禁用</el-button>
+                    >{{ t('settings.llm.disable') }}</el-button>
                     <el-button link type="primary" :icon="Edit" @click="openEditLLMModelDialog(m)" />
                     <el-button link type="danger" :icon="Delete" @click="deleteLLMModel(m)" />
                   </div>
@@ -82,8 +84,8 @@
             </div>
 
             <div v-if="!llmProviderLoading && llmProvidersData.length === 0" class="empty-block">
-              <el-empty description="暂无 LLM 服务商">
-                <el-button type="primary" @click="openAddLLMProviderDialog">添加服务商</el-button>
+              <el-empty :description="t('settings.llm.emptyProviders')">
+                <el-button type="primary" @click="openAddLLMProviderDialog">{{ t('settings.llm.addProvider') }}</el-button>
               </el-empty>
             </div>
           </div>
@@ -96,7 +98,7 @@
       <div class="provider-form-layout">
         <!-- 左侧：预设服务商卡片列表（仅新增时显示，编辑模式隐藏） -->
         <aside v-if="!currentLLMProvider" class="provider-preset-aside">
-          <div class="provider-preset-title">选择预设服务商（可选，点击后自动填充）</div>
+          <div class="provider-preset-title">{{ t('settings.llm.presetTitle') }}</div>
           <div v-loading="llmProviderPresetLoading" class="preset-grid">
             <div
               v-for="preset in llmProviderPresetsData"
@@ -112,7 +114,7 @@
               <div class="preset-info">
                 <div class="preset-name">
                   {{ preset.name }}
-                  <el-tag v-if="preset.is_popular" size="small" type="warning" effect="light">热门</el-tag>
+                  <el-tag v-if="preset.is_popular" size="small" type="warning" effect="light">{{ t('settings.llm.popular') }}</el-tag>
                 </div>
                 <div v-if="preset.description" class="preset-desc">{{ preset.description }}</div>
                 <div class="preset-tags">
@@ -121,40 +123,42 @@
               </div>
             </div>
             <div v-if="!llmProviderPresetLoading && llmProviderPresetsData.length === 0" class="preset-empty">
-              暂无预设服务商
+              {{ t('settings.llm.presetEmpty') }}
             </div>
           </div>
         </aside>
         <!-- 右侧：服务商表单 -->
         <div class="provider-form-main">
           <el-form label-position="top">
-            <el-form-item label="服务商名称" required>
-              <el-input v-model="llmProviderSettings.sourceName" placeholder="输入服务商名称" />
+            <el-form-item :label="t('settings.llm.providerName')" required>
+              <el-input v-model="llmProviderSettings.sourceName" :placeholder="t('settings.llm.providerNamePlaceholder')" />
             </el-form-item>
-            <el-form-item label="LLM API 地址" required>
-              <el-input v-model="llmProviderSettings.url" placeholder="输入 LLM API 地址" />
+            <el-form-item :label="t('settings.llm.apiUrl')" required>
+              <el-input v-model="llmProviderSettings.url" :placeholder="t('settings.llm.apiUrlPlaceholder')" />
             </el-form-item>
-            <el-form-item label="API Key" required>
-              <el-input v-model="llmProviderSettings.apiKey" placeholder="输入 API Key" />
+            <el-form-item :label="t('settings.llm.apiKey')" required>
+              <el-input v-model="llmProviderSettings.apiKey" :placeholder="t('settings.llm.apiKeyPlaceholder')" />
             </el-form-item>
-            <el-form-item label="协议类型" required>
-              <el-input v-model="llmProviderSettings.protocol" placeholder="协议类型" disabled />
+            <el-form-item :label="t('settings.llm.protocol')" required>
+              <el-input v-model="llmProviderSettings.protocol" :placeholder="t('settings.llm.protocol')" disabled />
             </el-form-item>
-            <el-form-item label="图标">
-              <el-input v-model="llmProviderSettings.icon" placeholder="输入图标 URL" />
+            <el-form-item :label="t('settings.llm.icon')">
+              <el-input v-model="llmProviderSettings.icon" :placeholder="t('settings.llm.iconPlaceholder')" />
             </el-form-item>
-            <el-form-item label="启用">
+            <el-form-item :label="t('settings.llm.enabled')">
               <el-switch v-model="llmProviderSettings.enabled" />
             </el-form-item>
-            <el-form-item label="额外配置 (JSON)">
-              <el-input type="textarea" v-model="llmProviderSettings.extraConfigText" placeholder='例如：{"region":"us-east-1"}' :rows="4" />
+            <el-form-item :label="t('settings.llm.extraConfig')">
+              <el-input type="textarea" v-model="llmProviderSettings.extraConfigText"
+                        :placeholder="t('settings.llm.extraConfigPlaceholder', { example: jsonExampleRegion })"
+                        :rows="4" />
             </el-form-item>
           </el-form>
         </div>
       </div>
       <template #footer>
-        <el-button @click="llmProviderDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveLLMProviderSettings">保存</el-button>
+        <el-button @click="llmProviderDialogVisible = false">{{ t('settings.llm.cancel') }}</el-button>
+        <el-button type="primary" @click="saveLLMProviderSettings">{{ t('settings.llm.save') }}</el-button>
       </template>
     </SidePanel>
 
@@ -163,66 +167,75 @@
                :panel-style="sidePanel.styleFor(500)"
                @close="llmModelDialogVisible = false" @resize="sidePanel.startResize">
       <el-form label-position="top">
-        <el-form-item label="模型名称" required>
-          <el-input v-model="llmModelSettings.name" placeholder="输入模型名称" />
+        <el-form-item :label="t('settings.llm.modelName')" required>
+          <el-input v-model="llmModelSettings.name" :placeholder="t('settings.llm.modelNamePlaceholder')" />
         </el-form-item>
-        <el-form-item label="上下文窗口">
-          <el-input-number v-model="llmModelSettings.contextWindow" placeholder="输入上下文窗口大小" />
+        <el-form-item :label="t('settings.llm.contextWindow')">
+          <el-input-number v-model="llmModelSettings.contextWindow" :placeholder="t('settings.llm.contextWindowPlaceholder')" />
         </el-form-item>
         <!-- 基础生成参数：开关 + 值，仅开启的参数会写入 base_params（键存在=使用，键不存在=未使用） -->
         <div class="gen-param-row">
           <el-switch v-model="llmGenParams.maxTokens.enabled" />
-          <span class="gen-param-label">最大 tokens</span>
-          <el-input-number v-model="llmGenParams.maxTokens.value" :disabled="!llmGenParams.maxTokens.enabled" placeholder="输入最大 tokens 数" :min="0" />
+          <span class="gen-param-label">{{ t('settings.llm.maxTokensLabel') }}</span>
+          <el-input-number v-model="llmGenParams.maxTokens.value" :disabled="!llmGenParams.maxTokens.enabled"
+                           :placeholder="t('settings.llm.maxTokensPlaceholder')" :min="0" />
         </div>
         <div class="gen-param-row">
           <el-switch v-model="llmGenParams.temperature.enabled" />
-          <span class="gen-param-label">温度</span>
-          <el-input-number v-model="llmGenParams.temperature.value" :disabled="!llmGenParams.temperature.enabled" :min="0" :max="1" :step="0.1" placeholder="输入温度" />
+          <span class="gen-param-label">{{ t('settings.llm.temperatureLabel') }}</span>
+          <el-input-number v-model="llmGenParams.temperature.value" :disabled="!llmGenParams.temperature.enabled"
+                           :min="0" :max="1" :step="0.1" :placeholder="t('settings.llm.temperaturePlaceholder')" />
         </div>
         <div class="gen-param-row">
           <el-switch v-model="llmGenParams.topP.enabled" />
-          <span class="gen-param-label">Top P</span>
-          <el-input-number v-model="llmGenParams.topP.value" :disabled="!llmGenParams.topP.enabled" :min="0" :max="1" :step="0.1" placeholder="输入 Top P" />
+          <span class="gen-param-label">{{ t('settings.llm.topPLabel') }}</span>
+          <el-input-number v-model="llmGenParams.topP.value" :disabled="!llmGenParams.topP.enabled"
+                           :min="0" :max="1" :step="0.1" :placeholder="t('settings.llm.topPPlaceholder')" />
         </div>
-        <el-form-item label="服务商" required>
-          <el-input :model-value="getProviderName(llmModelSettings.providerId)" placeholder="选择 LLM 服务商" disabled />
+        <el-form-item :label="t('settings.llm.providerLabel')" required>
+          <el-input :model-value="getProviderName(llmModelSettings.providerId)"
+                    :placeholder="t('settings.llm.providerPlaceholder')" disabled />
         </el-form-item>
-        <el-form-item v-if="llmModelSettings.gatewayId" label="网关模型ID">
+        <el-form-item v-if="llmModelSettings.gatewayId" :label="t('settings.llm.gatewayModelId')">
           <el-input :model-value="llmModelSettings.gatewayId" disabled />
         </el-form-item>
-        <el-form-item label="网关模型名" :disabled="!!llmModelSettings.gatewayId">
+        <el-form-item :label="t('settings.llm.gatewayModelName')" :disabled="!!llmModelSettings.gatewayId">
           <el-input
             v-model="llmModelSettings.gatewayModel"
-            placeholder="在网关中注册的模型名，启用后不可修改"
+            :placeholder="t('settings.llm.gatewayModelPlaceholder')"
             :disabled="!!llmModelSettings.gatewayId"
           />
           <template v-if="llmModelSettings.gatewayId" #help>
-            模型已启用，网关模型名不可修改，请先禁用再修改
+            {{ t('settings.llm.gatewayModelLocked') }}
           </template>
         </el-form-item>
         <div class="form-row-2">
-          <el-form-item label="设为默认">
+          <el-form-item :label="t('settings.llm.setDefault')">
             <el-switch v-model="llmModelSettings.isDefault" />
           </el-form-item>
         </div>
-        <el-form-item label="额外参数 (JSON)">
-          <el-input type="textarea" v-model="llmModelSettings.extraParamsText" placeholder='例如 千问启用思考：{"enable_thinking": true}' :rows="4" />
+        <el-form-item :label="t('settings.llm.extraParams')">
+          <el-input type="textarea" v-model="llmModelSettings.extraParamsText"
+                    :placeholder="t('settings.llm.extraParamsPlaceholder', { example: jsonExampleThinking })"
+                    :rows="4" />
         </el-form-item>
-        <el-form-item label="能力配置 (JSON)">
-          <el-input type="textarea" v-model="llmModelSettings.capabilitiesText" placeholder='例如：{"vision":true}' :rows="4" />
+        <el-form-item :label="t('settings.llm.capabilities')">
+          <el-input type="textarea" v-model="llmModelSettings.capabilitiesText"
+                    :placeholder="t('settings.llm.capabilitiesPlaceholder', { example: jsonExampleVision })"
+                    :rows="4" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="llmModelDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveLLMModelSettings">保存</el-button>
+        <el-button @click="llmModelDialogVisible = false">{{ t('settings.llm.cancel') }}</el-button>
+        <el-button type="primary" @click="saveLLMModelSettings">{{ t('settings.llm.save') }}</el-button>
       </template>
     </SidePanel>
   </div>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Edit, Delete, CopyDocument, Plus, Refresh, Remove, ChatDotRound } from '@element-plus/icons-vue'
 import apiConfig from '../../../config/api.js'
@@ -230,8 +243,17 @@ import { getToken } from '../../../utils/auth.js'
 import SidePanel from '../SidePanel.vue'
 import { useSidePanelContext } from '../useSidePanel.js'
 import { maskSecret, copyText } from '../format.js'
+import { formatError } from '../../../../locales'
 
 const props = defineProps({ active: { type: Boolean, default: false } })
+
+const { t } = useI18n()
+
+// JSON 示例带双引号与花括号：既不能直接写进模板属性（引号会截断属性），
+// 也不能直接写进语言包（{...} 会被 vue-i18n 当命名参数），所以整段当参数传。
+const jsonExampleRegion = '{"region":"us-east-1"}'
+const jsonExampleThinking = '{"enable_thinking": true}'
+const jsonExampleVision = '{"vision":true}'
 
 // 左侧导航显示「N 服务商 · M 模型」，由本组件加载后回报
 const emit = defineEmits(['count'])
@@ -249,7 +271,7 @@ const llmProviderLoading = ref(false)
 // LLM服务商设置
 const llmProviderSettings = ref({
   url: 'https://api.openai.com',
-  sourceName: '默认LLM服务商',
+  sourceName: t('settings.llm.defaultProviderName'),
   apiKey: '',
   protocol: 'openai-compatible',
   icon: '',
@@ -259,8 +281,10 @@ const llmProviderSettings = ref({
 
 // LLM服务商对话框相关
 const llmProviderDialogVisible = ref(false)
-const llmProviderDialogTitle = ref('添加LLM服务商')
 const currentLLMProvider = ref(null)
+// 标题跟着 current 判断（有值 = 编辑）：做成 computed，切语言时才跟着变
+const llmProviderDialogTitle = computed(() =>
+  currentLLMProvider.value ? t('settings.llm.dialogEditProvider') : t('settings.llm.dialogAddProvider'))
 
 // LLM服务商预设数据
 const llmProviderPresetsData = ref([])
@@ -318,8 +342,9 @@ function buildBaseParams() {
 
 // LLM模型对话框相关
 const llmModelDialogVisible = ref(false)
-const llmModelDialogTitle = ref('添加LLM模型')
 const currentLLMModel = ref(null)
+const llmModelDialogTitle = computed(() =>
+  currentLLMModel.value ? t('settings.llm.dialogEditModel') : t('settings.llm.dialogAddModel'))
 
 const sidePanel = useSidePanelContext()
 sidePanel.register(llmProviderDialogVisible)
@@ -342,7 +367,7 @@ const checkBizOk = async (response) => {
   }
   const data = await response.json()
   if (data && typeof data.code !== 'undefined' && data.code !== 200) {
-    throw new Error(data.msg || '操作失败')
+    throw new Error(formatError(data) || t('settings.llm.opFailed'))
   }
   return data
 }
@@ -373,19 +398,19 @@ const fetchLLMProviders = async () => {
       })
     })
     if (!response.ok) {
-      throw new Error('获取LLM服务商失败')
+      throw new Error(`HTTP ${response.status}`)
     }
     const data = await response.json()
     llmProvidersData.value = data?.data?.items ?? []
     reportCount()
   } catch (error) {
     ElMessage.error({
-      message: `获取LLM服务商失败: ${error.message}`,
+      message: t('settings.llm.loadProvidersFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('获取LLM服务商失败:', error)
+    console.error('load llm providers failed:', error)
   } finally {
     llmProviderLoading.value = false
   }
@@ -403,19 +428,19 @@ const fetchLLMProviderPresets = async () => {
       }
     })
     if (!response.ok) {
-      throw new Error('获取LLM服务商预设失败')
+      throw new Error(`HTTP ${response.status}`)
     }
     const data = await response.json()
     llmProviderPresetsData.value = data?.data?.items ?? []
     llmProviderPresetsLoaded = true
   } catch (error) {
     ElMessage.error({
-      message: `获取LLM服务商预设失败: ${error.message}`,
+      message: t('settings.llm.loadPresetsFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('获取LLM服务商预设失败:', error)
+    console.error('load llm provider presets failed:', error)
   } finally {
     llmProviderPresetLoading.value = false
   }
@@ -441,7 +466,6 @@ const onLLMProviderDialogOpen = () => {
 // 打开添加LLM服务商对话框
 const openAddLLMProviderDialog = () => {
   currentLLMProvider.value = null
-  llmProviderDialogTitle.value = '添加LLM服务商'
   llmProviderSettings.value = {
     url: 'https://api.openai.com',
     sourceName: '',
@@ -457,7 +481,6 @@ const openAddLLMProviderDialog = () => {
 // 打开编辑LLM服务商对话框
 const openEditLLMProviderDialog = (source) => {
   currentLLMProvider.value = source
-  llmProviderDialogTitle.value = '编辑LLM服务商'
   llmProviderSettings.value = {
     url: source.url,
     sourceName: source.name,
@@ -473,7 +496,7 @@ const openEditLLMProviderDialog = (source) => {
 // 保存LLM服务商
 const saveLLMProviderSettings = async () => {
   if (!llmProviderSettings.value.sourceName || !llmProviderSettings.value.url || !llmProviderSettings.value.apiKey) {
-    ElMessage.warning('请填写所有必填字段')
+    ElMessage.warning(t('settings.llm.needAllFields'))
     return
   }
 
@@ -482,7 +505,7 @@ const saveLLMProviderSettings = async () => {
     try {
       extraConfig = JSON.parse(llmProviderSettings.value.extraConfigText)
     } catch (e) {
-      ElMessage.warning('额外配置 JSON 格式错误')
+      ElMessage.warning(t('settings.llm.extraConfigInvalid'))
       return
     }
   }
@@ -524,12 +547,12 @@ const saveLLMProviderSettings = async () => {
     }
 
     if (!response.ok) {
-      throw new Error('保存LLM服务商失败')
+      throw new Error(`HTTP ${response.status}`)
     }
 
     await checkBizOk(response)
     ElMessage.success({
-      message: currentLLMProvider.value ? 'LLM服务商更新成功' : 'LLM服务商添加成功',
+      message: currentLLMProvider.value ? t('settings.llm.providerUpdated') : t('settings.llm.providerAdded'),
       duration: 700
     })
     llmProviderDialogVisible.value = false
@@ -537,12 +560,12 @@ const saveLLMProviderSettings = async () => {
     await fetchLLMProviders()
   } catch (error) {
     ElMessage.error({
-      message: `保存LLM服务商失败: ${error.message}`,
+      message: t('settings.llm.saveProviderFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('保存LLM服务商失败:', error)
+    console.error('save llm provider failed:', error)
   } finally {
     llmProviderLoading.value = false
   }
@@ -552,11 +575,11 @@ const saveLLMProviderSettings = async () => {
 const deleteLLMProvider = async (source) => {
   try {
     await ElMessageBox.confirm(
-      '确定要删除这个 LLM 服务商吗？这将会删除该服务商下的所有 LLM 模型，并更新相关的智能体配置。',
-      '提示',
+      t('settings.llm.deleteProviderConfirm'),
+      t('settings.llm.tipTitle'),
       {
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
+        confirmButtonText: t('settings.llm.delete'),
+        cancelButtonText: t('settings.llm.cancel'),
         type: 'warning'
       }
     )
@@ -576,11 +599,11 @@ const deleteLLMProvider = async (source) => {
     })
 
     if (!response.ok) {
-      throw new Error('删除LLM服务商失败')
+      throw new Error(`HTTP ${response.status}`)
     }
 
     ElMessage.success({
-      message: 'LLM服务商删除成功',
+      message: t('settings.llm.providerDeleted'),
       duration: 700
     })
     // 重新获取LLM服务商列表
@@ -589,12 +612,12 @@ const deleteLLMProvider = async (source) => {
     await fetchLLMModels()
   } catch (error) {
     ElMessage.error({
-      message: `删除LLM服务商失败: ${error.message}`,
+      message: t('settings.llm.deleteProviderFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('删除LLM服务商失败:', error)
+    console.error('delete llm provider failed:', error)
   } finally {
     llmProviderLoading.value = false
   }
@@ -619,19 +642,19 @@ const fetchLLMModels = async () => {
       })
     })
     if (!response.ok) {
-      throw new Error('获取LLM模型失败')
+      throw new Error(`HTTP ${response.status}`)
     }
     const data = await response.json()
     llmModelsData.value = data?.data?.items ?? []
     reportCount()
   } catch (error) {
     ElMessage.error({
-      message: `获取LLM模型失败: ${error.message}`,
+      message: t('settings.llm.loadModelsFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('获取LLM模型失败:', error)
+    console.error('load llm models failed:', error)
   } finally {
     llmModelLoading.value = false
   }
@@ -640,7 +663,6 @@ const fetchLLMModels = async () => {
 // 打开添加LLM模型对话框（可传入服务商 ID 自动带入）
 const openAddLLMModelDialog = (providerId) => {
   currentLLMModel.value = null
-  llmModelDialogTitle.value = '添加LLM模型'
   llmModelSettings.value = {
     name: '',
     contextWindow: 4096,
@@ -659,7 +681,6 @@ const openAddLLMModelDialog = (providerId) => {
 // 打开编辑LLM模型对话框
 const openEditLLMModelDialog = (model) => {
   currentLLMModel.value = model
-  llmModelDialogTitle.value = '编辑LLM模型'
   llmModelSettings.value = {
     name: model.name,
     contextWindow: model.context_window || 4096,
@@ -678,7 +699,7 @@ const openEditLLMModelDialog = (model) => {
 // 保存LLM模型
 const saveLLMModelSettings = async () => {
   if (!llmModelSettings.value.name || !llmModelSettings.value.providerId) {
-    ElMessage.warning('请填写所有必填字段')
+    ElMessage.warning(t('settings.llm.needAllFields'))
     return
   }
 
@@ -687,7 +708,7 @@ const saveLLMModelSettings = async () => {
     try {
       extraParams = JSON.parse(llmModelSettings.value.extraParamsText)
     } catch (e) {
-      ElMessage.warning('额外参数 JSON 格式错误')
+      ElMessage.warning(t('settings.llm.extraParamsInvalid'))
       return
     }
   }
@@ -697,7 +718,7 @@ const saveLLMModelSettings = async () => {
     try {
       capabilities = JSON.parse(llmModelSettings.value.capabilitiesText)
     } catch (e) {
-      ElMessage.warning('能力配置 JSON 格式错误')
+      ElMessage.warning(t('settings.llm.capabilitiesInvalid'))
       return
     }
   }
@@ -740,12 +761,12 @@ const saveLLMModelSettings = async () => {
     }
 
     if (!response.ok) {
-      throw new Error('保存LLM模型失败')
+      throw new Error(`HTTP ${response.status}`)
     }
 
     await checkBizOk(response)
     ElMessage.success({
-      message: currentLLMModel.value ? 'LLM模型更新成功' : 'LLM模型添加成功',
+      message: currentLLMModel.value ? t('settings.llm.modelUpdated') : t('settings.llm.modelAdded'),
       duration: 700
     })
     llmModelDialogVisible.value = false
@@ -753,12 +774,12 @@ const saveLLMModelSettings = async () => {
     await fetchLLMModels()
   } catch (error) {
     ElMessage.error({
-      message: `保存LLM模型失败: ${error.message}`,
+      message: t('settings.llm.saveModelFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('保存LLM模型失败:', error)
+    console.error('save llm model failed:', error)
   } finally {
     llmModelLoading.value = false
   }
@@ -767,9 +788,9 @@ const saveLLMModelSettings = async () => {
 // 删除LLM模型
 const deleteLLMModel = async (model) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个 LLM 模型吗？', '提示', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(t('settings.llm.deleteModelConfirm'), t('settings.llm.tipTitle'), {
+      confirmButtonText: t('settings.llm.delete'),
+      cancelButtonText: t('settings.llm.cancel'),
       type: 'warning'
     })
   } catch {
@@ -786,23 +807,23 @@ const deleteLLMModel = async (model) => {
     })
 
     if (!response.ok) {
-      throw new Error('删除LLM模型失败')
+      throw new Error(`HTTP ${response.status}`)
     }
 
     ElMessage.success({
-      message: 'LLM模型删除成功',
+      message: t('settings.llm.modelDeleted'),
       duration: 700
     })
     // 重新获取LLM模型列表
     await fetchLLMModels()
   } catch (error) {
     ElMessage.error({
-      message: `删除LLM模型失败: ${error.message}`,
+      message: t('settings.llm.deleteModelFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('删除LLM模型失败:', error)
+    console.error('delete llm model failed:', error)
   } finally {
     llmModelLoading.value = false
   }
@@ -820,22 +841,24 @@ const provisionLLMModel = async (model) => {
       }
     })
     if (!response.ok) {
-      throw new Error('启用失败')
+      throw new Error(`HTTP ${response.status}`)
     }
     const data = await checkBizOk(response)
     ElMessage.success({
-      message: `模型「${model.name}」已启用` + (data?.data?.gateway_id ? `（网关ID: ${data.data.gateway_id}）` : ''),
+      message: data?.data?.gateway_id
+        ? t('settings.llm.provisionSucceededWithGateway', { name: model.name, id: data.data.gateway_id })
+        : t('settings.llm.provisionSucceeded', { name: model.name }),
       duration: 1500
     })
     await fetchLLMModels()
   } catch (error) {
     ElMessage.error({
-      message: `启用模型失败: ${error.message}`,
+      message: t('settings.llm.provisionModelFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('启用模型失败:', error)
+    console.error('provision llm model failed:', error)
   } finally {
     model._provisioning = false
   }
@@ -844,9 +867,9 @@ const provisionLLMModel = async (model) => {
 // 禁用 LLM 模型（Deprovision：从 LiteLLM 网关删除并清空 gateway_id）
 const deprovisionLLMModel = async (model) => {
   try {
-    await ElMessageBox.confirm(`确定要禁用模型「${model.name}」吗？禁用后该模型将无法用于推理调用。`, '提示', {
-      confirmButtonText: '禁用',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(t('settings.llm.deprovisionConfirm', { name: model.name }), t('settings.llm.tipTitle'), {
+      confirmButtonText: t('settings.llm.disable'),
+      cancelButtonText: t('settings.llm.cancel'),
       type: 'warning'
     })
   } catch {
@@ -862,22 +885,22 @@ const deprovisionLLMModel = async (model) => {
       }
     })
     if (!response.ok) {
-      throw new Error('禁用失败')
+      throw new Error(`HTTP ${response.status}`)
     }
     await checkBizOk(response)
     ElMessage.success({
-      message: `模型「${model.name}」已禁用`,
+      message: t('settings.llm.deprovisionSucceeded', { name: model.name }),
       duration: 1500
     })
     await fetchLLMModels()
   } catch (error) {
     ElMessage.error({
-      message: `禁用模型失败: ${error.message}`,
+      message: t('settings.llm.deprovisionModelFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('禁用模型失败:', error)
+    console.error('deprovision llm model failed:', error)
   } finally {
     model._deprovisioning = false
   }
@@ -887,11 +910,11 @@ const deprovisionLLMModel = async (model) => {
 const deprovisionAllLLMModels = async () => {
   try {
     await ElMessageBox.confirm(
-      '确定要注销当前租户下的全部 LLM 模型吗？注销后这些模型将无法用于推理调用，且需重新启用才能恢复。',
-      '全部注销',
+      t('settings.llm.deprovisionAllConfirm'),
+      t('settings.llm.deprovisionAll'),
       {
-        confirmButtonText: '全部注销',
-        cancelButtonText: '取消',
+        confirmButtonText: t('settings.llm.deprovisionAll'),
+        cancelButtonText: t('settings.llm.cancel'),
         type: 'warning'
       }
     )
@@ -908,23 +931,23 @@ const deprovisionAllLLMModels = async () => {
       }
     })
     if (!response.ok) {
-      throw new Error('全部注销失败')
+      throw new Error(`HTTP ${response.status}`)
     }
     const data = await checkBizOk(response)
     const count = data?.data?.count ?? 0
     ElMessage.success({
-      message: `已注销 ${count} 个 LLM 模型`,
+      message: t('settings.llm.deprovisionAllSucceeded', { n: count }),
       duration: 1500
     })
     await fetchLLMModels()
   } catch (error) {
     ElMessage.error({
-      message: `全部注销失败: ${error.message}`,
+      message: t('settings.llm.deprovisionAllFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('全部注销失败:', error)
+    console.error('deprovision all llm models failed:', error)
   } finally {
     deprovisionAllLoading.value = false
   }
@@ -934,11 +957,11 @@ const deprovisionAllLLMModels = async () => {
 const syncLLMModels = async () => {
   try {
     await ElMessageBox.confirm(
-      '将逐个检查已启用模型：网关上缺失的注册过去，配置有变化则覆盖；并删除网关上本租户多余（本地已无引用）的记录。未启用的模型只列出、不注册。确定继续？',
-      '同步到 LiteLLM',
+      t('settings.llm.syncConfirm'),
+      t('settings.llm.syncTitle'),
       {
-        confirmButtonText: '同步',
-        cancelButtonText: '取消',
+        confirmButtonText: t('settings.llm.sync'),
+        cancelButtonText: t('settings.llm.cancel'),
         type: 'warning'
       }
     )
@@ -955,13 +978,18 @@ const syncLLMModels = async () => {
       }
     })
     if (!response.ok) {
-      throw new Error('同步失败')
+      throw new Error(`HTTP ${response.status}`)
     }
     const data = await checkBizOk(response)
     const r = data?.data || {}
     const skipped = r.skipped || []
     const errors = r.errors || []
-    const summary = `新建 ${r.created || 0} 个 · 更新 ${r.updated || 0} 个 · 一致 ${r.unchanged || 0} 个 · 删除多余 ${r.deleted || 0} 个`
+    const summary = t('settings.llm.syncSummary', {
+      created: r.created || 0,
+      updated: r.updated || 0,
+      unchanged: r.unchanged || 0,
+      deleted: r.deleted || 0
+    })
 
     if (errors.length) {
       // 有失败项时用弹窗展示明细；动态内容先转义，避免模型名里的尖括号被当 HTML
@@ -970,19 +998,23 @@ const syncLLMModels = async () => {
       ))
       const parts = [`<b>${esc(summary)}</b>`]
       if (skipped.length) {
-        parts.push(`<br>已跳过 ${skipped.length} 个未启用模型：`)
-        skipped.forEach((s) => parts.push(`<br>· ${esc(s.model)}（${esc(s.reason)}）`))
+        parts.push(t('settings.llm.syncSkippedDetail', { n: skipped.length }))
+        skipped.forEach((s) => parts.push(t('settings.llm.syncSkippedItem', {
+          model: esc(s.model), reason: esc(s.reason)
+        })))
       }
-      parts.push(`<br><br>失败 ${errors.length} 个：`)
-      errors.forEach((e) => parts.push(`<br>· ${esc(e.model)}：${esc(e.error)}`))
-      ElMessageBox.alert(parts.join(''), '同步完成（有失败项）', {
-        confirmButtonText: '知道了',
+      parts.push(t('settings.llm.syncErrorDetail', { n: errors.length }))
+      errors.forEach((e) => parts.push(t('settings.llm.syncErrorItem', {
+        model: esc(e.model), error: esc(e.error)
+      })))
+      ElMessageBox.alert(parts.join(''), t('settings.llm.syncDoneWithErrors'), {
+        confirmButtonText: t('settings.llm.gotIt'),
         type: 'warning',
         dangerouslyUseHTMLString: true
       }).catch(() => {})
     } else if (skipped.length) {
       ElMessage.success({
-        message: `${summary}；跳过 ${skipped.length} 个未启用模型`,
+        message: t('settings.llm.syncSummaryWithSkipped', { summary, n: skipped.length }),
         duration: 3000
       })
     } else {
@@ -994,12 +1026,12 @@ const syncLLMModels = async () => {
     await fetchLLMModels()
   } catch (error) {
     ElMessage.error({
-      message: `同步失败: ${error.message}`,
+      message: t('settings.llm.syncFailed', { msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error('同步失败:', error)
+    console.error('sync llm models failed:', error)
   } finally {
     syncLLMLoading.value = false
   }

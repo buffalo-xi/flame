@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -22,7 +22,7 @@
         <!-- 输入变量配置 -->
         <div class="props-section">
           <div class="section-title">
-            <span>输入变量</span>
+            <span>{{ t('flow.common.inputVars') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddInputVariable">
               <el-icon><Plus /></el-icon>
             </button>
@@ -30,7 +30,7 @@
           
           <div class="input-variables-list">
             <div v-if="Object.keys(inputVariables).length === 0" class="input-empty-state">
-              <p>暂无输入变量</p>
+              <p>{{ t('flow.common.noInputVars') }}</p>
             </div>
             
             <div
@@ -44,7 +44,7 @@
                 class="input-variable-name-input"
                 @focus="handleInputVariableFocus(name, name)"
                 @blur="handleUpdateInputVariableName(name, $event.target.value)"
-                placeholder="变量名"
+                :placeholder="t('flow.common.varName')"
               />
               <div class="input-variable-content">
                 <button 
@@ -71,7 +71,7 @@
                     </template>
                   </template>
                   <template v-else>
-                    选择变量
+                    {{ t('flow.common.selectVar') }}
                   </template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteInputVariable(name)">
@@ -85,7 +85,7 @@
         <!-- 分支列表 -->
         <div class="props-section">
           <div class="section-title">
-            <span>分支列表</span>
+            <span>{{ t('flow.branchNode.listTitle') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddBranch">
               <el-icon><Plus /></el-icon>
             </button>
@@ -93,7 +93,7 @@
 
           <div class="branches-list">
             <div v-if="branches.length === 0" class="branches-empty-state">
-              <p>暂无分支，请添加分支</p>
+              <p>{{ t('flow.branchNode.noBranches') }}</p>
             </div>
 
             <div
@@ -107,7 +107,7 @@
                   class="branch-label-input"
                   v-model="branch.label"
                   @blur="saveBranches"
-                  placeholder="输入分支名称"
+                  :placeholder="t('flow.branchNode.namePlaceholder')"
                 />
                 <button class="branch-delete-btn" @click="handleDeleteBranch(index)">
                   <el-icon><Delete /></el-icon>
@@ -120,16 +120,16 @@
                     class="prop-textarea"
                     v-model="branch.condition"
                     @blur="saveBranches"
-                    placeholder="输入条件脚本...&#10;脚本应返回 true 或 false&#10;示例中使用的输入变量会自动注入"
+                    :placeholder="t('flow.branchNode.conditionPlaceholder')"
                   ></textarea>
                 </div>
                 <div class="prop-group-horizontal">
                   <div class="prop-item">
-                    <label class="prop-label">排他</label>
+                    <label class="prop-label">{{ t('flow.branchNode.exclusive') }}</label>
                     <el-switch v-model="branch.exclusive" @change="saveBranches" />
                   </div>
                   <div class="prop-item">
-                    <span class="exclusive-hint">命中并执行后立即结束本节点，不再尝试后续分支与默认分支（默认开启）</span>
+                    <span class="exclusive-hint">{{ t('flow.branchNode.exclusiveHint') }}</span>
                   </div>
                 </div>
               </div>
@@ -140,29 +140,29 @@
         <!-- 默认分支说明 -->
         <div class="props-section">
           <div class="section-title">
-            <span>默认分支</span>
+            <span>{{ t('flow.node.branch.defaultBranch') }}</span>
           </div>
           <div class="default-branch-info">
-            <p>当所有分支的条件都不满足时，将执行默认分支。</p>
-            <p class="default-branch-note">默认分支是该节点的收尾链：非排他分支命中后仍会继续比对，最终执行默认分支；开启「排他」的分支命中后立即结束本节点，后续分支与默认分支都不会执行。</p>
+            <p>{{ t('flow.branchNode.defaultHint1') }}</p>
+            <p class="default-branch-note">{{ t('flow.branchNode.defaultHint2') }}</p>
           </div>
         </div>
 
         <!-- 脚本配置 -->
         <div class="props-section">
           <div class="section-title">
-            <span>脚本配置</span>
+            <span>{{ t('flow.branchNode.scriptSection') }}</span>
           </div>
           
           <div class="prop-group-horizontal">
             <div class="prop-item">
-              <label class="prop-label">脚本语言</label>
+              <label class="prop-label">{{ t('flow.common.scriptLanguage') }}</label>
               <el-select v-model="conditionLanguage" class="prop-select" @change="handleLanguageChange">
                 <el-option v-for="lang in scriptLanguages" :key="lang" :label="lang" :value="lang" />
               </el-select>
             </div>
             <div class="prop-item">
-              <label class="prop-label">超时控制</label>
+              <label class="prop-label">{{ t('flow.common.timeout') }}</label>
               <el-switch
                 v-model="timeoutEnabled"
                 @change="handleTimeoutEnabledChange"
@@ -177,7 +177,7 @@
                 :max="3600"
                 placeholder="30"
               />
-              <span v-if="timeoutEnabled" class="unit-text">秒</span>
+              <span v-if="timeoutEnabled" class="unit-text">{{ t('flow.common.seconds') }}</span>
             </div>
           </div>
         </div>
@@ -199,6 +199,9 @@ import random from '@/tenant/utils/random'
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {
@@ -325,7 +328,7 @@ const generateBranchId = () => {
 const handleAddBranch = () => {
   branches.value.push({
     id: generateBranchId(),
-    label: `分支 ${branches.value.length + 1}`,
+    label: t('flow.node.branch.childName', { n: branches.value.length + 1 }),
     condition: '',
     exclusive: true
   })

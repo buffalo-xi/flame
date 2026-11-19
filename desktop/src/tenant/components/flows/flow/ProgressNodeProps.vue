@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -21,7 +21,7 @@
       <div v-if="activeTab === 'settings'" class="settings-panel">
         <div class="props-section">
           <div class="section-title">
-            <span>输入变量</span>
+            <span>{{ t('flow.common.inputVars') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddInputVariable">
               <el-icon><Plus /></el-icon>
             </button>
@@ -29,7 +29,7 @@
           
           <div class="input-variables-list">
             <div v-if="Object.keys(inputVariables).length === 0" class="input-empty-state">
-              <p>暂无输入变量</p>
+              <p>{{ t('flow.common.noInputVars') }}</p>
             </div>
             
             <div
@@ -43,7 +43,7 @@
                 class="input-variable-name-input"
                 @focus="handleInputVariableFocus(name)"
                 @blur="handleUpdateInputVariableName(name, $event.target.value)"
-                placeholder="变量名"
+                :placeholder="t('flow.common.varName')"
               />
               <div class="input-variable-content">
                 <button 
@@ -70,7 +70,7 @@
                     </template>
                   </template>
                   <template v-else>
-                    选择变量
+                    {{ t('flow.common.selectVar') }}
                   </template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteInputVariable(name)">
@@ -84,10 +84,10 @@
         <div class="props-section">
           <div class="prop-group">
             <div class="prop-item">
-              <label class="prop-label">外发类型</label>
+              <label class="prop-label">{{ t('flow.progressNode.emitType') }}</label>
               <el-select v-model="progressCategory" class="prop-select" @change="handleCategoryChange">
-                <el-option label="普通文本（text）" value="text" />
-                <el-option label="思考（thinking）" value="thinking" />
+                <el-option :label="t('flow.emitCategory.text')" value="text" />
+                <el-option :label="t('flow.emitCategory.thinking')" value="thinking" />
               </el-select>
             </div>
           </div>
@@ -97,19 +97,19 @@
               v-model="codeContent"
               @keydown="handleCodeKeydown"
               @blur="handleCodeChange"
-              placeholder="输入进度更新代码，返回字符串即可推送到进度通道..."
+              :placeholder="t('flow.progressNode.scriptPlaceholder')"
             ></textarea>
           </div>
 
           <div class="prop-group-horizontal">
             <div class="prop-item">
-              <label class="prop-label">语言</label>
+              <label class="prop-label">{{ t('flow.common.language') }}</label>
               <el-select v-model="codeLanguage" class="prop-select" @change="handleLanguageChange">
                 <el-option v-for="lang in codeScriptLanguages" :key="lang" :label="lang" :value="lang" />
               </el-select>
             </div>
             <div class="prop-item">
-              <label class="prop-label">超时控制</label>
+              <label class="prop-label">{{ t('flow.common.timeout') }}</label>
               <el-switch
                 v-model="timeoutEnabled"
                 @change="handleTimeoutEnabledChange"
@@ -124,7 +124,7 @@
                 :max="3600"
                 placeholder="30"
               />
-              <span v-if="timeoutEnabled" class="unit-text">秒</span>
+              <span v-if="timeoutEnabled" class="unit-text">{{ t('flow.common.seconds') }}</span>
             </div>
           </div>
         </div>
@@ -145,6 +145,9 @@ import { Plus, Delete, Timer, Help, Link, MagicStick, Lightning, Promotion, Refr
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

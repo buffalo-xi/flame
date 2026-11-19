@@ -3,37 +3,37 @@
     <div class="binding-panel-header">
       <button class="binding-back-btn" @click="handleBack">
         <el-icon><ArrowLeft /></el-icon>
-        <span>返回</span>
+        <span>{{ t('flow.binding.back') }}</span>
       </button>
-      <span class="binding-panel-title"> {{ varName }} <span class="binding-panel-type">({{ varType }}) 流式外发绑定</span></span>
+      <span class="binding-panel-title"> {{ varName }} <span class="binding-panel-type">({{ varType }}) {{ t('flow.binding.title') }}</span></span>
     </div>
     
     <!-- Progress 通道 -->
     <div class="channel-section">
       <div class="channel-row">
-        <span class="channel-label">进度输出（progress）</span>
+        <span class="channel-label">{{ t('flow.binding.progressChannel') }}</span>
         <el-switch v-model="progressEnabled" @change="handleChannelToggle('progress')" />
       </div>
-      <div class="channel-hint">开启后该变量每次变化都逐条作为进度外发，不进入最终结果</div>
+      <div class="channel-hint">{{ t('flow.binding.progressHint') }}</div>
       <div v-if="progressEnabled" class="channel-config">
         <div class="channel-row">
-          <span class="channel-label">类型</span>
+          <span class="channel-label">{{ t('flow.binding.category') }}</span>
           <el-select v-model="progressBinding.category" size="small" style="width: 170px">
-            <el-option label="普通文本（text）" value="text" />
-            <el-option label="思考（thinking）" value="thinking" />
+            <el-option :label="t('flow.emitCategory.text')" value="text" />
+            <el-option :label="t('flow.emitCategory.thinking')" value="thinking" />
           </el-select>
         </div>
-        <div class="channel-hint">决定通知里的 _meta.category；选「思考」时客户端可折叠展示</div>
+        <div class="channel-hint">{{ t('flow.binding.categoryHint') }}</div>
         <div class="transform-section">
           <div class="binding-field-row">
             <div class="binding-field binding-field-lang">
-              <label>语言</label>
-              <el-select v-model="progressBinding.transform.lang" placeholder="选择脚本语言" size="small">
+              <label>{{ t('flow.common.language') }}</label>
+              <el-select v-model="progressBinding.transform.lang" :placeholder="t('flow.binding.languagePlaceholder')" size="small">
                 <el-option v-for="lang in bindingLanguages" :key="lang" :label="langLabel(lang)" :value="lang" />
               </el-select>
             </div>
             <div class="binding-field binding-field-timeout">
-              <label>超时控制</label>
+              <label>{{ t('flow.common.timeout') }}</label>
               <el-switch v-model="progressBinding.transform.timeout.enabled" :disabled="progressBinding.transform.lang === 'template'" />
               <el-input
                 v-if="progressBinding.transform.timeout.enabled"
@@ -44,11 +44,11 @@
                 :max="3600"
                 placeholder="30"
               />
-              <span v-if="progressBinding.transform.timeout.enabled" class="unit-text">秒</span>
+              <span v-if="progressBinding.transform.timeout.enabled" class="unit-text">{{ t('flow.common.seconds') }}</span>
             </div>
           </div>
           <div class="binding-field binding-field-script">
-            <label>脚本</label>
+            <label>{{ t('flow.common.script') }}</label>
             <textarea
               v-model="progressBinding.transform.script"
               class="script-textarea"
@@ -57,21 +57,21 @@
           </div>
           <div class="inputs-section">
             <div class="inputs-header">
-              <span>输入变量</span>
+              <span>{{ t('flow.common.inputVars') }}</span>
               <button class="add-input-btn" @click="addInputParam(progressBinding)">
                 <el-icon><Plus /></el-icon>
               </button>
             </div>
             <div class="binding-input-variables-list">
               <div v-for="(variable, name) in progressBinding.transform.inputs" :key="name" class="binding-input-variable-row">
-                <input type="text" :value="name" class="binding-input-name" @blur="renameInputKey(progressBinding, name, $event.target.value)" placeholder="变量名" />
+                <input type="text" :value="name" class="binding-input-name" @blur="renameInputKey(progressBinding, name, $event.target.value)" :placeholder="t('flow.common.varName')" />
                 <div class="binding-input-content">
                   <button class="show-content-btn binding-input-btn" @click="handleShowVariableSelect(name, $event, progressBinding)">
                     <template v-if="variable.source_key">
                       <span class="input-type-badge" :class="getTypeBadgeClass(variable.type)">{{ getTypeBadgeIcon(variable.type) }}</span>
                       <span class="input-var-key">{{ variable.source_key }}</span>
                     </template>
-                    <template v-else>选择变量</template>
+                    <template v-else>{{ t('flow.common.selectVar') }}</template>
                   </button>
                   <button class="input-delete-btn" @click="removeInputParam(progressBinding, name)">
                     <el-icon><Delete /></el-icon>
@@ -79,7 +79,7 @@
                 </div>
               </div>
               <div v-if="Object.keys(progressBinding.transform.inputs || {}).length === 0" class="inputs-empty">
-                未配置输入变量（{{ varName }} 会自动注入）
+                {{ t('flow.binding.noInputs', { name: varName }) }}
               </div>
             </div>
           </div>
@@ -90,26 +90,26 @@
     <!-- Result 通道 -->
     <div class="channel-section">
       <div class="channel-row">
-        <span class="channel-label">结果输出（result）</span>
+        <span class="channel-label">{{ t('flow.binding.resultChannel') }}</span>
         <el-switch v-model="resultEnabled" @change="handleChannelToggle('result')" />
       </div>
-      <div class="channel-hint">开启后该变量的变化会累积进最终结果（tool 返回值 / 运行记录）；关闭即解除该通道绑定</div>
+      <div class="channel-hint">{{ t('flow.binding.resultHint') }}</div>
       <div v-if="resultEnabled" class="channel-config">
         <div class="channel-row">
-          <span class="channel-label">流式外发</span>
+          <span class="channel-label">{{ t('flow.binding.stream') }}</span>
           <el-switch v-model="resultBinding.stream" size="small" />
         </div>
-        <div class="channel-hint">关闭后只累积进最终结果，不逐条推送（等价于 result 节点关掉「随结果流外发」）</div>
+        <div class="channel-hint">{{ t('flow.binding.streamHint') }}</div>
         <div class="transform-section">
           <div class="binding-field-row">
             <div class="binding-field binding-field-lang">
-              <label>语言</label>
-              <el-select v-model="resultBinding.transform.lang" placeholder="选择脚本语言" size="small">
+              <label>{{ t('flow.common.language') }}</label>
+              <el-select v-model="resultBinding.transform.lang" :placeholder="t('flow.binding.languagePlaceholder')" size="small">
                 <el-option v-for="lang in bindingLanguages" :key="lang" :label="langLabel(lang)" :value="lang" />
               </el-select>
             </div>
             <div class="binding-field binding-field-timeout">
-              <label>超时控制</label>
+              <label>{{ t('flow.common.timeout') }}</label>
               <el-switch v-model="resultBinding.transform.timeout.enabled" :disabled="resultBinding.transform.lang === 'template'" />
               <el-input
                 v-if="resultBinding.transform.timeout.enabled"
@@ -120,11 +120,11 @@
                 :max="3600"
                 placeholder="30"
               />
-              <span v-if="resultBinding.transform.timeout.enabled" class="unit-text">秒</span>
+              <span v-if="resultBinding.transform.timeout.enabled" class="unit-text">{{ t('flow.common.seconds') }}</span>
             </div>
           </div>
           <div class="binding-field binding-field-script">
-            <label>脚本</label>
+            <label>{{ t('flow.common.script') }}</label>
             <textarea
               v-model="resultBinding.transform.script"
               class="script-textarea"
@@ -133,21 +133,21 @@
           </div>
           <div class="inputs-section">
             <div class="inputs-header">
-              <span>输入变量</span>
+              <span>{{ t('flow.common.inputVars') }}</span>
               <button class="add-input-btn" @click="addInputParam(resultBinding)">
                 <el-icon><Plus /></el-icon>
               </button>
             </div>
             <div class="binding-input-variables-list">
               <div v-for="(variable, name) in resultBinding.transform.inputs" :key="name" class="binding-input-variable-row">
-                <input type="text" :value="name" class="binding-input-name" @blur="renameInputKey(resultBinding, name, $event.target.value)" placeholder="变量名" />
+                <input type="text" :value="name" class="binding-input-name" @blur="renameInputKey(resultBinding, name, $event.target.value)" :placeholder="t('flow.common.varName')" />
                 <div class="binding-input-content">
                   <button class="show-content-btn binding-input-btn" @click="handleShowVariableSelect(name, $event, resultBinding)">
                     <template v-if="variable.source_key">
                       <span class="input-type-badge" :class="getTypeBadgeClass(variable.type)">{{ getTypeBadgeIcon(variable.type) }}</span>
                       <span class="input-var-key">{{ variable.source_key }}</span>
                     </template>
-                    <template v-else>选择变量</template>
+                    <template v-else>{{ t('flow.common.selectVar') }}</template>
                   </button>
                   <button class="input-delete-btn" @click="removeInputParam(resultBinding, name)">
                     <el-icon><Delete /></el-icon>
@@ -155,7 +155,7 @@
                 </div>
               </div>
               <div v-if="Object.keys(resultBinding.transform.inputs || {}).length === 0" class="inputs-empty">
-                未配置输入变量（{{ varName }} 会自动注入）
+                {{ t('flow.binding.noInputs', { name: varName }) }}
               </div>
             </div>
           </div>
@@ -169,6 +169,9 @@
 <script setup>
 import { ref, watch, inject, computed, nextTick } from 'vue'
 import { Plus, Delete, ArrowLeft } from '@element-plus/icons-vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   varName: { type: String, default: '' },

@@ -5,35 +5,35 @@
       <div class="am-tabs">
         <button class="am-tab" :class="{ active: tab === 'market' }" @click="switchTab('market')">
           <el-icon><Shop /></el-icon>
-          本地市场
+          {{ t('assetMarket.tabMarket') }}
           <span class="am-count">
             ({{ market.length < marketTotal ? `${market.length}/${marketTotal}` : marketTotal }})
           </span>
         </button>
         <button class="am-tab" :class="{ active: tab === 'remote' }" @click="switchTab('remote')">
           <el-icon><Connection /></el-icon>
-          远端市场
+          {{ t('assetMarket.tabRemote') }}
           <span class="am-count">({{ remoteCount }})</span>
         </button>
         <button class="am-tab" :class="{ active: tab === 'mine' }" @click="switchTab('mine')">
           <el-icon><Upload /></el-icon>
-          我的资产
+          {{ t('assetMarket.tabMine') }}
           <span class="am-count">({{ mine.length }})</span>
         </button>
         <button class="am-tab" :class="{ active: tab === 'installs' }" @click="switchTab('installs')">
           <el-icon><Download /></el-icon>
-          安装记录
+          {{ t('assetMarket.tabInstalls') }}
           <span class="am-count">({{ installs.length }})</span>
         </button>
       </div>
       <div class="am-header-actions">
         <el-button size="small" :loading="loading" @click="reload">
           <el-icon><Refresh /></el-icon>
-          刷新
+          {{ t('assetMarket.refresh') }}
         </el-button>
         <el-button size="small" type="primary" @click="openListing">
           <el-icon><Plus /></el-icon>
-          上架资产
+          {{ t('assetMarket.listNew') }}
         </el-button>
       </div>
     </div>
@@ -56,13 +56,13 @@
             class="am-origin"
             size="small"
             clearable
-            placeholder="全部来源"
+            :placeholder="t('assetMarket.originAll')"
             @change="loadMarket()"
           >
             <el-option
               v-for="o in origins"
               :key="o.server"
-              :label="`${o.label}（${o.count}）`"
+              :label="t('assetMarket.originOption', { label: o.label, count: o.count })"
               :value="o.server || 'local'"
             />
           </el-select>
@@ -71,7 +71,7 @@
             class="am-search"
             size="small"
             clearable
-            placeholder="搜索名称 / 描述，回车搜索"
+            :placeholder="t('assetMarket.searchPlaceholder')"
             @keyup.enter="loadMarket()"
             @clear="loadMarket()"
           >
@@ -79,11 +79,11 @@
           </el-input>
         </div>
 
-        <div v-if="loading && !market.length" class="am-hint">加载中…</div>
+        <div v-if="loading && !market.length" class="am-hint">{{ t('common.loading') }}</div>
         <div v-else-if="loadError" class="am-hint am-hint--error">{{ loadError }}</div>
         <el-empty
           v-else-if="!market.length"
-          description="没有可安装的资产：要么已经装过了，要么提供方还没通过平台审核"
+          :description="t('assetMarket.emptyMarket')"
         />
         <!-- 短卡片网格：一行多张、随容器宽度自动换列，不要横向铺满整行的长条 -->
         <div v-else class="am-cards">
@@ -94,25 +94,25 @@
               <span class="am-ver">v{{ a.build }}</span>
             </div>
             <div v-if="a.installed || a.upgradable" class="am-badges">
-              <el-tag v-if="a.installed" size="small" type="success" effect="plain">已安装</el-tag>
-              <el-tag v-if="a.upgradable" size="small" type="warning" effect="plain">有新的快照</el-tag>
+              <el-tag v-if="a.installed" size="small" type="success" effect="plain">{{ t('assetMarket.tagInstalled') }}</el-tag>
+              <el-tag v-if="a.upgradable" size="small" type="warning" effect="plain">{{ t('assetMarket.tagUpgradable') }}</el-tag>
             </div>
-            <div class="am-desc">{{ a.description || '（提供方没有填描述）' }}</div>
+            <div class="am-desc">{{ a.description || t('assetMarket.noDescription') }}</div>
             <div class="am-meta">
-              <span>{{ a.file_count }} 个文件 · {{ fmtSize(a.total_size) }}</span>
+              <span>{{ t('assetMarket.filesAndSize', { n: a.file_count, size: fmtSize(a.total_size) }) }}</span>
               <span v-if="depsSummary(a.deps)" class="am-meta-deps">{{ depsSummary(a.deps) }}</span>
             </div>
             <div class="am-meta">{{ listerLabel(a) }}</div>
             <div class="am-card-actions">
-              <el-button size="small" @click="openDetail(a)">详情</el-button>
-              <el-button size="small" type="primary" @click="openInstall(a)">安装</el-button>
+              <el-button size="small" @click="openDetail(a)">{{ t('assetMarket.detail') }}</el-button>
+              <el-button size="small" type="primary" @click="openInstall(a)">{{ t('assetAction.install') }}</el-button>
             </div>
           </div>
         </div>
         <!-- 分页：只给「加载更多」，不做页码条——顺序是 updated_at，翻页找比搜索慢 -->
         <div v-if="hasMore" class="am-more">
           <el-button size="small" :loading="loadingMore" @click="loadMoreMarket">
-            加载更多（已显示 {{ market.length }} / {{ marketTotal }}）
+            {{ t('assetMarket.loadMore', { shown: market.length, total: marketTotal }) }}
           </el-button>
         </div>
       </div>
@@ -122,11 +122,7 @@
            不替租户逐条导入；点「拉取并安装」那一刻才下载到本机，并按对方的 install_policy
            决定是直接可用，还是先进本机待审（等平台审核通过）。 -->
       <div v-show="tab === 'remote'" class="am-pane">
-        <div class="am-tip">
-          这些资产<strong>还没进本机市场</strong>：平台只开通了「你能看哪个站」，不替你导入。
-          点「拉取并安装」才从对方站下载成本机的平台资产；对方策略是「需审核」时，
-          拉下来先进本机待审，平台通过后才真正装进来。
-        </div>
+        <div class="am-tip">{{ t('assetMarket.remoteTip') }}</div>
         <div class="am-filters">
           <button
             v-for="f in kindFilters"
@@ -141,7 +137,7 @@
             class="am-origin"
             size="small"
             clearable
-            placeholder="全部站点"
+            :placeholder="t('assetMarket.peerAll')"
             @change="loadRemote()"
           >
             <!-- 下拉项里带站点地址，选中后仍只回显站名（:label 只用于回显与过滤）。
@@ -163,7 +159,7 @@
             class="am-search"
             size="small"
             clearable
-            placeholder="搜索名称 / 描述，回车搜索"
+            :placeholder="t('assetMarket.searchPlaceholder')"
             @keyup.enter="loadRemote()"
             @clear="loadRemote()"
           >
@@ -171,11 +167,11 @@
           </el-input>
         </div>
 
-        <div v-if="remoteLoading && !remotePeers.length" class="am-hint">加载中…</div>
+        <div v-if="remoteLoading && !remotePeers.length" class="am-hint">{{ t('common.loading') }}</div>
         <div v-else-if="remoteError" class="am-hint am-hint--error">{{ remoteError }}</div>
         <el-empty
           v-else-if="!remotePeers.length"
-          description="平台还没给本租户开通远端市场（或对端暂时不可达）"
+          :description="t('assetMarket.remoteEmpty')"
         />
         <div v-else class="am-remote-blocks">
           <section v-for="p in remotePeers" :key="p.peer" class="am-remote-block">
@@ -192,20 +188,21 @@
                 size="small"
                 :type="p.install_policy === 'auto' ? 'warning' : 'info'"
                 effect="plain"
-              >{{ p.install_policy === 'auto' ? '拉取后直接可用' : '拉取后需平台审核' }}</el-tag>
+              >{{ p.install_policy === 'auto' ? t('assetMarket.policyAuto') : t('assetMarket.policyReview') }}</el-tag>
               <span class="am-cell-sub">
-                {{ p.count }} 个资产<template v-if="p.truncated">（只显示前 {{ p.items.length }} 条，用搜索收窄）</template>
+                {{ t('assetMarket.peerAssets', { n: p.count }) }}<template
+                  v-if="p.truncated">{{ t('assetMarket.peerTruncated', { shown: p.items.length }) }}</template>
               </span>
               <span class="am-cell-sub am-remote-fold">
-                {{ collapsedPeers[p.peer] ? '展开' : '收起' }}
+                {{ collapsedPeers[p.peer] ? t('common.expand') : t('common.collapse') }}
               </span>
             </div>
             <!-- 错误不跟着折叠：站挂了还要能一眼看到原因 -->
             <div v-if="p.error" class="am-hint am-hint--error">{{ p.error }}</div>
             <div v-else-if="collapsedPeers[p.peer]" class="am-cell-sub am-remote-folded">
-              已收起 {{ p.items.length }} 条
+              {{ t('assetMarket.peerFolded', { n: p.items.length }) }}
             </div>
-            <div v-else-if="!p.items.length" class="am-cell-sub">该站没有可拉取的资产</div>
+            <div v-else-if="!p.items.length" class="am-cell-sub">{{ t('assetMarket.peerEmpty') }}</div>
             <div v-else class="am-cards">
               <div v-for="a in p.items" :key="p.peer + ':' + a.id" class="am-card">
                 <div class="am-card-title">
@@ -215,22 +212,22 @@
                 </div>
                 <div v-if="a.local || a.installed" class="am-badges">
                   <el-tag v-if="a.local" size="small" type="info" effect="plain">
-                    已拉取 v{{ a.local.build }}
+                    {{ t('assetMarket.tagPulled', { build: a.local.build }) }}
                   </el-tag>
                   <el-tag v-if="a.local && a.local.status === 'pending'" size="small" type="warning" effect="plain">
-                    等平台审核
+                    {{ t('assetMarket.tagPendingReview') }}
                   </el-tag>
                   <el-tag v-if="a.installed" size="small" type="success" effect="plain">
-                    已安装<template v-if="a.installed_build"> v{{ a.installed_build }}</template>
+                    {{ t('assetMarket.tagInstalled') }}<template v-if="a.installed_build"> v{{ a.installed_build }}</template>
                   </el-tag>
-                  <el-tag v-if="a.stale" size="small" type="warning" effect="plain">远端有新版</el-tag>
+                  <el-tag v-if="a.stale" size="small" type="warning" effect="plain">{{ t('assetMarket.tagStale') }}</el-tag>
                 </div>
-                <div class="am-desc">{{ a.description || '（对方没有填描述）' }}</div>
+                <div class="am-desc">{{ a.description || t('assetMarket.remoteNoDescription') }}</div>
                 <div class="am-meta">
-                  <span>{{ a.file_count }} 个文件 · {{ fmtSize(a.total_size) }}</span>
+                  <span>{{ t('assetMarket.filesAndSize', { n: a.file_count, size: fmtSize(a.total_size) }) }}</span>
                   <span v-if="depsSummary(a.deps)" class="am-meta-deps">{{ depsSummary(a.deps) }}</span>
                 </div>
-                <div class="am-meta">来源：{{ p.peer }} 站</div>
+                <div class="am-meta">{{ t('assetMarket.listerSource', { peer: p.peer }) }}</div>
                 <div class="am-card-actions am-card-actions--show">
                   <el-button
                     size="small"
@@ -247,10 +244,7 @@
 
       <!-- ===== 我的资产 ===== -->
       <div v-show="tab === 'mine'" class="am-pane">
-        <div class="am-tip">
-          上架的是一份<strong>快照</strong>：其它租户可以安装，装完就是他们自己的实体，
-          与你的后续修改无关。再次上架同名资产，版本 +1（平台要求审核的租户会重新进入待审）。
-        </div>
+        <div class="am-tip">{{ t('assetMarket.mineTip') }}</div>
         <div class="am-toolbar">
           <el-button
             size="small"
@@ -258,21 +252,21 @@
             plain
             :disabled="!mine.some((m) => m.status !== 'listed')"
             @click="clearMine"
-          >清空未上架的资产</el-button>
+          >{{ t('assetMarket.clearUnlisted') }}</el-button>
         </div>
         <el-table v-loading="loading" :data="mine" size="small" style="width: 100%">
-          <el-table-column label="名称" min-width="180">
+          <el-table-column :label="t('assetMarket.colName')" min-width="180">
             <template #default="{ row }">
               <div class="am-cell-name">{{ row.display_name || row.name }}</div>
               <div class="am-cell-sub">{{ row.name }}</div>
             </template>
           </el-table-column>
-          <el-table-column label="类型" width="110">
+          <el-table-column :label="t('assetMarket.colKind')" width="110">
             <template #default="{ row }">
               <span class="am-kind" :class="'am-kind--' + row.kind">{{ kindLabel(row.kind) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="120">
+          <el-table-column :label="t('assetMarket.colStatus')" width="120">
             <template #default="{ row }">
               <el-tooltip v-if="row.review_note" :content="row.review_note" placement="top">
                 <el-tag size="small" :type="statusTagType(row.status)" effect="plain">{{ statusLabel(row.status) }}</el-tag>
@@ -280,16 +274,16 @@
               <el-tag v-else size="small" :type="statusTagType(row.status)" effect="plain">{{ statusLabel(row.status) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="快照" width="70">
+          <el-table-column :label="t('assetMarket.colBuild')" width="70">
             <template #default="{ row }">v{{ row.build }}</template>
           </el-table-column>
-          <el-table-column label="可见范围" width="100">
-            <template #default="{ row }">{{ row.visibility === 'allowlist' ? '部分租户' : '全部租户' }}</template>
+          <el-table-column :label="t('assetMarket.colVisibility')" width="100">
+            <template #default="{ row }">{{ row.visibility === 'allowlist' ? t('assetMarket.visibilityAllowlist') : t('assetMarket.visibilityAll') }}</template>
           </el-table-column>
-          <el-table-column label="更新时间" width="160">
+          <el-table-column :label="t('assetMarket.colUpdated')" width="160">
             <template #default="{ row }">{{ fmtTime(row.updated_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="140" fixed="right">
+          <el-table-column :label="t('assetMarket.colActions')" width="140" fixed="right">
             <template #default="{ row }">
               <el-button
                 v-if="row.status === 'pending'"
@@ -297,7 +291,7 @@
                 type="primary"
                 size="small"
                 @click="withdraw(row)"
-              >撤回</el-button>
+              >{{ t('assetMarket.withdraw') }}</el-button>
               <!-- 已通过的不能自己删：可能已经被别的租户装走，先让平台下架 -->
               <el-button
                 v-if="row.status !== 'listed'"
@@ -305,8 +299,8 @@
                 type="danger"
                 size="small"
                 @click="removeMine(row)"
-              >删除</el-button>
-              <span v-else class="am-cell-sub">平台下架</span>
+              >{{ t('common.delete') }}</el-button>
+              <span v-else class="am-cell-sub">{{ t('assetMarket.kickedByPlatform') }}</span>
             </template>
           </el-table-column>
         </el-table>
@@ -314,10 +308,7 @@
 
       <!-- ===== 安装记录 ===== -->
       <div v-show="tab === 'installs'" class="am-pane">
-        <div class="am-tip">
-          安装是<strong>复制</strong>：装完之后目标实体与资产快照无关，源租户改内容不会同步过来；
-          「有新的快照」只表示提供方又上架过一次，需要重新安装并自行合并。
-        </div>
+        <div class="am-tip">{{ t('assetMarket.installsTip') }}</div>
         <div class="am-toolbar">
           <el-button
             size="small"
@@ -325,36 +316,38 @@
             plain
             :disabled="!installs.length"
             @click="clearInstalls"
-          >清空安装记录</el-button>
+          >{{ t('assetMarket.clearInstalls') }}</el-button>
         </div>
         <el-table v-loading="loading" :data="installs" size="small" style="width: 100%">
-          <el-table-column label="资产" min-width="160">
+          <el-table-column :label="t('assetMarket.colAsset')" min-width="160">
             <template #default="{ row }">
               <div class="am-cell-name">{{ row.asset_name }}</div>
-              <div class="am-cell-sub">来源：{{ row.source_schema }}</div>
+              <div class="am-cell-sub">{{ t('assetMarket.colSource', { schema: row.source_schema }) }}</div>
             </template>
           </el-table-column>
-          <el-table-column label="类型" width="110">
+          <el-table-column :label="t('assetMarket.colKind')" width="110">
             <template #default="{ row }">
               <span class="am-kind" :class="'am-kind--' + row.kind">{{ kindLabel(row.kind) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="装成" min-width="140" prop="installed_name" />
-          <el-table-column label="快照" width="120">
+          <el-table-column :label="t('assetMarket.colInstalledAs')" min-width="140" prop="installed_name" />
+          <el-table-column :label="t('assetMarket.colBuild')" width="120">
             <template #default="{ row }">
               v{{ row.build }}
-              <el-tag v-if="row.upgradable" size="small" type="warning" effect="plain">最新 v{{ row.latest_build }}</el-tag>
+              <el-tag v-if="row.upgradable" size="small" type="warning" effect="plain">
+                {{ t('assetMarket.colLatest', { build: row.latest_build }) }}
+              </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="安装人" width="130">
+          <el-table-column :label="t('assetMarket.colInstaller')" width="130">
             <template #default="{ row }">{{ row.installed_by_name || row.installed_by || '—' }}</template>
           </el-table-column>
-          <el-table-column label="安装时间" width="160">
+          <el-table-column :label="t('assetMarket.colInstalledAt')" width="160">
             <template #default="{ row }">{{ fmtTime(row.installed_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="90" fixed="right">
+          <el-table-column :label="t('assetMarket.colActions')" width="90" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" link type="danger" @click="removeInstall(row)">删除</el-button>
+              <el-button size="small" link type="danger" @click="removeInstall(row)">{{ t('common.delete') }}</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -362,18 +355,20 @@
     </div>
 
     <!-- ===== 详情 ===== -->
-    <el-dialog v-model="detailVisible" :title="detail?.display_name || detail?.name || '资产详情'" width="620px">
+    <el-dialog v-model="detailVisible" :title="detail?.display_name || detail?.name || t('assetMarket.detailTitle')" width="620px">
       <div v-if="detail" class="am-detail">
         <div class="am-detail-row">
-          <span class="am-detail-key">类型</span>
+          <span class="am-detail-key">{{ t('assetMarket.detailKind') }}</span>
           <span class="am-kind" :class="'am-kind--' + detail.kind">{{ kindLabel(detail.kind) }}</span>
           <span class="am-ver">v{{ detail.build }}</span>
         </div>
         <div class="am-detail-row">
-          <span class="am-detail-key">{{ detail.listed_by?.origin?.server ? '来源' : '提供方' }}</span>
+          <span class="am-detail-key">
+            {{ detail.listed_by?.origin?.server ? t('assetMarket.detailSource') : t('assetMarket.detailLister') }}
+          </span>
           <span>
             <template v-if="detail.listed_by?.origin?.server">
-              从 {{ detail.listed_by.origin.server }} 站导入
+              {{ t('assetMarket.detailImportedFrom', { peer: detail.listed_by.origin.server }) }}
               <span v-if="detail.listed_by.origin.imported_at" class="am-detail-sub">
                 · {{ fmtTime(detail.listed_by.origin.imported_at) }}
               </span>
@@ -382,127 +377,121 @@
           </span>
         </div>
         <div class="am-detail-row">
-          <span class="am-detail-key">内容</span>
-          <span>{{ detail.file_count }} 个文件 · {{ fmtSize(detail.total_size) }}<template v-if="detail.entry"> · 入口 {{ detail.entry }}</template></span>
+          <span class="am-detail-key">{{ t('assetMarket.detailContent') }}</span>
+          <span>{{ t('assetMarket.filesAndSize', { n: detail.file_count, size: fmtSize(detail.total_size) }) }}<template
+            v-if="detail.entry">{{ t('assetMarket.detailEntry', { entry: detail.entry }) }}</template></span>
         </div>
         <div v-if="detail.description" class="am-detail-row">
-          <span class="am-detail-key">说明</span>
+          <span class="am-detail-key">{{ t('assetMarket.detailDesc') }}</span>
           <span class="am-detail-desc">{{ detail.description }}</span>
         </div>
         <div class="am-detail-row am-detail-row--top">
-          <span class="am-detail-key">依赖</span>
+          <span class="am-detail-key">{{ t('assetMarket.detailDeps') }}</span>
           <div class="am-detail-block">
-            <div v-if="!detail.deps || !hasDeps(detail.deps)" class="am-cell-sub">无声明依赖</div>
+            <div v-if="!detail.deps || !hasDeps(detail.deps)" class="am-cell-sub">{{ t('assetMarket.detailNoDeps') }}</div>
             <template v-else>
-              <div v-if="detail.deps.skills?.length">技能（按名字匹配目标租户）：
+              <div v-if="detail.deps.skills?.length">{{ t('assetMarket.detailSkills') }}
                 <el-tag v-for="s in detail.deps.skills" :key="s" size="small" class="am-dep-tag">{{ s }}</el-tag>
               </div>
               <div v-if="detail.deps.private_skills?.length" class="am-cell-sub">
-                私有技能 {{ detail.deps.private_skills.join('、') }} 不随资产迁移（当前版本只分发本体）
+                {{ t('assetMarket.detailPrivateSkills', { names: detail.deps.private_skills.join(t('assetDep.itemJoiner')) }) }}
               </div>
-              <div v-if="detail.deps.tools?.length">工具授权：
-                <el-tag v-for="t in detail.deps.tools" :key="t.type + t.ref" size="small" class="am-dep-tag">
-                  {{ t.ref }}<span v-if="t.grant_kind"> · {{ t.grant_kind }}</span>
+              <div v-if="detail.deps.tools?.length">{{ t('assetMarket.detailTools') }}
+                <el-tag v-for="tool in detail.deps.tools" :key="tool.type + tool.ref" size="small" class="am-dep-tag">
+                  {{ tool.ref }}<span v-if="tool.grant_kind"> · {{ tool.grant_kind }}</span>
                 </el-tag>
               </div>
-              <div v-if="detail.deps.requires?.length">能力要求：
+              <div v-if="detail.deps.requires?.length">{{ t('assetMarket.detailRequires') }}
                 <el-tag v-for="r in detail.deps.requires" :key="r" size="small" type="warning" class="am-dep-tag">{{ r }}</el-tag>
               </div>
-              <div v-if="detail.deps.egress">需要出网（net.egress）</div>
+              <div v-if="detail.deps.egress">{{ t('assetMarket.detailEgress') }}</div>
             </template>
           </div>
         </div>
         <div v-if="detail.review_note" class="am-detail-row am-detail-row--top">
-          <span class="am-detail-key">审核意见</span>
+          <span class="am-detail-key">{{ t('assetMarket.detailReviewNote') }}</span>
           <span class="am-detail-desc">{{ detail.review_note }}</span>
         </div>
       </div>
       <template #footer>
-        <el-button @click="detailVisible = false">关闭</el-button>
-        <el-button v-if="detail" type="primary" @click="installFromDetail">安装</el-button>
+        <el-button @click="detailVisible = false">{{ t('common.close') }}</el-button>
+        <el-button v-if="detail" type="primary" @click="installFromDetail">{{ t('assetAction.install') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- ===== 安装 ===== -->
-    <el-dialog v-model="installVisible" :title="'安装：' + (installing?.display_name || installing?.name || '')" width="520px">
+    <el-dialog v-model="installVisible"
+               :title="t('assetMarket.installTitle', { name: installing?.display_name || installing?.name || '' })"
+               width="520px">
       <div v-if="installing && !installDone" class="am-form">
         <div class="am-form-item">
-          <label>安装名</label>
-          <el-input v-model="installForm.name" size="small" placeholder="留空则沿用资产名" />
-          <div class="am-form-hint">
-            装成一个<strong>新的</strong>实体；重名会提示建议名（不会静默改名）。
-          </div>
+          <label>{{ t('assetMarket.installName') }}</label>
+          <el-input v-model="installForm.name" size="small"
+                    :placeholder="t('assetMarket.installNamePlaceholder')" />
+          <div class="am-form-hint">{{ t('assetMarket.installNameHint') }}</div>
         </div>
         <!-- 预检：与「导入」共用同一个渲染组件（同名提示 / 分组依赖 / 随包自带 / notes） -->
-        <div v-if="installInspectLoading" class="am-form-hint">正在检查同名实体与依赖…</div>
+        <div v-if="installInspectLoading" class="am-form-hint">{{ t('assetMarket.installInspecting') }}</div>
         <AssetDepCheck v-else-if="installInspect" :inspect="installInspect"
-                       :kind-label="kindLabelOf(installing.kind)" verb="安装" />
+                       :kind-label="kindLabelOf(installing.kind)" verb="install" />
 
         <!-- 只有自定义工具有「停用」这一态（工作流只有正常 / 废弃，装完是正常） -->
         <div v-if="installing.kind === 'custom_tool'" class="am-form-item">
-          <label>安装后状态</label>
+          <label>{{ t('assetMarket.installStatus') }}</label>
           <el-radio-group v-model="installForm.status" size="small">
-            <el-radio :value="1">启用（默认）</el-radio>
-            <el-radio :value="2">停用（先复核脚本与配置）</el-radio>
+            <el-radio :value="1">{{ t('assetMarket.installStatusOn') }}</el-radio>
+            <el-radio :value="2">{{ t('assetMarket.installStatusOff') }}</el-radio>
           </el-radio-group>
-          <div class="am-form-hint">停用的工具不会被调用，也不能发布版本；复核完再启用即可。</div>
+          <div class="am-form-hint">{{ t('assetMarket.installStatusHint') }}</div>
         </div>
 
         <div class="am-form-item">
-          <el-checkbox v-model="installForm.publish">安装成功后立刻发布一个版本</el-checkbox>
-          <div class="am-form-hint">
-            默认不发：装进来的是草稿，正式入口用的是已发布版本。停用或废弃的实体发不出去，会写进安装提示。
-          </div>
+          <el-checkbox v-model="installForm.publish">{{ t('assetMarket.installPublishNow') }}</el-checkbox>
+          <div class="am-form-hint">{{ t('assetMarket.installPublishHint') }}</div>
         </div>
         <div v-if="installConflict" class="am-warn">{{ installConflict }}</div>
         <!-- 失败一律内联，不用 toast：改名 / 前置条件不满足时要能看着提示原地重试 -->
         <el-alert v-if="installError" :title="installError" type="error" :closable="false" show-icon />
-        <div v-if="installing.kind === 'agent'" class="am-form-hint">
-          智能体的超级权限、工具不限、技能发现等开关不会随资产迁移（装上均为关闭）；
-          「谁能调用该智能体」需要在装好后到「智能体 → 调用授权」重新配置。
-        </div>
-        <div v-if="installing.kind === 'workflow'" class="am-form-hint">
-          工作流只带图与变量，不带模型 / 工具 / 子流程的引用：装好后要在编辑器里逐项重配，
-          凭据类环境变量（api_key 等）已在上架时清空。
-        </div>
+        <div v-if="installing.kind === 'agent'" class="am-form-hint">{{ t('assetMarket.installAgentHint') }}</div>
+        <div v-if="installing.kind === 'workflow'" class="am-form-hint">{{ t('assetMarket.installWorkflowHint') }}</div>
       </div>
 
       <!-- 结果页与「导入」共用同一个组件：成功行 + 注意事项 + 跳过文件，常驻到用户点完成 -->
       <AssetInstallResult v-if="installDone" :name="installDone.name" :overwritten="installDone.overwritten"
                           :warnings="installDone.warnings" :skipped="installDone.skipped"
-                          :published="installDone.published" verb="安装" />
+                          :published="installDone.published" verb="install" />
 
       <template #footer>
         <template v-if="installDone">
-          <el-button type="primary" @click="installVisible = false">知道了</el-button>
+          <el-button type="primary" @click="installVisible = false">{{ t('assetTransfer.gotIt') }}</el-button>
         </template>
         <template v-else>
-          <el-button @click="installVisible = false">取消</el-button>
-          <el-button type="primary" :loading="submitting" @click="submitInstall">安装</el-button>
+          <el-button @click="installVisible = false">{{ t('common.cancel') }}</el-button>
+          <el-button type="primary" :loading="submitting" @click="submitInstall">{{ t('assetAction.install') }}</el-button>
         </template>
       </template>
     </el-dialog>
 
     <!-- ===== 上架 ===== -->
-    <el-dialog v-model="listingVisible" title="上架新资产" width="560px">
+    <el-dialog v-model="listingVisible" :title="t('assetMarket.listingTitle')" width="560px">
       <div class="am-form">
         <div class="am-form-item">
-          <label>类型</label>
+          <label>{{ t('assetMarket.listingKind') }}</label>
           <el-radio-group v-model="listingForm.kind" size="small" @change="onExposeKindChange">
-            <el-radio value="skill">技能</el-radio>
-            <el-radio value="custom_tool">自定义工具</el-radio>
-            <el-radio value="agent">智能体</el-radio>
-            <el-radio value="workflow">工作流</el-radio>
+            <el-radio value="skill">{{ t('assetImport.kindSkill') }}</el-radio>
+            <el-radio value="custom_tool">{{ t('assetImport.kindCustomTool') }}</el-radio>
+            <el-radio value="agent">{{ t('assetImport.kindAgent') }}</el-radio>
+            <el-radio value="workflow">{{ t('assetImport.kindWorkflow') }}</el-radio>
           </el-radio-group>
         </div>
         <div class="am-form-item">
-          <label>选择对象</label>
+          <label>{{ t('assetMarket.listingPick') }}</label>
           <el-select
             v-model="listingForm.ref"
             size="small"
             filterable
             :loading="entityLoading"
-            placeholder="选择一个本租户的实体"
+            :placeholder="t('assetMarket.listingPickPlaceholder')"
             style="width: 100%"
           >
             <el-option
@@ -515,26 +504,17 @@
               <span v-if="e.note" class="am-option-block">（{{ e.note }}）</span>
             </el-option>
           </el-select>
-          <div class="am-form-hint">
-            受保护实体（main / *-authoring 等）、超级权限智能体、废弃实体都能上架。
-            私有技能<strong>不能单独上架</strong> —— 请上架它所属的智能体，私有技能会随智能体一起打包。
-            打包出去的是一份<strong>内容副本</strong> —— 超权、工具不限、技能发现、
-            调用授权、私有归属都不随包走；但<strong>依赖的自定义工具会连本体一起打包</strong>
-            （默认启用）。
-          </div>
+          <div class="am-form-hint">{{ t('assetMarket.listingHint') }}</div>
         </div>
-        <div class="am-form-hint">
-          上架后<strong>默认即可见</strong>：本租户免审时其它租户立刻能看到并安装；
-          平台对本租户要求审核时先进待审，通过后才可见。
-        </div>
+        <div class="am-form-hint">{{ t('assetMarket.listingVisibleHint') }}</div>
         <div v-if="listingWarnings.length" class="am-warn">
           <div v-for="(w, i) in listingWarnings" :key="i">{{ w }}</div>
         </div>
       </div>
       <template #footer>
-        <el-button @click="listingVisible = false">关闭</el-button>
+        <el-button @click="listingVisible = false">{{ t('common.close') }}</el-button>
         <el-button type="primary" :loading="submitting" :disabled="!listingForm.ref" @click="submitListing">
-          提交审核
+          {{ t('assetMarket.listingSubmit') }}
         </el-button>
       </template>
     </el-dialog>
@@ -543,13 +523,17 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Shop, Upload, Download, Refresh, Plus, Search, Connection, ArrowRight } from '@element-plus/icons-vue'
 import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
-import { publishAssetVersion, OVERWRITE_COPY } from '../utils/assetTransfer.js'
+import { publishAssetVersion, ASSET_KIND_SUFFIX } from '../utils/assetTransfer.js'
 import AssetDepCheck from './AssetDepCheck.vue'
 import AssetInstallResult from './AssetInstallResult.vue'
+import { formatError } from '../../locales'
+
+const { t } = useI18n()
 
 const authHeaders = () => ({ Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' })
 
@@ -565,25 +549,24 @@ const keyword = ref('')
 // 来源筛选：'' = 全部；'local' = 本机上架；其它 = 对端站点名
 const origin = ref('')
 const origins = ref([])
-const kindFilters = [
-  { value: '', label: '全部' },
-  { value: 'skill', label: '技能' },
-  { value: 'custom_tool', label: '自定义工具' },
-  { value: 'agent', label: '智能体' },
-  { value: 'workflow', label: '工作流' }
-]
+// 四类资产的类型名与「导入」共用同一套词（assetImport.kind*），不另写一份。
+// 顺序沿用技能 → 工具 → 智能体 → 工作流，别跟着 key 表的顺序走
+const KIND_FILTER_ORDER = ['skill', 'custom_tool', 'agent', 'workflow']
+const kindFilters = computed(() => [
+  { value: '', label: t('assetMarket.filterAll') },
+  ...KIND_FILTER_ORDER.map((k) => ({ value: k, label: t(`assetImport.kind${ASSET_KIND_SUFFIX[k]}`) }))
+])
 
-const KIND_LABEL = { skill: '技能', custom_tool: '自定义工具', agent: '智能体', workflow: '工作流' }
-const kindLabel = (k) => KIND_LABEL[k] || k || '—'
+const kindLabel = (k) => (ASSET_KIND_SUFFIX[k] ? t(`assetImport.kind${ASSET_KIND_SUFFIX[k]}`) : k || '—')
 
-const STATUS_LABEL = {
-  draft: '草稿',
-  pending: '待审核',
-  listed: '已上架',
-  rejected: '已驳回',
-  delisted: '已下架'
+const STATUS_LABEL_KEYS = {
+  draft: 'statusDraft',
+  pending: 'statusPending',
+  listed: 'statusListed',
+  rejected: 'statusRejected',
+  delisted: 'statusDelisted'
 }
-const statusLabel = (s) => STATUS_LABEL[s] || s || '—'
+const statusLabel = (s) => (STATUS_LABEL_KEYS[s] ? t(`assetMarket.${STATUS_LABEL_KEYS[s]}`) : s || '—')
 const statusTagType = (s) => {
   if (s === 'listed') return 'success'
   if (s === 'rejected') return 'danger'
@@ -605,11 +588,11 @@ const fmtTime = (t) => (t ? String(t).replace('T', ' ').slice(0, 19) : '—')
 // （后端为了不误导，已经把它换成了站点名，这里再说成「提供方」就更乱了）。
 const listerLabel = (a) => {
   const src = a?.listed_by?.origin?.server
-  if (src) return `来源：${src} 站`
+  if (src) return t('assetMarket.listerSource', { peer: src })
   const tenant = a?.listed_by?.tenant?.display_name || a?.listed_by?.tenant?.schema || ''
   const user = a?.listed_by?.user?.display_name || ''
-  if (user && tenant) return `提供方：${user} · ${tenant}`
-  if (tenant) return `提供方：${tenant}`
+  if (user && tenant) return t('assetMarket.listerUserTenant', { user, tenant })
+  if (tenant) return t('assetMarket.listerTenant', { tenant })
   return ''
 }
 
@@ -620,10 +603,10 @@ const hasDeps = (d) =>
 const depsSummary = (d) => {
   if (!d) return ''
   const parts = []
-  if (d.skills?.length) parts.push(`${d.skills.length} 个技能`)
-  if (d.tools?.length) parts.push(`${d.tools.length} 项工具授权`)
-  if (d.requires?.length) parts.push(`需要 ${d.requires.join('/')}`)
-  if (d.egress) parts.push('需要出网')
+  if (d.skills?.length) parts.push(t('assetMarket.depsSkills', { n: d.skills.length }))
+  if (d.tools?.length) parts.push(t('assetMarket.depsTools', { n: d.tools.length }))
+  if (d.requires?.length) parts.push(t('assetMarket.depsRequires', { list: d.requires.join('/') }))
+  if (d.egress) parts.push(t('assetMarket.depsEgress'))
   return parts.join(' · ')
 }
 
@@ -648,7 +631,7 @@ const loadMarket = async (append = false) => {
       { headers: authHeaders() }
     )
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '读取资产列表失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.loadListFailed'))
     const items = body.data?.items || []
     market.value = append ? market.value.concat(items) : items
     marketTotal.value = body.data?.total ?? items.length
@@ -656,9 +639,9 @@ const loadMarket = async (append = false) => {
     // 来源选项由后端汇总（忽略 origin 条件），筛了某个来源时其它选项不会消失
     if (!append) origins.value = body.data?.origins || []
   } catch (e) {
-    if (append) ElMessage.error(e.message || '加载更多失败')
+    if (append) ElMessage.error(e.message || t('assetMarket.loadMoreFailed'))
     else {
-      loadError.value = e.message || '读取资产列表失败'
+      loadError.value = e.message || t('assetMarket.loadListFailed')
       market.value = []
       marketTotal.value = 0
       hasMore.value = false
@@ -714,7 +697,7 @@ const loadRemote = async () => {
       headers: authHeaders()
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '读取远端市场失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.loadRemoteFailed'))
     // 单站不可达不影响其它站：error 是每个 peer 自己的字段，原样展示
     remotePeers.value = (body.data?.peers || []).filter((p) => p.items?.length || p.error)
     // 站点选项只从「全部」那次取：切到单站后返回的只有一站，拿它更新会把其它选项弄丢。
@@ -724,7 +707,7 @@ const loadRemote = async () => {
     }
     remoteLoaded.value = true
   } catch (e) {
-    remoteError.value = e.message || '读取远端市场失败'
+    remoteError.value = e.message || t('assetMarket.loadRemoteFailed')
     remotePeers.value = []
   } finally {
     remoteLoading.value = false
@@ -733,10 +716,10 @@ const loadRemote = async () => {
 
 // 按钮文案：本机已有就直接装，等审核就只是提示，远端有新的快照则重拉
 const pullActionLabel = (a) => {
-  if (a.stale) return '拉取新版本'
-  if (!a.local) return '拉取并安装'
-  if (a.local.status === 'pending') return '等平台审核'
-  return a.installed ? '重新安装' : '安装'
+  if (a.stale) return t('assetMarket.pullStale')
+  if (!a.local) return t('assetMarket.pullInstall')
+  if (a.local.status === 'pending') return t('assetMarket.pullPending')
+  return a.installed ? t('assetMarket.pullReinstall') : t('assetAction.install')
 }
 
 const pullAndInstall = async (p, a, forceRetry = false) => {
@@ -756,7 +739,7 @@ const pullAndInstall = async (p, a, forceRetry = false) => {
     return
   }
   if (!forceRetry && a.local && a.local.status === 'pending' && !a.stale) {
-    ElMessage.info('已拉取，正在等平台审核；通过后这一条会变成可安装')
+    ElMessage.info(t('assetMarket.pulledPending'))
     return
   }
 
@@ -778,17 +761,20 @@ const pullAndInstall = async (p, a, forceRetry = false) => {
       if (cf && !forceRetry) {
         try {
           await ElMessageBox.confirm(
-            `本机已有同名资产「${cf.name}」v${cf.build}（${statusLabel(cf.status)}），` +
-              '多半是对方撤回后重新上架过。覆盖后本机这一条会升到对方的最新快照，已安装它的租户需要重新安装。',
-            '同名资产已存在',
-            { type: 'warning', confirmButtonText: '覆盖并继续', cancelButtonText: '取消' }
+            t('assetMarket.conflictBody', { name: cf.name, build: cf.build, status: statusLabel(cf.status) }),
+            t('assetMarket.conflictTitle'),
+            {
+              type: 'warning',
+              confirmButtonText: t('assetMarket.conflictConfirm'),
+              cancelButtonText: t('common.cancel')
+            }
           )
         } catch {
           return
         }
         return pullAndInstall(p, a, true)
       }
-      throw new Error(body.msg || '拉取失败')
+      throw new Error(formatError(body) || t('assetMarket.pullFailed'))
     }
     const data = body.data || {}
     await loadRemote()
@@ -807,10 +793,10 @@ const pullAndInstall = async (p, a, forceRetry = false) => {
       // 对方策略是 auto：已经 listed，直接进安装流程
       openInstall(item)
     } else {
-      ElMessage.success({ message: '已拉取，等待平台审核通过后即可安装', duration: 2400 })
+      ElMessage.success({ message: t('assetMarket.pulledReview'), duration: 2400 })
     }
   } catch (e) {
-    ElMessage.error(e.message || '拉取失败')
+    ElMessage.error(e.message || t('assetMarket.pullFailed'))
   } finally {
     pullingKey.value = ''
   }
@@ -823,14 +809,14 @@ const installs = ref([])
 const loadMine = async () => {
   const res = await fetch(adminApi.share.mine, { headers: authHeaders() })
   const body = await res.json().catch(() => ({}))
-  if (body.code !== 200) throw new Error(body.msg || '读取我的资产失败')
+  if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.loadMineFailed'))
   mine.value = body.data?.items || []
 }
 
 const loadInstalls = async () => {
   const res = await fetch(adminApi.share.installs, { headers: authHeaders() })
   const body = await res.json().catch(() => ({}))
-  if (body.code !== 200) throw new Error(body.msg || '读取安装记录失败')
+  if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.loadInstallsFailed'))
   installs.value = body.data?.items || []
 }
 
@@ -838,11 +824,13 @@ const loadInstalls = async () => {
 const clearInstalls = async () => {
   try {
     await ElMessageBox.confirm(
-      `清空本租户的全部 ${installs.value.length} 条安装记录？\n` +
-        '只删记录，已安装的技能 / 工具 / 智能体都不会被卸载；' +
-        '清空后这些资产在本地市场里会重新显示为「未安装」。',
-      '清空安装记录',
-      { type: 'warning', confirmButtonText: '全部清空', cancelButtonText: '取消' }
+      t('assetMarket.clearInstallsBody', { n: installs.value.length }),
+      t('assetMarket.clearInstallsTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('assetMarket.clearAll'),
+        cancelButtonText: t('common.cancel')
+      }
     )
   } catch {
     return
@@ -853,11 +841,11 @@ const clearInstalls = async () => {
       headers: authHeaders()
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '清空失败')
-    ElMessage.success(`已清空 ${body.data?.deleted ?? 0} 条安装记录`)
+    if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.clearFailed'))
+    ElMessage.success(t('assetMarket.clearedInstalls', { n: body.data?.deleted ?? 0 }))
     await Promise.all([loadInstalls(), loadMarket()])
   } catch (e) {
-    ElMessage.error(e.message || '清空失败')
+    ElMessage.error(e.message || t('assetMarket.clearFailed'))
   }
 }
 
@@ -865,11 +853,13 @@ const clearInstalls = async () => {
 const removeInstall = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `删除「${row.asset_name}」的那条安装记录？\n` +
-        `只删记录，已安装的「${row.installed_name}」不会被卸载；` +
-        '删掉后该资产在本地市场里会重新显示为「未安装」。',
-      '删除安装记录',
-      { type: 'warning', confirmButtonText: '删除记录', cancelButtonText: '取消' }
+      t('assetMarket.removeInstallBody', { asset: row.asset_name, name: row.installed_name }),
+      t('assetMarket.removeInstallTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('assetMarket.removeRecord'),
+        cancelButtonText: t('common.cancel')
+      }
     )
   } catch {
     return
@@ -880,12 +870,12 @@ const removeInstall = async (row) => {
       headers: authHeaders()
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '删除失败')
-    ElMessage.success('已删除安装记录')
+    if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.deleteFailed'))
+    ElMessage.success(t('assetMarket.removedInstall'))
     // 「已安装」标记来自这张表，市场列表要一起刷
     await Promise.all([loadInstalls(), loadMarket()])
   } catch (e) {
-    ElMessage.error(e.message || '删除失败')
+    ElMessage.error(e.message || t('assetMarket.deleteFailed'))
   }
 }
 
@@ -898,7 +888,7 @@ const reload = async () => {
     if (remoteLoaded.value) tasks.push(loadRemote()) // 没打开过远端页签就不去打扰对端
     await Promise.all(tasks)
   } catch (e) {
-    ElMessage.error(e.message || '加载失败')
+    ElMessage.error(e.message || t('assetMarket.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -920,10 +910,10 @@ const openDetail = async (a) => {
   try {
     const res = await fetch(adminApi.share.asset(a.id), { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '读取详情失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.detailLoadFailed'))
     detail.value = body.data?.asset || a
   } catch (e) {
-    ElMessage.warning(e.message || '详情加载失败，仅显示列表信息')
+    ElMessage.warning(e.message || t('assetMarket.detailLoadSoft'))
   }
 }
 
@@ -940,8 +930,8 @@ let inspectTimer = null
 let inspectSeq = 0 // 名字连续改时只认最后一次回包
 let inspectKey = '' // 上次真正查过的「asset_id + 名字」：打开弹窗时的显式查询与 watch 会用同一个键，避免重复请求
 
-// 复用上面的 KIND_LABEL（市场列表与安装弹窗是同一套类型名）
-const kindLabelOf = (k) => KIND_LABEL[k] || '实体'
+// 市场列表与安装弹窗用同一套类型名；不认识的 kind 落到「资产」而不是原样露出编码值
+const kindLabelOf = (k) => (ASSET_KIND_SUFFIX[k] ? kindLabel(k) : t('assetDep.defaultKind'))
 
 // runInspect 与上传导入的预检同源：装之前就把同名实体与依赖摆出来，
 // 而不是装完去 warnings 里数缺了几项
@@ -963,9 +953,9 @@ const runInspect = async () => {
     })
     const body = await res.json().catch(() => ({}))
     if (seq !== inspectSeq) return // 旧回包，丢掉
-    installInspect.value = body.code === 200 ? body.data || null : { error: body.msg || '检查失败' }
+    installInspect.value = body.code === 200 ? body.data || null : { error: formatError(body) || t('assetMarket.inspectFailed') }
   } catch (e) {
-    if (seq === inspectSeq) installInspect.value = { error: e.message || '依赖检查失败' }
+    if (seq === inspectSeq) installInspect.value = { error: e.message || t('assetMarket.inspectDepFailed') }
   } finally {
     if (seq === inspectSeq) installInspectLoading.value = false
   }
@@ -1024,13 +1014,19 @@ const submitInstall = async () => {
 
     let body = await postInstall(payload)
 
-    // 同名不是失败，而是「要你确认」：与上传导入同一套话术（OVERWRITE_COPY 共用）
-    if (body.code !== 200 && body.data?.can_overwrite && OVERWRITE_COPY[a.kind]) {
-      const copy = OVERWRITE_COPY[a.kind]
+    // 同名不是失败，而是「要你确认」：与上传导入同一套话术（assetImport.overwrite* 共用）
+    const suffix = ASSET_KIND_SUFFIX[a.kind]
+    if (body.code !== 200 && body.data?.can_overwrite && suffix) {
       try {
-        await ElMessageBox.confirm(`${body.msg}。${copy.detail}`, copy.title, {
-          type: 'warning', confirmButtonText: '覆盖', cancelButtonText: '取消'
-        })
+        await ElMessageBox.confirm(
+          `${formatError(body)}。${t(`assetImport.overwriteDetail${suffix}`)}`,
+          t(`assetImport.overwriteTitle${suffix}`),
+          {
+            type: 'warning',
+            confirmButtonText: t('assetImport.overwrite'),
+            cancelButtonText: t('common.cancel')
+          }
+        )
       } catch {
         return // 用户取消：当作没发生，不弹错误
       }
@@ -1042,10 +1038,13 @@ const submitInstall = async () => {
       if (suggested) {
         // 冲突不静默：把建议名填进去，由用户确认后再点一次安装
         installForm.value.name = suggested
-        installConflict.value = `${body.msg || '名称已被占用'}；已填入建议名 ${suggested}，确认后再点一次「安装」`
+        installConflict.value = t('assetMarket.conflictSuggested', {
+          msg: formatError(body) || t('assetMarket.nameTaken'),
+          name: suggested
+        })
         return
       }
-      throw new Error(body.msg || '安装失败')
+      throw new Error(formatError(body) || t('assetMarket.installFailed'))
     }
 
     const data = body.data || {}
@@ -1057,7 +1056,7 @@ const submitInstall = async () => {
       try {
         published = await publishAssetVersion(a.kind, ref)
       } catch (e) {
-        warnings.push(`安装已完成，但发布版本失败：${e.message}（可到版本面板手动发布）`)
+        warnings.push(t('assetTransfer.publishFailedInline', { verb: t('assetAction.install'), msg: e.message }))
       }
     }
 
@@ -1071,7 +1070,7 @@ const submitInstall = async () => {
     await Promise.all([loadMarket(), loadInstalls()])
   } catch (e) {
     // 与导入一致：失败留在弹窗里，看着提示原地重试
-    installError.value = e.message || '安装失败'
+    installError.value = e.message || t('assetMarket.installFailed')
   } finally {
     submitting.value = false
   }
@@ -1110,7 +1109,7 @@ const loadEntities = async (k) => {
         body: JSON.stringify({ page: 1, limit: 500 })
       })
       const body = await res.json().catch(() => ({}))
-      if (body.code !== 200) throw new Error(body.msg || '读取技能失败')
+      if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.readSkillsFailed'))
       entityOptions.value = (body.data?.items || [])
         // 私有技能不能单独上架（后端会拒绝）：正文住在所属智能体的目录里，只能随智能体走，
         // 否则装到别的租户只剩一个丢了归属的租户级副本
@@ -1118,17 +1117,17 @@ const loadEntities = async (k) => {
         .map((s) => ({
           ref: s.id,
           label: s.name,
-          note: s.protected ? '系统内置'
-            : Number(s.status) === 3 ? '已废弃' : ''
+          note: s.protected ? t('assetMarket.noteBuiltin')
+            : Number(s.status) === 3 ? t('assetMarket.noteDeprecated') : ''
         }))
     } else if (k === 'custom_tool') {
       const res = await fetch(adminApi.customTools.list, { headers: authHeaders() })
       const body = await res.json().catch(() => ({}))
-      if (body.code !== 200) throw new Error(body.msg || '读取自定义工具失败')
-      entityOptions.value = (body.data?.tools || []).map((t) => ({
-        ref: t.name,
-        label: t.name,
-        note: Number(t.status) === 3 ? '已废弃' : ''
+      if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.readToolsFailed'))
+      entityOptions.value = (body.data?.tools || []).map((tool) => ({
+        ref: tool.name,
+        label: tool.name,
+        note: Number(tool.status) === 3 ? t('assetMarket.noteDeprecated') : ''
       }))
     } else if (k === 'workflow') {
       // 工作流没有目录，只有 {schema}.flows 里的一行；上架时后端把它序列化成 FLOW.json
@@ -1138,11 +1137,11 @@ const loadEntities = async (k) => {
         body: JSON.stringify({ page: 1, limit: 500 })
       })
       const body = await res.json().catch(() => ({}))
-      if (body.code !== 200) throw new Error(body.msg || '读取工作流失败')
+      if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.readFlowsFailed'))
       entityOptions.value = (body.data?.items || []).map((f) => ({
         ref: f.id,
         label: f.name,
-        note: Number(f.status) === 3 ? '已废弃' : ''
+        note: Number(f.status) === 3 ? t('assetMarket.noteDeprecated') : ''
       }))
     } else {
       const res = await fetch(adminApi.agents.base, {
@@ -1151,17 +1150,17 @@ const loadEntities = async (k) => {
         body: JSON.stringify({ page: 1, limit: 500 })
       })
       const body = await res.json().catch(() => ({}))
-      if (body.code !== 200) throw new Error(body.msg || '读取智能体失败')
+      if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.readAgentsFailed'))
       entityOptions.value = (body.data?.items || []).map((a) => ({
         ref: a.id,
         label: a.name,
-        note: a.is_supervisor ? '超级权限（权限不随包走）'
-          : a.protected ? '系统内置'
-          : Number(a.status) === 3 ? '已废弃' : ''
+        note: a.is_supervisor ? t('assetMarket.noteSupervisor')
+          : a.protected ? t('assetMarket.noteBuiltin')
+          : Number(a.status) === 3 ? t('assetMarket.noteDeprecated') : ''
       }))
     }
   } catch (e) {
-    ElMessage.error(e.message || '读取可上架对象失败')
+    ElMessage.error(e.message || t('assetMarket.readEntitiesFailed'))
     entityOptions.value = []
   } finally {
     entityLoading.value = false
@@ -1179,19 +1178,19 @@ const submitListing = async () => {
       body: JSON.stringify(listingForm.value)
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '上架失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.listFailed'))
     const warnings = body.data?.warnings || []
     listingWarnings.value = warnings
     // need_review=false 表示该租户免审、这条已经直接上架（缺省即如此），文案要跟着变
     ElMessage.success({
-      message: body.data?.need_review === false ? '已上架，其它租户现在就能安装' : '已提交，等待平台审核',
+      message: body.data?.need_review === false ? t('assetMarket.listedOk') : t('assetMarket.submittedOk'),
       duration: 1800
     })
     tab.value = 'mine'
     await Promise.all([loadMine(), loadMarket()])
     if (!warnings.length) listingVisible.value = false
   } catch (e) {
-    ElMessage.error(e.message || '上架失败')
+    ElMessage.error(e.message || t('assetMarket.listFailed'))
   } finally {
     submitting.value = false
   }
@@ -1203,10 +1202,13 @@ const submitListing = async () => {
 const removeMine = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `删除「${row.name}」（当前状态：${statusLabel(row.status)}）？` +
-        '快照文件会一起清掉，删除后不可恢复。',
-      '删除资产',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      t('assetMarket.deleteAssetBody', { name: row.name, status: statusLabel(row.status) }),
+      t('assetMarket.deleteAssetTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('common.delete'),
+        cancelButtonText: t('common.cancel')
+      }
     )
   } catch {
     return
@@ -1217,11 +1219,11 @@ const removeMine = async (row) => {
       headers: authHeaders()
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '删除失败')
-    ElMessage.success('已删除')
+    if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.deleteFailed'))
+    ElMessage.success(t('assetMarket.deleted'))
     await Promise.all([loadMine(), loadMarket()])
   } catch (e) {
-    ElMessage.error(e.message || '删除失败')
+    ElMessage.error(e.message || t('assetMarket.deleteFailed'))
   }
 }
 
@@ -1229,10 +1231,13 @@ const clearMine = async () => {
   const removable = mine.value.filter((m) => m.status !== 'listed').length
   try {
     await ElMessageBox.confirm(
-      `清空本租户 ${removable} 条未上架的资产（草稿 / 待审 / 被驳回 / 已下架）？\n` +
-        '快照文件会一起清掉，删除后不可恢复；已上架的资产会保留（需要先让平台下架）。',
-      '清空未上架的资产',
-      { type: 'warning', confirmButtonText: '全部清空', cancelButtonText: '取消' }
+      t('assetMarket.clearMineBody', { n: removable }),
+      t('assetMarket.clearMineTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('assetMarket.clearAll'),
+        cancelButtonText: t('common.cancel')
+      }
     )
   } catch {
     return
@@ -1243,11 +1248,11 @@ const clearMine = async () => {
       headers: authHeaders()
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '清空失败')
-    ElMessage.success(`已清空 ${body.data?.deleted ?? 0} 条资产`)
+    if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.clearFailed'))
+    ElMessage.success(t('assetMarket.clearedAssets', { n: body.data?.deleted ?? 0 }))
     await Promise.all([loadMine(), loadMarket()])
   } catch (e) {
-    ElMessage.error(e.message || '清空失败')
+    ElMessage.error(e.message || t('assetMarket.clearFailed'))
   }
 }
 
@@ -1257,10 +1262,14 @@ const withdraw = async (row) => {
   try {
     await ElMessageBox.confirm(
       isDraft
-        ? `删除草稿「${row.name}」？快照文件会一起清掉，删除后不可恢复。`
-        : `撤回「${row.name}」？撤回后回到草稿状态，其它租户将看不到它。`,
-      isDraft ? '删除草稿' : '撤回上架',
-      { type: 'warning', confirmButtonText: isDraft ? '删除' : '撤回', cancelButtonText: '取消' }
+        ? t('assetMarket.draftDeleteBody', { name: row.name })
+        : t('assetMarket.withdrawBody', { name: row.name }),
+      isDraft ? t('assetMarket.draftDeleteTitle') : t('assetMarket.withdrawTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: isDraft ? t('common.delete') : t('assetMarket.withdraw'),
+        cancelButtonText: t('common.cancel')
+      }
     )
   } catch {
     return
@@ -1268,11 +1277,11 @@ const withdraw = async (row) => {
   try {
     const res = await fetch(adminApi.share.withdraw(row.id), { method: 'POST', headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '操作失败')
-    ElMessage.success({ message: isDraft ? '已删除' : '已撤回', duration: 1500 })
+    if (body.code !== 200) throw new Error(formatError(body) || t('assetMarket.opFailed'))
+    ElMessage.success({ message: isDraft ? t('assetMarket.deleted') : t('assetMarket.withdrawn'), duration: 1500 })
     await Promise.all([loadMine(), loadMarket()])
   } catch (e) {
-    ElMessage.error(e.message || '操作失败')
+    ElMessage.error(e.message || t('assetMarket.opFailed'))
   }
 }
 

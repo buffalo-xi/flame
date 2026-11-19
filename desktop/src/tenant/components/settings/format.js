@@ -1,4 +1,5 @@
 import { ElMessage } from 'element-plus'
+import i18n from '../../../locales'
 
 /** 脱敏显示密钥：保留首尾各 4 位 */
 export const maskSecret = (val, head = 4, tail = 4) => {
@@ -21,8 +22,8 @@ export const copyText = async (text) => {
   if (!text) return
   try {
     await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制到剪贴板')
+    ElMessage.success(i18n.global.t('common.copied'))
   } catch (e) {
-    ElMessage.error('复制失败，请手动复制')
+    ElMessage.error(i18n.global.t('common.copyFailed'))
   }
 }

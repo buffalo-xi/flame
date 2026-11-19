@@ -1,8 +1,8 @@
 <template>
   <div class="llm-node-props">
     <div class="tabs">
-      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">配置</button>
-      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">执行结果</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">{{ t('flow.nodeProps.tabConfig') }}</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">{{ t('flow.nodeProps.tabResult') }}</button>
     </div>
 
     <div class="tab-content">
@@ -10,13 +10,13 @@
         <!-- 模型与响应模式 -->
         <div class="props-section">
           <div class="prop-group">
-            <label class="prop-label">模型 (gateway_model)</label>
+            <label class="prop-label">{{ t('flow.modelConfig.label') }}</label>
             <el-select
               v-model="gatewayModel"
               class="prop-select"
               @change="saveLLM"
             >
-              <el-option label="缺省模型" value="__default__" />
+              <el-option :label="t('flow.modelConfig.default')" value="__default__" />
               <el-option
                 v-for="m in selectableModels"
                 :key="m.gateway_model"
@@ -27,10 +27,10 @@
           </div>
           <div class="prop-group-horizontal">
             <div class="prop-item">
-              <label class="prop-label">响应模式</label>
+              <label class="prop-label">{{ t('flow.llmNode.responseMode') }}</label>
               <el-radio-group v-model="responseMode" @change="handleResponseModeChange">
-                <el-radio value="complete">非流式</el-radio>
-                <el-radio value="sse_stream">流式</el-radio>
+                <el-radio value="complete">{{ t('flow.llmNode.modeComplete') }}</el-radio>
+                <el-radio value="sse_stream">{{ t('flow.llmNode.modeStream') }}</el-radio>
               </el-radio-group>
             </div>
           </div>
@@ -38,7 +38,7 @@
 
         <!-- 大模型参数 -->
         <div class="props-section">
-          <div class="section-title"><span>大模型参数</span></div>
+          <div class="section-title"><span>{{ t('flow.modelConfig.paramsSection') }}</span></div>
           <div class="prop-group">
             <div class="gen-param-row">
               <label class="prop-label">max_tokens</label>
@@ -64,7 +64,7 @@
               class="prop-textarea gen-extra-textarea"
               v-model="extraParamsText"
               @blur="saveLLM"
-              placeholder='附加参数 JSON，如 {"reasoning_effort":"low"}'
+              :placeholder="t('flow.modelConfig.paramsPlaceholder')"
             ></textarea>
           </div>
         </div>
@@ -72,18 +72,18 @@
         <!-- 输入变量 -->
         <div class="props-section">
           <div class="section-title">
-            <span>输入变量</span>
+            <span>{{ t('flow.common.inputVars') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddInputVariable"><el-icon><Plus /></el-icon></button>
           </div>
           <div class="input-variables-list">
-            <div v-if="Object.keys(inputVariables).length === 0" class="input-empty-state"><p>暂无输入变量</p></div>
+            <div v-if="Object.keys(inputVariables).length === 0" class="input-empty-state"><p>{{ t('flow.common.noInputVars') }}</p></div>
             <div v-for="(variable, name) in inputVariables" :key="name" class="input-variable-row">
               <input
                 type="text"
                 :value="name"
                 class="input-variable-name-input"
                 @blur="handleUpdateInputVariableName(name, $event.target.value)"
-                placeholder="变量名"
+                :placeholder="t('flow.common.varName')"
               />
               <div class="input-variable-content">
                 <button class="show-content-btn input-variable-btn" @click="handleShowVariableSelect(name, $event, variable)">
@@ -104,7 +104,7 @@
                       </template>
                     </template>
                   </template>
-                  <template v-else>选择变量</template>
+                  <template v-else>{{ t('flow.common.selectVar') }}</template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteInputVariable(name)"><el-icon><Delete /></el-icon></button>
               </div>
@@ -115,11 +115,11 @@
         <!-- 上下文 messages -->
         <div class="props-section">
           <div class="section-title">
-            <span>上下文 (messages)</span>
+            <span>{{ t('flow.llmNode.contextSection') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddMessage"><el-icon><Plus /></el-icon></button>
           </div>
           <div class="messages-list">
-            <div v-if="messages.length === 0" class="input-empty-state"><p>暂无消息</p></div>
+            <div v-if="messages.length === 0" class="input-empty-state"><p>{{ t('flow.llmNode.noMessages') }}</p></div>
             <div v-for="(msg, idx) in messages" :key="idx" class="message-row">
               <div class="message-row-head">
                 <el-select v-model="msg.role" class="message-role-select" @change="saveLLM">
@@ -133,7 +133,7 @@
                 class="prop-textarea message-content"
                 v-model="msg.content"
                 @blur="saveLLM"
-                placeholder="支持模板：{{.input.变量名}} 输入 / {{.local.变量名}} 局部 / {{.output.变量名}} 输出"
+                :placeholder="t('flow.llmNode.messagePlaceholder')"
               ></textarea>
             </div>
           </div>
@@ -142,19 +142,19 @@
         <!-- 响应处理脚本 -->
         <div class="props-section">
           <div class="section-title">
-            <span>响应处理脚本（可选）</span>
+            <span>{{ t('flow.httpNode.handlerSection') }}</span>
             <el-switch v-model="handlerEnabled" @change="handleHandlerEnabledChange" />
           </div>
           <div v-if="handlerEnabled" class="prop-group">
             <div class="prop-group-horizontal handler-lang-row">
               <div class="prop-item">
-                <label class="prop-label">脚本语言</label>
+                <label class="prop-label">{{ t('flow.common.scriptLanguage') }}</label>
                 <el-select v-model="handlerLang" class="prop-select" @change="saveLLM">
                   <el-option v-for="lang in handlerLanguages" :key="lang" :label="lang" :value="lang" />
                 </el-select>
               </div>
               <div class="prop-item handler-timeout-item">
-                <label class="prop-label">脚本超时</label>
+                <label class="prop-label">{{ t('flow.httpNode.handlerTimeout') }}</label>
                 <el-switch v-model="handlerTimeoutEnabled" size="small" @change="saveLLM" />
                 <input
                   v-if="handlerTimeoutEnabled"
@@ -165,13 +165,12 @@
                   max="300"
                   @blur="saveLLM"
                 />
-                <span v-if="handlerTimeoutEnabled" class="timeout-unit">秒</span>
+                <span v-if="handlerTimeoutEnabled" class="timeout-unit">{{ t('flow.common.seconds') }}</span>
               </div>
             </div>
             <div class="handler-hint">
-              固定输出变量 <code>content</code> / <code>reasoning_content</code> / <code>tool_calls</code> 由节点自动写入（有没有脚本都一样），
-              脚本里 return 这三个名字会被忽略并记日志；脚本只用于处理自定义输出变量。
-              流式模式下脚本逐帧调用且无状态，<code>input.content</code> 是本帧增量，累积由节点完成。
+              {{ t('flow.handlerHint.prefix') }}<code>content</code> / <code>reasoning_content</code> / <code>tool_calls</code>{{ t('flow.handlerHint.autoWrite') }}
+              {{ t('flow.llmNode.hint.p3') }}<code>input.content</code>{{ t('flow.llmNode.hint.p4') }}
             </div>
             <textarea
               class="prop-textarea"
@@ -181,7 +180,7 @@
             ></textarea>
           </div>
           <div v-else class="hint-text">
-            固定输出变量（content / reasoning_content / tool_calls）由程序自动写入；开启脚本只用于额外处理自定义输出变量。
+            {{ t('flow.llmNode.fixedOutputHint') }}
           </div>
         </div>
 
@@ -218,6 +217,9 @@ import adminApi from '@/tenant/config/admin'
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: { type: Object, default: null },
@@ -239,19 +241,11 @@ const handlerLanguages = computed(() => scriptLanguages.value.filter(l => l !== 
 // 由执行器统一写入，不再按模式增删（避免出现"变量没声明但执行器要写"的情况）。
 const FIXED_OUTPUT_VARS = ['content', 'reasoning_content', 'tool_calls']
 
-const handlerPlaceholder = computed(() => {
-  if (localResponseMode.value === 'sse_stream') {
-    return `-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done
--- 固定变量 content / reasoning_content / tool_calls 由节点累积写入，脚本不要写它们
--- 逐帧调用、无状态：input.content 是本帧增量
--- 脚本只写自定义输出变量：string 追加、非 string 覆盖
-return { answer = input.content }`
-  }
-  return `-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done
--- 固定变量 content / reasoning_content / tool_calls 由节点自动写入，脚本不要写它们
--- 脚本只写自定义输出变量：string 追加、非 string 覆盖
-return { answer = input.content }`
-})
+const handlerPlaceholder = computed(() =>
+  localResponseMode.value === 'sse_stream'
+    ? t('flow.nodeProps.handlerPlaceholderLlmSse')
+    : t('flow.nodeProps.handlerPlaceholderLlmComplete')
+)
 
 // ── 本地状态 ──
 const activeTab = ref('settings')
@@ -279,7 +273,7 @@ const loadSelectableModels = async () => {
       selectableModels.value = data.data.items.map(m => ({ gateway_model: m.gateway_model }))
     }
   } catch (e) {
-    console.error('加载可选模型失败', e)
+    console.error(t('flow.message.loadModelsFailed'), e)
   }
 }
 
@@ -401,7 +395,7 @@ const buildLLMConfig = () => {
       const parsed = extraParamsText.value.trim() === '' ? {} : JSON.parse(extraParamsText.value)
       params.extra_params = parsed
     } catch (e) {
-      ElMessage.error('extra_params 不是合法 JSON')
+      ElMessage.error(t('flow.message.extraParamsInvalid'))
       return null
     }
   }
@@ -476,7 +470,7 @@ const handleHandlerEnabledChange = () => {
   if (handlerEnabled.value && handlerScript.value.trim() === '') {
     // 启用时若脚本为空，给一个默认占位，否则用户还没机会输入脚本就因空脚本被判定为未启用
     handlerScript.value = defaultLang.value === 'lua'
-      ? '-- 在这里编写响应处理脚本\nreturn { content = input.content }'
+      ? t('flow.nodeProps.handlerScriptDefault')
       : ''
   }
   if (!handlerEnabled.value) handlerScript.value = ''

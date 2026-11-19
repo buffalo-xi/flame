@@ -7,59 +7,55 @@
     <div class="panel-header">
       <div class="settings-tabs">
         <button class="settings-tab-btn" :class="{ active: settingsTab === 'visibility' }"
-                @click="switchSettingsTab('visibility')">可见性</button>
+                @click="switchSettingsTab('visibility')">{{ $t('skill.tabVisibility') }}</button>
         <button class="settings-tab-btn" :class="{ active: settingsTab === 'tools' }"
-                @click="switchSettingsTab('tools')">工具依赖</button>
+                @click="switchSettingsTab('tools')">{{ $t('skill.tabTools') }}</button>
         <button class="settings-tab-btn" :class="{ active: settingsTab === 'props' }"
-                @click="switchSettingsTab('props')">属性</button>
+                @click="switchSettingsTab('props')">{{ $t('skill.tabProps') }}</button>
       </div>
       <span class="close-icon" @click="$emit('close')">&#xd7;</span>
     </div>
     <div class="panel-body">
       <!-- tab 1：可见性（只决定「能否被发现」；是否进提示词由 agent 侧绑定决定） -->
       <template v-if="settingsTab === 'visibility'">
-        <div v-if="!skillId" class="editor-tip">技能创建后才能配置可见性。</div>
+        <div v-if="!skillId" class="editor-tip">{{ $t('skill.needCreateVisibility') }}</div>
         <div v-else-if="form.scope === 'agent'" class="editor-tip">
-          agent 私有技能：仅归属 agent（{{ form.owner_agent_name || form.agent_id }}）可见，无需配置。
+          {{ $t('skill.privateSkillHint', { name: form.owner_agent_name || form.agent_id }) }}
         </div>
         <template v-else>
           <div class="editor-tip">
-            可见范围只决定<strong>哪些 agent 能发现它</strong>（<code>list_skills</code> / <code>read_skill</code>）；
-            要把它写进某个 agent 的提示词，需在该 agent 的「设置 → 调用授权 →
-            <strong>可使用的技能</strong>」里绑定。
+            {{ $t('skill.visibilityScopeHintPre') }}<strong>{{ $t('skill.visibilityScopeHintStrong') }}</strong>{{ $t('skill.visibilityScopeHintPost') }}
           </div>
           <div class="settings-field">
-            <div class="field-label">可见范围</div>
+            <div class="field-label">{{ $t('skill.visibilityRange') }}</div>
             <el-radio-group v-model="form.restricted" :disabled="readonly" @change="saveVisibility">
-              <el-radio :value="false">全员可见</el-radio>
-              <el-radio :value="true">白名单</el-radio>
+              <el-radio :value="false">{{ $t('skill.scopeAll') }}</el-radio>
+              <el-radio :value="true">{{ $t('skill.scopeWhitelist') }}</el-radio>
             </el-radio-group>
             <div class="editor-tip">
-              <template v-if="form.restricted">
-                白名单：只有下面选中的 agent 能发现它；未绑定的也不会进提示词。
-              </template>
+              <template v-if="form.restricted">{{ $t('skill.whitelistHint') }}</template>
               <template v-else>
-                全员可见：本租户所有 agent 都能发现它；<strong>未绑定的不会自动进提示词</strong>。
+                {{ $t('skill.allHintPre') }}<strong>{{ $t('skill.allHintStrong') }}</strong>{{ $t('skill.allHintPost') }}
               </template>
             </div>
           </div>
           <div v-if="form.restricted" class="settings-field">
-            <div class="field-label">可见该技能的 agent（白名单）</div>
+            <div class="field-label">{{ $t('skill.visibleAgentsLabel') }}</div>
             <!-- 与智能体「谁能调用它」同一交互：点按钮从左侧拉出选择面板，点一项即加入 / 移出（改动即时保存） -->
             <div class="bind-row">
               <el-button size="small" :disabled="readonly || !skillId" @click="openAgentPicker">
-                选择 agent
+                {{ $t('skill.selectAgent') }}
               </el-button>
               <div class="bind-tags">
                 <el-tag v-for="id in visibleAgentIds" :key="id" size="small"
                         :closable="!readonly" :disable-transitions="true" @close="unbindAgent(id)">
                   {{ agentName(id) }}
                 </el-tag>
-                <span v-if="!visibleAgentIds.length" class="bind-tags-empty">不选则谁都发现不了</span>
+                <span v-if="!visibleAgentIds.length" class="bind-tags-empty">{{ $t('skill.noneVisible') }}</span>
               </div>
             </div>
             <div class="editor-tip">
-              仅被选中的 agent 可见；不选则谁都发现不了。想让某个 agent 常驻使用，再在 agent 侧绑定它。
+              {{ $t('skill.whitelistFooter') }}
             </div>
           </div>
         </template>
@@ -67,35 +63,31 @@
 
       <!-- tab 2：工具依赖（skill 只声明「需要」，不产生授权） -->
       <template v-else-if="settingsTab === 'tools'">
-        <div class="editor-tip">
-          声明这个技能「需要哪些工具」：agent 开启「不限制工具」时按此放行；
-          未开启时需要 agent 也被授权（这里只声明需求，不产生授权）。
-        </div>
-        <div v-if="!skillId" class="editor-tip">技能创建后才能配置工具依赖。</div>
+        <div class="editor-tip">{{ $t('skill.toolsTabHint') }}</div>
+        <div v-if="!skillId" class="editor-tip">{{ $t('skill.needCreateTools') }}</div>
         <template v-else>
           <div class="settings-field">
-            <div class="field-label">添加</div>
-            <el-button size="small" type="primary" :disabled="readonly" @click="openDepPicker">添加工具 / 组</el-button>
+            <div class="field-label">{{ $t('skill.addLabel') }}</div>
+            <el-button size="small" type="primary" :disabled="readonly" @click="openDepPicker">{{ $t('agentSettings.addGrants') }}</el-button>
             <div class="editor-tip">
-              从左侧弹出的选择器里挑组或单个工具（整组算一项，组内工具也可单独挑）。
-              勾选/取消会<strong>实时</strong>出现在下面的列表，点下方「保存」才提交。
+              {{ $t('skill.depPickerHintPre') }}<strong>{{ $t('skill.depPickerHintStrong') }}</strong>{{ $t('skill.depPickerHintPost') }}
             </div>
           </div>
 
           <div class="settings-field">
-            <div class="field-label">已声明（{{ depItems.length }}）</div>
-            <div v-if="!depItems.length" class="editor-tip">（空）</div>
+            <div class="field-label">{{ $t('skill.declared', { n: depItems.length }) }}</div>
+            <div v-if="!depItems.length" class="editor-tip">{{ $t('agentSettings.emptySection') }}</div>
             <div v-else class="tools-list">
               <div v-for="d in depSorted" :key="d.ref" class="tool-item">
                 <el-icon v-if="d.item_type === 'group'" class="grant-group-icon"><Folder /></el-icon>
                 <el-icon v-else class="grant-tool-icon"><Tools /></el-icon>
                 <div class="tool-item-main">
                   <div class="tool-name">
-                    {{ d.label || d.ref }}
-                    <span class="ref-tag">{{ d.item_type === 'group' ? '组' : '工具' }}</span>
-                    <span v-if="d.count" class="ref-tag">{{ d.count }} 个</span>
+                    {{ groupName(t, te, d) || d.ref }}
+                    <span class="ref-tag">{{ d.item_type === 'group' ? $t('agentSettings.tagGroup') : $t('agentSettings.tagTool') }}</span>
+                    <span v-if="d.count" class="ref-tag">{{ $t('agentSettings.countItems', { n: d.count }) }}</span>
                     <span v-if="d.supervisor_only || d.supervisor_only_count" class="ref-tag supervisor-only"
-                          title="仅 supervisor 可实际绑定 / 执行">仅 supervisor</span>
+                          :title="$t('skill.supervisorOnlyTip')">{{ $t('skill.supervisorOnly') }}</span>
                   </div>
                   <div class="tool-desc" :title="d.ref">{{ shortDesc(d) || d.ref }}</div>
                 </div>
@@ -106,9 +98,9 @@
 
           <div class="tools-save-bar">
             <el-button size="small" type="primary" :loading="savingDeps" :disabled="!skillId || readonly"
-                       @click="saveDeps">保存</el-button>
-            <span v-if="depDirty" class="dirty-tip">有未保存的修改</span>
-            <span v-else class="tools-count">已保存</span>
+                       @click="saveDeps">{{ $t('agentSettings.saveGrants') }}</el-button>
+            <span v-if="depDirty" class="dirty-tip">{{ $t('agentSettings.dirtyTip') }}</span>
+            <span v-else class="tools-count">{{ $t('agentSettings.savedTip') }}</span>
           </div>
         </template>
       </template>
@@ -116,47 +108,49 @@
       <!-- tab 3：属性 -->
       <template v-else>
         <div class="settings-field">
-          <div class="field-label">归属</div>
+          <div class="field-label">{{ $t('skill.ownerLabel') }}</div>
           <!-- 新建时可选；已创建后不可改（后端 UpdateSkill 也不支持改 agent_id） -->
           <template v-if="!skillId">
             <el-radio-group v-model="form.scope">
-              <el-radio value="tenant">租户级共享</el-radio>
-              <el-radio value="agent">agent 私有</el-radio>
+              <el-radio value="tenant">{{ $t('skill.tenantShared') }}</el-radio>
+              <el-radio value="agent">{{ $t('skill.agentPrivate') }}</el-radio>
             </el-radio-group>
             <el-select v-if="form.scope === 'agent'" v-model="form.agent_id" size="small"
-                       style="width:100%;margin-top:6px" placeholder="选择归属 agent"
+                       style="width:100%;margin-top:6px" :placeholder="$t('skill.selectOwnerAgent')"
                        popper-class="agent-select-popper">
               <el-option v-for="a in agents" :key="a.id" :label="a.name" :value="a.id">
                 <div class="agent-option">
                   <div class="agent-option-name">{{ a.name }}</div>
-                  <div class="agent-option-desc" :title="a.description || '无描述'">{{ a.description || '无描述' }}</div>
+                  <div class="agent-option-desc" :title="a.description || $t('agentSettings.noDescription')">{{ a.description || $t('agentSettings.noDescription') }}</div>
                 </div>
               </el-option>
             </el-select>
-            <div class="editor-tip">租户级：按可见性授权给各 agent；私有：仅归属 agent 可见</div>
+            <div class="editor-tip">{{ $t('skill.ownerHint') }}</div>
           </template>
           <div v-else class="editor-tip">
-            {{ form.scope === 'agent'
-              ? 'agent 私有：' + (form.owner_agent_name || form.agent_id)
-              : '租户级共享' }}（不可修改）
+            {{ $t('skill.ownerLocked', {
+              scope: form.scope === 'agent'
+                ? $t('skill.agentPrivate') + ': ' + (form.owner_agent_name || form.agent_id)
+                : $t('skill.tenantShared')
+            }) }}
           </div>
         </div>
         <div class="settings-field">
-          <div class="field-label">用户可调用</div>
+          <div class="field-label">{{ $t('skill.userInvocable') }}</div>
           <el-switch v-model="form.user_invocable" :disabled="!skillId || readonly" @change="saveProps" />
-          <div class="editor-tip">开启后该技能可作为用户直接调用的命令</div>
+          <div class="editor-tip">{{ $t('skill.userInvocableHint') }}</div>
         </div>
         <div class="settings-field">
-          <div class="field-label">命令分发</div>
+          <div class="field-label">{{ $t('skill.commandDispatch') }}</div>
           <el-select v-model="form.command_dispatch" size="small" style="width:100%" clearable
-                     placeholder="不启用" :disabled="!skillId || readonly" @change="saveProps">
-            <el-option label="tool（绕过模型，直接分发给工具）" value="tool" />
+                     :placeholder="$t('skill.dispatchNone')" :disabled="!skillId || readonly" @change="saveProps">
+            <el-option :label="$t('skill.dispatchTool')" value="tool" />
           </el-select>
         </div>
         <div v-if="form.command_dispatch === 'tool'" class="settings-field">
-          <div class="field-label">目标工具</div>
+          <div class="field-label">{{ $t('skill.targetTool') }}</div>
           <el-input v-model="form.command_tool" size="small" :disabled="!skillId || readonly"
-                    placeholder="分发到的工具名" @blur="saveProps" />
+                    :placeholder="$t('skill.targetToolPlaceholder')" @blur="saveProps" />
         </div>
       </template>
     </div>
@@ -167,18 +161,18 @@
 <teleport to="body">
   <div v-if="depPickerVisible" ref="depPickerRef" class="picker-panel" :style="pickerStyle">
     <div class="panel-header">
-      <span class="panel-title">添加工具 / 组</span>
+      <span class="panel-title">{{ $t('agentSettings.addGrants') }}</span>
       <span class="close-icon" @click="depPickerVisible = false">&#xd7;</span>
     </div>
     <div class="panel-body">
       <div class="picker-toolbar">
-        <el-input v-model="depSearch" size="small" placeholder="搜索名称或 ref" clearable style="width:100%" />
+        <el-input v-model="depSearch" size="small" :placeholder="$t('agentSettings.searchGrantPlaceholder')" clearable style="width:100%" />
         <el-radio-group v-model="depFilterKind" size="small" class="picker-kinds">
-          <el-radio-button value="">全部</el-radio-button>
-          <el-radio-button value="builtin">内置</el-radio-button>
-          <el-radio-button value="preset">预设</el-radio-button>
-          <el-radio-button value="ext">插件/脚本</el-radio-button>
-          <el-radio-button value="conn">连接/端点</el-radio-button>
+          <el-radio-button value="">{{ $t('agentSettings.filterAll') }}</el-radio-button>
+          <el-radio-button value="builtin">{{ $t('agentSettings.filterBuiltin') }}</el-radio-button>
+          <el-radio-button value="preset">{{ $t('agentSettings.filterPreset') }}</el-radio-button>
+          <el-radio-button value="ext">{{ $t('agentSettings.filterExt') }}</el-radio-button>
+          <el-radio-button value="conn">{{ $t('agentSettings.filterConn') }}</el-radio-button>
         </el-radio-group>
       </div>
 
@@ -192,16 +186,16 @@
                      @click.stop="toggleDepCollapse(c.ref)"><CaretRight /></el-icon>
             <div class="tool-item-main">
               <div class="tool-name">
-                {{ c.name }}
-                <span class="ref-tag">{{ c.synthetic ? '类别' : '组' }}</span>
-                <span class="ref-tag">{{ c.count }} 个</span>
+                {{ groupName(t, te, c) }}
+                <span class="ref-tag">{{ c.synthetic ? $t('agentSettings.tagCategory') : $t('agentSettings.tagGroup') }}</span>
+                <span class="ref-tag">{{ $t('agentSettings.countItems', { n: c.count }) }}</span>
                 <!-- 类别卡的名字本身就是类别名（插件 / 自定义工具），不再重复标 kind -->
                 <span v-if="!c.synthetic" class="ref-tag">{{ kindLabel(c.kind) }}</span>
                 <span v-if="c.supervisor_only_count" class="ref-tag supervisor-only"
-                      title="仅 supervisor 可实际绑定 / 执行；绑给其它 agent 也不会生效">仅 supervisor</span>
-                <span v-if="c.available === false" class="ref-tag warn">不可用</span>
+                      :title="$t('skill.supervisorOnlyTipExt')">{{ $t('skill.supervisorOnly') }}</span>
+                <span v-if="c.available === false" class="ref-tag warn">{{ $t('skill.depUnavailable') }}</span>
               </div>
-              <div class="tool-desc" :title="c.ref">{{ c.synthetic ? '声明下面的具体工具' : c.ref }}</div>
+              <div class="tool-desc" :title="c.ref">{{ c.synthetic ? $t('skill.declareHint') : c.ref }}</div>
             </div>
             <el-icon v-if="!c.synthetic && inDraft(c.ref)" class="picker-check"><Check /></el-icon>
           </div>
@@ -210,21 +204,21 @@
                  :class="{ on: inDraft(t.ref), covered: !c.synthetic && inDraft(c.ref) }" @click="pickToggleTool(c, t)">
               <el-icon class="picker-tool-mark"><Check /></el-icon>
               <div class="tool-item-main">
-                <div class="tool-name">{{ t.label || t.name }}<span class="ref-tag">{{ t.ref }}</span><span v-if="t.supervisor_only" class="ref-tag supervisor-only" title="仅 supervisor 可实际绑定 / 执行">仅 supervisor</span></div>
+                <div class="tool-name">{{ t.label || t.name }}<span class="ref-tag">{{ t.ref }}</span><span v-if="t.supervisor_only" class="ref-tag supervisor-only" :title="$t('skill.supervisorOnlyTip')">{{ $t('skill.supervisorOnly') }}</span></div>
                 <div class="tool-desc" :title="t.description">{{ shortDesc(t) }}</div>
               </div>
             </div>
           </div>
         </div>
-        <div v-if="!depCards.length" class="editor-tip">没有匹配的项</div>
+        <div v-if="!depCards.length" class="editor-tip">{{ $t('skill.noMatches') }}</div>
       </div>
     </div>
     <div class="picker-footer">
       <span style="font-size:12px;color:#909399">
-        已声明 {{ depItems.length }} 项（改动实时写入右侧列表，点「保存」提交）
+        {{ $t('skill.declaredFooter', { n: depItems.length }) }}
       </span>
       <el-button size="small" type="primary" style="margin-left:auto"
-                 @click="depPickerVisible = false">完成</el-button>
+                 @click="depPickerVisible = false">{{ $t('agentSettings.done') }}</el-button>
     </div>
   </div>
 </teleport>
@@ -233,16 +227,16 @@
 <teleport to="body">
   <div v-if="agentPickerVisible" ref="agentPickerRef" class="picker-panel" :style="pickerStyle">
     <div class="panel-header">
-      <span class="panel-title">可见该技能的 agent</span>
+      <span class="panel-title">{{ $t('skill.visibleAgentsTitle') }}</span>
       <span class="close-icon" @click="agentPickerVisible = false">&#xd7;</span>
     </div>
     <div class="panel-body">
       <div class="picker-block-title">
-        点一项即加入 / 移出
-        <span class="picker-block-hint">已选 {{ visibleAgentIds.length }} 个</span>
+        {{ $t('skill.toggleVisibleHint') }}
+        <span class="picker-block-hint">{{ $t('skill.selectedAgents', { n: visibleAgentIds.length }) }}</span>
       </div>
       <div class="picker-toolbar">
-        <el-input v-model="agentSearch" size="small" placeholder="搜索智能体名称或描述"
+        <el-input v-model="agentSearch" size="small" :placeholder="$t('agentSettings.searchAgentPlaceholder')"
                   clearable style="width:100%" />
       </div>
       <div class="picker-cards">
@@ -253,21 +247,21 @@
               <div class="tool-name">
                 {{ a.name }}
                 <span v-if="a.is_supervisor" class="ref-tag supervisor-only">supervisor</span>
-                <span v-if="isAgentVisible(a.id)" class="ref-tag core">已选</span>
+                <span v-if="isAgentVisible(a.id)" class="ref-tag core">{{ $t('skill.selectedTag') }}</span>
               </div>
-              <div class="tool-desc" :title="a.description || '无描述'">{{ a.description || '无描述' }}</div>
+              <div class="tool-desc" :title="a.description || $t('agentSettings.noDescription')">{{ a.description || $t('agentSettings.noDescription') }}</div>
             </div>
             <el-icon class="picker-check">
               <Check v-if="isAgentVisible(a.id)" /><Plus v-else />
             </el-icon>
           </div>
         </div>
-        <div v-if="!filteredAgents.length" class="editor-tip">没有匹配的智能体</div>
+        <div v-if="!filteredAgents.length" class="editor-tip">{{ $t('agentSettings.noMatchingAgents') }}</div>
       </div>
     </div>
     <div class="picker-footer">
-      <span class="tools-count">改动即时保存</span>
-      <el-button size="small" type="primary" @click="agentPickerVisible = false">完成</el-button>
+      <span class="tools-count">{{ $t('agentSettings.savedImmediately') }}</span>
+      <el-button size="small" type="primary" @click="agentPickerVisible = false">{{ $t('agentSettings.done') }}</el-button>
     </div>
   </div>
 </teleport>
@@ -275,11 +269,14 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Tools, Check } from '@element-plus/icons-vue'
 import adminApi from '../../config/admin.js'
 import { getToken } from '../../utils/auth.js'
 import { useEscClose } from '../../composables/useEscClose'
+import { formatError } from '../../../locales'
+import { groupName, groupDesc } from '../../utils/groupText.js'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -293,6 +290,9 @@ const props = defineProps({
 })
 const emit = defineEmits(['close'])
 
+// 脚本侧文案（toast、校验）走 t()
+const { t, te } = useI18n()
+
 const authHeaders = () => ({
   'Content-Type': 'application/json',
   'Authorization': `Bearer ${getToken()}`
@@ -301,14 +301,14 @@ const authHeaders = () => ({
 // 只读闸（与父组件同语义）：拦截并提示
 const blockIfReadonly = () => {
   if (!props.readonly) return false
-  ElMessage.warning({ message: '只读模式：请先切回「编辑」状态再修改', duration: 2000, offset: 20 })
+  ElMessage.warning({ message: t('skill.readonlyMode'), duration: 2000, offset: 20 })
   return true
 }
 
 // 更新技能元数据：后端按全量处理（name / 命令字段，空值即清空），
 // 所以这里必须把当前表单里的字段一并带上，避免只改描述却把命令配置抹掉。
 const putSkill = async (patch) => {
-  if (props.readonly) throw new Error('只读模式：无法保存')
+  if (props.readonly) throw new Error(t('skill.readonlySave'))
   const payload = {
     name: props.form.name,
     description: props.form.description,
@@ -323,7 +323,7 @@ const putSkill = async (patch) => {
     body: JSON.stringify(payload)
   })
   const body = await res.json().catch(() => ({}))
-  if (body.code !== 200) throw new Error(body.msg || '保存失败')
+  if (body.code !== 200) throw new Error(formatError(body) || t('agent.saveFailed'))
 }
 
 //（选择面板是 4000 的 body 级浮层，悬空会压住面板里的 Element Plus 下拉）
@@ -398,9 +398,9 @@ const saveProps = async () => {
   if (!props.skillId) return
   try {
     await putSkill({})
-    ElMessage.success({ message: '已保存', duration: 700 })
+    ElMessage.success({ message: t('agent.saved'), duration: 700 })
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('agent.saveFailed'))
   }
 }
 
@@ -426,10 +426,10 @@ const saveVisibility = async () => {
       body: JSON.stringify({ restricted: !!props.form.restricted, agent_ids: visibleAgentIds.value })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '可见性保存失败')
-    ElMessage.success({ message: '可见性已保存', duration: 700 })
+    if (body.code !== 200) throw new Error(formatError(body) || t('skill.visibilitySaveFailed'))
+    ElMessage.success({ message: t('skill.visibilitySaved'), duration: 700 })
   } catch (e) {
-    ElMessage.error(e.message || '可见性保存失败')
+    ElMessage.error(e.message || t('skill.visibilitySaveFailed'))
     // 落库失败 → 回到服务端的真实状态，别让 tag 与服务端漂移
     await loadVisibility()
   }
@@ -454,7 +454,7 @@ const filteredAgents = computed(() => {
 
 const openAgentPicker = () => {
   if (blockIfReadonly()) return
-  if (!props.skillId) { ElMessage.warning('请先创建技能'); return }
+  if (!props.skillId) { ElMessage.warning(t('skill.needCreate')); return }
   agentSearch.value = ''
   depPickerVisible.value = false // 两个选择面板互斥，避免叠在一起
   updatePickerRect()
@@ -497,10 +497,11 @@ const depSorted = computed(() => [...depItems.value].sort((a, b) => {
   return String(a.label || a.ref || '').localeCompare(String(b.label || b.ref || ''), 'zh')
 }))
 
-const kindLabel = (k) => ({
-  builtin: '内置', mcp: 'MCP', rpc: 'RPC', local: '本地端点', group: '工具组', preset: '预设',
-  plugin: '插件', custom: '自定义工具'
-}[k] || k)
+const KIND_LABEL_KEYS = {
+  builtin: 'kindBuiltin', mcp: 'kindMcp', rpc: 'kindRpc', local: 'kindLocal',
+  group: 'kindGroup', preset: 'kindPreset', plugin: 'kindPlugin', custom: 'kindCustom'
+}
+const kindLabel = (k) => (KIND_LABEL_KEYS[k] ? t(`agentSettings.${KIND_LABEL_KEYS[k]}`) : k)
 // 工具/组简述：最多 20 字（超出截断，完整内容放 title）
 const shortDesc = (item) => {
   const s = String(item?.description || '').trim()
@@ -522,8 +523,8 @@ const loadToolCatalog = async () => {
 const describeRef = (ref, itemType) => {
   for (const g of toolCatalog.value) {
     if (itemType !== 'tool' && g.ref === ref) {
-      return { ref, item_type: 'group', label: g.name, kind: g.kind,
-               available: g.available, count: (g.items || []).length, description: g.description || '',
+      return { ref, item_type: 'group', label: groupName(t, te, g) || ref, kind: g.kind,
+               available: g.available, count: (g.items || []).length, description: groupDesc(t, te, g),
                supervisor_only_count: (g.items || []).filter((t) => t.supervisor_only).length }
     }
     for (const t of (g.items || [])) {
@@ -546,13 +547,13 @@ const loadDeps = async (force = false) => {
   try {
     const res = await fetch(adminApi.skills.toolGrants(props.skillId), { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '读取工具依赖失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('skill.loadDepsFailed'))
     depItems.value = (body.data?.items || []).map((it) => describeRef(it.ref, it.item_type))
     depsLoaded.value = true
     depsSkillId.value = props.skillId
     depDirty.value = false
   } catch (e) {
-    ElMessage.error(e.message || '读取工具依赖失败')
+    ElMessage.error(e.message || t('skill.loadDepsFailed'))
   }
 }
 
@@ -571,11 +572,11 @@ const saveDeps = async () => {
       })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '工具依赖保存失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('skill.saveDepsFailed'))
     depDirty.value = false
-    ElMessage.success({ message: '工具依赖已保存', duration: 700 })
+    ElMessage.success({ message: t('skill.depsSaved'), duration: 700 })
   } catch (e) {
-    ElMessage.error(e.message || '工具依赖保存失败')
+    ElMessage.error(e.message || t('skill.saveDepsFailed'))
   } finally {
     savingDeps.value = false
   }
@@ -597,7 +598,8 @@ const depCards = computed(() => {
       ref: t.ref, item_type: 'tool', label: t.label || t.name, description: t.description || '',
       supervisor_only: !!t.supervisor_only
     }))
-    const groupHit = !kw || hit(g.name) || hit(g.ref)
+    // 译名也要能搜到：英文界面下搜 built-in 应该命中「Built-in · file」
+    const groupHit = !kw || hit(groupName(t, te, g)) || hit(g.name) || hit(g.ref)
     const matched = groupHit ? items : items.filter((t) => hit(t.label) || hit(t.ref))
     if (kw && !groupHit && !matched.length) continue
     out.push({
@@ -669,7 +671,7 @@ watch(anyPickerVisible, (visible) => {
 const inDraft = (ref) => depItems.value.some((d) => d.ref === ref)
 const openDepPicker = () => {
   if (blockIfReadonly()) return
-  if (!props.skillId) { ElMessage.warning('请先创建技能'); return }
+  if (!props.skillId) { ElMessage.warning(t('skill.needCreate')); return }
   depSearch.value = ''
   depFilterKind.value = ''
   agentPickerVisible.value = false // 两个选择面板互斥，避免叠在一起

@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -21,11 +21,11 @@
       <div v-if="activeTab === 'settings'" class="settings-panel">
         <div class="props-section">
           <div class="section-title">
-            <span>节点说明</span>
+            <span>{{ t('flow.nodeProps.noteTitle') }}</span>
           </div>
           <div class="node-description">
-            <p>跳出节点<strong>必须位于一个循环节点内部</strong>，否则会产生错误。</p>
-            <p>当流程执行到此节点时，将立即退出当前所在的最内层循环，不再执行该循环的剩余迭代。</p>
+            <p>{{ t('flow.nodeProps.break.p1') }}<strong>{{ t('flow.nodeProps.loopOnly') }}</strong>{{ t('flow.nodeProps.otherwiseError') }}</p>
+            <p>{{ t('flow.nodeProps.break.p2') }}</p>
           </div>
         </div>
       </div>
@@ -40,6 +40,9 @@
 <script setup>
 import { ref } from 'vue';
 import NodeLastRun from './NodeLastRun.vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

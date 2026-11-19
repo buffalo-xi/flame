@@ -5,19 +5,19 @@
       <Handle type="target" position="top" :id="'target' + id + 'top'" class="custom-handle custom-handle-top custom-handle-target" />
       <Handle type="target" position="right" :id="'target' + id + 'right'" class="custom-handle custom-handle-right custom-handle-target" />
       <div class="icon-wrapper icon-process"><el-icon><Help /></el-icon></div>
-      <div class="node-label" ref="labelRef">{{ data.label || '流程' }}</div>
+      <div class="node-label" ref="labelRef">{{ data.label || t('flow.node.fallbackLabel.process') }}</div>
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper" @click.stop @mousedown.stop @pointerdown.stop><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item @click="deleteNode">
               <el-icon><Delete /></el-icon>
-              <span>删除节点</span>
+              <span>{{ t('flow.node.action.delete') }}</span>
             </el-dropdown-item>
             <BreakpointMenuItem :id="id" />
             <el-dropdown-item @click="toggleConcurrency">
               <el-icon><component :is="concurrencyEnabled ? 'Close' : 'CircleCheck'" /></el-icon>
-              <span>{{ concurrencyEnabled ? '取消并发' : '启用并发' }}</span>
+              <span>{{ concurrencyEnabled ? t('flow.node.concurrency.disable') : t('flow.node.concurrency.enable') }}</span>
             </el-dropdown-item>            
           </el-dropdown-menu>
         </template>
@@ -30,8 +30,8 @@
         @pointerdown.stop
       >
         <el-select v-model="concurrencyGroup" class="concurrency-select" :disabled="!concurrencyEnabled">
-          <el-option label="单体并发" value="mono" />
-          <el-option-group v-if="forkNodes.length" label="并发组">
+          <el-option :label="t('flow.node.concurrency.mono')" value="mono" />
+          <el-option-group v-if="forkNodes.length" :label="t('flow.node.concurrency.forkGroup')">
             <el-option
               v-for="node in forkNodes"
               :key="node.id"
@@ -42,7 +42,7 @@
         </el-select>
         <button
           class="concurrency-cancel-btn"
-          title="取消并发"
+          :title="t('flow.node.concurrency.disable')"
           @click="clearConcurrency"
         >
           ✕
@@ -68,11 +68,14 @@ import { ref, computed, onMounted, watch, inject } from 'vue'
 import { Help, MoreFilled, Delete, Close, CircleCheck } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
 import { readConcurrencyGroup, buildConcurrencyConfig } from './concurrencyConfig.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {
     type: Object,
-    default: () => ({ label: '嵌入流程', children: [] })
+    default: () => ({ children: [] })
   },
   id: {
     type: String,

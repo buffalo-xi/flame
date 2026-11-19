@@ -10,15 +10,15 @@
     <div class="status-filters">
       <el-button :class="{ active: statusFilter === 'all' }" @click="setStatusFilter('all')">
         <el-icon><Refresh /></el-icon>
-        <span>全部{{ statusCounts.all ? ` (${statusCounts.all})` : '' }}</span>
+        <span>{{ $t('skill.filterAll') }}{{ statusCounts.all ? ` (${statusCounts.all})` : '' }}</span>
       </el-button>
       <el-button class="btn-enable" :class="{ active: statusFilter === 'normal' }" @click="setStatusFilter('normal')">
         <el-icon><CircleCheck /></el-icon>
-        <span>正常{{ statusCounts.normal ? ` (${statusCounts.normal})` : '' }}</span>
+        <span>{{ $t('skill.filterNormal') }}{{ statusCounts.normal ? ` (${statusCounts.normal})` : '' }}</span>
       </el-button>
       <el-button class="btn-disable" :class="{ active: statusFilter === 'deprecated' }" @click="setStatusFilter('deprecated')">
         <el-icon><CircleClose /></el-icon>
-        <span>废弃{{ statusCounts.deprecated ? ` (${statusCounts.deprecated})` : '' }}</span>
+        <span>{{ $t('skill.filterDeprecated') }}{{ statusCounts.deprecated ? ` (${statusCounts.deprecated})` : '' }}</span>
       </el-button>
     </div>
     <!-- 窄档：状态筛选合并成一个下拉 -->
@@ -32,7 +32,7 @@
         <el-dropdown-menu>
           <el-dropdown-item v-for="opt in STATUS_FILTERS" :key="opt.key" :command="opt.key">
             <el-icon><component :is="opt.icon" /></el-icon>
-            <span>{{ opt.label }}{{ statusCounts[opt.key] ? ` (${statusCounts[opt.key]})` : '' }}</span>
+            <span>{{ statusLabel(opt.key) }}{{ statusCounts[opt.key] ? ` (${statusCounts[opt.key]})` : '' }}</span>
           </el-dropdown-item>
         </el-dropdown-menu>
       </template>
@@ -41,15 +41,15 @@
          刻意用 el-switch 而不是按钮 —— 按钮的"关"态只能靠颜色/边框暗示，实测会被看成空框；
          开关是二值控件，与智能体编辑里「允许发现未绑定的技能」那一排同一套。
          偏好存 localStorage，见 showSystem -->
-    <span class="system-toggle" title="显示/隐藏系统内置（不可删除、不可改名的那些）">
-      <span class="system-toggle-label">系统</span>
+    <span class="system-toggle" :title="$t('skill.systemToggleTip')">
+      <span class="system-toggle-label">{{ $t('skill.systemLabel') }}</span>
       <el-switch v-model="showSystem" size="small" />
     </span>
     <div class="search-box">
       <el-input
         ref="listSearchInputRef"
         v-model="keyword"
-        placeholder="搜索技能名称/描述/智能体"
+        :placeholder="$t('skill.searchPlaceholder')"
         prefix-icon="Search"
         clearable
         @keyup.enter="emit('refresh')"
@@ -60,26 +60,26 @@
     <el-button
       class="search-toggle"
       :class="{ active: !!keyword }"
-      title="搜索"
+      :title="$t('skill.searchTip')"
       @click="toggleListSearch"
     >
       <el-icon><component :is="listSearchOpen ? Close : Search" /></el-icon>
     </el-button>
     <!-- 导入：从资产包装一个技能。次要动作，不抢「新建」的主色 -->
-    <el-button class="header-import-btn" @click="emit('import')" round title="从资产包导入技能">
+    <el-button class="header-import-btn" @click="emit('import')" round :title="$t('skill.importTip')">
       <el-icon><Upload /></el-icon>
-      <span>导入</span>
+      <span>{{ $t('skill.import') }}</span>
     </el-button>
     <!-- 窄档（sm/xs）只留 +，文字由 CSS 收起；title 兜住"这是干嘛的" -->
-    <el-button class="header-create-btn" type="primary" @click="emit('create')" round title="新建技能">
+    <el-button class="header-create-btn" type="primary" @click="emit('create')" round :title="$t('skill.createTip')">
       <el-icon><Plus /></el-icon>
-      <span>新建技能</span>
+      <span>{{ $t('skill.create') }}</span>
     </el-button>
   </div>
 
   <!-- 卡片列表 -->
   <div class="agent-skills-content">
-    <div v-if="loading" class="loading">加载中...</div>
+    <div v-if="loading" class="loading">{{ $t('common.loading') }}</div>
     <!-- 空态判据用 skillGroups 而不是 filteredSkills：关掉「系统」开关后可能一个都不剩，
          那时 filteredSkills 仍有内容、列表却是空的 -->
     <div v-else-if="skillGroups.length === 0" class="no-data">{{ emptyText }}</div>
@@ -108,7 +108,7 @@
                    说明文字走整卡 tooltip（cardHoverTip），这里不再套一层 el-tooltip ——
                    嵌套 tooltip 会和整卡那个同时弹出，两个 popper 叠在一起。 -->
               <el-tag v-if="skill.protected" size="small" effect="plain" type="primary"
-                      class="tag-system">系统</el-tag>
+                      class="tag-system">{{ $t('skill.systemTag') }}</el-tag>
               <el-tag size="small" effect="dark" :type="statusMeta(skill.status).tag">
                 {{ statusMeta(skill.status).text }}
               </el-tag>
@@ -116,9 +116,9 @@
                    正文冻结在所属智能体的当前版本里，后端把 agent 的版本号填进来（version_source=agent） -->
               <el-tag size="small" effect="plain" type="info" class="tag-version"
                       :title="skill.agent_id
-                        ? (skill.current_version ? `随所属智能体发布，当前 v${skill.current_version}` : '随所属智能体，尚未发布')
-                        : (skill.current_version ? `当前发布版本 v${skill.current_version}` : '尚未发布正式版本（线上不可调用）')">
-                {{ skill.current_version ? `v${skill.current_version}` : '未发布' }}
+                        ? (skill.current_version ? $t('skill.versionOwnerPublished', { v: skill.current_version }) : $t('skill.versionOwner'))
+                        : (skill.current_version ? $t('skill.versionPublished', { v: skill.current_version }) : $t('skill.versionUnreleased'))">
+                {{ skill.current_version ? `v${skill.current_version}` : $t('skill.badgeUnreleased') }}
               </el-tag>
               <!-- 归属/可见性：私有 | 共享N（N = 能使用它的智能体数） -->
               <el-tag size="small" effect="light" :type="scopeTag(skill).type"
@@ -131,46 +131,46 @@
         <div class="card-body">
           <div class="card-body-bottom">
             <div class="info-item">
-              <span class="info-label">描述：</span>
-              <span class="info-value description-value" :title="skill.description">{{ skill.description || '很懒，什么都没写！' }}</span>
+              <span class="info-label">{{ $t('skill.labelDesc') }}</span>
+              <span class="info-value description-value" :title="skill.description">{{ skill.description || $t('skill.emptyDesc') }}</span>
             </div>
             <div v-if="skill.agent_id" class="info-item">
-              <span class="info-label">归属：</span>
-              <span class="info-value">{{ skill.agent_name || '未知' }}</span>
+              <span class="info-label">{{ $t('skill.labelOwner') }}</span>
+              <span class="info-value">{{ skill.agent_name || $t('skill.unknown') }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">更新：</span>
-              <span class="info-value">{{ skill.updated_by_name || '未知' }} · {{ formatTime(skill.updated_at) }}</span>
+              <span class="info-label">{{ $t('skill.labelUpdated') }}</span>
+              <span class="info-value">{{ skill.updated_by_name || $t('skill.unknown') }} · {{ formatTime(skill.updated_at) }}</span>
             </div>
           </div>
           <!-- 操作浮层：只覆盖「卡片头下方」那块（即 card-body），hover 时浮出、按钮居中。
                整层 @click.stop，点按钮不会误触「打开编辑」。 -->
           <div class="card-actions" @click.stop>
             <!-- 两态：正常(1) / 废弃(3) -->
-            <el-tooltip v-if="skill.status !== 1" content="切回正常（可修改、可运行）" placement="top">
+            <el-tooltip v-if="skill.status !== 1" :content="$t('skill.actionRestore')" placement="top">
               <button class="card-action-btn" @click="emit('status', { row: skill, status: 1 })">
                 <el-icon><CircleCheck /></el-icon>
               </button>
             </el-tooltip>
-            <el-tooltip v-if="skill.status !== 3" content="废弃（不可修改、不可用）" placement="top">
+            <el-tooltip v-if="skill.status !== 3" :content="$t('skill.actionDeprecate')" placement="top">
               <button class="card-action-btn" @click="emit('status', { row: skill, status: 3 })">
                 <el-icon><CircleClose /></el-icon>
               </button>
             </el-tooltip>
-            <el-tooltip content="编辑" placement="top">
+            <el-tooltip :content="$t('skill.actionEdit')" placement="top">
               <button class="card-action-btn" @click="emit('open', skill)">
                 <el-icon><Edit /></el-icon>
               </button>
             </el-tooltip>
             <el-tooltip
-              :content="skill.agent_id ? '私有技能不能单独导出：请导出它所属的智能体' : '导出为资产包（.zip）'"
+              :content="skill.agent_id ? $t('skill.exportPrivateTip') : $t('skill.exportTip')"
               placement="top"
             >
               <button class="card-action-btn" :disabled="!!skill.agent_id" @click="emit('export', skill)">
                 <el-icon><Download /></el-icon>
               </button>
             </el-tooltip>
-            <el-tooltip v-if="!skill.protected && skill.status === 1" content="删除" placement="top">
+            <el-tooltip v-if="!skill.protected && skill.status === 1" :content="$t('skill.actionDelete')" placement="top">
               <button class="card-action-btn danger" @click="emit('delete', skill)">
                 <el-icon><Delete /></el-icon>
               </button>
@@ -186,8 +186,11 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Plus, Search, Refresh, Edit, Delete, CircleCheck, CircleClose, ArrowDown, Close, CaretRight, Upload, Download } from '@element-plus/icons-vue'
 import { useHeaderCompact } from '../../utils/useHeaderCompact.js'
+
+const { t } = useI18n()
 
 const props = defineProps({
   skills: { type: Array, default: () => [] },
@@ -204,9 +207,12 @@ const emit = defineEmits(['open', 'create', 'import', 'export', 'status', 'delet
 //     全员可见（restricted=false）→ 全部 agent 数
 //     白名单（restricted=true）  → 绑定的 agent 数（bound_count）
 const scopeTag = (s) => {
-  if (s.agent_id) return { type: 'success', text: '私有' }
+  if (s.agent_id) return { type: 'success', text: t('skill.scopePrivate') }
   const n = s.restricted ? (s.bound_count || 0) : props.agentCount
-  return { type: s.restricted && n === 0 ? 'danger' : 'info', text: `共享${n}` }
+  return {
+    type: s.restricted && n === 0 ? 'danger' : 'info',
+    text: t('skill.scopeShared', { n })
+  }
 }
 
 const formatTime = (t) => {
@@ -218,11 +224,9 @@ const keyword = ref('')
 // 两态状态（与后端 shared/models.StatusXxx 一一对应）：
 //   1 正常：可修改、可运行（新建默认）
 //   3 废弃：不可修改、不可运行
-const STATUS_META = {
-  1: { text: '正常', tag: 'success' },
-  3: { text: '废弃', tag: 'danger' }
-}
-const statusMeta = (status) => STATUS_META[status] || STATUS_META[1]
+const statusMeta = (status) => (status === 3
+  ? { text: t('skill.filterDeprecated'), tag: 'danger' }
+  : { text: t('skill.filterNormal'), tag: 'success' })
 // 卡片名样式：废弃=红（正常态不加类）
 const titleClass = (status) => (status === 3 ? 'title-disabled' : '')
 // 卡片悬停提示（参考工作流）：废弃时提示"查看"
@@ -231,12 +235,10 @@ const cardHoverTip = (skill) => {
   // 系统内置：删/改名的闸门在 shared/models 的名单里，卡片上只是把按钮藏了 ——
   // 不在这儿说出来，"删除按钮凭空消失"会被当成故障。
   if (skill.protected) {
-    const why = '系统内置技能（不可删除、不可改名）'
-    if (st === 3) return `${why} · 点击查看（废弃·只读）`
-    return `${why} · 点击编辑`
+    const why = t('skill.systemHoverWhy')
+    return t(st === 3 ? 'skill.hoverSystemDeprecated' : 'skill.hoverSystemEdit', { why })
   }
-  if (st === 3) return '点击查看技能（废弃·只读）'
-  return '点击编辑技能'
+  return t(st === 3 ? 'skill.hoverViewDeprecated' : 'skill.hoverEdit')
 }
 
 // 鼠标是否正压在卡片底部的操作条上：压上去时把「点击编辑技能」的 tip 关掉
@@ -292,8 +294,8 @@ const skillGroups = computed(() => {
   const sys = showSystem.value ? list.filter(s => s.protected) : []
   const rest = list.filter(s => !s.protected)
   const groups = []
-  if (sys.length) groups.push({ key: 'system', label: '系统内置', items: sys })
-  if (rest.length) groups.push({ key: 'other', label: '其他技能', items: rest })
+  if (sys.length) groups.push({ key: 'system', label: t('skill.groupSystem'), items: sys })
+  if (rest.length) groups.push({ key: 'other', label: t('skill.groupOther'), items: rest })
   // 只有一组时不画组头：本来就是一个扁平列表，再加个标题纯是噪声
   const headed = groups.length > 1
   return groups.map(g => ({ ...g, headed }))
@@ -302,19 +304,16 @@ const skillGroups = computed(() => {
 // 空列表提示文案（区分「搜索无结果」与「该状态下暂无数据」）
 const emptyText = computed(() => {
   if (keyword.value) {
-    return '没有找到匹配的技能'
+    return t('skill.emptySearch')
   }
   // 系统内置被开关藏起来了：说清为什么空，而不是笼统报「暂无技能」
   if (!showSystem.value && props.skills.some(s => s.protected)) {
-    return '系统内置技能已隐藏（点顶部「系统」可重新显示）'
-  }
-  if (statusFilter.value === 'normal') {
-    return '暂无技能'
+    return t('skill.emptySystemHidden')
   }
   if (statusFilter.value === 'deprecated') {
-    return '暂无废弃的技能'
+    return t('skill.emptyDeprecated')
   }
-  return '暂无技能'
+  return t('skill.emptyNone')
 })
 
 // 切换状态筛选（「全部」同时承担刷新）
@@ -336,15 +335,19 @@ const closeListSearch = () => { listSearchOpen.value = false }
 watch(listHeaderSize, (s) => { if (s !== 'xs') listSearchOpen.value = false })
 // 状态筛选项（紧凑下拉用；与模板里的平铺按钮一一对应）
 const STATUS_FILTERS = [
-  { key: 'all', label: '全部', icon: Refresh, cls: '' },
-  { key: 'normal', label: '正常', icon: CircleCheck, cls: 'btn-enable' },
-  { key: 'deprecated', label: '废弃', icon: CircleClose, cls: 'btn-disable' }
+  { key: 'all', icon: Refresh, cls: '' },
+  { key: 'normal', icon: CircleCheck, cls: 'btn-enable' },
+  { key: 'deprecated', icon: CircleClose, cls: 'btn-disable' }
 ]
+// 标签不放进常量里：切语言时 STATUS_FILTERS 不会重建，label 会停在旧语言
+const statusLabel = (key) => t(key === 'normal'
+  ? 'skill.filterNormal'
+  : key === 'deprecated' ? 'skill.filterDeprecated' : 'skill.filterAll')
 const activeStatus = computed(() => STATUS_FILTERS.find(o => o.key === statusFilter.value) || STATUS_FILTERS[0])
 const activeStatusLabel = computed(() => {
   const o = activeStatus.value
   const n = statusCounts.value[o.key]
-  return o.label + (n ? ` (${n})` : '')
+  return statusLabel(o.key) + (n ? ` (${n})` : '')
 })
 </script>
 

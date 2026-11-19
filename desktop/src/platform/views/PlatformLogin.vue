@@ -34,11 +34,14 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
 import { saveAuth } from '../auth'
 
 const emit = defineEmits(['login-success'])
+
+const { t } = useI18n()
 
 // 「记住我」＝记住账号名（**绝不记密码**），下次打开自动填上。
 // 键名与控制台的 app_flame_auth_remembered_* 分开，两边互不影响。
@@ -50,14 +53,14 @@ const form = reactive({ name: '', password: '', rememberMe: false })
 
 const handleLogin = async () => {
   if (!form.name || !form.password) {
-    ElMessage({ message: '账号和密码不能为空', type: 'error', duration: 2000 })
+    ElMessage({ message: t('login.accountPasswordRequired'), type: 'error', duration: 2000 })
     return
   }
   loading.value = true
   try {
     const data = await api.login(form.name.trim(), form.password)
     if (!data?.token || !data?.user) {
-      throw new Error('登录响应缺少 token 或用户信息')
+      throw new Error(t('login.missingToken'))
     }
     saveAuth(data.token, data.user)
 
@@ -77,7 +80,7 @@ const handleLogin = async () => {
     emit('login-success')
   } catch (err) {
     // 后端对"账号不存在 / 密码错误"用同一句文案，避免账号枚举；这里原样透出
-    ElMessage({ message: err.message || '登录失败，请重试', type: 'error', duration: 2000 })
+    ElMessage({ message: err.message || t('loginError.failed'), type: 'error', duration: 2000 })
   } finally {
     loading.value = false
   }

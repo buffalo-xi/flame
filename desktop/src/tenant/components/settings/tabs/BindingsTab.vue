@@ -1,18 +1,18 @@
 <template>
   <div class="module-section">
     <div class="module-head">
-      <h3>服务凭证</h3>
+      <h3>{{ t('settings.tabs.svcauthbindings.title') }}</h3>
       <div class="head-actions">
-        <el-button type="primary" size="small" :icon="Refresh" @click="loadBindings">刷新</el-button>
+        <el-button type="primary" size="small" :icon="Refresh" @click="loadBindings">{{ t('settings.bindings.refresh') }}</el-button>
       </div>
     </div>
 
     <div v-loading="bindingLoading" class="config-form">
       <el-alert type="info" :closable="false" show-icon class="config-tip">
-        <template #title>服务凭证</template>
-        把 API Key / OAuth 身份绑定到租户用户，MCP 与 RPC 服务共用。
+        <template #title>{{ t('settings.bindings.tipTitle') }}</template>
+        {{ t('settings.bindings.tipIntro') }}
         <br />
-        这里是创建 API Key 的唯一入口：新建的绑定默认「已限制端点范围」且目标为空，需点「配置」勾选允许的智能体 / 工作流，否则该 key 调不到任何端点。
+        {{ t('settings.bindings.tipCreate') }}
       </el-alert>
 
       <!-- 绑定列表：API Key / OAuth 两个 tab -->
@@ -30,8 +30,8 @@
                     :model-value="b.is_active"
                     size="small"
                     inline-prompt
-                    active-text="启用"
-                    inactive-text="停用"
+                    :active-text="t('settings.bindings.switchOn')"
+                    :inactive-text="t('settings.bindings.switchOff')"
                     @change="(v) => toggleBinding(b, v)"
                   />
                   <el-button
@@ -39,10 +39,11 @@
                     size="small"
                     type="primary"
                     :icon="b.showSecret ? Hide : View"
-                    :title="b.showSecret ? '隐藏' : '显示'"
+                    :title="b.showSecret ? t('settings.bindings.hide') : t('settings.bindings.show')"
                     @click="b.showSecret = !b.showSecret"
                   />
-                  <el-button circle size="small" :icon="CopyDocument" title="复制" @click="copyText(b.external_subject)" />
+                  <el-button circle size="small" :icon="CopyDocument" :title="t('settings.bindings.copy')"
+                             @click="copyText(b.external_subject)" />
                   <el-button link type="danger" :icon="Delete" @click="removeBinding(b)" />
                 </div>
               </div>
@@ -52,21 +53,21 @@
               </div>
               <!-- 端点范围：三种状态都要能一眼分清 —— 不限制=全开，已限制但空=全禁（新建绑定的初始态） -->
               <div class="binding-scope">
-                <span class="binding-scope-label">端点范围</span>
-                <span v-if="b.restrict_targets && b.target_count === 0" class="binding-scope-warn">⚠ 已限制但未选目标（无法调用任何端点）</span>
-                <span v-else-if="b.restrict_targets" class="binding-scope-ok">✓ 已限制 {{ b.target_count }} 个目标</span>
-                <span v-else-if="b.exclude_supervisor" class="binding-scope-ok">✓ 除超级智能体外全部端点</span>
-                <span v-else class="binding-scope-warn">⚠ 不限制（全部端点）</span>
-                <el-button link type="primary" size="small" @click="openScopeDialog(b)">配置</el-button>
+                <span class="binding-scope-label">{{ t('settings.bindings.scopeLabel') }}</span>
+                <span v-if="b.restrict_targets && b.target_count === 0" class="binding-scope-warn">{{ t('settings.bindings.scopeRestrictedEmpty') }}</span>
+                <span v-else-if="b.restrict_targets" class="binding-scope-ok">{{ t('settings.bindings.scopeRestrictedCount', { n: b.target_count }) }}</span>
+                <span v-else-if="b.exclude_supervisor" class="binding-scope-ok">{{ t('settings.bindings.scopeExcludeSupervisor') }}</span>
+                <span v-else class="binding-scope-warn">{{ t('settings.bindings.scopeUnrestricted') }}</span>
+                <el-button link type="primary" size="small" @click="openScopeDialog(b)">{{ t('settings.bindings.configure') }}</el-button>
               </div>
             </div>
-            <div v-if="apikeyBindings.length === 0" class="binding-empty">暂无绑定</div>
+            <div v-if="apikeyBindings.length === 0" class="binding-empty">{{ t('settings.bindings.empty') }}</div>
           </div>
           <div class="binding-add-row">
-            <el-select v-model="newApiKeyUserId" placeholder="选择用户" filterable size="small" style="width: 240px">
+            <el-select v-model="newApiKeyUserId" :placeholder="t('settings.bindings.selectUser')" filterable size="small" style="width: 240px">
               <el-option v-for="u in userOptions" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
             </el-select>
-            <el-button type="primary" size="small" :icon="Plus" :disabled="!newApiKeyUserId" @click="addApiKeyBinding">新增 API Key 绑定</el-button>
+            <el-button type="primary" size="small" :icon="Plus" :disabled="!newApiKeyUserId" @click="addApiKeyBinding">{{ t('settings.bindings.addApiKey') }}</el-button>
           </div>
         </el-tab-pane>
 
@@ -83,8 +84,8 @@
                     :model-value="b.is_active"
                     size="small"
                     inline-prompt
-                    active-text="启用"
-                    inactive-text="停用"
+                    :active-text="t('settings.bindings.switchOn')"
+                    :inactive-text="t('settings.bindings.switchOff')"
                     @change="(v) => toggleBinding(b, v)"
                   />
                   <el-button link type="danger" :icon="Delete" @click="removeBinding(b)" />
@@ -92,38 +93,38 @@
               </div>
               <div class="client-card-body binding-oauth-body">
                 <div class="binding-oauth-row">
-                  <span class="binding-oauth-label">Issuer</span>
+                  <span class="binding-oauth-label">{{ t('settings.bindings.issuerLabel') }}</span>
                   <code class="apikey-value">{{ b.external_issuer || '-' }}</code>
                 </div>
                 <div class="binding-oauth-row">
-                  <span class="binding-oauth-label">Subject</span>
+                  <span class="binding-oauth-label">{{ t('settings.bindings.subjectLabel') }}</span>
                   <code class="apikey-value">{{ b.external_subject }}</code>
                 </div>
               </div>
               <div class="binding-scope">
-                <span class="binding-scope-label">端点范围</span>
-                <span v-if="b.restrict_targets && b.target_count === 0" class="binding-scope-warn">⚠ 已限制但未选目标（无法调用任何端点）</span>
-                <span v-else-if="b.restrict_targets" class="binding-scope-ok">✓ 已限制 {{ b.target_count }} 个目标</span>
-                <span v-else-if="b.exclude_supervisor" class="binding-scope-ok">✓ 除超级智能体外全部端点</span>
-                <span v-else class="binding-scope-warn">⚠ 不限制（全部端点）</span>
-                <el-button link type="primary" size="small" @click="openScopeDialog(b)">配置</el-button>
+                <span class="binding-scope-label">{{ t('settings.bindings.scopeLabel') }}</span>
+                <span v-if="b.restrict_targets && b.target_count === 0" class="binding-scope-warn">{{ t('settings.bindings.scopeRestrictedEmpty') }}</span>
+                <span v-else-if="b.restrict_targets" class="binding-scope-ok">{{ t('settings.bindings.scopeRestrictedCount', { n: b.target_count }) }}</span>
+                <span v-else-if="b.exclude_supervisor" class="binding-scope-ok">{{ t('settings.bindings.scopeExcludeSupervisor') }}</span>
+                <span v-else class="binding-scope-warn">{{ t('settings.bindings.scopeUnrestricted') }}</span>
+                <el-button link type="primary" size="small" @click="openScopeDialog(b)">{{ t('settings.bindings.configure') }}</el-button>
               </div>
             </div>
-            <div v-if="oauthBindings.length === 0" class="binding-empty">暂无绑定</div>
+            <div v-if="oauthBindings.length === 0" class="binding-empty">{{ t('settings.bindings.empty') }}</div>
           </div>
           <div class="binding-add-row">
-            <el-select v-model="newOauthForm.user_id" placeholder="选择用户" filterable size="small" style="width: 200px">
+            <el-select v-model="newOauthForm.user_id" :placeholder="t('settings.bindings.selectUser')" filterable size="small" style="width: 200px">
               <el-option v-for="u in userOptions" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
             </el-select>
-            <el-input v-model="newOauthForm.external_issuer" placeholder="Issuer (iss，可空)" size="small" style="width: 220px" />
-            <el-input v-model="newOauthForm.external_subject" placeholder="Subject (sub，必填)" size="small" style="width: 200px" />
+            <el-input v-model="newOauthForm.external_issuer" :placeholder="t('settings.bindings.issuerPlaceholder')" size="small" style="width: 220px" />
+            <el-input v-model="newOauthForm.external_subject" :placeholder="t('settings.bindings.subjectPlaceholder')" size="small" style="width: 200px" />
             <el-button
               type="primary"
               size="small"
               :icon="Plus"
               :disabled="!newOauthForm.user_id || !newOauthForm.external_subject"
               @click="addOauthBinding"
-            >新增 OAuth 绑定</el-button>
+            >{{ t('settings.bindings.addOauth') }}</el-button>
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -132,7 +133,7 @@
     <!-- 端点访问范围：按 agent / flow 目标授权（覆盖该目标的 rpc 与 mcp 端点）。
          候选目标不用下拉：在配置面板左侧再开一个同高列表窗口，一次看全并勾选。 -->
     <SidePanel panel-class="scope-picker" :visible="scopeDialogVisible && scopePickerVisible"
-               title="可授权的端点目标" :panel-style="scopePickerStyle"
+               :title="t('settings.bindings.pickerTitle')" :panel-style="scopePickerStyle"
                :loading="scopeDialogLoading" @close="scopePickerVisible = false">
       <!-- 两块区域各自成卡片：普通端点在前，超级智能体（管理入口，警示色）单独一块放最后 -->
       <div v-for="g in scopeCandidateGroups" :key="g.key" class="scope-group"
@@ -142,8 +143,7 @@
         </div>
         <!-- 超级智能体的端点等于租户管理入口：只提示，不隐藏（隐藏会让人以为"没有这个选项"） -->
         <div v-if="g.key === 'supervisor'" class="scope-group-warn">
-          授权后，外部凭证可调用租户管理能力（创建 / 修改 / 删除智能体与技能、改授权）。
-          请逐个确认，不要顺手全选。
+          {{ t('settings.bindings.supervisorWarn') }}
         </div>
         <div class="scope-group-items">
           <div v-for="c in g.items" :key="scopeKey(c)" class="scope-item"
@@ -153,45 +153,47 @@
             <span class="scope-item-main">
               <span class="scope-item-name">{{ c.name || c.target_id }}</span>
               <span class="scope-item-meta">
-                {{ c.target_type === 'agent' ? '智能体' : '工作流' }} · {{ (c.protocols || []).join(' / ') || '仅内部' }}
+                {{ c.target_type === 'agent' ? t('settings.bindings.targetTypeAgent') : t('settings.bindings.targetTypeFlow') }}
+                · {{ (c.protocols || []).join(' / ') || t('settings.bindings.internalOnly') }}
               </span>
             </span>
           </div>
         </div>
       </div>
       <div v-if="!scopeDialogLoading && !scopeCandidates.length" class="scope-empty">
-        没有对外开放端点的智能体 / 工作流
+        {{ t('settings.bindings.pickerEmpty') }}
       </div>
     </SidePanel>
 
-    <SidePanel :visible="scopeDialogVisible" :title="`可以访问的端点 · ${scopeBindingLabel}`"
+    <SidePanel :visible="scopeDialogVisible" :title="t('settings.bindings.panelTitle', { name: scopeBindingLabel })"
                :panel-style="sidePanel.styleFor(SCOPE_PANEL_WIDTH)"
                @close="scopeDialogVisible = false" @resize="sidePanel.startResize">
       <div class="settings-field">
-        <div class="field-label">可以访问的端点</div>
+        <div class="field-label">{{ t('settings.bindings.fieldScope') }}</div>
         <el-radio-group v-model="scopeMode">
-          <el-radio value="all">不限制（全部端点）</el-radio>
-          <el-radio value="exclude_supervisor">除超级智能体外全部</el-radio>
-          <el-radio value="selected">仅选中的目标</el-radio>
+          <el-radio value="all">{{ t('settings.bindings.modeAll') }}</el-radio>
+          <el-radio value="exclude_supervisor">{{ t('settings.bindings.modeExclude') }}</el-radio>
+          <el-radio value="selected">{{ t('settings.bindings.modeSelected') }}</el-radio>
         </el-radio-group>
         <div class="editor-tip">
           <template v-if="scopeMode === 'all'">
-            该凭证可调用<b>全部对外开放端点</b>，包括超级智能体的。
+            {{ t('settings.bindings.tipAll1') }}<b>{{ t('settings.bindings.tipAllBold') }}</b>{{ t('settings.bindings.tipAll2') }}
           </template>
           <template v-else-if="scopeMode === 'exclude_supervisor'">
-            可调用<b>除超级智能体外</b>的全部对外开放端点 —— 新对外开放的普通端点自动生效，
-            不用回头补白名单；supervisor 的端点等于租户管理入口，这里一并挡掉。
+            {{ t('settings.bindings.tipExclude1') }}<b>{{ t('settings.bindings.tipExcludeBold') }}</b>{{ t('settings.bindings.tipExclude2') }}
           </template>
           <template v-else>
-            只允许左侧列表里勾选的目标。新建绑定默认<b>这一档</b>——忘了配的代价是调不到，而不是全开。
+            {{ t('settings.bindings.tipSelected1') }}<b>{{ t('settings.bindings.tipSelectedBold') }}</b>{{ t('settings.bindings.tipSelected2') }}
           </template>
         </div>
       </div>
 
       <div class="settings-field">
         <div class="field-label">
-          已选目标
-          <span class="scope-chosen-count">{{ scopeSelectedKeys.length }} / {{ scopeCandidates.length }}</span>
+          {{ t('settings.bindings.chosenLabel') }}
+          <span class="scope-chosen-count">
+            {{ t('settings.bindings.chosenCount', { n: scopeSelectedKeys.length, total: scopeCandidates.length }) }}
+          </span>
         </div>
 
         <!-- 已选目标必须列出来：只给个数字看不出这条凭证到底能用哪些端点 -->
@@ -200,7 +202,9 @@
                   :type="it.supervisor ? 'warning' : 'primary'"
                   :closable="scopeRestrict" disable-transitions
                   @close="removeScopeTarget(it.key)">
-            {{ it.name }}<span class="scope-chosen-type">{{ it.type === 'agent' ? '智能体' : '工作流' }}{{ it.missing ? ' · 未对外开放' : '' }}</span>
+            {{ it.name }}<span class="scope-chosen-type">{{
+              it.type === 'agent' ? t('settings.bindings.targetTypeAgent') : t('settings.bindings.targetTypeFlow')
+            }}{{ it.missing ? t('settings.bindings.missingExposed') : '' }}</span>
           </el-tag>
         </div>
         <div v-else class="scope-chosen-empty" :class="{ warn: scopeRestrict }">
@@ -210,27 +214,26 @@
         <div class="scope-summary">
           <el-button size="small" type="primary" :disabled="!scopeRestrict"
                      @click="scopePickerVisible = !scopePickerVisible">
-            {{ scopePickerVisible ? '收起列表' : '选择目标' }}
+            {{ scopePickerVisible ? t('settings.bindings.collapseList') : t('settings.bindings.pickTargets') }}
           </el-button>
-          <el-button size="small" :disabled="!scopeRestrict" @click="selectAllScope">全选普通</el-button>
-          <el-button size="small" :disabled="!scopeRestrict" @click="clearScopeSelection">全清</el-button>
+          <el-button size="small" :disabled="!scopeRestrict" @click="selectAllScope">{{ t('settings.bindings.selectNormal') }}</el-button>
+          <el-button size="small" :disabled="!scopeRestrict" @click="clearScopeSelection">{{ t('settings.bindings.clearAll') }}</el-button>
         </div>
         <div class="editor-tip">
-          点「选择目标」在左侧列表里勾选；勾一个目标会同时放行它的 rpc 与 mcp 端点。
-          「全选普通」不包括超级智能体。
+          {{ t('settings.bindings.pickHint') }}
         </div>
 
         <el-alert v-if="scopeRestrict && scopeSelectedKeys.length === 0" type="warning"
                   :closable="false" show-icon class="scope-alert">
-          已开启限制但一个目标都没选：保存后该凭证将<b>无法调用任何端点</b>。
+          {{ t('settings.bindings.alertNoTarget1') }}<b>{{ t('settings.bindings.alertNoTargetBold') }}</b>{{ t('settings.bindings.alertNoTarget2') }}
         </el-alert>
         <el-alert v-else type="info" :closable="false" show-icon class="scope-alert">
-          列表只包含<b>有对外开放端点</b>的智能体 / 工作流；仅内部的目标授权了也调不到。
+          {{ t('settings.bindings.alertCandidates1') }}<b>{{ t('settings.bindings.alertCandidatesBold') }}</b>{{ t('settings.bindings.alertCandidates2') }}
         </el-alert>
       </div>
       <template #footer>
-        <el-button @click="scopeDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="scopeDialogSaving" @click="saveScope">保存</el-button>
+        <el-button @click="scopeDialogVisible = false">{{ t('settings.bindings.cancel') }}</el-button>
+        <el-button type="primary" :loading="scopeDialogSaving" @click="saveScope">{{ t('settings.bindings.save') }}</el-button>
       </template>
     </SidePanel>
   </div>
@@ -238,6 +241,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Plus, Delete, View, Hide, CopyDocument, Refresh, Check } from '@element-plus/icons-vue'
 import apiConfig from '../../../config/api.js'
@@ -247,6 +251,7 @@ import { useSidePanelContext } from '../useSidePanel.js'
 import { useUsers } from '../useUsers.js'
 import { useBindings } from '../useBindings.js'
 import { maskSecret, copyText } from '../format.js'
+import { formatError } from '../../../../locales'
 
 const props = defineProps({
   // 当前 tab 是否激活：用它做惰性加载，避免进设置页就把绑定全拉一遍
@@ -257,6 +262,8 @@ const { userOptions, userLabel, userOptionLabel, userDisplayName, userCardTitle,
 const { apikeyBindings, oauthBindings, bindingLoading, loadBindings } = useBindings()
 // 侧边面板坐标由父组件（Settings.vue）统一提供，父子面板才能对齐
 const sidePanel = useSidePanelContext()
+
+const { t } = useI18n()
 
 // ===== 列表 / 新增 =====
 const bindingTab = ref('apikey')
@@ -282,22 +289,22 @@ const addApiKeyBinding = async () => {
       },
       body: JSON.stringify({ auth_type: 'apikey', user_id: newApiKeyUserId.value })
     })
-    if (!resp.ok) throw new Error('新增失败')
+    if (!resp.ok) throw new Error(t('settings.bindings.addFailed'))
     const data = await resp.json()
     if (data.code === 200) {
       // 新建即受限（白名单为空 = 全禁），不提示的话会以为是 key 有问题
       ElMessage.success({
-        message: '新增 API Key 绑定成功：默认已限制端点范围且尚未选目标，请点「配置」勾选允许的智能体 / 工作流',
+        message: t('settings.bindings.addedApiKey'),
         offset: 20,
         duration: 6000
       })
       newApiKeyUserId.value = ''
       await loadBindings()
     } else {
-      ElMessage.error({ message: data.msg || '新增失败', offset: 20 })
+      ElMessage.error({ message: formatError(data) || t('settings.bindings.addFailed'), offset: 20 })
     }
   } catch (e) {
-    ElMessage.error({ message: `新增失败: ${e.message}`, offset: 20 })
+    ElMessage.error({ message: t('settings.bindings.addFailedDetail', { msg: e.message }), offset: 20 })
   }
 }
 
@@ -319,21 +326,21 @@ const addOauthBinding = async () => {
         external_subject: f.external_subject
       })
     })
-    if (!resp.ok) throw new Error('新增失败')
+    if (!resp.ok) throw new Error(t('settings.bindings.addFailed'))
     const data = await resp.json()
     if (data.code === 200) {
       ElMessage.success({
-        message: '新增 OAuth 绑定成功：默认已限制端点范围且尚未选目标，请点「配置」勾选允许的智能体 / 工作流',
+        message: t('settings.bindings.addedOauth'),
         offset: 20,
         duration: 6000
       })
       newOauthForm.value = { user_id: '', external_issuer: '', external_subject: '' }
       await loadBindings()
     } else {
-      ElMessage.error({ message: data.msg || '新增失败', offset: 20 })
+      ElMessage.error({ message: formatError(data) || t('settings.bindings.addFailed'), offset: 20 })
     }
   } catch (e) {
-    ElMessage.error({ message: `新增失败: ${e.message}`, offset: 20 })
+    ElMessage.error({ message: t('settings.bindings.addFailedDetail', { msg: e.message }), offset: 20 })
   }
 }
 
@@ -344,14 +351,14 @@ const removeBinding = async (b) => {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` }
     })
-    if (!resp.ok) throw new Error('删除失败')
+    if (!resp.ok) throw new Error(t('settings.bindings.deleteFailed'))
     const data = await resp.json()
     if (data.code === 200) {
-      ElMessage.success({ message: '已删除', offset: 20 })
+      ElMessage.success({ message: t('settings.bindings.deleted'), offset: 20 })
       await loadBindings()
     }
   } catch (e) {
-    ElMessage.error({ message: `删除失败: ${e.message}`, offset: 20 })
+    ElMessage.error({ message: t('settings.bindings.deleteFailedDetail', { msg: e.message }), offset: 20 })
   }
 }
 
@@ -366,16 +373,19 @@ const toggleBinding = async (b, val) => {
       },
       body: JSON.stringify({ user_id: b.user_id, is_active: val })
     })
-    if (!resp.ok) throw new Error('更新失败')
+    if (!resp.ok) throw new Error(t('settings.bindings.updateFailed'))
     const data = await resp.json()
     if (data.code === 200) {
       b.is_active = val
-      ElMessage.success({ message: val ? '已启用' : '已停用', offset: 20 })
+      ElMessage.success({
+        message: val ? t('settings.bindings.enabled') : t('settings.bindings.disabled'),
+        offset: 20
+      })
     } else {
-      ElMessage.error({ message: data.msg || '更新失败', offset: 20 })
+      ElMessage.error({ message: formatError(data) || t('settings.bindings.updateFailed'), offset: 20 })
     }
   } catch (e) {
-    ElMessage.error({ message: `更新失败: ${e.message}`, offset: 20 })
+    ElMessage.error({ message: t('settings.bindings.updateFailedDetail', { msg: e.message }), offset: 20 })
   }
 }
 
@@ -412,16 +422,16 @@ const scopeMode = computed({
 
 // 「已选目标」为空时的说明：三档各有各的含义，不能都写成「不限制」
 const scopeEmptyHint = computed(() => {
-  if (scopeRestrict.value) return '未选择任何目标 —— 保存后该凭证无法调用任何端点'
-  if (scopeExcludeSupervisor.value) return '当前范围：除超级智能体外全部端点（不需要逐个选择）'
-  return '当前不限制：可调用全部对外开放端点'
+  if (scopeRestrict.value) return t('settings.bindings.emptyHintRestrict')
+  if (scopeExcludeSupervisor.value) return t('settings.bindings.emptyHintExclude')
+  return t('settings.bindings.emptyHintAll')
 })
 
 // 混进父级的面板互斥集合：否则点外部时这两个面板不会跟着关
 sidePanel.register(scopeDialogVisible)
 sidePanel.register(scopePickerVisible)
 
-const scopeKey = (t) => `${t.target_type}:${t.target_id}`
+const scopeKey = (target) => `${target.target_type}:${target.target_id}`
 
 // 候选目标分两组：普通端点在前，超级智能体单独成组放在最后 ——
 // 它是租户管理入口，不该混在常规选项里被顺手勾上。组内按名字排。
@@ -438,8 +448,8 @@ const scopeCandidateGroups = computed(() => {
   sup.sort(byName)
   normal.sort(byName)
   return [
-    { key: 'normal', title: '普通端点', items: normal },
-    { key: 'supervisor', title: '超级智能体的端点', items: sup }
+    { key: 'normal', title: t('settings.bindings.groupNormal'), items: normal },
+    { key: 'supervisor', title: t('settings.bindings.groupSupervisor'), items: sup }
   ].filter((g) => g.items.length)
 })
 
@@ -514,7 +524,7 @@ const openScopeDialog = async (b) => {
     if (cand.code === 200) {
       scopeCandidates.value = cand.data.items || []
     } else {
-      ElMessage.error(cand.msg || '加载候选目标失败')
+      ElMessage.error(formatError(cand) || t('settings.bindings.loadCandidatesFailed'))
     }
     if (cur.code === 200) {
       // 以服务端为准（列表里的 target_count 只是摘要）
@@ -523,7 +533,7 @@ const openScopeDialog = async (b) => {
       scopeSelectedKeys.value = (cur.data.targets || []).map(scopeKey)
     }
   } catch (e) {
-    ElMessage.error(`加载端点范围失败: ${e.message}`)
+    ElMessage.error(t('settings.bindings.loadScopeFailed', { msg: e.message }))
   } finally {
     scopeDialogLoading.value = false
   }
@@ -548,23 +558,23 @@ const saveScope = async () => {
       })
     })
     const data = await resp.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '保存失败')
+    if (data.code !== 200) throw new Error(formatError(data) || t('settings.bindings.saveFailed'))
     // 三档各有各的结果，提示不能合并：尤其「限制 + 空列表」是全禁，不能显示成不限制
     if (scopeRestrict.value) {
       if (targets.length === 0) {
-        ElMessage.warning('已设为限制且未选任何目标：该凭证将无法调用任何端点')
+        ElMessage.warning(t('settings.bindings.savedRestrictedEmpty'))
       } else {
-        ElMessage.success(`已限制为 ${targets.length} 个目标`)
+        ElMessage.success(t('settings.bindings.savedRestrictedCount', { n: targets.length }))
       }
     } else if (scopeExcludeSupervisor.value) {
-      ElMessage.success('已设为「除超级智能体外全部端点」')
+      ElMessage.success(t('settings.bindings.savedExclude'))
     } else {
-      ElMessage.success('已设为不限制：该凭证可调用全部对外开放端点')
+      ElMessage.success(t('settings.bindings.savedAll'))
     }
     scopeDialogVisible.value = false
     await loadBindings()
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('settings.bindings.saveFailed'))
   } finally {
     scopeDialogSaving.value = false
   }

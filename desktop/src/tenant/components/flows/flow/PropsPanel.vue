@@ -22,12 +22,17 @@
           @click="startEditLabel"
         >{{ nodeLabel }} <span class="node-name-id">({{ selectedNode.id }})</span></span>
       </div>
-      <div v-else class="panel-title">节点属性</div>
+      <div v-else class="panel-title">{{ t('flow.propsPanel.title') }}</div>
       <span class="close-icon" @click="$emit('close')">×</span>
     </div>
     <div class="panel-body">
       <div v-if="selectedNode" class="note-edit-wrapper">
-        <div class="note-edit" contenteditable="true" @blur="updateNodeNote">{{ nodeNote }}</div>
+        <div
+          class="note-edit"
+          contenteditable="true"
+          :data-placeholder="t('flow.propsPanel.notePlaceholder')"
+          @blur="updateNodeNote"
+        >{{ nodeNote }}</div>
       </div>
       <div class="panel-content">
         <!-- 流式输出绑定编辑视图（覆盖整个 panel-content） -->
@@ -216,14 +221,14 @@
         <div v-else-if="selectedNode" key="node-default" class="node-props-inner">
           <div class="default-props">
             <div class="prop-group">
-              <label class="prop-label">节点ID</label>
+              <label class="prop-label">{{ t('flow.propsPanel.nodeId') }}</label>
               <span class="prop-value">{{ selectedNode.id }}</span>
             </div>
           </div>
         </div>
         <div v-else key="empty-state" class="empty-state">
-          <p>请选择一个节点</p>
-          <p class="empty-hint">点击流程图中的节点查看属性</p>
+          <p>{{ t('flow.propsPanel.emptyTitle') }}</p>
+          <p class="empty-hint">{{ t('flow.propsPanel.emptyHint') }}</p>
         </div>
       </div>
     </div>
@@ -277,6 +282,9 @@ import MemoryNodeProps from './MemoryNodeProps.vue'
 import VariableSelect from './VariableSelect.vue'
 import OutputBindingConfig from './OutputBindingConfig.vue'
 import { useEscClose } from '../../../composables/useEscClose'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 // 从父组件获取 nodes 和 edges
 const FlowNodes = inject('FlowNodes', ref([]))
@@ -491,7 +499,7 @@ const updateNodeLabel = () => {
 
 const updateNodeNote = (event) => {
   const newNote = event.target.innerText.trim()
-  if (newNote !== nodeNote.value && newNote !== '输入节点说明...') {
+  if (newNote !== nodeNote.value && newNote !== t('flow.propsPanel.notePlaceholder')) {
     nodeNote.value = newNote
     emit('updateNodeData', {
       nodeId: props.selectedNode.id,
@@ -923,7 +931,7 @@ const handleUpdateLimits = (limitsData) => {
 }
 
 .note-edit:empty:before {
-  content: '输入节点说明...';
+  content: attr(data-placeholder);
   color: #777;
 }
 

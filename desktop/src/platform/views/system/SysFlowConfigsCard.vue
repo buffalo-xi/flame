@@ -1,16 +1,15 @@
 <template>
   <div class="domain">
     <div class="d-sub">
-      所有租户的硬顶：运行期取 min(租户值, 系统值)。留空 = 用兜底值，-1 = 不限制。
-      本组允许 -1（放开），与「智能体运行参数」那组不同 —— 那一组全是安全阀、没有 -1；
-      另外 0 在多数项里等同「未设置」并回退到上一级，想放开请写 -1，别写 0。
+      {{ t('platform.system.flowConfigs.intro1') }}
+      {{ t('platform.system.flowConfigs.intro2') }}
     </div>
 
     <div v-loading="loading" class="cfg-table">
       <div class="cfg-head">
-        <span>配置项</span>
-        <span>兜底值</span>
-        <span>系统级设置</span>
+        <span>{{ t('platform.system.card.colItem') }}</span>
+        <span>{{ t('platform.system.card.colFallback') }}</span>
+        <span>{{ t('platform.system.card.colSystem') }}</span>
       </div>
       <div v-for="f in FIELDS" :key="f.key" class="cfg-row">
         <span class="cfg-name">
@@ -18,36 +17,39 @@
           <span class="cfg-desc">{{ f.desc }}</span>
         </span>
         <span class="cfg-fallback">{{ fallback[f.key] ?? '-' }}</span>
-        <el-input v-model="form[f.key]" size="small" placeholder="留空 = 用兜底值" />
+        <el-input v-model="form[f.key]" size="small" :placeholder="t('platform.system.card.placeholderFallback')" />
       </div>
     </div>
 
     <div class="blk-foot">
       <span class="tip">
-        调低会截断已配更高值的租户（只影响运行期取值，不会改租户行，租户页上的数字也不会自动变）。保存后立即生效。
+        {{ t('platform.system.card.saveHint') }}
       </span>
-      <el-button size="small" type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button size="small" type="primary" :loading="saving" @click="save">{{ t('platform.system.card.save') }}</el-button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../../api'
+
+const { t } = useI18n()
 
 // 与租户卡片 / 租户设置页同一套字段。
 // desc 是给人看的「这一项到底管什么」：七个名字里有三对近义（超时/执行/循环、记录/记忆），
 // 只给名字的话调之前必须先猜一次。
-const FIELDS = [
-  { key: 'max_timeout', label: '最大超时（秒）', desc: '单次运行的总时长上限，与工作流实例自己的 timeout 取小' },
-  { key: 'max_recursion_depth', label: '最大递归深度', desc: '跨 agent / 工作流的调用栈深度，用来拦住互相调用成环' },
-  { key: 'max_node_count', label: '最大节点数', desc: '单次运行最多执行多少个节点' },
-  { key: 'max_exec_count', label: '最大执行次数', desc: '单次运行内节点执行次数的总和上限（循环展开会累计得很快）' },
-  { key: 'max_loop_times', label: '最大循环次数', desc: '循环节点的迭代上限；遍历数组超长时会被截断并记一条日志' },
-  { key: 'max_run_records', label: '最大运行记录数', desc: '每个工作流保留多少条运行记录，超出后裁掉最旧的' },
-  { key: 'max_session_records', label: '最大会话记忆', desc: '每个会话保留多少条记忆记录，超出后裁掉最旧的' }
-]
+const FIELDS = computed(() => [
+  { key: 'max_timeout', label: t('platform.system.flowConfigs.max_timeout'), desc: t('platform.system.flowConfigs.max_timeoutDesc') },
+  { key: 'max_recursion_depth', label: t('platform.system.flowConfigs.max_recursion_depth'), desc: t('platform.system.flowConfigs.max_recursion_depthDesc') },
+  { key: 'max_node_count', label: t('platform.system.flowConfigs.max_node_count'), desc: t('platform.system.flowConfigs.max_node_countDesc') },
+  { key: 'max_exec_count', label: t('platform.system.flowConfigs.max_exec_count'), desc: t('platform.system.flowConfigs.max_exec_countDesc') },
+  { key: 'max_loop_times', label: t('platform.system.flowConfigs.max_loop_times'), desc: t('platform.system.flowConfigs.max_loop_timesDesc') },
+  { key: 'max_run_records', label: t('platform.system.flowConfigs.max_run_records'), desc: t('platform.system.flowConfigs.max_run_recordsDesc') },
+  { key: 'max_session_records', label: t('platform.system.flowConfigs.max_session_records'), desc: t('platform.system.flowConfigs.max_session_recordsDesc') }
+])
 
 const loading = ref(false)
 const saving = ref(false)
@@ -60,7 +62,7 @@ const esc = (s) =>
 
 const toForm = (src) => {
   const o = {}
-  for (const f of FIELDS) {
+  for (const f of FIELDS.value) {
     const v = src?.[f.key]
     o[f.key] = v === null || v === undefined ? '' : String(v)
   }
@@ -75,7 +77,7 @@ async function load() {
     Object.assign(form, toForm(data?.config))
     Object.assign(original, toForm(data?.config))
   } catch (err) {
-    ElMessage.error(err?.message || '加载失败')
+    ElMessage.error(err?.message || t('platform.system.card.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -84,7 +86,7 @@ async function load() {
 // '' → null（未设置）；非数字也按未设置处理（与租户侧同口径）
 function toBody() {
   const body = {}
-  for (const f of FIELDS) {
+  for (const f of FIELDS.value) {
     const raw = String(form[f.key] ?? '').trim()
     if (raw === '') {
       body[f.key] = null
@@ -98,27 +100,27 @@ function toBody() {
 
 async function save() {
   const body = toBody()
-  for (const f of FIELDS) {
+  for (const f of FIELDS.value) {
     if (body[f.key] !== null && body[f.key] < -1) {
-      ElMessage.error(`${f.label} 只能是 -1（不限制）或非负数`)
+      ElMessage.error(t('platform.system.card.invalidNonNegative', { label: f.label }))
       return
     }
   }
 
   // 这是影响所有租户的写操作：确认框里逐项列出"旧 → 新"
-  const changes = FIELDS.filter((f) => original[f.key] !== String(form[f.key] ?? '').trim()).map(
+  const changes = FIELDS.value.filter((f) => original[f.key] !== String(form[f.key] ?? '').trim()).map(
     (f) =>
-      `${esc(f.label)}：${esc(original[f.key] || '未设置')} → ${esc(String(form[f.key] ?? '').trim() || '未设置')}`
+      `${esc(f.label)}：${esc(original[f.key] || t('platform.system.card.unset'))} → ${esc(String(form[f.key] ?? '').trim() || t('platform.system.card.unset'))}`
   )
   if (!changes.length) {
-    ElMessage.info('没有需要保存的改动')
+    ElMessage.info(t('platform.system.card.noChanges'))
     return
   }
   try {
     await ElMessageBox.confirm(
-      `<div style="line-height:1.9">将修改<b>系统级</b>配置（影响所有租户）：<br/>${changes.join('<br/>')}</div>`,
-      '保存系统配置',
-      { dangerouslyUseHTMLString: true, type: 'warning', confirmButtonText: '确认保存' }
+      `<div style="line-height:1.9">${t('platform.system.card.confirmConfigPrefix')}<br/>${changes.join('<br/>')}</div>`,
+      t('platform.system.card.confirmTitle'),
+      { dangerouslyUseHTMLString: true, type: 'warning', confirmButtonText: t('platform.system.card.confirmSave') }
     )
   } catch {
     return
@@ -127,10 +129,10 @@ async function save() {
   saving.value = true
   try {
     await api.setSystemFlowConfigs(body)
-    ElMessage.success('系统配置已保存，立即生效')
+    ElMessage.success(t('platform.system.card.saved'))
     await load()
   } catch (err) {
-    ElMessage.error(err?.message || '保存失败')
+    ElMessage.error(err?.message || t('platform.system.card.saveFailed'))
   } finally {
     saving.value = false
   }

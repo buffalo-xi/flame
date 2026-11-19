@@ -3,8 +3,8 @@
     <!-- 只有内容"看起来像 Markdown"时才给切换：纯文本 / JSON 结果多一个无意义的开关只是噪音 -->
     <div v-if="markdownCapable" class="result-bar">
       <span class="result-switch">
-        <span :class="{ active: mode === 'md' }" title="按 Markdown 渲染" @click="mode = 'md'">美化</span>
-        <span :class="{ active: mode === 'raw' }" title="按原文显示" @click="mode = 'raw'">原始</span>
+        <span :class="{ active: mode === 'md' }" :title="t('flow.result.beautifyTitle')" @click="mode = 'md'">{{ t('flow.result.beautify') }}</span>
+        <span :class="{ active: mode === 'raw' }" :title="t('flow.result.rawTitle')" @click="mode = 'raw'">{{ t('flow.result.raw') }}</span>
       </span>
     </div>
     <pre v-if="!markdownCapable || mode === 'raw'" class="result-pre" :class="variant">{{ plain }}</pre>
@@ -14,7 +14,10 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { renderMarkdown } from '@/tenant/utils/markdown.js'
+
+const { t } = useI18n()
 
 const props = defineProps({
   // 不用 String 限定：结果可能是对象（历史记录里未强类型化），统一在组件内转成文本

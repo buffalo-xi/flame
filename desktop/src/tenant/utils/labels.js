@@ -1,3 +1,5 @@
+import i18n from '@/locales'
+
 // 节点 label 全图唯一：source_ref / call.target / fork_node_id 都可以按 label 写，
 // 重名会让这些引用指错节点。画布侧一律「撞名就加后缀」，不打断用户操作。
 
@@ -14,7 +16,7 @@ export const randomLabelSuffix = () => {
  * @param {(label: string) => boolean} isTaken 该 label 是否已被别人占用
  */
 export const uniqueLabel = (base, isTaken) => {
-  const wanted = (base || '').trim() || '节点'
+  const wanted = (base || '').trim() || i18n.global.t('flow.node.fallbackLabel.node')
   if (!isTaken(wanted)) return wanted
   for (let i = 0; i < 50; i++) {
     const candidate = `${wanted}-${randomLabelSuffix()}`

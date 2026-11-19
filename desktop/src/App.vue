@@ -72,7 +72,7 @@ export default {
       syncLoginState()
       // 刷新时 index.html 的静态标题会盖回登录时设的值，按当前会话补一次
       if (loggedIn.value) {
-        setTitle(mode.value === MODE_MANAGE ? '平台管理' : getDeskUser()?.schema)
+        setTitle(mode.value === MODE_MANAGE ? i18n.global.t('platform.app.consoleTitle') : getDeskUser()?.schema)
       }
     })
 

@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -28,7 +28,7 @@
 
         <div class="props-section">
           <div class="section-title">
-            <span>局部变量</span>
+            <span>{{ t('flow.common.localVars') }}</span>
             <button class="add-variable-icon-btn" ref="addLocalBtnRef" @click="toggleLocalDropdown">
               <el-icon><Plus /></el-icon>
             </button>
@@ -36,7 +36,7 @@
 
           <div class="output-variables-cards">
             <div v-if="Object.keys(localVariables).length === 0" class="output-empty-state">
-              <p>暂无局部变量</p>
+              <p>{{ t('flow.common.noLocalVars') }}</p>
             </div>
 
             <div
@@ -54,7 +54,7 @@
                   :data-variable-key="`local-${key}`"
                   class="output-variable-name-input"
                   @change="handleRenameLocalVariable(key, $event.target.value)"
-                  placeholder="变量名"
+                  :placeholder="t('flow.common.varName')"
                 />
               </div>
               <div class="output-variable-content">
@@ -62,7 +62,7 @@
                   type="text"
                   :value="config.description"
                   class="output-description-input"
-                  placeholder="添加描述"
+                  :placeholder="t('flow.common.addDescription')"
                   @change="handleUpdateLocalVariable(key, 'description', $event.target.value)"
                 />
                 <button class="output-delete-btn" @click="handleDeleteLocalVariable(key)">
@@ -87,16 +87,16 @@
     <Teleport to="body">
       <div v-if="showLocalDropdown" class="local-dropdown-overlay" @click="closeLocalDropdown">
         <div class="local-dropdown-menu" :style="localDropdownStyle" @click.stop>
-          <div class="local-dropdown-item" @click="handleAddLocalVariable('string')"><span class="dropdown-icon icon-string-inline">S</span>字符串</div>
-          <div class="local-dropdown-item" @click="handleAddLocalVariable('number')"><span class="dropdown-icon icon-number-inline">N</span>数字</div>
-          <div class="local-dropdown-item" @click="handleAddLocalVariable('boolean')"><span class="dropdown-icon icon-boolean-inline">B</span>布尔值</div>
-          <div class="local-dropdown-item" @click="handleAddLocalVariable('object')"><span class="dropdown-icon icon-object-inline">O</span>对象</div>
+          <div class="local-dropdown-item" @click="handleAddLocalVariable('string')"><span class="dropdown-icon icon-string-inline">S</span>{{ t('flow.typeOptions.string') }}</div>
+          <div class="local-dropdown-item" @click="handleAddLocalVariable('number')"><span class="dropdown-icon icon-number-inline">N</span>{{ t('flow.typeOptions.number') }}</div>
+          <div class="local-dropdown-item" @click="handleAddLocalVariable('boolean')"><span class="dropdown-icon icon-boolean-inline">B</span>{{ t('flow.typeOptions.boolean') }}</div>
+          <div class="local-dropdown-item" @click="handleAddLocalVariable('object')"><span class="dropdown-icon icon-object-inline">O</span>{{ t('flow.typeOptions.object') }}</div>
           <div class="local-dropdown-divider"></div>
-          <div class="local-dropdown-item" @click="handleAddLocalVariable('array[string]')"><span class="dropdown-icon icon-string-array-inline">S</span>字符串数组</div>
-          <div class="local-dropdown-item" @click="handleAddLocalVariable('array[number]')"><span class="dropdown-icon icon-number-array-inline">N</span>数字数组</div>
-          <div class="local-dropdown-item" @click="handleAddLocalVariable('array[boolean]')"><span class="dropdown-icon icon-boolean-array-inline">B</span>布尔数组</div>
+          <div class="local-dropdown-item" @click="handleAddLocalVariable('array[string]')"><span class="dropdown-icon icon-string-array-inline">S</span>{{ t('flow.typeOptions.arrayString') }}</div>
+          <div class="local-dropdown-item" @click="handleAddLocalVariable('array[number]')"><span class="dropdown-icon icon-number-array-inline">N</span>{{ t('flow.typeOptions.arrayNumber') }}</div>
+          <div class="local-dropdown-item" @click="handleAddLocalVariable('array[boolean]')"><span class="dropdown-icon icon-boolean-array-inline">B</span>{{ t('flow.typeOptions.arrayBoolean') }}</div>
           <div class="local-dropdown-divider"></div>
-          <div class="local-dropdown-item" @click="handleAddLocalVariable('array[object]')"><span class="dropdown-icon icon-object-array-inline">O</span>对象数组</div>
+          <div class="local-dropdown-item" @click="handleAddLocalVariable('array[object]')"><span class="dropdown-icon icon-object-array-inline">O</span>{{ t('flow.typeOptions.arrayObject') }}</div>
         </div>
       </div>
     </Teleport>
@@ -106,11 +106,14 @@
 <script setup>
 import { ref, watch, computed, onMounted, onBeforeUnmount } from 'vue';
 import NodeLastRun from './NodeLastRun.vue'
+import { useI18n } from 'vue-i18n'
 import { Plus, Delete } from '@element-plus/icons-vue';
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js';
 import OnErrorConfig from './OnErrorConfig.vue';
 import OutputVarsConfig from './OutputVarsConfig.vue';
 import { useEscClose } from '../../../composables/useEscClose';
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

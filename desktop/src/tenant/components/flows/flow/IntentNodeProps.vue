@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -21,11 +21,11 @@
       <div v-if="activeTab === 'settings'" class="settings-panel">
         <!-- 模型配置 -->
         <div class="props-section">
-          <div class="section-title"><span>模型配置</span></div>
+          <div class="section-title"><span>{{ t('flow.intentNode.modelSection') }}</span></div>
           <div class="prop-group">
-            <label class="prop-label">模型 (gateway_model)</label>
+            <label class="prop-label">{{ t('flow.modelConfig.label') }}</label>
             <el-select v-model="gatewayModel" class="prop-select" @change="saveIntent">
-              <el-option label="缺省模型" value="__default__" />
+              <el-option :label="t('flow.modelConfig.default')" value="__default__" />
               <el-option
                 v-for="m in selectableModels"
                 :key="m.gateway_model"
@@ -38,7 +38,7 @@
 
         <!-- 大模型参数（与 LLM 节点一致） -->
         <div class="props-section">
-          <div class="section-title"><span>大模型参数</span></div>
+          <div class="section-title"><span>{{ t('flow.modelConfig.paramsSection') }}</span></div>
           <div class="prop-group">
             <div class="gen-param-row">
               <label class="prop-label">max_tokens</label>
@@ -64,30 +64,30 @@
               class="prop-textarea gen-extra-textarea"
               v-model="extraParamsText"
               @blur="saveIntent"
-              placeholder='附加参数 JSON，如 {"reasoning_effort":"low"}'
+              :placeholder="t('flow.modelConfig.paramsPlaceholder')"
             ></textarea>
           </div>
         </div>
 
         <!-- 输出变量（只读展示） -->
         <div class="props-section">
-          <div class="section-title"><span>输出变量</span></div>
+          <div class="section-title"><span>{{ t('flow.outputVars.title') }}</span></div>
           <div class="field-row">
             <label class="field-label">intent</label>
             <span class="field-type-tag">string</span>
-            <span class="field-hint-inline">命中的意图 label</span>
+            <span class="field-hint-inline">{{ t('flow.intentNode.hintLabel') }}</span>
           </div>
           <div class="field-row">
             <label class="field-label">index</label>
             <span class="field-type-tag">number</span>
-            <span class="field-hint-inline">命中的分支序号（从 0 开始）</span>
+            <span class="field-hint-inline">{{ t('flow.intentNode.hintBranch') }}</span>
           </div>
         </div>
 
         <!-- 输入变量配置 -->
         <div class="props-section">
           <div class="section-title">
-            <span>输入变量</span>
+            <span>{{ t('flow.common.inputVars') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddInputVariable">
               <el-icon><Plus /></el-icon>
             </button>
@@ -95,7 +95,7 @@
 
           <div class="input-variables-list">
             <div v-if="Object.keys(inputVariables).length === 0" class="input-empty-state">
-              <p>暂无输入变量</p>
+              <p>{{ t('flow.common.noInputVars') }}</p>
             </div>
 
             <div
@@ -108,7 +108,7 @@
                 :value="name"
                 class="input-variable-name-input"
                 @blur="handleUpdateInputVariableName(name, $event.target.value)"
-                placeholder="变量名"
+                :placeholder="t('flow.common.varName')"
               />
               <div class="input-variable-content">
                 <button
@@ -135,7 +135,7 @@
                     </template>
                   </template>
                   <template v-else>
-                    选择变量
+                    {{ t('flow.common.selectVar') }}
                   </template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteInputVariable(name)">
@@ -148,13 +148,13 @@
 
         <!-- 系统提示词 -->
         <div class="props-section">
-          <div class="section-title"><span>系统提示词</span></div>
+          <div class="section-title"><span>{{ t('flow.intentNode.systemPrompt') }}</span></div>
           <div class="prop-group">
             <textarea
               class="prop-textarea system-prompt-textarea"
               v-model="systemPrompt"
               @blur="saveIntent"
-              placeholder="你是意图分类器，请根据用户输入判断其意图"
+              :placeholder="t('flow.intentNode.systemPromptPlaceholder')"
             ></textarea>
           </div>
         </div>
@@ -162,7 +162,7 @@
         <!-- 意图列表 -->
         <div class="props-section">
           <div class="section-title">
-            <span>意图列表</span>
+            <span>{{ t('flow.intentNode.listTitle') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddBranch">
               <el-icon><Plus /></el-icon>
             </button>
@@ -170,7 +170,7 @@
 
           <div class="branches-list">
             <div v-if="branches.length === 0" class="branches-empty-state">
-              <p>暂无意图，请添加</p>
+              <p>{{ t('flow.intentNode.noIntents') }}</p>
             </div>
 
             <div
@@ -184,7 +184,7 @@
                   class="branch-label-input"
                   v-model="branch.label"
                   @blur="saveIntent"
-                  placeholder="输入意图名称"
+                  :placeholder="t('flow.intentNode.namePlaceholder')"
                 />
                 <button class="branch-delete-btn" @click="handleDeleteBranch(index)">
                   <el-icon><Delete /></el-icon>
@@ -197,7 +197,7 @@
                     class="prop-textarea"
                     v-model="branch.description"
                     @blur="saveIntent"
-                    placeholder="输入意图描述，例如：用户想查询账户余额"
+                    :placeholder="t('flow.intentNode.descPlaceholder')"
                   ></textarea>
                 </div>
               </div>
@@ -208,11 +208,11 @@
         <!-- 默认分支说明 -->
         <div class="props-section">
           <div class="section-title">
-            <span>默认分支</span>
+            <span>{{ t('flow.node.branch.defaultBranch') }}</span>
           </div>
           <div class="default-branch-info">
-            <p>当大模型判断不出意图（返回无效结果）时，将执行默认分支。</p>
-            <p class="default-branch-note">意图节点为单选：命中一个意图即执行对应分支链，不再尝试其他分支。</p>
+            <p>{{ t('flow.intentNode.defaultHint1') }}</p>
+            <p class="default-branch-note">{{ t('flow.intentNode.defaultHint2') }}</p>
           </div>
         </div>
 
@@ -241,6 +241,9 @@ import adminApi from '@/tenant/config/admin'
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {
@@ -299,7 +302,7 @@ const loadSelectableModels = async () => {
       selectableModels.value = data.data.items.map(m => ({ gateway_model: m.gateway_model }))
     }
   } catch (e) {
-    console.error('加载可选模型失败', e)
+    console.error(t('flow.message.loadModelsFailed'), e)
   }
 }
 
@@ -369,7 +372,7 @@ const buildIntentConfig = () => {
       const parsed = extraParamsText.value.trim() === '' ? {} : JSON.parse(extraParamsText.value)
       params.extra_params = parsed
     } catch (e) {
-      ElMessage.error('extra_params 不是合法 JSON')
+      ElMessage.error(t('flow.message.extraParamsInvalid'))
       return null
     }
   }
@@ -432,7 +435,7 @@ const generateBranchId = () => {
 const handleAddBranch = () => {
   branches.value.push({
     id: generateBranchId(),
-    label: `意图 ${branches.value.length + 1}`,
+    label: t('flow.node.intent.childName', { n: branches.value.length + 1 }),
     description: ''
   })
   saveIntent()

@@ -4,7 +4,7 @@
       <textarea
         class="comment-textarea"
         v-model="commentText"
-        placeholder="输入注释内容..."
+        :placeholder="t('flow.node.commentPlaceholder')"
         @input="handleTextChange"
       ></textarea>
     </div>
@@ -15,7 +15,7 @@
           <!-- 断点菜单不给：comment 没有执行器、永远不会被跑到 -->
           <el-dropdown-item @click="deleteNode">
             <el-icon><Delete /></el-icon>
-            <span>删除节点</span>
+            <span>{{ t('flow.node.action.delete') }}</span>
           </el-dropdown-item>
         </el-dropdown-menu>
       </template>
@@ -28,11 +28,14 @@
 import { ref, onMounted, nextTick } from 'vue'
 import { ChatLineSquare, Delete } from '@element-plus/icons-vue'
 import { useVueFlow } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {
     type: Object,
-    default: () => ({ label: '注释' })
+    default: () => ({})
   },
   id: {
     type: String,

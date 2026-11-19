@@ -10,7 +10,19 @@
     "loading": "加载中…",
     "empty": "暂无数据",
     "language": "语言",
-    "placeholder": "内容将在这里显示"
+    "placeholder": "内容将在这里显示",
+    "loginRequired": "请先登录",
+    "refresh": "刷新",
+    "close": "关闭",
+    "expand": "展开",
+    "collapse": "收起",
+    "remove": "移除",
+    "export": "导出",
+    "config": "配置",
+    "copy": "复制",
+    "copied": "已复制",
+    "copyFailed": "复制失败，请手动选中文本",
+    "listJoiner": "、"
   },
   "login": {
     "title": "Flame Desk",
@@ -24,7 +36,54 @@
     "platformTab": "平台登录",
     "platformTitle": "平台登录",
     "platformSubmit": "登录管理台",
-    "platformHint": "平台账号与租户账号相互独立，由管理员在「平台用户」里维护。管理台没有自助找回：忘记密码请联系平台管理员，在「平台用户 → 重置密码」里重置。"
+    "platformHint": "平台账号与租户账号相互独立，由管理员在「平台用户」里维护。管理台没有自助找回：忘记密码请联系平台管理员，在「平台用户 → 重置密码」里重置。",
+    "accountPasswordRequired": "账号和密码不能为空",
+    "missingToken": "登录响应缺少 token 或用户信息"
+  },
+  "password": {
+    "current": "当前密码",
+    "new": "新密码",
+    "confirm": "确认新密码",
+    "currentPlaceholder": "请输入当前密码",
+    "newPlaceholder": "至少 8 位",
+    "hint": "修改成功后，其它端已登录的会话仍保持有效（token 不会失效）；如需立即踢下线，请让管理员停用该账号。",
+    "requiredCurrent": "请输入当前密码",
+    "minLength": "新密码至少 8 位",
+    "mismatch": "两次输入的新密码不一致",
+    "sameAsOld": "新密码不能与当前密码相同",
+    "failed": "修改失败",
+    "changed": "密码已修改"
+  },
+  "user": {
+    "notSignedIn": "未登录",
+    "withAccount": "{name}（账号 {account}）",
+    "copyTip": "{name}，点击复制账号",
+    "copied": "账号已复制：{account}",
+    "copyFailed": "复制失败，请手动选择账号名",
+    "logoutClick": "用户点击退出登录"
+  },
+  "llmCheck": {
+    "requestFailed": "[llm-check] 请求失败，跳过提示:",
+    "hasDefault": "[llm-check] 已有缺省模型:",
+    "skipNotice": "[llm-check] 非「缺少默认模型」的响应，跳过提示:",
+    "noDefault": "[llm-check] 未检测到缺省模型，提示用户去配置",
+    "prompt": "当前租户还没有配置缺省大模型，智能体无法开始对话。现在去「设置 → LLM 配置」添加服务商与模型吗？",
+    "title": "未检测到大模型",
+    "goConfig": "去配置",
+    "later": "稍后"
+  },
+  "apiError": {
+    "network": "网络请求失败：{reason}",
+    "sessionExpired": "平台会话已失效，请重新登录",
+    "requestFailed": "请求失败",
+    "requestFailedHttp": "请求失败（HTTP {status}）",
+    "downloadFailed": "下载失败（HTTP {status}）"
+  },
+  "loginError": {
+    "success": "登录成功",
+    "failed": "登录失败，请重试",
+    "failedReason": "登录失败: {reason}",
+    "required": "租户、用户名和密码不能为空"
   },
   "nav": {
     "agents": "智能体",

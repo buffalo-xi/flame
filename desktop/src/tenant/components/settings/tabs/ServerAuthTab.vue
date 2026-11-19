@@ -7,53 +7,55 @@
           <el-radio-button value="apikey">API Key</el-radio-button>
           <el-radio-button value="oauth">OAuth 2.0</el-radio-button>
         </el-radio-group>
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="onRefresh">刷新</el-button>
+        <el-button size="small" :icon="Refresh" :loading="loading" @click="onRefresh">{{ t('settings.inboundAuth.refresh') }}</el-button>
       </div>
     </div>
 
     <div v-loading="loading" class="config-form">
       <el-alert type="info" :closable="false" show-icon class="config-tip">
-        <template #title>入站鉴权配置</template>
-        此配置用于校验外部 {{ kind.toUpperCase() }} 客户端调用本租户
-        <code>POST /service/{{ kind }}/{schema}</code> 时的身份（路径段即租户标识）。修改后保存即生效。
+        <template #title>{{ t('settings.inboundAuth.tipTitle') }}</template>
+        {{ t('settings.inboundAuth.tipBody1', { kind: kind.toUpperCase() }) }}
+        <code>POST /service/{{ kind }}/{schema}</code>
+        {{ t('settings.inboundAuth.tipBody2') }}
       </el-alert>
 
       <el-form label-position="top">
         <div class="mcp-enabled-row">
-          <el-form-item label="启用该鉴权方式" class="mcp-enabled-item">
-            <el-switch v-model="config.is_active" active-text="启用" inactive-text="停用" @change="onActiveChange" />
+          <el-form-item :label="t('settings.inboundAuth.enabledLabel')" class="mcp-enabled-item">
+            <el-switch v-model="config.is_active" :active-text="t('settings.inboundAuth.switchOn')"
+                       :inactive-text="t('settings.inboundAuth.switchOff')" @change="onActiveChange" />
           </el-form-item>
         </div>
 
         <!-- API Key 模式：绑定在「服务凭证」中统一管理 -->
         <template v-if="authType === 'apikey'">
           <el-alert type="info" :closable="false" show-icon style="margin-top: 8px">
-            <span>API Key 的用户绑定在「服务凭证」统一管理，此处仅控制该鉴权方式是否启用。</span>
+            <span>{{ t('settings.inboundAuth.apikeyTip') }}</span>
           </el-alert>
         </template>
 
         <!-- OAuth 模式 -->
         <template v-if="authType === 'oauth'">
-          <el-form-item label="Issuer (令牌颁发者)" required>
+          <el-form-item :label="t('settings.inboundAuth.issuer')" required>
             <el-input v-model="config.auth_config.issuer" placeholder="https://idp.example.com" />
           </el-form-item>
-          <el-form-item label="授权端点 (authorize_endpoint)">
+          <el-form-item :label="t('settings.inboundAuth.authorizeEndpoint')">
             <el-input v-model="config.auth_config.authorize_endpoint" placeholder="https://idp.example.com/authorize" />
           </el-form-item>
-          <el-form-item label="JWKS 地址 (jwks_url)" required>
+          <el-form-item :label="t('settings.inboundAuth.jwksUrl')" required>
             <el-input v-model="config.auth_config.jwks_url" placeholder="https://idp.example.com/.well-known/jwks.json" />
           </el-form-item>
-          <el-form-item label="Audience">
-            <el-input v-model="config.auth_config.audience" placeholder="可选，校验 token 受众" />
+          <el-form-item :label="t('settings.inboundAuth.audience')">
+            <el-input v-model="config.auth_config.audience" :placeholder="t('settings.inboundAuth.audiencePlaceholder')" />
           </el-form-item>
-          <el-form-item label="Required Scope">
+          <el-form-item :label="t('settings.inboundAuth.requiredScope')">
             <el-input v-model="config.auth_config.required_scope" :placeholder="scopePlaceholder" />
           </el-form-item>
         </template>
 
         <div v-if="authType !== 'apikey'" class="form-actions">
-          <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
-          <el-button @click="loadConfig">重置</el-button>
+          <el-button type="primary" :loading="saving" @click="saveConfig">{{ t('settings.inboundAuth.save') }}</el-button>
+          <el-button @click="loadConfig">{{ t('settings.inboundAuth.reset') }}</el-button>
         </div>
       </el-form>
     </div>
@@ -62,6 +64,7 @@
 
 <script setup>
 import { ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { getToken } from '../../../utils/auth.js'
@@ -83,6 +86,8 @@ const props = defineProps({
 // 保存后让父级刷新左侧导航上的「已启用方式」计数
 const emit = defineEmits(['refresh-count'])
 
+const { t } = useI18n()
+
 const authType = ref('apikey')
 const loading = ref(false)
 const saving = ref(false)
@@ -95,7 +100,7 @@ const loadConfig = async () => {
     const response = await fetch(props.api.get(authType.value), {
       headers: { Authorization: `Bearer ${token}` }
     })
-    if (!response.ok) throw new Error('获取配置失败')
+    if (!response.ok) throw new Error(t('settings.inboundAuth.loadFailedShort'))
     const data = await response.json()
     const cfg = data?.data || {}
     config.value = {
@@ -108,12 +113,12 @@ const loadConfig = async () => {
     // apikey 的用户绑定在「服务凭证」统一管理，此处无需加载
   } catch (error) {
     ElMessage.error({
-      message: `获取 ${props.title} 配置失败: ${error.message}`,
+      message: t('settings.inboundAuth.loadFailed', { title: props.title, msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error(`获取 ${props.title} 配置失败:`, error)
+    console.error(`load ${props.title} config failed:`, error)
   } finally {
     loading.value = false
   }
@@ -138,11 +143,17 @@ const onActiveChange = async (val) => {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ auth_type: 'apikey', is_active: val, auth_config: {} })
     })
-    if (!resp.ok) throw new Error('更新失败')
-    ElMessage.success({ message: val ? '已启用' : '已停用', offset: 20 })
+    if (!resp.ok) throw new Error(t('settings.inboundAuth.updateFailed'))
+    ElMessage.success({
+      message: val ? t('settings.inboundAuth.enabled') : t('settings.inboundAuth.disabled'),
+      offset: 20
+    })
     emit('refresh-count')
   } catch (e) {
-    ElMessage.error({ message: `更新失败: ${e.message}`, offset: 20 })
+    ElMessage.error({
+      message: `${t('settings.inboundAuth.updateFailed')}: ${e.message}`,
+      offset: 20
+    })
     config.value.is_active = !val
   }
 }
@@ -162,18 +173,18 @@ const saveConfig = async () => {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload)
     })
-    if (!response.ok) throw new Error('保存失败')
-    ElMessage.success({ message: '配置已保存', offset: 20 })
+    if (!response.ok) throw new Error(t('settings.inboundAuth.saveFailedShort'))
+    ElMessage.success({ message: t('settings.inboundAuth.saved'), offset: 20 })
     await loadConfig()
     emit('refresh-count')
   } catch (error) {
     ElMessage.error({
-      message: `保存 ${props.title} 配置失败: ${error.message}`,
+      message: t('settings.inboundAuth.saveFailed', { title: props.title, msg: error.message }),
       duration: 5000,
       offset: 20,
       showClose: true
     })
-    console.error(`保存 ${props.title} 配置失败:`, error)
+    console.error(`save ${props.title} config failed:`, error)
   } finally {
     saving.value = false
   }

@@ -5,14 +5,14 @@
       <Handle type="target" position="top" :id="'target' + id + 'top'" class="custom-handle custom-handle-top custom-handle-target" />
       <Handle type="target" position="right" :id="'target' + id + 'right'" class="custom-handle custom-handle-right custom-handle-target" />
       <div class="icon-wrapper icon-intent"><el-icon><Aim /></el-icon></div>
-      <div class="node-label">{{ data.label || '意图' }}</div>
+      <div class="node-label">{{ data.label || t('flow.node.defaultLabel.intent') }}</div>
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item @click="deleteNode">
               <el-icon><Delete /></el-icon>
-              <span>删除节点</span>
+              <span>{{ t('flow.node.action.delete') }}</span>
             </el-dropdown-item>
             <BreakpointMenuItem :id="id" />
           </el-dropdown-menu>
@@ -28,7 +28,7 @@
     >
       <div class="child-content">
         <div class="child-label">
-          {{ child.label || '意图 ' + (index + 1) }}
+          {{ child.label || t('flow.node.intent.childName', { n: index + 1 }) }}
         </div>
         <el-dropdown trigger="hover" placement="right">
           <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
@@ -36,7 +36,7 @@
             <el-dropdown-menu>
               <el-dropdown-item @click="deleteChildNode(index)">
                 <el-icon><Delete /></el-icon>
-                <span>删除意图</span>
+                <span>{{ t('flow.node.intent.deleteChild') }}</span>
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -64,7 +64,7 @@
         class="custom-handle custom-handle-left"
       />
       <div class="child-content">
-        <div class="child-label child-label-default">默认分支</div>
+        <div class="child-label child-label-default">{{ t('flow.node.branch.defaultBranch') }}</div>
       </div>
       <Handle
         type="source"
@@ -86,11 +86,14 @@
 import { ref, watch, inject } from 'vue'
 import { Aim, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {
     type: Object,
-    default: () => ({ label: '意图' })
+    default: () => ({})
   },
   id: {
     type: String,

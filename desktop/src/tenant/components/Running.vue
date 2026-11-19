@@ -100,6 +100,7 @@ import { ElMessage, ElMessageBox, ElButton, ElTag } from 'element-plus'
 import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import RunHistory from './RunHistory.vue'
+import { formatError } from '../../locales'
 
 // 列定义与下拉选项都要跟着语言切换重算，所以它们不是常量数组而是 computed ——
 // el-table-v2 的列是渲染函数，locale 变了不会自动重渲染，只有 data（columns）变了才会。
@@ -179,7 +180,7 @@ const load = async (silent = false) => {
   try {
     const res = await fetch(adminApi.running(kind.value), { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || t('running.loadFailed'))
+    if (body.code !== 200) throw new Error(formatError(body) || t('running.loadFailed'))
     rows.value = body.data?.runs || []
     complete.value = body.data?.complete !== false
     instance.value = body.data?.instance || ''
@@ -217,7 +218,7 @@ const stopRun = async (row) => {
       body: JSON.stringify({ kind: row.kind, run_id: row.run_id, session_id: row.session_id })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || t('running.stopFailed'))
+    if (body.code !== 200) throw new Error(formatError(body) || t('running.stopFailed'))
 
     const reason = body.data?.reason
     if (reason === 'stopped') {

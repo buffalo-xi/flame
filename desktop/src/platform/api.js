@@ -11,7 +11,9 @@
 //     401 时会顺手清掉本地会话（令牌失效/账号被停用）
 
 import { getToken, clearAuth } from './auth'
-import { formatError } from '../locales'
+import i18n, { formatError } from '../locales'
+
+const t = (key, params) => i18n.global.t(key, params)
 
 export class ApiError extends Error {
   constructor(message, status = 0, code = 0, data = null) {
@@ -66,7 +68,7 @@ export const request = async (path, { method = 'GET', body, auth = true } = {}) 
       formatError({
         error: 'common.network',
         params: { reason: err.message },
-        msg: `网络请求失败：${err.message}`
+        msg: t('apiError.network', { reason: err.message })
       })
     )
   }
@@ -83,15 +85,15 @@ export const request = async (path, { method = 'GET', body, auth = true } = {}) 
     // 401 一律用本地的「会话失效」文案：后端的 message 在部分网关下是英文短语，
     // 直接透出会出现「英文界面里混一句英文网关话」或反过来。
     throw new ApiError(
-      formatError({ error: 'auth.session_expired', msg: payload?.message || '平台会话已失效，请重新登录' }),
+      formatError({ error: 'auth.session_expired', msg: payload?.message || t('apiError.sessionExpired') }),
       401
     )
   }
   if (!resp.ok) {
-    throw new ApiError(bizMessage(payload, `请求失败（HTTP ${resp.status}）`), resp.status, 0, payload?.data || null)
+    throw new ApiError(bizMessage(payload, t('apiError.requestFailedHttp', { status: resp.status })), resp.status, 0, payload?.data || null)
   }
   if (payload && payload.code !== undefined && payload.code !== 200) {
-    throw new ApiError(bizMessage(payload, '请求失败'), resp.status, payload.code, payload.data || null)
+    throw new ApiError(bizMessage(payload, t('apiError.requestFailed')), resp.status, payload.code, payload.data || null)
   }
   return payload ? payload.data : null
 }
@@ -117,17 +119,17 @@ const blobRequest = async (path) => {
       headers: t ? { Authorization: `Bearer ${t}` } : {}
     })
   } catch (err) {
-    throw new ApiError(`网络请求失败：${err.message}`)
+    throw new ApiError(t('apiError.network', { reason: err.message }))
   }
   if (resp.status === 401) {
     clearAuth()
-    throw new ApiError('平台会话已失效，请重新登录', 401)
+    throw new ApiError(t('apiError.sessionExpired'), 401)
   }
   if (!resp.ok) {
-    let msg = `下载失败（HTTP ${resp.status}）`
+    let msg = t('apiError.downloadFailed', { status: resp.status })
     try {
       const p = await resp.json()
-      msg = p.msg || p.message || msg
+      msg = bizMessage(p, msg)
     } catch {
       /* 非 JSON 错误体，保留状态码文案 */
     }
@@ -150,7 +152,7 @@ const formRequest = async (path, formData) => {
       body: formData
     })
   } catch (err) {
-    throw new ApiError(`网络请求失败：${err.message}`)
+    throw new ApiError(t('apiError.network', { reason: err.message }))
   }
   let payload = null
   try {
@@ -160,13 +162,18 @@ const formRequest = async (path, formData) => {
   }
   if (resp.status === 401) {
     clearAuth()
-    throw new ApiError(payload?.message || '平台会话已失效，请重新登录', 401)
+    throw new ApiError(payload?.message || t('apiError.sessionExpired'), 401)
   }
   if (!resp.ok) {
-    throw new ApiError(payload?.message || payload?.msg || `请求失败（HTTP ${resp.status}）`, resp.status, 0, payload?.data || null)
+    throw new ApiError(
+      bizMessage(payload, t('apiError.requestFailedHttp', { status: resp.status })),
+      resp.status,
+      payload?.code || 0,
+      payload?.data || null
+    )
   }
   if (payload && payload.code !== undefined && payload.code !== 200) {
-    throw new ApiError(payload.msg || '请求失败', resp.status, payload.code, payload.data || null)
+    throw new ApiError(formatError(payload) || t('apiError.requestFailed'), resp.status, payload.code, payload.data || null)
   }
   return payload ? payload.data : null
 }

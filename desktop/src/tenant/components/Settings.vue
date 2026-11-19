@@ -3,7 +3,7 @@
     <!-- 顶部：设置项跳转（页面 + 具体配置项，选中直接切 tab 并定位） -->
     <div class="settings-topbar">
       <div ref="searchBoxRef" class="settings-search">
-        <el-input v-model="navKeyword" placeholder="搜索设置项，如「超时」「模型」「用户」" prefix-icon="Search"
+        <el-input v-model="navKeyword" :placeholder="t('settings.searchPlaceholder')" prefix-icon="Search"
                   clearable
                   @keydown.enter.prevent="pickActiveResult"
                   @keydown.down.prevent="moveActiveResult(1)"
@@ -11,7 +11,7 @@
                   @keydown.esc="navKeyword = ''" />
         <div v-if="navKeyword.trim()" class="search-results">
           <div v-if="!navResults.length" class="search-empty">
-            没有匹配「{{ navKeyword.trim() }}」的设置项
+            {{ t('settings.searchEmpty', { kw: navKeyword.trim() }) }}
           </div>
           <div v-for="(r, i) in navResults" :key="r.tab + (r.anchor || '')"
                class="search-item" :class="{ active: i === activeResultIndex }"
@@ -32,78 +32,80 @@
         <div class="nav-card" :class="{ active: activeTab === 'llm' }" @click="activeTab = 'llm'">
           <div class="nav-card-icon"><el-icon><Cpu /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">LLM 配置</div>
-            <div class="nav-card-count">{{ llmProviderCount ?? '—' }} 服务商 · {{ llmModelCount ?? '—' }} 模型</div>
+            <div class="nav-card-title">{{ t('settings.tabs.llm.title') }}</div>
+            <div class="nav-card-count">
+              {{ t('settings.nav.llmCount', { providers: llmProviderCount ?? '—', models: llmModelCount ?? '—' }) }}
+            </div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'mcp' }" @click="activeTab = 'mcp'">
           <div class="nav-card-icon"><el-icon><Connection /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">MCP 连接（出站）</div>
+            <div class="nav-card-title">{{ t('settings.tabs.mcp.title') }}</div>
             <div class="nav-card-count">{{ mcpConnectionCount ?? '—' }}</div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'rpc' }" @click="activeTab = 'rpc'">
           <div class="nav-card-icon"><el-icon><Connection /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">RPC 连接（出站）</div>
+            <div class="nav-card-title">{{ t('settings.tabs.rpc.title') }}</div>
             <div class="nav-card-count">{{ rpcConnectionCount ?? '—' }}</div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'mcpserverconfig' }" @click="activeTab = 'mcpserverconfig'">
           <div class="nav-card-icon"><el-icon><Lock /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">MCP 鉴权（入站）</div>
+            <div class="nav-card-title">{{ t('settings.tabs.mcpserverconfig.title') }}</div>
             <div class="nav-card-count">{{ mcpServerConfigCount ?? '—' }}</div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'rpcserverconfig' }" @click="activeTab = 'rpcserverconfig'">
           <div class="nav-card-icon"><el-icon><Lock /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">RPC 鉴权（入站）</div>
+            <div class="nav-card-title">{{ t('settings.tabs.rpcserverconfig.title') }}</div>
             <div class="nav-card-count">{{ rpcServerConfigCount ?? '—' }}</div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'svcauthbindings' }" @click="switchToBindings">
           <div class="nav-card-icon"><el-icon><Link /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">服务凭证</div>
+            <div class="nav-card-title">{{ t('settings.tabs.svcauthbindings.title') }}</div>
             <div class="nav-card-count">{{ apikeyBindings.length + oauthBindings.length }}</div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'users' }" @click="switchToUsers">
           <div class="nav-card-icon"><el-icon><User /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">用户管理</div>
-            <div class="nav-card-count">{{ users.length }} 用户</div>
+            <div class="nav-card-title">{{ t('settings.tabs.users.title') }}</div>
+            <div class="nav-card-count">{{ t('settings.nav.usersCount', { n: users.length }) }}</div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'globalVars' }" @click="activeTab = 'globalVars'">
           <div class="nav-card-icon"><el-icon><Key /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">全局变量</div>
-            <div class="nav-card-count">本租户内全局</div>
+            <div class="nav-card-title">{{ t('settings.tabs.globalVars.title') }}</div>
+            <div class="nav-card-count">{{ t('settings.nav.globalVarsCount') }}</div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'tenantQuota' }" @click="activeTab = 'tenantQuota'">
           <div class="nav-card-icon"><el-icon><Odometer /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">租户配额</div>
-            <div class="nav-card-count">系统顶 + 本租户</div>
+            <div class="nav-card-title">{{ t('settings.tabs.tenantQuota.title') }}</div>
+            <div class="nav-card-count">{{ t('settings.nav.quotaCount') }}</div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'flowConfig' }" @click="activeTab = 'flowConfig'">
           <div class="nav-card-icon"><el-icon><Tools /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">工作流运行参数</div>
-            <div class="nav-card-count">系统缺省 + 租户</div>
+            <div class="nav-card-title">{{ t('settings.tabs.flowConfig.title') }}</div>
+            <div class="nav-card-count">{{ t('settings.nav.configCount') }}</div>
           </div>
         </div>
         <div class="nav-card" :class="{ active: activeTab === 'agentConfig' }" @click="activeTab = 'agentConfig'">
           <div class="nav-card-icon"><el-icon><Cpu /></el-icon></div>
           <div class="nav-card-body">
-            <div class="nav-card-title">智能体运行参数</div>
-            <div class="nav-card-count">系统缺省 + 租户</div>
+            <div class="nav-card-title">{{ t('settings.tabs.agentConfig.title') }}</div>
+            <div class="nav-card-count">{{ t('settings.nav.configCount') }}</div>
           </div>
         </div>
       </div>
@@ -115,7 +117,7 @@
         <div class="main-narrow-tip">
           <div class="main-narrow-title">{{ activeTabMeta.title }}</div>
           <div class="main-narrow-desc">{{ activeTabMeta.desc }}</div>
-          <div class="main-narrow-hint">当前宽度不足，设置项已收起。把窗口拉宽即可正常显示。</div>
+          <div class="main-narrow-hint">{{ t('settings.narrowTip') }}</div>
         </div>
 
         <!-- LLM：服务商内嵌模型 -->
@@ -125,23 +127,23 @@
         <!-- MCP 连接 -->
         <!-- MCP / RPC 连接（出站）：同一个组件的两个实例 -->
         <ConnectionTab v-show="activeTab === 'mcp'" :active="activeTab === 'mcp'"
-                       kind="mcp" title="MCP 连接（出站）" :api="apiConfig.admin.mcpConnections"
-                       url-placeholder="输入 MCP 服务 URL，如 http://localhost:8080/service/mcp/{schema}"
+                       kind="mcp" :title="t('settings.tabs.mcp.title')" :api="apiConfig.admin.mcpConnections"
+                       :url-placeholder="t('settings.mcpUrlPlaceholder')"
                        @count="(n) => (mcpConnectionCount = n)" />
         <ConnectionTab v-show="activeTab === 'rpc'" :active="activeTab === 'rpc'"
-                       kind="rpc" title="RPC 连接（出站）" :api="apiConfig.admin.rpcConnections"
-                       url-placeholder="输入 RPC 服务 URL，如 http://localhost:8080/service/rpc/{schema}"
+                       kind="rpc" :title="t('settings.tabs.rpc.title')" :api="apiConfig.admin.rpcConnections"
+                       :url-placeholder="t('settings.rpcUrlPlaceholder')"
                        with-token-url
                        @count="(n) => (rpcConnectionCount = n)" />
 
         <!-- MCP 鉴权（入站）配置 -->
         <!-- MCP / RPC 鉴权（入站）：两块界面一致，同一个组件两处复用 -->
         <ServerAuthTab v-show="activeTab === 'mcpserverconfig'" :active="activeTab === 'mcpserverconfig'"
-                       kind="mcp" title="MCP 鉴权（入站）" :api="apiConfig.admin.mcpServerConfig"
-                       scope-placeholder="可选，如 read:mcp" @refresh-count="refreshMcpConfigCount" />
+                       kind="mcp" :title="t('settings.tabs.mcpserverconfig.title')" :api="apiConfig.admin.mcpServerConfig"
+                       :scope-placeholder="t('settings.mcpScopePlaceholder')" @refresh-count="refreshMcpConfigCount" />
         <ServerAuthTab v-show="activeTab === 'rpcserverconfig'" :active="activeTab === 'rpcserverconfig'"
-                       kind="rpc" title="RPC 鉴权（入站）" :api="apiConfig.admin.rpcServerConfig"
-                       scope-placeholder="可选，如 read:rpc" @refresh-count="refreshRpcConfigCount" />
+                       kind="rpc" :title="t('settings.tabs.rpcserverconfig.title')" :api="apiConfig.admin.rpcServerConfig"
+                       :scope-placeholder="t('settings.rpcScopePlaceholder')" @refresh-count="refreshRpcConfigCount" />
         <!-- 服务凭证（独立配置项，MCP/RPC 共用） -->
         <BindingsTab v-show="activeTab === 'svcauthbindings'" :active="activeTab === 'svcauthbindings'" />
 
@@ -156,19 +158,16 @@
 
         <!-- 工作流运行参数 -->
         <ConfigTableTab v-show="activeTab === 'flowConfig'" :active="activeTab === 'flowConfig'"
-                        title="工作流运行参数" :fields="flowConfigFields"
+                        :title="t('settings.tabs.flowConfig.title')" :fields="flowConfigFields"
                         :api="apiConfig.admin.flowconfigs" allow-unlimited>
-          <template #hint>租户配置：留空 = 回退系统级，-1 = 不限制；租户 max_* 不能超过系统级</template>
+          <template #hint>{{ t('settings.flowHint') }}</template>
         </ConfigTableTab>
 
         <!-- 智能体运行参数 -->
         <ConfigTableTab v-show="activeTab === 'agentConfig'" :active="activeTab === 'agentConfig'"
-                        title="智能体运行参数" :fields="agentConfigFields"
+                        :title="t('settings.tabs.agentConfig.title')" :fields="agentConfigFields"
                         :api="apiConfig.admin.agentconfigs">
-          <template #hint>
-            租户配置：留空 = 回退系统级；<b>本组没有 -1</b>（四项都是安全阀，调成「不限制」等于拆掉防线）；
-            租户值不能超过系统级
-          </template>
+          <template #hint>{{ t('settings.agentHint') }}</template>
         </ConfigTableTab>
       </div>
     </div>
@@ -177,6 +176,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Cpu, Connection, Lock, Link, User, Tools, Search, Odometer, Key } from '@element-plus/icons-vue'
 import apiConfig from '../config/api.js'
 import { getToken } from '../utils/auth.js'
@@ -198,6 +198,8 @@ const props = defineProps({
   tab: { type: String, default: '' }
 })
 
+const { t } = useI18n()
+
 // 当前激活模块
 const activeTab = ref(props.tab || 'llm')
 
@@ -206,21 +208,17 @@ watch(() => props.tab, (v) => {
   if (v) activeTab.value = v
 })
 
-// 内容区窄到放不下时（<360px）只显示这两行：分区名 + 这里能配什么
-const tabMeta = {
-  llm: { title: 'LLM 配置', desc: '管理大模型服务商与模型：接入地址、API Key、上下文长度与生成参数。' },
-  mcp: { title: 'MCP 连接（出站）', desc: '以客户端身份接入外部 MCP 服务，供智能体调用它的工具。' },
-  rpc: { title: 'RPC 连接（出站）', desc: '以客户端身份接入外部 RPC 服务，供智能体调用它的接口。' },
-  mcpserverconfig: { title: 'MCP 鉴权（入站）', desc: '设置本租户 MCP 服务接受调用时的鉴权方式（API Key / OAuth）。' },
-  rpcserverconfig: { title: 'RPC 鉴权（入站）', desc: '设置本租户 RPC 服务接受调用时的鉴权方式（API Key / OAuth）。' },
-  svcauthbindings: { title: '服务凭证', desc: '把 API Key / OAuth 身份绑定到租户用户，MCP 与 RPC 共用一份凭证。' },
-  users: { title: '用户管理', desc: '维护租户内账号、角色、密码，以及单用户的会话 / 空间配额。' },
-  globalVars: { title: '全局变量', desc: '本租户内全局的键值配置，供工作流 / 智能体 / 技能引用；导出资产时只带引用名不带值。' },
-  tenantQuota: { title: '租户配额', desc: '设置本租户的资源上限（智能体 / 技能 / 工作流 / 会话空间 / 会话数），受平台系统顶约束。' },
-  flowConfig: { title: '工作流运行参数', desc: '限制工作流的运行时长、递归深度、节点数与记录数（留空回退系统级）。' },
-  agentConfig: { title: '智能体运行参数', desc: '限制智能体的运行轮次、调用深度、工具数与输出大小（留空回退系统级）。' }
-}
-const activeTabMeta = computed(() => tabMeta[activeTab.value] || { title: '', desc: '' })
+// 内容区窄到放不下时（<360px）只显示这两行：分区名 + 这里能配什么。
+// 做成 computed：切语言时这两行要跟着变（原来的静态对象只会在启动时取一次语言）。
+const TAB_KEYS = [
+  'llm', 'mcp', 'rpc', 'mcpserverconfig', 'rpcserverconfig', 'svcauthbindings',
+  'users', 'globalVars', 'tenantQuota', 'flowConfig', 'agentConfig'
+]
+const tabMeta = computed(() => Object.fromEntries(TAB_KEYS.map((k) => [k, {
+  title: t(`settings.tabs.${k}.title`),
+  desc: t(`settings.tabs.${k}.desc`)
+}])))
+const activeTabMeta = computed(() => tabMeta.value[activeTab.value] || { title: '', desc: '' })
 
 // 顶部搜索：跳转到某个设置项（页面，或页面里的具体配置项）
 const navKeyword = ref('')
@@ -257,81 +255,85 @@ const { users, loadUsers } = useUsers()
 
 // 两张「系统级 + 租户覆盖」配置表的字段定义；表格与保存逻辑在 ConfigTableTab.vue
 // desc 只讲「这个数是什么」，怎么填（留空回退 / -1 不限制 / 不得超系统级）由模板里的 #hint 负责，别重复
-const flowConfigFields = [
-  { key: 'max_timeout', label: '最大超时（秒）', desc: '单次运行的总时长上限，到点强制终止' },
-  { key: 'max_recursion_depth', label: '最大递归深度', desc: '工作流之间互相调用时可嵌套的层数' },
-  { key: 'max_node_count', label: '最大节点数', desc: '一张流程图里允许的节点数量' },
-  { key: 'max_exec_count', label: '最大执行次数', desc: '单次运行中节点被执行的累计次数' },
-  { key: 'max_loop_times', label: '最大循环次数', desc: '循环节点的迭代次数上限' },
-  { key: 'max_run_records', label: '最大运行记录数', desc: '每个工作流保留的历史运行记录条数' },
-  { key: 'max_session_records', label: '最大会话记忆', desc: '会话中保留的上下文记录条数' }
+// 字段名（key）与后端列名一致，标签/说明走语言包，所以这里是 computed，切语言时要重算。
+const FLOW_FIELD_KEYS = [
+  'max_timeout', 'max_recursion_depth', 'max_node_count', 'max_exec_count',
+  'max_loop_times', 'max_run_records', 'max_session_records'
 ]
+const flowConfigFields = computed(() => FLOW_FIELD_KEYS.map((key) => ({
+  key,
+  label: t(`settings.flowFields.${key}.label`),
+  desc: t(`settings.flowFields.${key}.desc`)
+})))
 
-const agentConfigFields = [
-  { key: 'max_iterations', label: '最大运行轮次（轮）', desc: '一次对话里「思考 → 调工具 → 再思考」的最大轮数' },
-  { key: 'max_call_depth', label: '最大调用深度（层）', desc: '智能体之间互相调用的嵌套层数' },
-  { key: 'max_tools', label: '工具数量上限（个）', desc: '单个智能体最多能绑定的工具数量' },
-  { key: 'max_output_bytes', label: '命令输出上限（字节）', desc: '单条命令或工具输出的截断长度' }
+const AGENT_FIELD_KEYS = ['max_iterations', 'max_call_depth', 'max_tools', 'max_output_bytes']
+const agentConfigFields = computed(() => AGENT_FIELD_KEYS.map((key) => ({
+  key,
+  label: t(`settings.agentFields.${key}.label`),
+  desc: t(`settings.agentFields.${key}.desc`)
+})))
+
+// 租户配额的五项上限（字段定义在 QuotaTab.vue，这里只留搜索用的名字）
+const QUOTA_FIELD_KEYS = [
+  'max_agents', 'max_skills', 'max_flows',
+  'max_session_storage_bytes', 'max_user_sessions'
 ]
+const quotaFieldNames = computed(() => QUOTA_FIELD_KEYS.map((key) => ({
+  key,
+  label: t(`settings.quotaFields.${key}.label`),
+  desc: t(`settings.quotaFields.${key}.desc`)
+})))
+
+// 会话相关的两个上限属于配额，不在「运行参数」两组里；搜索时指到「用户管理」的按用户覆盖。
+const USER_OVERRIDE_KEYS = ['sessions', 'storage']
+const userOverrideNames = computed(() => USER_OVERRIDE_KEYS.map((key) => ({
+  key,
+  title: t(`settings.userOverrides.${key}.title`),
+  hint: t(`settings.userOverrides.${key}.hint`)
+})))
 
 // ============ 顶部搜索：设置项跳转 ============
 // 索引里全是前端写死的名字，不含任何拉取到的数据，所以搜索是零请求的
 // （不像搜用户名 / 连接名那样必须先加载列表 —— 那些是懒加载的，没点开就没有）。
-const settingsPages = [
-  { tab: 'llm', title: 'LLM 配置', hint: '服务商 · 模型 · API Key', kw: 'llm 模型 服务商 apikey api key 密钥 provider model' },
-  { tab: 'mcp', title: 'MCP 连接（出站）', hint: '远程 MCP 服务', kw: 'mcp 连接 出站 客户端 远程 工具 client' },
-  { tab: 'rpc', title: 'RPC 连接（出站）', hint: '远程 RPC 服务', kw: 'rpc 连接 出站 客户端 远程 工具 client' },
-  { tab: 'mcpserverconfig', title: 'MCP 鉴权（入站）', hint: '入站鉴权方式', kw: 'mcp 鉴权 入站 服务器 apikey oauth 密钥' },
-  { tab: 'rpcserverconfig', title: 'RPC 鉴权（入站）', hint: '入站鉴权方式', kw: 'rpc 鉴权 入站 服务器 apikey oauth 密钥' },
-  { tab: 'svcauthbindings', title: '服务凭证', hint: 'API Key / OAuth 绑定关系', kw: '凭证 绑定 服务鉴权 用户 apikey oauth 密钥' },
-  { tab: 'users', title: '用户管理', hint: '账号 · 角色 · 密码 · 配额', kw: '用户 账号 角色 密码 配额 重置' },
-  { tab: 'tenantQuota', title: '租户配额', hint: '本租户资源上限 · 受系统顶约束', kw: '租户 配额 上限 智能体 技能 工作流 会话 空间 存储 quota' }
+// 名字与关键词都走语言包：英文界面下得能用英文词搜到，故整体做成 computed。
+const PAGE_KEYS = [
+  'llm', 'mcp', 'rpc', 'mcpserverconfig',
+  'rpcserverconfig', 'svcauthbindings', 'users', 'tenantQuota'
 ]
+const settingsPages = computed(() => PAGE_KEYS.map((tab) => ({
+  tab,
+  title: t(`settings.tabs.${tab}.title`),
+  hint: t(`settings.pages.${tab}.hint`),
+  kw: t(`settings.pages.${tab}.kw`)
+})))
 
-const settingsIndex = [
-  ...settingsPages,
-  ...flowConfigFields.map((f) => ({
-    tab: 'flowConfig', group: '工作流运行参数', title: f.label, hint: f.desc, anchor: f.key,
-    kw: '工作流 运行参数 限制 配置 ' + f.key
+const settingsIndex = computed(() => [
+  ...settingsPages.value,
+  ...flowConfigFields.value.map((f) => ({
+    tab: 'flowConfig', group: t('settings.groups.flowConfig'), title: f.label, hint: f.desc, anchor: f.key,
+    kw: t('settings.kwFlow', { key: f.key })
   })),
-  ...agentConfigFields.map((f) => ({
-    tab: 'agentConfig', group: '智能体运行参数', title: f.label, hint: f.desc, anchor: f.key,
-    kw: '智能体 运行参数 限制 配置 ' + f.key
+  ...agentConfigFields.value.map((f) => ({
+    tab: 'agentConfig', group: t('settings.groups.agentConfig'), title: f.label, hint: f.desc, anchor: f.key,
+    kw: t('settings.kwAgent', { key: f.key })
   })),
-  // 租户配额的五项上限（字段定义在 QuotaTab.vue，这里只留搜索用的名字）
-  ...[
-    { key: 'max_agents', label: '智能体数量上限', desc: '本租户最多可创建多少个智能体' },
-    { key: 'max_skills', label: '技能数量上限', desc: '本租户最多可创建多少个技能' },
-    { key: 'max_flows', label: '工作流数量上限', desc: '本租户最多可创建多少个工作流' },
-    { key: 'max_session_storage_bytes', label: '单会话空间上限（租户默认）', desc: '单个会话工作区的空间上限（MiB）' },
-    { key: 'max_user_sessions', label: '单用户会话数上限（租户默认）', desc: '每个用户默认最多拥有多少个会话' }
-  ].map((f) => ({
-    tab: 'tenantQuota', group: '租户配额', title: f.label, hint: f.desc, anchor: f.key,
-    kw: '租户 配额 上限 限制 配置 ' + f.key
+  ...quotaFieldNames.value.map((f) => ({
+    tab: 'tenantQuota', group: t('settings.groups.tenantQuota'), title: f.label, hint: f.desc, anchor: f.key,
+    kw: t('settings.kwQuota', { key: f.key })
   })),
   // 会话相关的两个上限属于配额，不在「运行参数」两组里；搜索时指到「用户管理」的按用户覆盖。
-  {
-    tab: 'users',
-    group: '用户管理',
-    title: '单用户会话数上限（用户覆盖）',
-    hint: '为某个用户单独设的会话数上限（留空跟随租户，-1 不限）',
-    kw: '会话 数量 上限 配额 max_user_sessions'
-  },
-  {
-    tab: 'users',
-    group: '用户管理',
-    title: '单会话空间上限（用户覆盖）',
-    hint: '为某个用户单独设的空间上限（留空跟随租户，-1 不限）',
-    kw: '会话 空间 上限 存储 配额 max_session_storage_bytes'
-  }
-]
+  ...userOverrideNames.value.map((f) => ({
+    tab: 'users', group: t('settings.groups.users'), title: f.title, hint: f.hint,
+    kw: `${t('settings.kwQuota', { key: f.key })} ${f.title}`
+  }))
+])
 
 // 归一化后按空格分词，「全部命中」才算匹配 —— 这样「mcp 鉴权」能把 MCP 连接那条筛掉
 const normalizeNav = (s) => String(s).toLowerCase().replace(/[\s（）()【】[\]]/g, '')
 const navResults = computed(() => {
   const kws = String(navKeyword.value).trim().toLowerCase().split(/\s+/).filter(Boolean).map(normalizeNav)
   if (!kws.length) return []
-  return settingsIndex
+  return settingsIndex.value
     .filter((item) => {
       const hay = normalizeNav(`${item.group || ''}${item.title}${item.hint || ''}${item.kw || ''}`)
       return kws.every((k) => hay.includes(k))

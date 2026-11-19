@@ -1,7 +1,7 @@
 <template>
   <!-- 入口节点只画一个图标，名字（「入口」/ 撞名后的「入口-2」）平时看不见，
        悬停时用 tooltip 补上：多容器并存时靠它区分是哪个入口 -->
-  <el-tooltip :content="data.label || '入口'" placement="top">
+  <el-tooltip :content="data.label || t('flow.node.defaultLabel.entry')" placement="top">
     <div class="entry-node" :class="{ 'child-node': parentNode }" ref="nodeRef" @click="handleNodeClick">
       <div class="node-content">
         <div class="icon-wrapper icon-entry"><el-icon><Aim /></el-icon></div>      
@@ -17,11 +17,14 @@
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { Aim } from '@element-plus/icons-vue'
 import { Handle } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {
     type: Object,
-    default: () => ({ label: '入口' })
+    default: () => ({})
   },
   id: {
     type: String,

@@ -6,11 +6,11 @@
     <div class="split">
       <div class="list-pane">
         <div class="lp-bar">
-          <span class="lp-count">对端 {{ peers.length }} 个</span>
+          <span class="lp-count">{{ t('platform.market.peerCount', { count: peers.length }) }}</span>
           <div class="lp-bar-right">
             <el-button size="small" type="primary" @click="openPeerForm()">
               <el-icon><Plus /></el-icon>
-              新建对端
+              {{ t('platform.market.newPeer') }}
             </el-button>
           </div>
         </div>
@@ -28,35 +28,34 @@
             <div class="pc-top">
               <span class="pc-name" :title="p.name">{{ p.name }}</span>
               <el-tag size="small" :type="p.install_policy === 'auto' ? 'warning' : 'info'" effect="plain">
-                {{ p.install_policy === 'auto' ? '自动通过' : '需审核' }}
+                {{ p.install_policy === 'auto' ? t('platform.market.autoApprove') : t('platform.market.needReview') }}
               </el-tag>
             </div>
             <div class="pc-url mono" :title="p.base_url">{{ p.base_url }}</div>
             <div class="pc-state">
               <span v-if="p.last_error" class="err" :title="p.last_error">{{ p.last_error }}</span>
               <span v-else class="muted">
-                {{ p.last_sync_at ? '上次同步 ' + fmtTime(p.last_sync_at) : '还没拉过' }}
+                {{ p.last_sync_at ? t('platform.market.lastSync', { time: fmtTime(p.last_sync_at) }) : t('platform.market.neverPulled') }}
               </span>
-              <span v-if="!p.enabled" class="muted">· 已停用</span>
-              <span v-if="p.auth_mode === 'none'" class="muted">· 公开市场</span>
-              <span v-else-if="!p.has_token" class="err">· 未配置令牌</span>
+              <span v-if="!p.enabled" class="muted">{{ t('platform.market.disabled') }}</span>
+              <span v-if="p.auth_mode === 'none'" class="muted">{{ t('platform.market.publicMarket') }}</span>
+              <span v-else-if="!p.has_token" class="err">{{ t('platform.market.noToken') }}</span>
             </div>
             <div class="pc-actions">
-              <el-button link type="primary" size="small" @click.stop="openPeerForm(p)">编辑</el-button>
-              <el-button link type="danger" size="small" @click.stop="removePeer(p)">删除</el-button>
+              <el-button link type="primary" size="small" @click.stop="openPeerForm(p)">{{ t('common.edit') }}</el-button>
+              <el-button link type="danger" size="small" @click.stop="removePeer(p)">{{ t('common.delete') }}</el-button>
             </div>
           </div>
-          <el-empty v-if="!peers.length && !loadingPeers" description="还没有配置对端站点" />
+          <el-empty v-if="!peers.length && !loadingPeers" :description="t('platform.market.emptyPeers')" />
         </div>
 
         <div class="lp-foot">
-          对端 = 你要去拉的那一端。对方要求令牌时，先在对方平台的「本地市场 → 对外接入」生成一个填到这里；
-          对方是公开市场（config.yaml 里 market.open: true）时，认证方式选「公开」即可。
+          {{ t('platform.market.footHint') }}
         </div>
       </div>
 
       <section class="detail-pane">
-        <el-empty v-if="!activePeer" description="左侧选择一个对端，然后拉取它的资产目录" />
+        <el-empty v-if="!activePeer" :description="t('platform.market.selectPeer')" />
 
         <template v-else>
           <div class="d-head">
@@ -64,15 +63,15 @@
               <span class="d-name">{{ activePeer.name }}</span>
               <span class="mono d-schema">{{ activePeer.base_url }}</span>
             </div>
-            <el-button size="small" :loading="loadingCatalog" @click="loadCatalog">拉取目录</el-button>
+            <el-button size="small" :loading="loadingCatalog" @click="loadCatalog">{{ t('platform.market.pullCatalog') }}</el-button>
           </div>
 
           <div v-if="activePeer.last_error" class="warn">{{ activePeer.last_error }}</div>
 
           <div class="hint" style="margin: 10px 0">
-            目录只含对方<strong>已通过审核</strong>的资产。导入后在这里仍是
-            <strong>{{ activePeer.install_policy === 'auto' ? '已通过（该对端开启了自动通过）' : '待审核' }}</strong>
-            {{ activePeer.install_policy === 'auto' ? '，但仍记录来源可追溯' : '，要在「本地市场」里过一眼才会进入本机市场' }}。
+            {{ t('platform.market.hintPrefix') }}<strong>{{ t('platform.market.hintApproved') }}</strong>{{ t('platform.market.hintMid') }}
+            <strong>{{ activePeer.install_policy === 'auto' ? t('platform.market.hintAutoStatus') : t('platform.market.hintReviewStatus') }}</strong>
+            {{ activePeer.install_policy === 'auto' ? t('platform.market.hintAutoTail') : t('platform.market.hintReviewTail') }}
           </div>
 
           <!-- 目录筛选：全在本地过滤（见脚本里 catFilters 上面的说明） -->
@@ -90,7 +89,7 @@
               :key="'ci-' + s.value"
               class="cat-chip"
               :class="{ active: catFilters.imported === s.value }"
-              :title="catFilters.imported === s.value ? '再点一次取消' : ''"
+              :title="catFilters.imported === s.value ? t('platform.market.cancelFilterTip') : ''"
               @click="toggleImport(s.value)"
             >{{ s.label }}</button>
             <el-input
@@ -98,7 +97,7 @@
               class="cat-search"
               size="small"
               clearable
-              placeholder="搜索名称 / 说明"
+              :placeholder="t('platform.market.searchPlaceholder')"
             >
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
@@ -117,7 +116,7 @@
                 <span class="muted cc-ver">v{{ row.build }}</span>
               </div>
               <div class="cc-sub mono" :title="row.name">{{ row.name }}</div>
-              <div class="cc-desc">{{ row.description || '（对方没有填描述）' }}</div>
+              <div class="cc-desc">{{ row.description || t('platform.market.noDescription') }}</div>
               <div class="cc-foot">
                 <!-- 对方版本更高时标成橙色并写出目标版本：不然「已导入 v1」看着一切正常 -->
                 <el-tag
@@ -126,21 +125,21 @@
                   :type="hasUpdate(row) ? 'warning' : 'success'"
                   effect="plain"
                 >
-                  已导入 v{{ row.local?.build }}<template v-if="hasUpdate(row)"> → v{{ row.build }}</template>
+                  {{ t('platform.market.importedVersion', { version: row.local?.build }) }}<template v-if="hasUpdate(row)"> → v{{ row.build }}</template>
                 </el-tag>
-                <span v-else class="muted">未导入</span>
+                <span v-else class="muted">{{ t('platform.market.notImported') }}</span>
                 <el-button
                   link
                   type="primary"
                   size="small"
                   :loading="importingId === row.id"
                   @click="importAsset(row)"
-                >{{ row.imported ? '覆盖导入' : '导入' }}</el-button>
+                >{{ row.imported ? t('platform.market.overwriteImport') : t('assetImport.import') }}</el-button>
               </div>
             </div>
             <el-empty
               v-if="!filteredCatalog.length && !loadingCatalog"
-              :description="catalog.length ? `没有符合条件的资产（共 ${catalog.length} 条）` : '该对端目录里没有资产'"
+              :description="catalog.length ? t('platform.market.emptyFiltered', { count: catalog.length }) : t('platform.market.emptyCatalog')"
             />
           </div>
 
@@ -149,7 +148,11 @@
               type="success"
               :closable="false"
               show-icon
-              :title="`已导入：${importResult.asset?.name} v${importResult.asset?.build}（${importResult.asset?.status === 'listed' ? '已通过' : '待审核'}）`"
+              :title="t('platform.market.importResult', {
+                name: importResult.asset?.name,
+                build: importResult.asset?.build,
+                status: importResult.asset?.status === 'listed' ? t('platform.market.statusPassed') : t('platform.market.statusReview')
+              })"
             />
             <ul v-if="importResult.warnings?.length" class="warn-list">
               <li v-for="(w, i) in importResult.warnings" :key="i">{{ w }}</li>
@@ -160,58 +163,58 @@
     </div>
 
     <!-- 新建 / 编辑对端 -->
-    <el-dialog v-model="peerFormVisible" :title="peerForm.id ? '编辑对端' : '新建对端'" width="520px">
+    <el-dialog v-model="peerFormVisible" :title="peerForm.id ? t('platform.market.dialogEdit') : t('platform.market.dialogCreate')" width="520px">
       <div class="form">
         <div class="form-row">
-          <label>站点名</label>
+          <label>{{ t('platform.market.labelName') }}</label>
           <div class="form-control">
-            <el-input v-model="peerForm.name" size="small" placeholder="例如 test（导入后作为来源标记，唯一）" />
+            <el-input v-model="peerForm.name" size="small" :placeholder="t('platform.market.phName')" />
           </div>
         </div>
         <div class="form-row">
-          <label>地址</label>
+          <label>{{ t('platform.market.labelAddress') }}</label>
           <div class="form-control">
-            <el-input v-model="peerForm.base_url" size="small" placeholder="https://test.example.com（不要带路径）" />
-            <div class="hint">只填到主机名 / 端口，<code>/platform/market/…</code> 会自动拼上。</div>
+            <el-input v-model="peerForm.base_url" size="small" :placeholder="t('platform.market.phAddress')" />
+            <div class="hint">{{ t('platform.market.addressHint1') }}<code>/platform/market/…</code>{{ t('platform.market.addressHint2') }}</div>
           </div>
         </div>
         <div class="form-row">
-          <label>认证方式</label>
+          <label>{{ t('platform.market.labelAuth') }}</label>
           <div class="form-control">
             <el-select v-model="peerForm.auth_mode" size="small" style="width: 100%">
-              <el-option label="市场令牌（对方要求令牌）" value="token" />
-              <el-option label="公开（不带令牌）" value="none" />
+              <el-option :label="t('platform.market.authToken')" value="token" />
+              <el-option :label="t('platform.market.authNone')" value="none" />
             </el-select>
             <div class="hint">
-              对方开了 <code>market.open: true</code> 就选「公开」；否则去对方平台的「本地市场 → 对外接入」里签发一个。
+              {{ t('platform.market.authHint1') }} <code>market.open: true</code>{{ t('platform.market.authHint2') }}
             </div>
           </div>
         </div>
         <div v-if="peerForm.auth_mode === 'token'" class="form-row">
-          <label>市场令牌</label>
+          <label>{{ t('platform.market.labelToken') }}</label>
           <div class="form-control">
             <el-input
               v-model="peerForm.token"
               size="small"
-              :placeholder="peerForm.id ? '留空 = 不修改' : '对方平台上生成的 flmt_… 令牌'"
+              :placeholder="peerForm.id ? t('platform.market.phTokenKeep') : t('platform.market.phTokenNew')"
             />
-            <div v-if="peerForm.id" class="hint">要清空旧令牌（改成公开市场），把上面的认证方式改成「公开」再保存。</div>
+            <div v-if="peerForm.id" class="hint">{{ t('platform.market.tokenHintEdit') }}</div>
           </div>
         </div>
         <div class="form-row">
-          <label>导入策略</label>
+          <label>{{ t('platform.market.labelPolicy') }}</label>
           <div class="form-control">
             <el-checkbox v-model="peerForm.auto_approve" size="small">
-              从该站导入后自动通过（跳过本机审核）
+              {{ t('platform.market.autoApproveLabel') }}
             </el-checkbox>
-            <el-checkbox v-model="peerForm.enabled" size="small">启用该对端</el-checkbox>
-            <div class="hint">自动通过只建议给「你自己掌控的测试环境」；生产导入默认要再审一眼。</div>
+            <el-checkbox v-model="peerForm.enabled" size="small">{{ t('platform.market.enablePeer') }}</el-checkbox>
+            <div class="hint">{{ t('platform.market.policyHint') }}</div>
           </div>
         </div>
       </div>
       <template #footer>
-        <el-button @click="peerFormVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingPeer" @click="savePeer">保存</el-button>
+        <el-button @click="peerFormVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="savingPeer" @click="savePeer">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
 
@@ -222,14 +225,22 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
 import { api } from '../api'
 
+const { t } = useI18n()
+
 const emit = defineEmits(['count', 'session-expired'])
 
-const KIND_LABEL = { skill: '技能', custom_tool: '自定义工具', agent: '智能体', workflow: '工作流' }
-const kindLabel = (k) => KIND_LABEL[k] || k || '—'
+// 资产类型标签复用导入对话框里那套（同一个概念不该有两种叫法）
+const kindLabel = (k) => ({
+  skill: t('assetImport.kindSkill'),
+  custom_tool: t('assetImport.kindCustomTool'),
+  agent: t('assetImport.kindAgent'),
+  workflow: t('assetImport.kindWorkflow')
+}[k] || k || '—')
 const fmtTime = (t) => (t ? String(t).replace('T', ' ').slice(0, 19) : '—')
 
 const peers = ref([])
@@ -244,19 +255,19 @@ const importResult = ref(null)
 // 全在本地算：目录本来就是一次全量拉回来的。走后端 ?kind= 会真打一次对端
 // （PeerCatalog 直连 peerGet，不走 admin/share 那套 per-peer 缓存），
 // 切个类型就要冒 30s 超时的风险，纯亏。
-const KIND_FILTERS = [
-  { value: '', label: '全部' },
-  { value: 'skill', label: '技能' },
-  { value: 'custom_tool', label: '自定义工具' },
-  { value: 'agent', label: '智能体' },
-  { value: 'workflow', label: '工作流' }
-]
+const KIND_FILTERS = computed(() => [
+  { value: '', label: t('platform.market.filterAll') },
+  { value: 'skill', label: t('assetImport.kindSkill') },
+  { value: 'custom_tool', label: t('assetImport.kindCustomTool') },
+  { value: 'agent', label: t('assetImport.kindAgent') },
+  { value: 'workflow', label: t('assetImport.kindWorkflow') }
+])
 // 是否已导入做成两个可切换的 chip（点亮的再点一次 = 不限），
 // 比再摆一个「全部」按钮少一个控件、也不会和左边的「全部」读串
-const IMPORT_FILTERS = [
-  { value: 'no', label: '未导入' },
-  { value: 'yes', label: '已导入' }
-]
+const IMPORT_FILTERS = computed(() => [
+  { value: 'no', label: t('platform.market.filterNotImported') },
+  { value: 'yes', label: t('platform.market.filterImported') }
+])
 const catFilters = reactive({ kind: '', imported: '', q: '' })
 
 // 「对方版本更高」：卡片上直接标出来，不用点覆盖导入才发现
@@ -283,7 +294,7 @@ function handleError(err) {
     emit('session-expired')
     return
   }
-  ElMessage.error(err?.message || '请求失败')
+  ElMessage.error(err?.message || t('platform.market.requestFailed'))
 }
 
 const loadPeers = async () => {
@@ -341,11 +352,14 @@ const importAsset = async (row) => {
   if (overwrite) {
     try {
       await ElMessageBox.confirm(
-        `本机已从「${activePeer.value.name}」导入过 ${row.name}（v${row.local?.build}），重新导入会覆盖内容并把本地版本 +1${
-          activePeer.value.auto_approve ? '' : '，并回到待审核'
-        }。继续？`,
-        '覆盖导入',
-        { type: 'warning', confirmButtonText: '覆盖导入', cancelButtonText: '取消' }
+        t('platform.market.overwriteConfirm', {
+          peer: activePeer.value.name,
+          name: row.name,
+          build: row.local?.build,
+          reviewTail: activePeer.value.auto_approve ? '' : t('platform.market.overwriteReviewTail')
+        }),
+        t('platform.market.overwriteConfirmTitle'),
+        { type: 'warning', confirmButtonText: t('platform.market.overwriteImport'), cancelButtonText: t('common.cancel') }
       )
     } catch {
       return
@@ -356,7 +370,7 @@ const importAsset = async (row) => {
     const data = await api.importFromPeer(activePeer.value.id, { asset_id: row.id, force: overwrite })
     importResult.value = data
     ElMessage.success(
-      data?.asset?.status === 'listed' ? '已导入并通过（该对端自动通过）' : '已导入，等待本机审核'
+      data?.asset?.status === 'listed' ? t('platform.market.importedPassed') : t('platform.market.importedPending')
     )
     await loadCatalog()
   } catch (err) {
@@ -405,7 +419,7 @@ const savePeer = async () => {
     }
     if (peerForm.id) await api.updatePeer(peerForm.id, body)
     else await api.createPeer(body)
-    ElMessage.success('已保存')
+    ElMessage.success(t('platform.market.saved'))
     peerFormVisible.value = false
     await loadPeers()
   } catch (err) {
@@ -418,9 +432,9 @@ const savePeer = async () => {
 const removePeer = async (row) => {
   try {
     await ElMessageBox.confirm(
-      `删除对端「${row.name}」？已导入的资产不受影响（它们只保留来源标记）。`,
-      '删除对端',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      t('platform.market.deleteConfirm', { name: row.name }),
+      t('platform.market.deleteTitle'),
+      { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
     )
   } catch {
     return
@@ -431,7 +445,7 @@ const removePeer = async (row) => {
       activePeer.value = null
       catalog.value = []
     }
-    ElMessage.success('已删除')
+    ElMessage.success(t('platform.market.deleted'))
     await loadPeers()
   } catch (err) {
     handleError(err)

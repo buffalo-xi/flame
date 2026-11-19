@@ -9,7 +9,7 @@
           @click="emit('update:activeTab', 'flow')"
         >
           <el-icon class="tab-icon"><ChromeFilled /></el-icon>
-          流程变量
+          {{ t('flow.variables.tabFlowVars') }}
         </button>
         <button
           class="tab-btn"
@@ -17,7 +17,7 @@
           @click="emit('update:activeTab', 'environment')"
         >
           <el-icon class="tab-icon"><Notification /></el-icon>
-          环境变量
+          {{ t('flow.variables.tabEnvVars') }}
         </button>
         <!-- 全局变量：租户级，这里只读（维护在「设置 → 全局变量」） -->
         <button
@@ -26,7 +26,7 @@
           @click="emit('update:activeTab', 'global')"
         >
           <el-icon class="tab-icon"><Key /></el-icon>
-          全局变量
+          {{ t('flow.variables.tabGlobalVars') }}
         </button>
       </div>
       <span class="close-icon" @click="$emit('close')">×</span>
@@ -34,43 +34,43 @@
     <div class="panel-body">
       <div v-if="props.activeTab === 'flow'" class="tab-content">
         <div class="sub-tabs">
-          <button class="sub-tab-btn" :class="{ active: flowSubTab === 'settings' }" @click="flowSubTab = 'settings'">设置</button>
-          <button class="sub-tab-btn" :class="{ active: flowSubTab === 'run' }" @click="flowSubTab = 'run'">执行结果</button>
+          <button class="sub-tab-btn" :class="{ active: flowSubTab === 'settings' }" @click="flowSubTab = 'settings'">{{ t('flow.variables.subTabSettings') }}</button>
+          <button class="sub-tab-btn" :class="{ active: flowSubTab === 'run' }" @click="flowSubTab = 'run'">{{ t('flow.variables.subTabRun') }}</button>
         </div>
 
         <div v-if="flowSubTab === 'settings'">
-        <div class="description-text">流程变量用于存储工作流运行中的数据信息，可在任何工作流节点中读写。</div>
+        <div class="description-text">{{ t('flow.variables.flowIntro') }}</div>
         <div class="add-button-container">
           <el-dropdown @command="handleAddFlowVariable" trigger="click">
             <button class="add-variable-btn">
               <el-icon><Plus /></el-icon>
-              添加流程变量
+              {{ t('flow.variables.addFlowVar') }}
             </button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="string">
-                  <span class="dropdown-icon icon-string-inline">S</span>字符串
+                  <span class="dropdown-icon icon-string-inline">S</span>{{ t('flow.typeOptions.string') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="number">
-                  <span class="dropdown-icon icon-number-inline">N</span>数字
+                  <span class="dropdown-icon icon-number-inline">N</span>{{ t('flow.typeOptions.number') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="boolean">
-                  <span class="dropdown-icon icon-boolean-inline">B</span>布尔值
+                  <span class="dropdown-icon icon-boolean-inline">B</span>{{ t('flow.typeOptions.boolean') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="object">
-                  <span class="dropdown-icon icon-object-inline">O</span>对象
+                  <span class="dropdown-icon icon-object-inline">O</span>{{ t('flow.typeOptions.object') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="array[string]">
-                  <span class="dropdown-icon icon-string-array-inline">S</span>字符串数组
+                  <span class="dropdown-icon icon-string-array-inline">S</span>{{ t('flow.typeOptions.arrayString') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="array[number]">
-                  <span class="dropdown-icon icon-number-array-inline">N</span>数字数组
+                  <span class="dropdown-icon icon-number-array-inline">N</span>{{ t('flow.typeOptions.arrayNumber') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="array[boolean]">
-                  <span class="dropdown-icon icon-boolean-array-inline">B</span>布尔数组
+                  <span class="dropdown-icon icon-boolean-array-inline">B</span>{{ t('flow.typeOptions.arrayBoolean') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="array[object]">
-                  <span class="dropdown-icon icon-object-array-inline">O</span>对象数组
+                  <span class="dropdown-icon icon-object-array-inline">O</span>{{ t('flow.typeOptions.arrayObject') }}
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -79,7 +79,7 @@
         
         <div class="flow-variables-cards">
           <div v-if="Object.keys(sortedFlowVariables).length === 0" class="flow-empty-state">
-            <p>暂无流程变量</p>
+            <p>{{ t('flow.variables.noFlowVars') }}</p>
           </div>
           
           <div
@@ -111,7 +111,7 @@
                   v-if="editingDescKey === key"
                   v-model="editingDescTemp"
                   class="flow-card-description-input"
-                  placeholder="添加描述"
+                  :placeholder="t('flow.common.addDescription')"
                   @click.stop
                   @blur="finishEditFlowDesc(key)"
                   @keydown.enter="finishEditFlowDesc(key)"
@@ -121,7 +121,7 @@
                   v-else
                   class="flow-card-description flow-card-description-editable"
                   @click.stop="startEditDesc(key, config.description)"
-                >{{ config.description || '无描述' }}</span>
+                >{{ config.description || t('flow.variables.noDescription') }}</span>
               </div>
               <el-icon class="flow-expand-icon" :class="{ rotated: expandedCards.has(key) }" @click="toggleCard(key)">
                 <ArrowDown />
@@ -134,7 +134,7 @@
             <div class="flow-card-body" v-show="expandedCards.has(key)">
               <template v-if="config.type === 'string'">
                 <div class="flow-form-item">
-                  <label>默认值</label>
+                  <label>{{ t('flow.variables.defaultValue') }}</label>
                   <textarea
                     class="flow-form-textarea"
                     :value="config.default"
@@ -145,7 +145,7 @@
               
               <template v-else-if="config.type === 'number'">
                 <div class="flow-form-item">
-                  <label>默认值</label>
+                  <label>{{ t('flow.variables.defaultValue') }}</label>
                   <input
                     type="number"
                     :value="parseNumber(config.default)"
@@ -157,7 +157,7 @@
               
               <template v-else-if="config.type === 'boolean'">
                 <div class="flow-form-item">
-                  <label>默认值</label>
+                  <label>{{ t('flow.variables.defaultValue') }}</label>
                   <div class="flow-boolean-selector">
                     <button
                       class="flow-boolean-btn"
@@ -175,10 +175,10 @@
               
               <template v-else-if="config.type === 'object'">
                 <div class="flow-form-item">
-                  <label>成员属性</label>
+                  <label>{{ t('flow.variables.members') }}</label>
                   <div class="properties-container">
                     <div v-if="Object.keys(config.properties || {}).length === 0" class="empty-properties">
-                      <p>暂无成员属性</p>
+                      <p>{{ t('flow.variables.noMembers') }}</p>
                     </div>
                     <div
                       v-for="(propConfig, propKey) in config.properties || {}"
@@ -232,18 +232,18 @@
                   <el-dropdown @command="(type) => handleAddProperty(key, type)" trigger="click">
                     <button class="add-property-btn">
                       <el-icon><Plus /></el-icon>
-                      添加成员属性
+                      {{ t('flow.variables.addMember') }}
                     </button>
                     <template #dropdown>
                       <el-dropdown-menu>
                         <el-dropdown-item command="string">
-                          <span class="dropdown-icon icon-string-inline">S</span>字符串
+                          <span class="dropdown-icon icon-string-inline">S</span>{{ t('flow.typeOptions.string') }}
                         </el-dropdown-item>
                         <el-dropdown-item command="number">
-                          <span class="dropdown-icon icon-number-inline">N</span>数字
+                          <span class="dropdown-icon icon-number-inline">N</span>{{ t('flow.typeOptions.number') }}
                         </el-dropdown-item>
                         <el-dropdown-item command="boolean">
-                          <span class="dropdown-icon icon-boolean-inline">B</span>布尔值
+                          <span class="dropdown-icon icon-boolean-inline">B</span>{{ t('flow.typeOptions.boolean') }}
                         </el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
@@ -253,7 +253,7 @@
               
               <template v-else-if="config.type === 'array[string]'">
                 <div class="flow-form-item">
-                  <label>默认值 (字符串数组)</label>
+                  <label>{{ t('flow.variables.defaultStringArray') }}</label>
                   <textarea
                     class="flow-form-textarea"
                     :value="formatJson(config.default)"
@@ -264,7 +264,7 @@
               
               <template v-else-if="config.type === 'array[number]'">
                 <div class="flow-form-item">
-                  <label>默认值 (数字数组)</label>
+                  <label>{{ t('flow.variables.defaultNumberArray') }}</label>
                   <textarea
                     class="flow-form-textarea"
                     :value="formatJson(config.default)"
@@ -275,7 +275,7 @@
               
               <template v-else-if="config.type === 'array[boolean]'">
                 <div class="flow-form-item">
-                  <label>默认值 (布尔数组)</label>
+                  <label>{{ t('flow.variables.defaultBooleanArray') }}</label>
                   <textarea
                     class="flow-form-textarea"
                     :value="formatJson(config.default)"
@@ -286,7 +286,7 @@
               
               <template v-else-if="config.type === 'array[object]'">
                 <div class="flow-form-item">
-                  <label>默认值 (对象数组)</label>
+                  <label>{{ t('flow.variables.defaultObjectArray') }}</label>
                   <textarea
                     class="flow-form-textarea"
                     :value="formatJson(config.default)"
@@ -309,24 +309,24 @@
            免得同一个值在两处都能改。引用方式是在节点「输入变量」里选来源。 -->
       <div v-else-if="props.activeTab === 'global'" class="tab-content">
         <div class="description-text">
-          全局变量是本租户所有工作流 / 智能体 / 技能共用的配置，这里只读，维护在「设置 → 全局变量」。
-          引用方式：在节点的「输入变量」里把来源选为「全局变量」，模板里写输入变量名。
+          {{ t('flow.variables.globalIntro1') }}
+          {{ t('flow.variables.globalIntro2') }}
         </div>
         <div class="gv-toolbar">
-          <span class="gv-count">共 {{ globalVars.length }} 个</span>
+          <span class="gv-count">{{ t('flow.variables.globalCount', { count: globalVars.length }) }}</span>
           <button class="gv-refresh-btn" :disabled="globalVarsLoading" @click="loadGlobalVars">
-            {{ globalVarsLoading ? '加载中…' : '刷新' }}
+            {{ globalVarsLoading ? t('flow.variables.loading') : t('flow.variables.refresh') }}
           </button>
         </div>
         <div v-if="!globalVarsLoading && !globalVars.length" class="flow-empty-state">
-          <p>暂无全局变量（在「设置 → 全局变量」里创建）</p>
+          <p>{{ t('flow.variables.noGlobalVars') }}</p>
         </div>
         <div class="gv-list">
           <div v-for="gv in globalVars" :key="gv.name" class="gv-row">
             <span class="gv-kind" :class="'gv-kind--' + gv.kind">{{ GLOBAL_KIND_LABEL[gv.kind] || gv.kind }}</span>
             <div class="gv-row-main">
               <div class="gv-row-name" :title="gv.name">{{ gv.name }}</div>
-              <div class="gv-row-desc" :title="gv.description || ''">{{ gv.description || '无描述' }}</div>
+              <div class="gv-row-desc" :title="gv.description || ''">{{ gv.description || t('flow.variables.noDescription') }}</div>
             </div>
             <span class="gv-row-value" :class="{ 'is-secret': gv.kind === 'secret' }">{{ globalVarDisplay(gv) }}</span>
           </div>
@@ -335,25 +335,25 @@
 
       <div v-else class="tab-content">
         <div class="description-text">
-          环境变量用于配置工作流运行时的环境信息，包含字符串、数字和密钥类型。
-          租户级配置（地址、账号名、密钥等）不在这里：请在节点的输入变量里把来源选为「全局变量」，模板里用输入变量引用。
+          {{ t('flow.variables.envIntro1') }}
+          {{ t('flow.variables.envIntro2') }}
         </div>
         <div class="add-button-container">
           <el-dropdown @command="handleAddEnvironmentVariable" trigger="click">
             <button class="add-variable-btn">
               <el-icon><Plus /></el-icon>
-              添加环境变量
+              {{ t('flow.variables.addEnvVar') }}
             </button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="string">
-                  <span class="dropdown-icon icon-string-inline">S</span>字符串
+                  <span class="dropdown-icon icon-string-inline">S</span>{{ t('flow.typeOptions.string') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="number">
-                  <span class="dropdown-icon icon-number-inline">N</span>数字
+                  <span class="dropdown-icon icon-number-inline">N</span>{{ t('flow.typeOptions.number') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="secret">
-                  <span class="dropdown-icon icon-secret-inline">K</span>密钥
+                  <span class="dropdown-icon icon-secret-inline">K</span>{{ t('flow.typeOptions.secret') }}
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -362,7 +362,7 @@
         
         <div class="env-variables-list">
           <div v-if="Object.keys(environmentVariables).length === 0" class="env-empty-state">
-            <p>暂无环境变量</p>
+            <p>{{ t('flow.variables.noEnvVars') }}</p>
           </div>
           <div
             v-for="(config, key) in environmentVariables"
@@ -392,7 +392,7 @@
                   v-if="editingDescKey === key"
                   v-model="editingDescTemp"
                   class="env-card-description-input"
-                  placeholder="添加描述"
+                  :placeholder="t('flow.common.addDescription')"
                   @click.stop
                   @blur="finishEditEnvDesc(key)"
                   @keydown.enter="finishEditEnvDesc(key)"
@@ -402,7 +402,7 @@
                   v-else
                   class="env-card-description env-card-description-editable"
                   @click.stop="startEditDesc(key, config.description)"
-                >{{ config.description || '无描述' }}</span>
+                >{{ config.description || t('flow.variables.noDescription') }}</span>
               </div>
               <el-icon class="env-expand-icon" :class="{ rotated: expandedEnvCards.has(key) }" @click="toggleEnvCard(key)">
                 <ArrowDown />
@@ -416,29 +416,29 @@
               <!-- 已废弃的类型 global（全局变量改成节点输入的来源了）：老数据仍可能躺在这里，
                    给一句迁移提示，而不是让它退化成「一个叫 value 的普通字符串」。 -->
               <div v-if="config.type === 'global'" class="gv-hint warn">
-                该类型已废弃：请在节点的输入变量里新增一项，来源选「全局变量」，模板里用 &#123;&#123; .input.变量名 &#125;&#125; 引用。
+                {{ t('flow.variables.deprecatedBefore') }}{{ t('flow.variables.deprecatedTemplate') }}{{ t('flow.variables.deprecatedAfter') }}
               </div>
               <template v-else-if="config.type === 'secret'">
                 <div class="env-form-item">
-                  <label>配置值</label>
+                  <label>{{ t('flow.variables.configValue') }}</label>
                   <!-- 后端不回显明文：value 恒为空，留空提交 = 沿用原值（后端按名字合并）。
                        所以这里不能预填，也必须把「留空不改」写出来 ——
                        否则用户会以为输入框空着就是「密码被清空了」。 -->
                   <input
                     type="password"
                     :value="config.value"
-                    :placeholder="config.has_value ? '已设置，留空表示不修改' : '变量值'"
+                    :placeholder="config.has_value ? t('flow.variables.secretPlaceholderSet') : t('flow.variables.secretPlaceholder')"
                     class="env-form-input"
                     @change="handleUpdateEnvVariable(key, 'value', $event.target.value)"
                   />
                   <div v-if="config.has_value" class="gv-hint">
-                    已设置值：界面上不回显，留空保存即沿用原值；要清掉只能删掉这个变量重建
+                    {{ t('flow.variables.secretHint') }}
                   </div>
                 </div>
               </template>
               <template v-else-if="config.type === 'number'">
                 <div class="env-form-item">
-                  <label>配置值</label>
+                  <label>{{ t('flow.variables.configValue') }}</label>
                   <input
                     type="number"
                     :value="config.value"
@@ -449,7 +449,7 @@
               </template>
               <template v-else>
                 <div class="env-form-item">
-                  <label>配置值</label>
+                  <label>{{ t('flow.variables.configValue') }}</label>
                   <textarea
                     class="env-form-textarea"
                     :value="config.value"
@@ -474,6 +474,9 @@ import { getDataTypeIcon, getDataTypeIconClass, getDataTypeLabel } from './dataT
 import { useEscClose } from '../../../composables/useEscClose'
 import adminApi from '../../../config/admin.js'
 import { authHeaders, checkBizOk } from '../../settings/http.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   activeTab: {
@@ -560,15 +563,20 @@ watch(() => props.flowVariables, (newVariables) => {
 // ── 全局变量（只读浏览）──
 // 维护入口在「设置 → 全局变量」。这里只列名字 / 类型 / 描述：接口不回 secret 的值，
 // 所以密钥类只显示「已设置 / 未设置」。
-const GLOBAL_KIND_LABEL = { text: '文本', number: '数字', bool: '布尔', secret: '密钥' }
+const GLOBAL_KIND_LABEL = computed(() => ({
+  text: t('flow.variables.kindText'),
+  number: t('flow.variables.kindNumber'),
+  bool: t('flow.variables.kindBool'),
+  secret: t('flow.variables.kindSecret')
+}))
 const globalVars = ref([])
 const globalVarsLoading = ref(false)
 const globalVarsLoaded = ref(false)
 
 const globalVarDisplay = (v) => {
-  if (v.kind === 'secret') return v.has_value ? '已设置' : '未设置'
-  if (v.kind === 'bool') return String(v.value).trim().toLowerCase() === 'true' ? '真' : '假'
-  return v.value === '' || v.value == null ? '（空）' : v.value
+  if (v.kind === 'secret') return v.has_value ? t('flow.variables.valueSet') : t('flow.variables.valueUnset')
+  if (v.kind === 'bool') return String(v.value).trim().toLowerCase() === 'true' ? t('flow.variables.valueTrue') : t('flow.variables.valueFalse')
+  return v.value === '' || v.value == null ? t('flow.variables.valueEmpty') : v.value
 }
 
 const loadGlobalVars = async () => {
@@ -579,7 +587,7 @@ const loadGlobalVars = async () => {
     globalVars.value = data.data?.items || []
     globalVarsLoaded.value = true
   } catch (e) {
-    ElMessage.error('读取全局变量失败：' + e.message)
+    ElMessage.error(t('flow.message.loadGlobalVarsFailed') + e.message)
   } finally {
     globalVarsLoading.value = false
   }
@@ -615,7 +623,7 @@ const flowRunVars = computed(() => {
 })
 const flowRunVarsText = computed(() => {
   const v = flowRunVars.value
-  if (v == null) return '暂无运行数据'
+  if (v == null) return t('flow.node.run.empty')
   return JSON.stringify(v, null, 2)
 })
 
@@ -846,12 +854,12 @@ const validateKey = (key) => {
 
 const handleRenameVariable = (oldKey, newKey) => {
   if (!newKey.trim()) {
-    alert('变量名不能为空')
+    alert(t('flow.variables.nameEmpty'))
     return
   }
   
   if (!validateKey(newKey)) {
-    alert('变量名必须以英文字母开头，且只能包含英文字母、数字和下划线')
+    alert(t('flow.variables.nameInvalid'))
     return
   }
   
@@ -912,12 +920,12 @@ const handleUpdateProperty = (varKey, propKey, field, value) => {
 
 const handleRenameProperty = (varKey, oldPropKey, newPropKey) => {
   if (!newPropKey.trim()) {
-    alert('属性名不能为空')
+    alert(t('flow.variables.propNameEmpty'))
     return
   }
   
   if (!validateKey(newPropKey)) {
-    alert('属性名必须以英文字母开头，且只能包含英文字母、数字和下划线')
+    alert(t('flow.variables.propNameInvalid'))
     return
   }
   
@@ -947,15 +955,15 @@ const handleDeleteProperty = (varKey, propKey) => {
 
 const getDefaultPlaceholder = (type) => {
   const placeholders = {
-    'string': '字符串默认值',
-    'number': '数字默认值',
-    'boolean': 'true 或 false'
+    'string': t('flow.variables.defaultValueString'),
+    'number': t('flow.variables.defaultValueNumber'),
+    'boolean': t('flow.variables.defaultValueBoolean')
   }
   return placeholders[type] || ''
 }
 
 const handleDeleteVariable = (key) => {
-  if (!confirm(`确定要删除变量 "${key}" 吗？`)) return
+  if (!confirm(t('flow.variables.confirmDeleteVar', { name: key }))) return
   
   const newVariables = { ...props.flowVariables }
   delete newVariables[key]
@@ -1029,12 +1037,12 @@ const handleUpdateEnvVariable = (key, field, value) => {
 
 const handleRenameEnvVariable = (oldKey, newKey) => {
   if (!newKey.trim()) {
-    alert('变量名不能为空')
+    alert(t('flow.variables.nameEmpty'))
     return
   }
   
   if (!validateKey(newKey)) {
-    alert('变量名必须以英文字母开头，且只能包含英文字母、数字和下划线')
+    alert(t('flow.variables.nameInvalid'))
     return
   }
   
@@ -1053,7 +1061,7 @@ const handleRenameEnvVariable = (oldKey, newKey) => {
 }
 
 const handleDeleteEnvVariable = (key) => {
-  if (!confirm(`确定要删除环境变量 "${key}" 吗？`)) return
+  if (!confirm(t('flow.variables.confirmDeleteEnvVar', { name: key }))) return
   
   const newEnvVariables = { ...props.environmentVariables }
   delete newEnvVariables[key]

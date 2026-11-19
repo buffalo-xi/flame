@@ -2,14 +2,14 @@
   <div class="function-node" :class="{ 'selected': isSelected }" ref="nodeRef">
     <div class="node-header">
       <div class="icon-wrapper icon-function"><el-icon><ScaleToOriginal /></el-icon></div>
-      <div class="node-label">{{ data.label || '函数' }}</div>
+      <div class="node-label">{{ data.label || t('flow.node.defaultLabel.function') }}</div>
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item @click="deleteNode">
               <el-icon><Delete /></el-icon>
-              <span>删除节点</span>
+              <span>{{ t('flow.node.action.delete') }}</span>
             </el-dropdown-item>
             <BreakpointMenuItem :id="id" />
           </el-dropdown-menu>
@@ -31,11 +31,14 @@
 import { ref, computed, onMounted, watch, inject } from 'vue'
 import { ScaleToOriginal, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { useVueFlow } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {
     type: Object,
-    default: () => ({ label: '函数', children: [] })
+    default: () => ({ children: [] })
   },
   id: {
     type: String,

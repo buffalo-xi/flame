@@ -6,13 +6,181 @@
     },
     "asset": {
       "not_found": "Asset not found",
-      "not_available": "This asset is not available to your tenant"
+      "not_available": "This asset is not available to your tenant",
+      "invalid_kind": "Unknown asset type: {kind}",
+      "ref_required": "Missing ref (id for skill / agent / workflow, name for custom_tool)",
+      "invalid_action": "Unknown action (approve / reject / delist only)",
+      "invalid_visibility": "Visibility must be all or allowlist",
+      "invalid_status": "This action is not allowed in status {status}",
+      "not_owner": "You can only act on assets listed by your own tenant",
+      "name_conflict": "An asset named {name} already exists in this tenant; rename it or confirm the overwrite",
+      "target_deprecated": "The target with the same name is deprecated; switch it back to Active first",
+      "record_write_failed": "Files were written but the record could not be saved; retry the import",
+      "install_not_found": "Install record not found (it may have been deleted)",
+      "stale_build": "This asset was just overwritten by another listing; refresh and retry",
+      "peer_not_available": "This remote market is not available to your tenant",
+      "package_required": "Choose an asset package to import",
+      "package_too_large": "Asset package exceeds the upload limit ({limit_mb} MiB)",
+      "package_too_new": "This package uses a newer manifest format (spec {spec}, supported up to {supported}); upgrade before installing",
+      "invalid_package": "Asset package validation failed: the content is incomplete or corrupted",
+      "kind_mismatch": "This is a {kind} package and cannot be imported as {want}",
+      "overwrite_unsupported": "{kind} packages do not support overwrite import yet; a suggested name is provided instead"
     },
     "tool": {
-      "not_found": "Custom tool not found: {name}"
+      "not_found": "Custom tool not found: {name}",
+      "file_not_found": "File not found",
+      "file_exists": "File or directory already exists: {path}",
+      "invalid_name": "Invalid tool name (letters, digits and hyphens only; must not start with a hyphen or contain double underscores)",
+      "name_taken": "A custom tool named {name} already exists",
+      "invalid_contract": "This directory is not a valid tool yet (TOOL.json is missing or invalid). Create it with New custom tool, or fix TOOL.json first.",
+      "deprecated": "This tool is locked or deprecated. Switch it back to Active before making changes.",
+      "contract_readonly": "TOOL.json is the tool contract. Edit it through the form; it cannot be created, edited, deleted or overwritten directly.",
+      "entry_exists": "The entry file {entry} already exists; change the entry field in the form instead",
+      "entry_readonly": "The entry file {entry} cannot be deleted; the tool would remain but fail with \"entry not found\"",
+      "invalid_path": "{path} is a directory and cannot be written as a file",
+      "file_too_large": "File too large (limit {limit_mb} MB)",
+      "contract_write_failed": "Settings saved, but writing the contract file failed and the table definition is in use. Save again to retry.",
+      "entry_write_failed": "Settings saved, but writing the entry file failed. Save again to retry.",
+      "capability_denied": "Capability {capability} is not enabled for this tenant, so custom tools cannot run (enable it under Tool capabilities)",
+      "last_version_undeletable": "v{version} is the only version and cannot be deleted. Release a new version before cleaning up history."
+    },
+    "agent": {
+      "not_found": "Agent not found",
+      "file_not_found": "File not found",
+      "file_exists": "File or directory already exists: {path}",
+      "deprecated": "This agent is deprecated. Switch it back to Active before making changes.",
+      "invalid_name": "Invalid agent name (letters, digits and hyphens only, max 64 characters)",
+      "invalid_status": "Status must be 1 (active) or 3 (deprecated)",
+      "file_too_large": "File too large (limit {limit_mb} MB)",
+      "skills_dir_readonly": "The skills/ directory is read-only. Edit it on the skill page.",
+      "last_version_undeletable": "v{version} is the only version and cannot be deleted. Release a new version before cleaning up history.",
+      "rename_failed": "Failed to migrate the definition/version directories, so the rename did not take effect."
+    },
+    "skill": {
+      "not_found": "Skill not found",
+      "file_not_found": "File not found",
+      "file_exists": "File or directory already exists: {path}",
+      "deprecated": "This skill is deprecated. Switch it back to Active before making changes.",
+      "invalid_name": "Invalid skill name (letters, digits and hyphens only, max 64 characters)",
+      "invalid_status": "Status must be 1 (active) or 3 (deprecated)",
+      "last_version_undeletable": "v{version} is the only version and cannot be deleted. Release a new version before cleaning up history.",
+      "rename_failed": "The skill was renamed but the version directory migration failed; retry or move it manually.",
+      "private_no_version": "Private skills have no version of their own; their version is {owner}'s version, so operate on {owner} instead"
+    },
+    "version": {
+      "not_found": "Version not found"
+    },
+    "llm": {
+      "preset_invalid_id": "Invalid preset id",
+      "preset_not_found": "Preset not found",
+      "model_not_found": "Model not found",
+      "provider_not_found": "Model provider not found",
+      "model_enabled_locked": "This model is enabled, so gateway_model cannot be changed. Disable it first.",
+      "provider_disabled": "The provider is disabled. Enable it under LLM providers before enabling this model.",
+      "gateway_model_required": "gateway_model must not be empty; fill it in before enabling.",
+      "gateway_model_taken": "gateway_model {name} is already used by another enabled model, which makes routing ambiguous. Use a different one."
+    },
+    "user": {
+      "not_found": "User not found",
+      "invalid_name": "Login names may only contain letters, digits, underscores and hyphens (1-64 characters)",
+      "name_taken": "Login name already exists: {name}",
+      "primary_readonly": "The primary account is created when the platform provisions the tenant and cannot be changed from the tenant side (including quotas)",
+      "cannot_modify_self": "You cannot disable or demote the account you are signed in with",
+      "last_admin_undeletable": "You cannot disable or demote the last management user who can sign in",
+      "password_required": "This user must have a password (at least 8 characters)",
+      "password_too_short": "Password must be at least {min} characters",
+      "password_unchanged": "The new password must differ from the current one",
+      "password_incorrect": "Current password is incorrect",
+      "password_not_allowed": "Service users cannot sign in, so they cannot have a password",
+      "invalid_role": "Role must be admin or user",
+      "invalid_status": "Status must be active / disabled / locked",
+      "protected_account": "The protected administrator {name} cannot be modified (seeded by the environment)"
+    },
+    "mcp": {
+      "connection_not_found": "MCP connection not found",
+      "discovery_failed": "Tool discovery failed, so the connection was not enabled"
+    },
+    "rpc": {
+      "connection_not_found": "RPC connection not found",
+      "discovery_failed": "Tool discovery failed, so the connection was not enabled"
+    },
+    "session": {
+      "not_found": "Session not found"
+    },
+    "run": {
+      "not_found": "Run record not found",
+      "filter_required": "At least one filter (workflow / status / time range) is required; clearing everything is not allowed",
+      "invalid_kind": "kind must be agent or flow",
+      "target_required": "Provide at least one of run_id or session_id",
+      "flow_stop_needs_run_id": "A flow run can only be stopped by run_id"
+    },
+    "binding": {
+      "not_found": "Tool binding not found",
+      "target_not_exposed": "Target {target} exposes no endpoint and cannot be granted"
+    },
+    "toolgrant": {
+      "ref_not_found": "No tools available under this ref",
+      "item_not_found": "No tools available under this item"
+    },
+    "plugin": {
+      "name_required": "Plugin name must not be empty",
+      "not_found": "Plugin {name} is not in the on-disk list (put it under plugins/tools/{name}/ and refresh)",
+      "invalid_impl": "Implementation {impl} is not in the plugin list",
+      "main_impl_required": "Choose a main implementation before enabling",
+      "globally_disabled": "Plugin {name} is globally disabled by the platform",
+      "not_enabled_for_tenant": "Plugin {name} is not enabled for this tenant (ask a platform administrator)",
+      "registry_not_initialized": "The plugin registry is not initialized (check plugin.dir and the startup log)"
+    },
+    "peer": {
+      "not_found": "Peer not found",
+      "name_taken": "A peer with this name already exists: {name}",
+      "disabled": "This peer is disabled: {name}",
+      "unreachable": "Cannot reach peer {peer}; check its address and token",
+      "invalid_response": "The peer response could not be parsed (stale snapshot or wrong address)",
+      "invalid_token_name": "Token names may only contain letters, digits, dots, underscores and hyphens (max 64)"
+    },
+    "capability": {
+      "dependency_missing": "{capability} depends on {deps}; enable at least one of them, otherwise the combination cannot work"
+    },
+    "globalvar": {
+      "not_found": "Global variable not found: {name}",
+      "invalid_name": "Variable names may only contain letters, digits and underscores, and must not start with a digit (max 64)",
+      "name_required": "Variable name must not be empty",
+      "invalid_type": "Type must be text / secret / number / bool",
+      "in_use": "References could not be resolved, so the delete was rejected (pass force=1 to delete anyway)",
+      "referenced": "{name} is still referenced in {count} place(s); deleting it will break them at runtime (pass force=1 to delete anyway)"
     },
     "auth": {
-      "session_expired": "Your platform session has expired. Please sign in again."
+      "session_expired": "Your platform session has expired. Please sign in again.",
+      "invalid_credentials": "Wrong username or password",
+      "account_not_console": "This is a service account and cannot sign in to the console",
+      "account_locked": "This account is locked, ask an administrator to unlock it",
+      "account_disabled": "This account is disabled, contact an administrator"
+    },
+    "tenant": {
+      "not_found": "Tenant not found: {name}",
+      "owner_not_found": "Owner not found",
+      "owner_invalid_role": "The owner must be a platform account with the user role",
+      "invalid_status": "Status must be active or suspended",
+      "must_suspend_first": "This tenant is active; suspend it before deleting"
+    },
+    "quota": {
+      "session_storage_exceeded": "This session workspace is full. Delete files you no longer need and try again.",
+      "user_sessions_exceeded": "You have reached the session limit. Delete unused sessions and try again.",
+      "exceeded": "Quota exceeded. Free up space and try again.",
+      "invalid_value": "{field} must be -1 (unlimited) or a non-negative number",
+      "self_lockout": "You cannot set your own quota {field} to 0; you would lock yourself into read-only mode",
+      "exceeds_tenant_limit": "{field} cannot exceed the tenant limit ({limit})",
+      "exceeds_system_limit": "{field} cannot exceed the system limit ({limit})"
+    },
+    "sandbox": {
+      "not_ready": "The sandbox is not ready or its capabilities are unknown, so nothing was executed (check sandbox.url and sandboxd)"
+    },
+    "flow": {
+      "not_found": "Workflow not found",
+      "invalid_status": "Status must be 1 (active) or 3 (deprecated); workflows have no locked state, the live version is managed by releases",
+      "not_released": "Workflow {name} has no released version yet. Release it in the editor before calling it.",
+      "deprecated": "Workflow {name} is deprecated and cannot be called."
     },
     "common": {
       "internal": "Internal error, please try again later",

@@ -128,6 +128,8 @@
 
 <script setup>
 import { ref, computed, onMounted, onActivated, onUnmounted, onDeactivated, nextTick, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { currentLocale } from '../../locales'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AgentsList from './agents/AgentsList.vue'
 import AgentFileEditor from './agents/AgentFileEditor.vue'
@@ -139,15 +141,22 @@ import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import { exportEntity } from '../utils/assetTransfer.js'
 import { useHeaderCompact } from '../utils/useHeaderCompact.js'
+import { formatError } from '../../locales'
+
+// 脚本侧文案（状态名、只读提示、toast、确认框）走 t()，切语言后重渲染即可生效
+const { t } = useI18n()
 
 // 两态状态（与后端 shared/models.StatusXxx 一一对应）：
 //   1 正常：可修改、可运行（新建默认）
 //   3 废弃：不可修改、不可运行（只由手工设置）
-const STATUS_META = {
-  1: { text: '正常', tag: 'success' },
-  3: { text: '废弃', tag: 'danger' }
+const STATUS_TAG = { 1: 'success', 3: 'danger' }
+const statusMeta = (status) => {
+  const s = STATUS_TAG[status] ? status : 1
+  return {
+    text: t(s === 1 ? 'agent.statusNormal' : 'agent.statusDeprecated'),
+    tag: STATUS_TAG[s]
+  }
 }
-const statusMeta = (status) => STATUS_META[status] || STATUS_META[1]
 
 // 智能体实例列表（列表的筛选 / 搜索 / 分组都在 agents/AgentsList.vue）
 const agentList = ref([])
@@ -284,15 +293,15 @@ const editingSupervisor = ref(false)
 // 判据只有 status —— 端点对外开放不改状态，也不影响可编辑性（见下方 isReadonly）。
 const exposedLocked = ref(false)
 // 只读角标文案（参考工作流编辑器的「已废弃 · 只读」）
-const readonlyBadgeText = computed(() => '已废弃 · 只读')
-const readonlyBadgeTitle = computed(() => '智能体已废弃，不可保存、不可运行')
+const readonlyBadgeText = computed(() => t('agent.readonlyBadge'))
+const readonlyBadgeTitle = computed(() => t('agent.readonlyBadgeTip'))
 // 名称 / 描述是否锁定（名称：内置受保护 or 只读；描述：只读）
 const lockName = computed(() => editingProtected.value || exposedLocked.value)
 const lockDesc = computed(() => exposedLocked.value)
 const nameLockTip = computed(() => editingProtected.value
-  ? '内置智能体不允许改名'
-  : '已废弃，请先切回「正常」状态再修改')
-const descLockTip = computed(() => '已废弃，请先切回「正常」状态再修改')
+  ? t('agent.nameLockedProtected')
+  : t('agent.readonlyLockTip'))
+const descLockTip = computed(() => t('agent.readonlyLockTip'))
 // 头部名称内联编辑 / 描述弹窗编辑，两者共用同一个「保存中」标记
 const renaming = ref(false)
 const editName = ref('')
@@ -349,7 +358,7 @@ const openEditEditor = async (instance) => {
   if (!token) return
   try {
     const res = await fetch(adminApi.agents.get + instance.id, { headers: authHeaders() })
-    if (!res.ok) throw new Error('加载失败')
+    if (!res.ok) throw new Error(t('agent.loadFailed'))
     const data = await res.json()
     const d = data.data || {}
     editingId.value = d.id
@@ -376,13 +385,13 @@ const openEditEditor = async (instance) => {
     // 调用关系 / 技能绑定 / 工具授权同理，由设置面板懒加载
   } catch (error) {
     console.error('加载智能体失败:', error)
-    ElMessage.error('加载失败，请稍后重试')
+    ElMessage.error(t('agent.loadFailedRetry'))
   }
 }
 
 const handleBack = () => {
   if (fileState.value.hasDirty) {
-    ElMessage.warning({ message: '有未保存的文件修改', duration: 2000, offset: 20 })
+    ElMessage.warning({ message: t('agent.unsavedFiles'), duration: 2000, offset: 20 })
   }
   fullScreenMode.value = false
   editingId.value = ''
@@ -436,7 +445,7 @@ const refreshEditor = async () => {
   try {
     const res = await fetch(adminApi.agents.get + editingId.value, { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '刷新失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('agent.refreshFailed'))
     const d = body.data || {}
     // 元数据以服务端为准；can_call_ids / called_by_ids 由 loadRelations 回填
     editForm.value = {
@@ -459,12 +468,12 @@ const refreshEditor = async () => {
     // 关系 / 授权 / 生效信息由设置面板自己感知 refreshToken 重拉
     settingsRefreshToken.value++
     if (skipped) {
-      ElMessage.warning({ message: `已刷新（${skipped} 个文件有未保存修改，已跳过）`, duration: 2500 })
+      ElMessage.warning({ message: t('agent.refreshedSkipped', { n: skipped }), duration: 2500 })
     } else {
-      ElMessage.success({ message: '已刷新', duration: 700 })
+      ElMessage.success({ message: t('agent.refreshed'), duration: 700 })
     }
   } catch (e) {
-    ElMessage.error(e.message || '刷新失败')
+    ElMessage.error(e.message || t('agent.refreshFailed'))
   } finally {
     refreshing.value = false
   }
@@ -486,7 +495,7 @@ const saveEditName = async () => {
   if (!next || next === prev) return
   if (editingProtected.value) return                          // 内置智能体不允许改名
   if (!NAME_RE.test(next)) {                                  // 名称规则：字母数字横线，≤64
-    ElMessage.warning('名称只允许字母数字横线，且不能以横线开头（≤64）')
+    ElMessage.warning(t('agent.nameRuleHint'))
     return
   }
   if (!editingId.value) { editForm.value.name = next; return } // 未创建：等设置抽屉统一创建
@@ -499,14 +508,14 @@ const saveEditName = async () => {
       body: JSON.stringify({ ...editForm.value, name: next })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '改名失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('agent.renameFailed'))
     editForm.value.name = next
-    ElMessage.success('已改名')
+    ElMessage.success(t('agent.renamed'))
     // 局部更新卡片名称（不整表刷新）
     const card = agentList.value.find(a => String(a.id) === String(editingId.value))
     if (card) card.name = next
   } catch (e) {
-    ElMessage.error(e.message || '改名失败')
+    ElMessage.error(e.message || t('agent.renameFailed'))
   } finally {
     renaming.value = false
   }
@@ -532,11 +541,11 @@ const saveEditDesc = async () => {
       body: JSON.stringify({ ...editForm.value, description: next })
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '描述保存失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('agent.descSaveFailed'))
     editForm.value.description = next
     descDialogVisible.value = false
   } catch (e) {
-    ElMessage.error(e.message || '描述保存失败')
+    ElMessage.error(e.message || t('agent.descSaveFailed'))
   } finally {
     renaming.value = false
   }
@@ -548,9 +557,9 @@ const saveEditDesc = async () => {
 const handleSaveSettings = async () => {
   const f = editForm.value
   f.name = (f.name || '').trim()
-  if (!f.name) { ElMessage.warning('请输入智能体名称'); return }
+  if (!f.name) { ElMessage.warning(t('agent.nameRequired')); return }
   // 名称规则：字母或数字开头，后续只允许字母数字横线，≤64
-  if (!NAME_RE.test(f.name)) { ElMessage.warning('名称只允许字母数字横线，且不能以横线开头（≤64）'); return }
+  if (!NAME_RE.test(f.name)) { ElMessage.warning(t('agent.nameRuleHint')); return }
   saving.value = true
   try {
     let id = editingId.value
@@ -561,15 +570,16 @@ const handleSaveSettings = async () => {
         body: JSON.stringify(f)
       })
       const body = await res.json().catch(() => ({}))
-      if (body.code !== 200) throw new Error(body.msg || '保存失败')
+      if (body.code !== 200) throw new Error(formatError(body) || t('agent.saveFailed'))
     } else {
       const res = await fetch(adminApi.agents.create, {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify(f)
+        // lang 只影响新建时 AGENT.md 骨架的语言，不落库；不传则由后端回落英文
+        body: JSON.stringify({ ...f, lang: currentLocale() })
       })
       const body = await res.json().catch(() => ({}))
-      if (body.code !== 200) throw new Error(body.msg || '创建失败')
+      if (body.code !== 200) throw new Error(formatError(body) || t('agent.createFailed'))
       id = body?.data?.id
       editingId.value = id // 留在编辑页，后续修改走 PUT
       // 新建时未填这两个隐藏字段（后端已落默认值），补成合法 JSON，
@@ -583,14 +593,14 @@ const handleSaveSettings = async () => {
         headers: authHeaders(),
         body: JSON.stringify({ can_call_ids: f.can_call_ids, called_by_ids: f.called_by_ids })
       })
-      if (!rr.ok) throw new Error('授权保存失败')
+      if (!rr.ok) throw new Error(t('agent.relationSaveFailed'))
     }
-    ElMessage.success(editingId.value ? '已保存' : '已创建')
+    ElMessage.success(editingId.value ? t('agent.saved') : t('agent.created'))
     settingsVisible.value = false
     fetchAgents()
   } catch (error) {
     console.error('保存智能体失败:', error)
-    ElMessage.error(error.message || '保存失败')
+    ElMessage.error(error.message || t('agent.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -628,9 +638,9 @@ const confirmIfExposed = async (action) => {
   if (!hasExposed.value) return true
   try {
     await ElMessageBox.confirm(
-      `该智能体有端点已对外开放，${action}会立即影响线上调用方。确认继续？`,
-      '端点已对外开放',
-      { confirmButtonText: '确认保存', cancelButtonText: '取消', type: 'warning' }
+      t('agent.exposedConfirmBody', { action }),
+      t('agent.exposedConfirmTitle'),
+      { confirmButtonText: t('agent.confirmSave'), cancelButtonText: t('common.cancel'), type: 'warning' }
     )
     return true
   } catch { return false }
@@ -688,11 +698,11 @@ const handleHeaderSave = async () => {
 const handleDeleteAgent = (instance) => {
   // 弹出确认对话框
   ElMessageBox.confirm(
-    `确定要删除智能体 "${instance.name}" 吗？此操作不可恢复。`,
-    '删除确认',
+    t('agent.deleteConfirm', { name: instance.name }),
+    t('agent.deleteTitle'),
     {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
       type: 'warning'
     }
   ).then(async () => {
@@ -700,7 +710,7 @@ const handleDeleteAgent = (instance) => {
       const token = getToken()
       if (!token) {
         ElMessage.error({
-        message: '请先登录',
+        message: t('common.loginRequired'),
         duration: 5000,
         offset: 20,
         showClose: true
@@ -717,20 +727,20 @@ const handleDeleteAgent = (instance) => {
       })
 
       if (!response.ok) {
-        throw new Error('删除失败')
+        throw new Error(t('agent.deleteFailed'))
       }
 
       const data = await response.json()
       if (data.code === 200) {
         ElMessage.success({
-          message: '智能体删除成功',
+          message: t('agent.deleteOk'),
           duration: 700
         })
         // 刷新智能体列表
         fetchAgents()
       } else {
         ElMessage.error({
-          message: `删除失败: ${data.msg}`,
+          message: t('agent.deleteFailedDetail', { msg: formatError(data) }),
           duration: 5000,
           offset: 20,
           showClose: true
@@ -739,7 +749,7 @@ const handleDeleteAgent = (instance) => {
     } catch (error) {
       console.error('删除智能体失败:', error)
       ElMessage.error({
-        message: '删除失败，请稍后重试',
+        message: t('agent.deleteFailedRetry'),
         duration: 5000,
         offset: 20,
         showClose: true
@@ -760,9 +770,9 @@ const handleSetAgentStatus = async (instance, status) => {
   if (status === 3) {
     try {
       await ElMessageBox.confirm(
-        `废弃「${instance.name}」？废弃后不可修改、不可运行，并自动收回全部端点的对外。`,
-        '提示',
-        { type: 'warning' }
+        t('agent.deprecateConfirm', { name: instance.name }),
+        t('agent.prompt'),
+        { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
       )
     } catch {
       return
@@ -771,7 +781,7 @@ const handleSetAgentStatus = async (instance, status) => {
   try {
     const token = getToken()
     if (!token) {
-      ElMessage.error({ message: '请先登录', duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('common.loginRequired'), duration: 5000, offset: 20, showClose: true })
       return
     }
     const response = await fetch(adminApi.agents.status(instance.id), {
@@ -782,18 +792,18 @@ const handleSetAgentStatus = async (instance, status) => {
       },
       body: JSON.stringify({ status })
     })
-    if (!response.ok) throw new Error('更新失败')
+    if (!response.ok) throw new Error(t('agent.updateFailed'))
     const data = await response.json()
     if (data.code === 200) {
       instance.status = status
-      ElMessage.success({ message: `已切到「${meta.text}」`, duration: 700 })
+      ElMessage.success({ message: t('agent.statusChanged', { status: meta.text }), duration: 700 })
       await fetchAgents()
     } else {
-      ElMessage.error({ message: `更新失败: ${data.msg}`, duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({ message: t('agent.updateFailedDetail', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
     }
   } catch (error) {
     console.error('切换 agent 状态失败:', error)
-    ElMessage.error({ message: '更新失败，请稍后重试', duration: 5000, offset: 20, showClose: true })
+    ElMessage.error({ message: t('agent.updateFailedRetry'), duration: 5000, offset: 20, showClose: true })
   }
 }
 

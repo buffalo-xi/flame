@@ -14,7 +14,7 @@
       <div ref="headerRef" class="full-screen-header" :class="'header--' + headerSize">
         <div class="header-actions">
           <el-button size="small" @click="handleBack">
-            <el-icon><ArrowLeft /></el-icon>返回列表
+            <el-icon><ArrowLeft /></el-icon>{{ $t('skill.back') }}
           </el-button>
         </div>
         <el-icon class="header-icon"><Collection /></el-icon>
@@ -22,58 +22,58 @@
           <!-- 名称：点击可改名（内置受保护技能除外）；新建时直接输入 -->
           <div class="header-name-wrapper" :class="{ locked: editingProtected || editorReadonly }">
             <el-tooltip v-if="editingProtected || editorReadonly"
-                        :content="editingProtected ? '内置受保护技能，名称不可修改' : '已废弃，请先切回「正常」状态再修改'"
+                        :content="editingProtected ? $t('skill.nameLockedProtected') : $t('agent.readonlyLockTip')"
                         placement="bottom">
               <span class="header-name">{{ form.name }}</span>
             </el-tooltip>
             <template v-else-if="editingId">
               <span v-if="!isEditingName" class="header-name"
-                    :title="form.name ? form.name + '（点击改名）' : '点击改名'"
+                    :title="form.name ? $t('skill.renameTitle', { name: form.name }) : $t('skill.clickRename')"
                     @click="startEditName">
                 {{ form.name }}
               </span>
               <el-input v-else v-model="editName" size="small" class="header-name-input" maxlength="64"
-                        placeholder="技能名（字母数字横线，≤64）"
+                        :placeholder="$t('skill.namePlaceholder')"
                         @blur="saveEditName" @keyup.enter="saveEditName" ref="nameInputRef" />
             </template>
             <el-input v-else v-model="form.name" size="small" class="header-name-input" maxlength="64"
-                      placeholder="技能名（字母数字横线，≤64）" ref="nameInputRef" />
+                      :placeholder="$t('skill.namePlaceholder')" ref="nameInputRef" />
           </div>
           <!-- 描述：点击打开大框编辑（头部这行只有 12px，长描述在原位输入框里没法写） -->
           <div class="header-desc-wrapper" :class="{ locked: editorReadonly }">
-            <el-tooltip v-if="editorReadonly" content="已废弃，请先切回「正常」状态再修改" placement="bottom">
-              <span class="header-desc">{{ form.description || '作者很懒，什么都没有留下！' }}</span>
+            <el-tooltip v-if="editorReadonly" :content="$t('agent.readonlyLockTip')" placement="bottom">
+              <span class="header-desc">{{ form.description || $t('skill.emptyDescLong') }}</span>
             </el-tooltip>
             <span v-else class="header-desc"
-                  :title="form.description || '作者很懒，什么都没有留下！'"
+                  :title="form.description || $t('skill.emptyDescLong')"
                   @click="openDescDialog">
-              {{ form.description || '作者很懒，什么都没有留下！' }}
+              {{ form.description || $t('skill.emptyDescLong') }}
             </span>
           </div>
         </div>
         <div class="header-buttons">
           <!-- 只读提示（参考工作流编辑器）：只读角标 + 悬停说明 -->
           <span v-if="editorReadonly" class="readonly-badge" :title="readonlyBadgeTitle">{{ readonlyBadgeText }}</span>
-          <span v-if="fileState.hasDirty" class="dirty-tip">有未保存的修改</span>
+          <span v-if="fileState.hasDirty" class="dirty-tip">{{ $t('skill.dirty') }}</span>
           <!-- 版本：vN / 未发布 / 有改动 三态，与工作流编辑器同口径（私有技能显示「随所属智能体」） -->
           <VersionEntry v-if="editingId" kind="skill" :target="editingId"
                         :current-version="detailVersion" :dirty="detailDirty"
                         :can-release="!editorReadonly" :private-hint="form.scope === 'agent'"
                         @applied="onVersionApplied" @changed="refreshVersionState" />
           <el-button size="small" class="header-action-btn settings-toggle-btn"
-                     :class="{ active: settingsVisible }" @click="toggleSettings">设置</el-button>
+                     :class="{ active: settingsVisible }" @click="toggleSettings">{{ $t('skill.settings') }}</el-button>
           <el-button size="small" type="primary" class="header-action-btn"
                     :loading="savingFile" :disabled="editorReadonly" @click="handleSaveContent">
-            {{ editingId ? '保存内容' : '创建技能' }}
+            {{ editingId ? $t('skill.saveContent') : $t('skill.createSkill') }}
           </el-button>
           <!-- 窄档：设置收进「⋯」，保存/创建始终保留 -->
           <el-dropdown class="header-more" trigger="click" @command="onHeaderMore">
-            <el-button size="small" class="header-action-btn more-btn" title="更多操作">
+            <el-button size="small" class="header-action-btn more-btn" :title="$t('skill.more')">
               <el-icon><MoreFilled /></el-icon>
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="settings">设置</el-dropdown-item>
+                <el-dropdown-item command="settings">{{ $t('skill.settings') }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -97,17 +97,17 @@
     <AssetImportDialog v-model="importVisible" kind="skill" @imported="fetchSkills" />
 
     <!-- 描述单独用大框编辑：头部那行字号只有 12px、还被单行省略，长描述在原位输入框里基本没法写 -->
-    <el-dialog v-model="descDialogVisible" title="编辑技能描述" width="640px" append-to-body
+    <el-dialog v-model="descDialogVisible" :title="$t('skill.descDialogTitle')" width="640px" append-to-body
                :close-on-click-modal="false" class="desc-dialog">
       <el-input v-model="descDraft" type="textarea" :rows="8" resize="vertical"
-                placeholder="一句话说明这个技能解决什么问题、什么时候该用它"
+                :placeholder="$t('skill.descDialogPlaceholder')"
                 @keydown.ctrl.enter="saveEditDesc" />
       <div class="desc-dialog-hint">
-        描述会显示在技能列表卡片上。点「确定」立即保存；Ctrl+Enter 可快速确定。
+        {{ $t('skill.descDialogHint') }}
       </div>
       <template #footer>
-        <el-button size="small" @click="descDialogVisible = false">取消</el-button>
-        <el-button size="small" type="primary" @click="saveEditDesc">确定</el-button>
+        <el-button size="small" @click="descDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button size="small" type="primary" @click="saveEditDesc">{{ $t('common.confirm') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -115,6 +115,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, onDeactivated, nextTick, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // 图标走全局注册（main.js），模板只用到 ArrowLeft / Collection / MoreFilled
 import SkillList from './skills/SkillList.vue'
@@ -126,6 +127,11 @@ import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import { exportEntity } from '../utils/assetTransfer.js'
 import { useHeaderCompact } from '../utils/useHeaderCompact.js'
+import { currentLocale } from '../../locales'
+import { formatError } from '../../locales'
+
+// 脚本侧文案（标签、toast、确认框）走 t()
+const { t } = useI18n()
 
 const skills = ref([])
 const loading = ref(false)
@@ -160,8 +166,8 @@ const detailDirty = ref(false)
 // 「载入版本」会整目录替换草稿：文件编辑器靠这个 key 重挂载
 const editorEpoch = ref(0)
 // 只读角标文案（参考工作流编辑器的「已废弃 · 只读」）
-const readonlyBadgeText = computed(() => '已废弃 · 只读')
-const readonlyBadgeTitle = computed(() => '技能已废弃，不可保存')
+const readonlyBadgeText = computed(() => t('skill.readonlyBadge'))
+const readonlyBadgeTitle = computed(() => t('skill.readonlyBadgeTip'))
 const form = ref({
   name: '',
   description: '',
@@ -223,9 +229,12 @@ const formatTime = (t) => {
 //     全员可见（restricted=false）→ 全部 agent 数
 //     白名单（restricted=true）  → 绑定的 agent 数（bound_count）
 const scopeTag = (s) => {
-  if (s.agent_id) return { type: 'success', text: '私有' }
+  if (s.agent_id) return { type: 'success', text: t('skill.scopePrivate') }
   const n = s.restricted ? (s.bound_count || 0) : agents.value.length
-  return { type: s.restricted && n === 0 ? 'danger' : 'info', text: `共享${n}` }
+  return {
+    type: s.restricted && n === 0 ? 'danger' : 'info',
+    text: t('skill.scopeShared', { n })
+  }
 }
 
 const fetchSkills = async () => {
@@ -236,13 +245,13 @@ const fetchSkills = async () => {
       headers: authHeaders(),
       body: JSON.stringify({ page: 1, limit: -1 })
     })
-    if (!response.ok) throw new Error('获取技能失败')
+    if (!response.ok) throw new Error(t('skill.loadFailed'))
     const data = await response.json()
     const items = data?.data?.items || []
     items.forEach((s) => { s._statusLoading = false })
     skills.value = items
   } catch (e) {
-    ElMessage.error(e.message || '获取技能失败')
+    ElMessage.error(e.message || t('skill.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -291,7 +300,7 @@ const openEditor = async (row) => {
   try {
     const res = await fetch(adminApi.skills.get(row.id), { headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '获取技能详情失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('skill.loadDetailFailed'))
     const d = body.data || {}
     editingProtected.value = !!d.protected
     // 版本状态由后端按「当前版本 vs 草稿」算好（含描述 / 依赖 / 文件），前端不自己推
@@ -312,7 +321,7 @@ const openEditor = async (row) => {
     // 可见性 / 工具依赖由设置面板在打开或切 tab 时懒加载，
     // 内容目录与 SKILL.md 由编辑器组件按 skillId 自动加载
   } catch (e) {
-    ElMessage.error(e.message || '获取技能详情失败')
+    ElMessage.error(e.message || t('skill.loadDetailFailed'))
   }
 }
 
@@ -382,18 +391,18 @@ const saveEditName = async () => {
   const next = (editName.value || '').trim()
   if (!next || next === prev) return
   if (!NAME_RE.test(next)) {
-    ElMessage.warning('名称只允许字母数字横线，且不能以横线开头（≤64）')
+    ElMessage.warning(t('skill.nameRuleHint'))
     return
   }
   try {
     await putSkill({ name: next })
     form.value.name = next
-    ElMessage.success('已改名')
+    ElMessage.success(t('agent.renamed'))
     // 内容目录名随技能名变化：重列当前目录（条目路径是相对路径，已打开的 tab 不受影响）
     await fileEditorRef.value?.reloadDir()
     fetchSkills() // 刷新列表卡片上的名字
   } catch (e) {
-    ElMessage.error(e.message || '改名失败')
+    ElMessage.error(e.message || t('agent.renameFailed'))
   }
 }
 
@@ -414,7 +423,7 @@ const saveEditDesc = async () => {
     descDialogVisible.value = false
   } catch (e) {
     form.value.description = prev
-    ElMessage.error(e.message || '描述保存失败')
+    ElMessage.error(e.message || t('agent.descSaveFailed'))
   }
 }
 
@@ -428,12 +437,12 @@ const toggleSettings = () => { settingsVisible.value = !settingsVisible.value }
 // 只读模式下拦截任何修改操作（UI 已禁用，这里做兜底）
 const blockIfReadonly = () => {
   if (!editorReadonly.value) return false
-  ElMessage.warning({ message: '只读模式：请先切回「编辑」状态再修改', duration: 2000, offset: 20 })
+  ElMessage.warning({ message: t('skill.readonlyMode'), duration: 2000, offset: 20 })
   return true
 }
 
 const putSkill = async (patch) => {
-  if (editorReadonly.value) throw new Error('只读模式：无法保存')
+  if (editorReadonly.value) throw new Error(t('skill.readonlySave'))
   const payload = {
     name: form.value.name,
     description: form.value.description,
@@ -448,7 +457,7 @@ const putSkill = async (patch) => {
     body: JSON.stringify(payload)
   })
   const body = await res.json().catch(() => ({}))
-  if (body.code !== 200) throw new Error(body.msg || '保存失败')
+  if (body.code !== 200) throw new Error(formatError(body) || t('agent.saveFailed'))
   // 元数据也是定义的一部分（描述 / 命令 / 可见性）：存完徽标可能从「一致」变成「有改动」
   refreshVersionState()
 }
@@ -460,13 +469,13 @@ const handleSaveContent = async () => {
   if (!editingId.value) {
     const f = form.value
     f.name = (f.name || '').trim()
-    if (!f.name) { ElMessage.warning('请填写技能名'); return }
+    if (!f.name) { ElMessage.warning(t('skill.nameRequired')); return }
     if (!NAME_RE.test(f.name)) {
-      ElMessage.warning('名称只允许字母数字横线，且不能以横线开头（≤64）')
+      ElMessage.warning(t('skill.nameRuleHint'))
       return
     }
     if (f.scope === 'agent' && !f.agent_id) {
-      ElMessage.warning('请选择归属 agent（私有技能）')
+      ElMessage.warning(t('skill.ownerRequired'))
       return
     }
     savingFile.value = true
@@ -479,16 +488,18 @@ const handleSaveContent = async () => {
           description: f.description,
           agent_id: f.scope === 'agent' ? f.agent_id : '',
           content: '',
-          restricted: !!f.restricted
+          restricted: !!f.restricted,
+          // lang 只影响新建时 SKILL.md 骨架的语言，不落库；不传则由后端回落英文
+          lang: currentLocale()
         })
       })
       const body = await res.json().catch(() => ({}))
-      if (body.code !== 200) throw new Error(body.msg || '创建失败')
+      if (body.code !== 200) throw new Error(formatError(body) || t('agent.createFailed'))
       // 换成新 id 后，编辑器组件会自动 loadDir('') + 打开 SKILL.md
       editingId.value = body?.data?.id || ''
-      ElMessage.success('已创建')
+      ElMessage.success(t('agent.created'))
     } catch (e) {
-      ElMessage.error(e.message || '创建失败')
+      ElMessage.error(e.message || t('agent.createFailed'))
     } finally {
       savingFile.value = false
     }
@@ -501,11 +512,9 @@ const handleSaveContent = async () => {
 // 1 正常 / 3 废弃。skills 没有服务端点，所以这里没有"端点收回联动"；
 // 但 3 会让技能变为只读（后端 UpdateSkill / DeleteSkill / SetSkillVisibility 都拦）。
 // 列表的筛选/卡片展示在 skills/SkillList.vue，这里只留会改数据、要刷新的动作。
-const STATUS_META = {
-  1: { text: '正常', tag: 'success' },
-  3: { text: '废弃', tag: 'danger' }
-}
-const statusMeta = (status) => STATUS_META[status] || STATUS_META[1]
+const statusMeta = (status) => (status === 3
+  ? { text: t('skill.filterDeprecated'), tag: 'danger' }
+  : { text: t('skill.filterNormal'), tag: 'success' })
 
 const setStatus = async (row, status) => {
   const meta = statusMeta(status)
@@ -514,9 +523,13 @@ const setStatus = async (row, status) => {
   if (status === 3) {
     try {
       await ElMessageBox.confirm(
-        `废弃「${row.name}」？废弃后不可修改，也不会再被智能体看到 / 注入。`,
-        '提示',
-        { type: 'warning' }
+        t('skill.deprecateConfirm', { name: row.name }),
+        t('agent.prompt'),
+        {
+          type: 'warning',
+          confirmButtonText: t('common.confirm'),
+          cancelButtonText: t('common.cancel')
+        }
       )
     } catch {
       return
@@ -529,13 +542,13 @@ const setStatus = async (row, status) => {
       headers: authHeaders(),
       body: JSON.stringify({ status })
     })
-    if (!response.ok) throw new Error('状态更新失败')
+    if (!response.ok) throw new Error(t('skill.statusUpdateFailed'))
     const body = await response.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '状态更新失败')
+    if (body.code !== 200) throw new Error(formatError(body) || t('skill.statusUpdateFailed'))
     row.status = status
-    ElMessage.success({ message: `已切到「${meta.text}」`, duration: 700 })
+    ElMessage.success({ message: t('agent.statusChanged', { status: meta.text }), duration: 700 })
   } catch (e) {
-    ElMessage.error(e.message || '状态更新失败')
+    ElMessage.error(e.message || t('skill.statusUpdateFailed'))
   } finally {
     row._statusLoading = false
   }
@@ -543,17 +556,25 @@ const setStatus = async (row, status) => {
 
 const removeSkill = async (row) => {
   try {
-    await ElMessageBox.confirm(`确定删除技能「${row.name}」？将同时删除其整个内容目录。`, '提示', { type: 'warning' })
+    await ElMessageBox.confirm(
+      t('skill.deleteConfirm', { name: row.name }),
+      t('agent.prompt'),
+      {
+        type: 'warning',
+        confirmButtonText: t('common.confirm'),
+        cancelButtonText: t('common.cancel')
+      }
+    )
   } catch {
     return
   }
   try {
     const response = await fetch(adminApi.skills.delete(row.id), { method: 'DELETE', headers: authHeaders() })
-    if (!response.ok) throw new Error('删除失败')
-    ElMessage.success('已删除')
+    if (!response.ok) throw new Error(t('agent.deleteFailed'))
+    ElMessage.success(t('skill.deleted'))
     await fetchSkills()
   } catch (e) {
-    ElMessage.error(e.message || '删除失败')
+    ElMessage.error(e.message || t('agent.deleteFailed'))
   }
 }
 

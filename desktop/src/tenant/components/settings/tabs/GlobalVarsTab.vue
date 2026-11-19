@@ -1,10 +1,10 @@
 <template>
   <div class="module-section">
     <div class="module-head">
-      <h3>全局变量</h3>
+      <h3>{{ t('settings.tabs.globalVars.title') }}</h3>
       <div class="head-actions">
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-        <el-button type="primary" size="small" :icon="Plus" @click="openCreate">新建变量</el-button>
+        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('settings.globalVars.refresh') }}</el-button>
+        <el-button type="primary" size="small" :icon="Plus" @click="openCreate">{{ t('settings.globalVars.create') }}</el-button>
       </div>
     </div>
 
@@ -21,20 +21,20 @@
 
     <div v-loading="loading" class="gv-grid">
       <div v-if="!loading && !items.length" class="gv-empty">
-        还没有全局变量。先在右上角建一个，再到工作流的节点输入变量里把来源选为「全局变量」。
+        {{ t('settings.globalVars.empty') }}
       </div>
       <div v-for="v in items" :key="v.name" class="gv-card">
         <div class="gv-card-top">
           <span class="gv-name" :title="v.name">{{ v.name }}</span>
           <div class="gv-card-actions">
-            <el-button link type="primary" :icon="Edit" title="编辑" @click="openEdit(v)" />
-            <el-button link type="danger" :icon="Delete" title="删除" @click="remove(v)" />
+            <el-button link type="primary" :icon="Edit" :title="t('settings.globalVars.edit')" @click="openEdit(v)" />
+            <el-button link type="danger" :icon="Delete" :title="t('settings.globalVars.delete')" @click="remove(v)" />
           </div>
         </div>
         <div class="gv-card-meta">
           <span class="gv-kind" :class="'gv-kind--' + v.kind">{{ kindLabel(v.kind) }}</span>
           <span v-if="v.kind === 'secret'" class="gv-state" :class="{ 'is-empty': !v.has_value }">
-            {{ v.has_value ? '已设置' : '未设置' }}
+            {{ v.has_value ? t('settings.globalVars.stateSet') : t('settings.globalVars.stateUnset') }}
           </span>
         </div>
         <div class="gv-value" :class="{ 'is-secret': v.kind === 'secret' }">{{ displayValue(v) }}</div>
@@ -44,33 +44,33 @@
 
     <el-dialog
       v-model="dialogVisible"
-      :title="editing ? '编辑全局变量' : '新建全局变量'"
+      :title="editing ? t('settings.globalVars.dialogEdit') : t('settings.globalVars.dialogCreate')"
       width="520px"
     >
       <el-form label-width="84px" @submit.prevent>
-        <el-form-item label="变量名" required>
+        <el-form-item :label="t('settings.globalVars.nameLabel')" required>
           <el-input
             v-model="draft.name"
             :disabled="editing"
-            placeholder="如 DB_HOST（字母 / 数字 / 下划线，不能数字开头）"
+            :placeholder="t('settings.globalVars.namePlaceholder')"
           />
           <!-- 变量名就是引用名，直接把它在模板里的样子显示出来，免得用户猜 -->
           <div class="gv-hint">{{ templateHint }}</div>
         </el-form-item>
-        <el-form-item label="类型">
+        <el-form-item :label="t('settings.globalVars.kindLabel')">
           <el-select v-model="draft.kind" style="width: 100%">
-            <el-option label="文本（text）" value="text" />
-            <el-option label="密钥（secret，接口不回显）" value="secret" />
-            <el-option label="数字（number）" value="number" />
-            <el-option label="布尔（bool）" value="bool" />
+            <el-option :label="t('settings.globalVars.kindText')" value="text" />
+            <el-option :label="t('settings.globalVars.kindSecret')" value="secret" />
+            <el-option :label="t('settings.globalVars.kindNumber')" value="number" />
+            <el-option :label="t('settings.globalVars.kindBool')" value="bool" />
           </el-select>
         </el-form-item>
-        <el-form-item label="值">
+        <el-form-item :label="t('settings.globalVars.valueLabel')">
           <!-- 布尔只有真/假：给选择器而不是输入框 —— 手输 yes/on 后端虽然也认，
                但存进库里的值五花八门，排查时看不出到底是哪一种 -->
           <el-radio-group v-if="draft.kind === 'bool'" v-model="draft.value">
-            <el-radio value="true">真（true）</el-radio>
-            <el-radio value="false">假（false）</el-radio>
+            <el-radio value="true">{{ t('settings.globalVars.valueTrue') }}</el-radio>
+            <el-radio value="false">{{ t('settings.globalVars.valueFalse') }}</el-radio>
           </el-radio-group>
           <el-input
             v-else
@@ -80,16 +80,16 @@
             :placeholder="secretKeepPlaceholder"
           />
           <div v-if="draft.kind === 'secret'" class="gv-hint">
-            密钥只在运行期读取，接口不会回显；也不要写进 AGENT.md / SKILL.md（会进模型上下文与运行记录）。
+            {{ t('settings.globalVars.secretHint') }}
           </div>
         </el-form-item>
-        <el-form-item label="说明">
-          <el-input v-model="draft.description" placeholder="这个变量是干什么的（随资产包的需求清单带出）" />
+        <el-form-item :label="t('settings.globalVars.descLabel')">
+          <el-input v-model="draft.description" :placeholder="t('settings.globalVars.descPlaceholder')" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+        <el-button @click="dialogVisible = false">{{ t('settings.globalVars.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="save">{{ t('settings.globalVars.save') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -97,6 +97,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Plus, Edit, Delete } from '@element-plus/icons-vue'
 import adminApi from '../../../config/admin.js'
@@ -106,6 +107,8 @@ const props = defineProps({
   // Settings.vue 用 v-show + active 懒加载：没切到这个页签就不发请求
   active: { type: Boolean, default: true }
 })
+
+const { t } = useI18n()
 
 const items = ref([])
 const loading = ref(false)
@@ -125,34 +128,42 @@ watch(() => draft.value.kind, (kind) => {
   if (kind === 'bool') draft.value.value = toBoolStr(draft.value.value)
 })
 
+// 引用写法 {{ .input.x }} 与 ${global_vars.X} 是代码语法，不能放进模板（会被 Vue 当插值解析），
+// 也不能直接进语言包（{...} 会被 vue-i18n 当命名参数）。所以拼在 script 里，再把整段当参数传进去。
+const refNamePlaceholder = computed(() => t('settings.globalVars.namePlaceholderShort'))
+const inputRef = computed(() => '{{ .input.' + refNamePlaceholder.value + ' }}')
+const globalVarRef = computed(() => '${global_vars.' + refNamePlaceholder.value + '}')
+
 // 说明文案放这里而不是直接写进 template：里面有 {{ .input.x }} 与 ${global_vars.X}，
 // 前者会被 Vue 当成插值解析（构建直接报 Unterminated string constant）。
-const SCOPE_TIP = '全局 = 本租户内全局，不跨租户'
-const USAGE_TIP =
-  '工作流里：在节点的「输入变量」中新增一项，来源选「全局变量」，模板里用 {{ .input.变量名 }} 引用；' +
-  '智能体 / 技能文档里写 ${global_vars.变量名}。' +
-  '资产包只带引用名不带值，装到别的租户后在这里填一次即可。'
+const SCOPE_TIP = computed(() => t('settings.globalVars.scopeTip'))
+const USAGE_TIP = computed(() => t('settings.globalVars.usageTip', {
+  input: inputRef.value,
+  globalRef: globalVarRef.value
+}))
 
 // 变量名 → 它被引用时的完整样子，让用户直接看到该写什么
 const templateHint = computed(() => {
-  const name = draft.value.name || '变量名'
-  return `节点输入变量：source_type = global，source_key = ${name}；模板里写 {{ .input.${name} }}`
+  const name = draft.value.name || refNamePlaceholder.value
+  return t('settings.globalVars.templateHint', {
+    name,
+    input: '{{ .input.' + name + ' }}'
+  })
 })
 
 // secret 编辑时留空 = 不改原值（后端也是这个语义），占位文案要把它说清，
 // 否则用户会以为「留空就是把密码清了」。
 const secretKeepPlaceholder = computed(() =>
   editing.value && draft.value.kind === 'secret' && draft.value.has_value
-    ? '留空表示不修改原值'
-    : '变量值'
+    ? t('settings.globalVars.secretKeepPlaceholder')
+    : t('settings.globalVars.valuePlaceholder')
 )
 
-const KIND_LABELS = { text: '文本', secret: '密钥', number: '数字', bool: '布尔' }
-const kindLabel = (k) => KIND_LABELS[k] || k
+const kindLabel = (k) => t(`settings.globalVars.kindShort${k.charAt(0).toUpperCase()}${k.slice(1)}`)
 
 const displayValue = (v) => {
-  if (v.kind === 'secret') return v.has_value ? '••••••' : '（未设置）'
-  return v.value === '' ? '（空）' : v.value
+  if (v.kind === 'secret') return v.has_value ? '••••••' : t('settings.globalVars.secretUnset')
+  return v.value === '' ? t('settings.globalVars.emptyValue') : v.value
 }
 
 const load = async () => {
@@ -162,7 +173,7 @@ const load = async () => {
     const data = await checkBizOk(res)
     items.value = data.data?.items || []
   } catch (e) {
-    ElMessage.error('读取全局变量失败：' + e.message)
+    ElMessage.error(t('settings.globalVars.loadFailed', { msg: e.message }))
   } finally {
     loading.value = false
   }
@@ -190,12 +201,12 @@ const openEdit = (v) => {
 const save = async () => {
   const name = draft.value.name.trim()
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name)) {
-    ElMessage.warning('变量名只能用字母、数字、下划线，且不能以数字开头')
+    ElMessage.warning(t('settings.globalVars.invalidName'))
     return
   }
   // number 存的是字符串，后端解析失败会在运行期报错 —— 这里先挡一道
   if (draft.value.kind === 'number' && !/^-?\d+(\.\d+)?$/.test(String(draft.value.value).trim())) {
-    ElMessage.warning('数字类型的值只能填数字')
+    ElMessage.warning(t('settings.globalVars.invalidNumber'))
     return
   }
   saving.value = true
@@ -212,18 +223,21 @@ const save = async () => {
     })
     await checkBizOk(res)
     // 时长由 utils/message.js 统一（成功 1s），这里不传 duration
-    ElMessage.success(editing.value ? '已保存' : '已创建')
+    ElMessage.success(editing.value ? t('settings.globalVars.saved') : t('settings.globalVars.created'))
     dialogVisible.value = false
     load()
   } catch (e) {
-    ElMessage.error('保存失败：' + e.message)
+    ElMessage.error(t('settings.globalVars.saveFailed', { msg: e.message }))
   } finally {
     saving.value = false
   }
 }
 
-// 后端 usage 接口的 kind → 中文（与 admin/globalvars/usage.go 的 UsageHit 对齐）
-const HIT_KIND = { flow: '工作流', agent: '智能体', skill: '技能', agent_doc: '文档', skill_doc: '文档' }
+// 后端 usage 接口的 kind → 界面文案（与 admin/globalvars/usage.go 的 UsageHit 对齐）
+const HIT_KIND = {
+  flow: 'hitFlow', agent: 'hitAgent', skill: 'hitSkill', agent_doc: 'hitDoc', skill_doc: 'hitDoc'
+}
+const hitKindLabel = (k) => (HIT_KIND[k] ? t(`settings.globalVars.${HIT_KIND[k]}`) : k)
 
 // 先查引用面再问确认：变量被删后引用方要到运行期才失败，
 // 「会坏掉谁」只有删除这一刻能说清楚。
@@ -235,20 +249,23 @@ const remove = async (v) => {
     hits = data.data?.items || []
   } catch (e) {
     // 查不到不阻断：后端删除时还会再拦一次，这里的提示只是提前告知
-    ElMessage.warning('查询引用面失败：' + e.message + '（删除时后端还会再拦一次）')
+    ElMessage.warning(t('settings.globalVars.usageFailed', { msg: e.message }))
   }
 
-  const where = hits.slice(0, 5).map((h) => `${HIT_KIND[h.kind] || h.kind}「${h.name}」`).join('、')
-  const more = hits.length > 5 ? ` 等 ${hits.length} 处` : ''
+  const where = hits
+    .slice(0, 5)
+    .map((h) => t('settings.globalVars.hitItem', { kind: hitKindLabel(h.kind), name: h.name }))
+    .join(t('common.listJoiner'))
+  const more = hits.length > 5 ? t('settings.globalVars.hitMore', { n: hits.length }) : ''
   const text = hits.length
-    ? `「${v.name}」仍被引用：${where}${more}。删除后这些地方运行时会直接失败，仍要删除？`
-    : `删除全局变量「${v.name}」？引用它的工作流 / 智能体在运行时会直接失败（不会静默用空值）。`
+    ? t('settings.globalVars.confirmInUse', { name: v.name, where, more })
+    : t('settings.globalVars.confirmUnused', { name: v.name })
 
   try {
-    await ElMessageBox.confirm(text, '删除全局变量', {
+    await ElMessageBox.confirm(text, t('settings.globalVars.deleteTitle'), {
       type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消'
+      confirmButtonText: t('settings.globalVars.delete'),
+      cancelButtonText: t('settings.globalVars.cancel')
     })
   } catch {
     return
@@ -260,10 +277,10 @@ const remove = async (v) => {
       headers: authHeaders()
     })
     await checkBizOk(res)
-    ElMessage.success('已删除')
+    ElMessage.success(t('settings.globalVars.deleted'))
     load()
   } catch (e) {
-    ElMessage.error('删除失败：' + e.message)
+    ElMessage.error(t('settings.globalVars.deleteFailed', { msg: e.message }))
   }
 }
 

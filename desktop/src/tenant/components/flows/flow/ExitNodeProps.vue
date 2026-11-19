@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -21,12 +21,12 @@
       <div v-if="activeTab === 'settings'" class="settings-panel">
         <div class="props-section">
           <div class="section-title">
-            <span>节点说明</span>
+            <span>{{ t('flow.nodeProps.noteTitle') }}</span>
           </div>
           <div class="node-description">
-            <p>终止节点用于立即退出整个工作流的执行。</p>
-            <p>当工作流执行到该节点时，将直接终止整个流程，不再执行后续节点。</p>
-            <p><strong>注意：</strong>该节点在函数节点内部也可以执行，但一定要注意跟返回节点的区别。</p>
+            <p>{{ t('flow.nodeProps.exit.p1') }}</p>
+            <p>{{ t('flow.nodeProps.exit.p2') }}</p>
+            <p><strong>{{ t('flow.nodeProps.notice') }}</strong>{{ t('flow.nodeProps.exit.p3') }}</p>
           </div>
         </div>
       </div>
@@ -41,6 +41,9 @@
 <script setup>
 import { ref } from 'vue';
 import NodeLastRun from './NodeLastRun.vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

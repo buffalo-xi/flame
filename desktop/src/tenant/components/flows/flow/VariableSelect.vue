@@ -7,7 +7,7 @@
           v-model="searchKeyword" 
           type="text" 
           class="search-input" 
-          placeholder="搜索变量"
+          :placeholder="t('flow.varSource.searchPlaceholder')"
         />
       </div>
     </div>
@@ -83,7 +83,7 @@
       <div v-if="selectMode !== 'target' && upstreamFunctionParams.length > 0" class="variable-group">
         <div class="group-header" @click="toggleGroup('param')">
           <el-icon class="group-icon"><ScaleToOriginal /></el-icon>
-          <span class="group-title">函数参数</span>
+          <span class="group-title">{{ t('flow.common.functionParams') }}</span>
           <el-icon class="collapse-icon" :class="{ 'expanded': expandedGroups.param }">
             <ArrowDown />
           </el-icon>
@@ -110,7 +110,7 @@
       <div v-if="Object.keys(filteredFlowVariables).length > 0" class="variable-group">
         <div class="group-header" @click="toggleGroup('flow')">
           <el-icon class="group-icon"><ChromeFilled /></el-icon>
-          <span class="group-title">流程变量</span>
+          <span class="group-title">{{ t('flow.varSource.flowVars') }}</span>
           <el-icon class="collapse-icon" :class="{ 'expanded': expandedGroups.flow }">
             <ArrowDown />
           </el-icon>
@@ -134,7 +134,7 @@
       <div v-if="selectMode !== 'target' && Object.keys(filteredEnvironmentVariables).length > 0" class="variable-group">
         <div class="group-header" @click="toggleGroup('env')">
           <el-icon class="group-icon"><Notification /></el-icon>
-          <span class="group-title">环境变量</span>
+          <span class="group-title">{{ t('flow.varSource.envVars') }}</span>
           <el-icon class="collapse-icon" :class="{ 'expanded': expandedGroups.env }">
             <ArrowDown />
           </el-icon>
@@ -159,7 +159,7 @@
       <div v-if="selectMode !== 'target' && filteredGlobalVars.length > 0" class="variable-group">
         <div class="group-header" @click="toggleGroup('global')">
           <el-icon class="group-icon"><Collection /></el-icon>
-          <span class="group-title">全局变量</span>
+          <span class="group-title">{{ t('flow.varSource.globalVars') }}</span>
           <el-icon class="collapse-icon" :class="{ 'expanded': expandedGroups.global }">
             <ArrowDown />
           </el-icon>
@@ -184,7 +184,7 @@
       <div v-if="selectMode !== 'target' && parsedArguments.length > 0" class="variable-group">
         <div class="group-header" @click="toggleGroup('argument')">
           <el-icon class="group-icon"><User /></el-icon>
-          <span class="group-title">入口参数</span>
+          <span class="group-title">{{ t('flow.varSource.entryArgs') }}</span>
           <el-icon class="collapse-icon" :class="{ 'expanded': expandedGroups.argument }">
             <ArrowDown />
           </el-icon>
@@ -214,7 +214,7 @@
       <div v-if="selectMode !== 'target' && filteredBuiltinVars.length > 0" class="variable-group">
         <div class="group-header" @click="toggleGroup('builtin')">
           <el-icon class="group-icon"><Tools /></el-icon>
-          <span class="group-title">运行上下文</span>
+          <span class="group-title">{{ t('flow.varSource.runContext') }}</span>
           <el-icon class="collapse-icon" :class="{ 'expanded': expandedGroups.builtin }">
             <ArrowDown />
           </el-icon>
@@ -224,14 +224,14 @@
             v-for="bv in filteredBuiltinVars"
             :key="'builtin-' + bv.key"
             class="variable-item flow-variable-item"
-            :title="bv.hint"
+            :title="t(`flow.builtinVar.${bv.key}.hint`)"
             @click="selectVariable('builtin', { key: bv.key, type: bv.type })"
           >
             <span class="type-badge" :class="getTypeClass(bv.type)">
               {{ getTypeIcon(bv.type) }}
             </span>
             <span class="variable-name">{{ bv.key }}</span>
-            <span class="variable-type">{{ bv.label }}</span>
+            <span class="variable-type">{{ t(`flow.builtinVar.${bv.key}.label`) }}</span>
           </div>
         </div>
       </div>
@@ -248,6 +248,9 @@ import { getDataTypeIcon, getDataTypeIconClass, getDataTypeLabel } from './dataT
 import { useEscClose } from '../../../composables/useEscClose'
 import adminApi from '../../../config/admin.js'
 import { authHeaders, checkBizOk } from '../../settings/http.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   modelValue: {

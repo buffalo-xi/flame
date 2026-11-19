@@ -13,26 +13,29 @@
 // 避免「创建时写一份、面板里再列一份」两处漂移。
 
 import { uniqueLabel } from '@/tenant/utils/labels.js'
+import i18n from '@/locales'
+
+const t = (key, params) => i18n.global.t(key, params)
 
 export const HTTP_OUTPUTS = {
-  mode: { type: 'string', description: '响应模式' },
-  status: { type: 'number', description: 'HTTP 状态码' },
-  headers: { type: 'string', description: '响应头' },
-  body: { type: 'string', description: '响应体' },
-  sse_events: { type: 'array[string]', description: 'SSE 事件列表' },
-  stream_finished: { type: 'boolean', description: '流式传输是否完成' }
+  mode: { type: 'string', get description() { return t('flow.nodeFactory.varMode') } },
+  status: { type: 'number', get description() { return t('flow.nodeFactory.varStatus') } },
+  headers: { type: 'string', get description() { return t('flow.nodeFactory.varHeaders') } },
+  body: { type: 'string', get description() { return t('flow.nodeFactory.varBody') } },
+  sse_events: { type: 'array[string]', get description() { return t('flow.nodeFactory.varSseEvents') } },
+  stream_finished: { type: 'boolean', get description() { return t('flow.nodeFactory.varStreamFinished') } }
 }
 
 export const MCP_OUTPUTS = {
-  result: { type: 'string', description: '工具返回结果' },
-  progress: { type: 'array[string]', description: '进度通知数组' },
-  error: { type: 'string', description: '调用错误信息' }
+  result: { type: 'string', get description() { return t('flow.nodeFactory.varResult') } },
+  progress: { type: 'array[string]', get description() { return t('flow.nodeFactory.varProgress') } },
+  error: { type: 'string', get description() { return t('flow.nodeFactory.varError') } }
 }
 
 export const RPC_OUTPUTS = {
-  result: { type: 'string', description: '工具返回结果' },
-  progress: { type: 'array[string]', description: '进度通知数组' },
-  error: { type: 'string', description: '调用错误信息' }
+  result: { type: 'string', get description() { return t('flow.nodeFactory.varResult') } },
+  progress: { type: 'array[string]', get description() { return t('flow.nodeFactory.varProgress') } },
+  error: { type: 'string', get description() { return t('flow.nodeFactory.varError') } }
 }
 
 // 每个节点拿一份独立副本：面板后续会往 outputs 里增删变量
@@ -55,10 +58,10 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '条件分支',
+            label: t('flow.node.defaultLabel.branch'),
             config: {
               children: [
-                { id: generateUniqueId(5), label: '分支 1', condition: '', exclusive: true },
+                { id: generateUniqueId(5), label: t('flow.node.branch.childName', { n: 1 }), condition: '', exclusive: true },
               ]
             }
           },
@@ -70,15 +73,15 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '意图',
+            label: t('flow.node.defaultLabel.intent'),
             config: {
               inputs: {
                 messages: { source_type: 'argument', source_ref: '', source_key: '', type: '' },
                 input: { source_type: 'argument', source_ref: '', source_key: '', type: '' }
               },
-              llm: { gateway_model: '', system_prompt: '你是意图分类器，请根据对话历史和用户输入判断用户意图。\n\n对话历史：\n{{json .input.messages}}\n\n用户输入：\n{{.input.input}}', params: {} },
+              llm: { gateway_model: '', system_prompt: t('flow.nodeFactory.intentPrompt'), params: {} },
               children: [
-                { id: generateUniqueId(5), label: '意图 1', description: '' },
+                { id: generateUniqueId(5), label: t('flow.node.intent.childName', { n: 1 }), description: '' },
               ],
               outputs: { intent: { type: 'string' }, index: { type: 'number' } }
             }
@@ -91,7 +94,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '嵌入流程',
+            label: t('flow.node.defaultLabel.process'),
           },
           position: { x, y },
           type: 'process'
@@ -100,7 +103,7 @@ export function createNodeBuilders({
           id: generateUniqueId(5),
           parentNode: newNode.id,
           data: {
-            label: '入口',
+            label: t('flow.node.defaultLabel.entry'),
           },
           position: { x: 6, y: 37 },
           extent: {
@@ -114,7 +117,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '并发组',
+            label: t('flow.node.defaultLabel.forkGroup'),
           },
           position: { x, y },
           type: 'fork'
@@ -124,7 +127,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '并发同步',
+            label: t('flow.node.defaultLabel.waitJoin'),
           },
           position: { x, y },
           type: 'wait'
@@ -134,7 +137,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '调用',
+            label: t('flow.node.defaultLabel.call'),
           },
           position: { x, y },
           type: 'call'
@@ -144,7 +147,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '记忆',
+            label: t('flow.node.defaultLabel.memory'),
             config: {
               outputs: { messages: { type: 'array[object]' } },
               limit: 10,
@@ -159,7 +162,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '赋值',
+            label: t('flow.node.defaultLabel.assign'),
             config: {
               inputs: {},
               outputs: {},
@@ -175,10 +178,10 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '循环',
+            label: t('flow.node.defaultLabel.loop'),
             config: {
               loop: { type: 'count', total_times: 10 },
-              loop_vars: { index: { type: 'number', description: '循环下标' } }
+              loop_vars: { index: { type: 'number', get description() { return t('flow.nodeFactory.loopVarIndex') } } }
             }
           },
           position: { x, y },
@@ -188,7 +191,7 @@ export function createNodeBuilders({
           id: generateUniqueId(5),
           parentNode: newNode.id,
           data: {
-            label: '入口',
+            label: t('flow.node.defaultLabel.entry'),
           },
           position: { x: 6, y: 37 },
           extent: {
@@ -202,7 +205,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '跳出',
+            label: t('flow.node.defaultLabel.breakOut'),
           },
           position: { x, y },
           type: 'break'
@@ -212,7 +215,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '跳过',
+            label: t('flow.node.defaultLabel.continue'),
           },
           position: { x, y },
           type: 'continue'
@@ -222,7 +225,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '返回',
+            label: t('flow.node.defaultLabel.return'),
           },
           position: { x, y },
           type: 'return'
@@ -232,7 +235,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '终止',
+            label: t('flow.node.defaultLabel.exit'),
           },
           position: { x, y },
           type: 'exit'
@@ -242,7 +245,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: 'HTTP 请求',
+            label: t('flow.node.defaultLabel.http'),
             config: {
               outputs: cloneOutputs(HTTP_OUTPUTS)
             }
@@ -281,7 +284,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '代码',
+            label: t('flow.node.defaultLabel.code'),
           },
           position: { x, y },
           type: 'code'
@@ -291,7 +294,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '布局',
+            label: t('flow.node.fallbackLabel.layout'),
           },
           position: { x, y },
           type: 'layout'
@@ -301,7 +304,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '注释',
+            label: t('flow.node.defaultLabel.comment'),
           },
           position: { x, y },
           type: 'comment'
@@ -311,7 +314,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '结果输出',
+            label: t('flow.node.defaultLabel.result'),
           },
           position: { x, y },
           type: 'result'
@@ -321,7 +324,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '进度输出',
+            label: t('flow.node.defaultLabel.progress'),
           },
           position: { x, y },
           type: 'progress'
@@ -341,7 +344,7 @@ export function createNodeBuilders({
         newNode = {
           id: generateUniqueId(5),
           data: {
-            label: '函数',
+            label: t('flow.node.defaultLabel.function'),
           },
           position: { x, y },
           type: 'function'
@@ -350,7 +353,7 @@ export function createNodeBuilders({
           id: generateUniqueId(5),
           parentNode: newNode.id,
           data: {
-            label: '入口',
+            label: t('flow.node.defaultLabel.entry'),
           },
           position: { x: 6, y: 37 },
           extent: {
@@ -388,7 +391,7 @@ export function createNodeBuilders({
   // 顶层创建：return 只能在函数节点内部用
   const createNode = (nodeType, x, y) => {
     if (nodeType === 'return') {
-      ElMessage.warning('返回节点只能创建在函数节点内部')
+      ElMessage.warning(t('flow.nodeFactory.returnOnlyInFunction'))
       return null
     }
     return build(nodeType, x, y, null)
@@ -397,7 +400,7 @@ export function createNodeBuilders({
   // 容器内创建子节点：函数节点只能建在顶层
   const createChildNode = (parentNode, nodeType, x, y) => {
     if (nodeType === 'return' && !hasAncestorOfType(parentNode, 'function')) {
-      ElMessage.warning('返回节点只能创建在函数节点内部')
+      ElMessage.warning(t('flow.nodeFactory.returnOnlyInFunction'))
       return null
     }
     if (nodeType === 'function') return

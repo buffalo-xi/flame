@@ -1,4 +1,7 @@
 import { ref, reactive } from 'vue'
+import i18n from '@/locales'
+
+const t = (key, params) => i18n.global.t(key, params)
 import { getToken, getAuthHeader } from '@/tenant/utils/auth.js'
 import { apiBase } from '@/tenant/config/base.js'
 import { runInfo, nodeResults, fillRunInfo, setNodeResult, clearNodeResults } from './runData.js'
@@ -104,14 +107,14 @@ export function useFlowDebug() {
     pending.forEach(rawSend)
     pending = []
     breakpoints.forEach((id) => rawSend({ action: 'setBreakpoint', breakpoint: id, on: true }))
-    pushLog(`已同步断点 ${breakpoints.size} 个`)
+    pushLog(t('flow.debugLog.breakpointsSynced', { count: breakpoints.size }))
   }
 
   function handleFrame(d) {
     switch (d.event) {
       case 'ready':
         connected.value = true
-        pushLog('调试通道就绪 ' + flowId)
+        pushLog(t('flow.debugLog.channelReady', { flowId }))
         flushPending()
         break
       case 'run_started':
@@ -145,7 +148,7 @@ export function useFlowDebug() {
         if (d.node_id && !failedNodeIds.value.includes(d.node_id)) {
           failedNodeIds.value.push(d.node_id)
           failedTick.value++
-          pushLog('节点执行失败: ' + nodeLabel(d) + ' ' + (d.error || ''), 'error')
+          pushLog(t('flow.debugLog.nodeFailed', { label: nodeLabel(d), error: d.error || '' }), 'error')
         }
         // 失败即完成：取消该节点的运行态（旋转图标），改由 debug-error 呈现结果
         if (d.node_id && highlightNodeId.value === d.node_id) {
@@ -161,7 +164,7 @@ export function useFlowDebug() {
           if (!skippedNodeIds.value.includes(d.node_id)) {
             skippedNodeIds.value.push(d.node_id)
             skippedTick.value++
-            pushLog('节点已跳过: ' + nodeLabel(d))
+            pushLog(t('flow.debugLog.nodeSkipped', { label: nodeLabel(d) }))
           }
           if (failedNodeIds.value.includes(d.node_id)) {
             failedNodeIds.value = failedNodeIds.value.filter((id) => id !== d.node_id)
@@ -226,12 +229,12 @@ export function useFlowDebug() {
         }
         if (d.error) {
           error.value = d.error
-          pushLog('执行失败: ' + d.error, 'error')
+          pushLog(t('flow.debugLog.failed', { error: d.error }), 'error')
         } else {
           if (result.value) {
-            pushLog('返回结果: ' + result.value, 'result')
+            pushLog(t('flow.debugLog.result', { result: result.value }), 'result')
           }
-          pushLog('执行完成')
+          pushLog(t('flow.debugLog.finished'))
         }
         // 运行结束主动关闭调试通道（与后端 pushFinished 关闭互为兜底）
         if (ws) {
@@ -253,7 +256,7 @@ export function useFlowDebug() {
         }
         break
       case 'error':
-        error.value = d.error || '未知错误'
+        error.value = d.error || t('flow.debugLog.unknownError')
         // 错误信息写入当前卡片（若有），标记失败状态（结束卡片会红色展示 run.error）
         if (currentRunId) {
           const run = runs.value.find((r) => r.id === currentRunId)
@@ -264,7 +267,7 @@ export function useFlowDebug() {
           }
         }
         // 错误日志用 error 类型，红色显示在「执行」区
-        pushLog('错误: ' + error.value, 'error')
+        pushLog(t('flow.debugLog.error', { error: error.value }), 'error')
         // 停止调试通道：复位运行状态并主动关闭 ws
         running.value = false
         mode.value = 'idle'
@@ -280,7 +283,7 @@ export function useFlowDebug() {
         break
       default:
         // event 为空（如后端 welcome 欢迎帧，只有 type 无 event）时静默跳过
-        if (d.event) pushLog('帧: ' + d.event)
+        if (d.event) pushLog(t('flow.debugLog.frame', { event: d.event }))
     }
   }
 
@@ -298,7 +301,7 @@ export function useFlowDebug() {
       try {
         handleFrame(JSON.parse(e.data))
       } catch (err) {
-        pushLog('帧解析失败: ' + err.message, 'error')
+        pushLog(t('flow.debugLog.frameParseFailed', { error: err.message }), 'error')
       }
     }
     ws.onclose = () => {
@@ -311,12 +314,12 @@ export function useFlowDebug() {
       highlightNodeId.value = ''
       highlightStack.value = []
       ws = null
-      pushLog('调试通道已关闭')
+      pushLog(t('flow.debugLog.channelClosed'))
     }
     ws.onerror = () => {
-      error.value = 'WS 连接错误'
+      error.value = t('flow.debugLog.wsError')
       // 通道级失败也算「执行中的错误」：用 error 类型落日志，执行区才会标红
-      pushLog('WS 错误', 'error')
+      pushLog(t('flow.debugLog.wsErrorLog'), 'error')
     }
   }
 
@@ -336,7 +339,7 @@ export function useFlowDebug() {
       if (run && run.status === 'running') {
         run.status = 'cancelled'
         run.endTs = Date.now()
-        pushLog('已终止')
+        pushLog(t('flow.debugLog.terminated'))
       }
     }
   }
@@ -484,9 +487,9 @@ export function useFlowDebug() {
         body: JSON.stringify({ node_id: nodeId, on })
       })
       const data = await resp.json()
-      if (data.code !== 200) console.warn('断点持久化失败:', data.msg)
+      if (data.code !== 200) console.warn(t('flow.debugLog.breakpointSaveFailed'), data.msg)
     } catch (e) {
-      console.warn('断点持久化失败:', e?.message || e)
+      console.warn(t('flow.debugLog.breakpointSaveFailed'), e?.message || e)
     }
   }
 

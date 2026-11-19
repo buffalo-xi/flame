@@ -3,18 +3,18 @@
     <div class="module-head">
       <h3>{{ title }}</h3>
       <div class="head-actions">
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchConfigs">刷新</el-button>
+        <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchConfigs">{{ t('settings.configTable.refresh') }}</el-button>
         <el-button type="primary" size="small" :loading="saving" @click="saveConfigs">
-          <el-icon><Check /></el-icon> 保存租户配置
+          <el-icon><Check /></el-icon> {{ t('settings.configTable.save') }}
         </el-button>
       </div>
     </div>
     <div v-loading="loading" class="flow-config-body">
       <div class="flow-config-table">
         <div class="flow-config-table-head">
-          <span class="col-name">配置项</span>
-          <span class="col-system">系统级</span>
-          <span class="col-tenant">租户配置</span>
+          <span class="col-name">{{ t('settings.configTable.colField') }}</span>
+          <span class="col-system">{{ t('settings.configTable.colSystem') }}</span>
+          <span class="col-tenant">{{ t('settings.configTable.colTenant') }}</span>
         </div>
         <!-- data-field 供设置页顶部搜索定位到具体配置项（gotoSetting 里的 querySelector） -->
         <div v-for="f in fields" :key="f.key" :data-field="f.key" class="flow-config-row">
@@ -23,7 +23,7 @@
             <span v-if="f.desc" class="col-name-desc">{{ f.desc }}</span>
           </span>
           <span class="col-system">{{ formatValue(systemConfig[f.key]) }}</span>
-          <el-input v-model="tenantConfig[f.key]" placeholder="留空回退系统级" size="small" />
+          <el-input v-model="tenantConfig[f.key]" :placeholder="t('settings.configTable.inputPlaceholder')" size="small" />
         </div>
       </div>
       <div class="flow-config-hint">
@@ -35,9 +35,11 @@
 
 <script setup>
 import { ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Check, Refresh } from '@element-plus/icons-vue'
 import { getToken } from '../../../utils/auth.js'
+import { formatError } from '../../../../locales'
 
 /**
  * 「系统级值 + 租户覆盖值」的配置表：工作流运行参数与智能体运行参数共用这一份。
@@ -54,13 +56,15 @@ const props = defineProps({
   allowUnlimited: { type: Boolean, default: false }
 })
 
+const { t } = useI18n()
+
 const loading = ref(false)
 const saving = ref(false)
 const systemConfig = ref({})
 const tenantConfig = ref({})
 
 const formatValue = (v) => {
-  if (v === null || v === undefined || v === '') return '未设置'
+  if (v === null || v === undefined || v === '') return t('settings.configTable.unset')
   return String(v)
 }
 
@@ -74,10 +78,10 @@ const fetchConfigs = async () => {
     const data = await response.json()
     if (data.code === 200) {
       systemConfig.value = data.data.system || {}
-      const t = data.data.tenant || {}
+      const tenantRow = data.data.tenant || {}
       const obj = {}
       for (const f of props.fields) {
-        const v = t[f.key]
+        const v = tenantRow[f.key]
         obj[f.key] = (v === null || v === undefined) ? '' : String(v)
       }
       tenantConfig.value = obj
@@ -102,11 +106,17 @@ const saveConfigs = async () => {
     if (isNaN(tVal)) {
       // 工作流运行参数历史行为：非数字直接忽略（保存时置空），不打断其它项
       if (props.allowUnlimited) continue
-      ElMessage.error({ message: `${f.label}必须填数字`, duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({
+        message: t('settings.configTable.mustBeNumber', { field: f.label }),
+        duration: 5000, offset: 20, showClose: true
+      })
       return
     }
     if (!props.allowUnlimited && tVal < 1) {
-      ElMessage.error({ message: `${f.label}必须 >= 1（本组配置不支持 -1 不限制）`, duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({
+        message: t('settings.configTable.mustBePositive', { field: f.label }),
+        duration: 5000, offset: 20, showClose: true
+      })
       return
     }
     // -1 = 不限制，跳过上限比较
@@ -114,7 +124,10 @@ const saveConfigs = async () => {
     const sysVal = sys[f.key]
     if (sysVal === null || sysVal === undefined) continue
     if (tVal > sysVal) {
-      ElMessage.error({ message: `${f.label}不能超过系统级值 ${sysVal}`, duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({
+        message: t('settings.configTable.exceedSystem', { field: f.label, value: sysVal }),
+        duration: 5000, offset: 20, showClose: true
+      })
       return
     }
   }
@@ -139,17 +152,23 @@ const saveConfigs = async () => {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     })
-    if (!response.ok) throw new Error('保存失败')
+    if (!response.ok) throw new Error(t('settings.configTable.saveFailed'))
     const data = await response.json()
     if (data.code === 200) {
-      ElMessage.success({ message: `${props.title}保存成功`, duration: 700 })
+      ElMessage.success({ message: t('settings.configTable.saved', { title: props.title }), duration: 700 })
       await fetchConfigs()
     } else {
-      ElMessage.error({ message: `保存失败: ${data.msg}`, duration: 5000, offset: 20, showClose: true })
+      ElMessage.error({
+        message: t('settings.configTable.saveFailedDetail', { msg: formatError(data) }),
+        duration: 5000, offset: 20, showClose: true
+      })
     }
   } catch (e) {
-    console.error(`保存${props.title}失败:`, e)
-    ElMessage.error({ message: '保存失败，请稍后重试', duration: 5000, offset: 20, showClose: true })
+    console.error(`save ${props.title} failed:`, e)
+    ElMessage.error({
+      message: t('settings.configTable.saveFailedRetry'),
+      duration: 5000, offset: 20, showClose: true
+    })
   } finally {
     saving.value = false
   }

@@ -6,24 +6,24 @@
       <div class="cap-tabs">
         <button class="cap-tab" :class="{ active: tab === 'tools' }" @click="tab = 'tools'">
           <el-icon><Tools /></el-icon>
-          工具目录
+          {{ t('capabilities.tabTools') }}
           <span class="cap-count">({{ toolsCount }})</span>
         </button>
         <button class="cap-tab" :class="{ active: tab === 'plugins' }" @click="tab = 'plugins'">
           <el-icon><Grid /></el-icon>
-          插件
+          {{ t('capabilities.tabPlugins') }}
           <span class="cap-count">({{ pluginsCount }})</span>
         </button>
         <button class="cap-tab" :class="{ active: tab === 'custom' }" @click="tab = 'custom'">
           <el-icon><Document /></el-icon>
-          自定义工具
+          {{ t('capabilities.tabCustom') }}
           <span class="cap-count">({{ customCount }})</span>
         </button>
       </div>
       <div class="cap-hint">
-        <strong>工具目录</strong>＝我们能用的（内置 / 工具组 / 连接 / 本地端点）；
-        <strong>插件</strong>＝磁盘上的 Python 工具插件（一种工具多种实现，按租户启用配置）；
-        <strong>自定义工具</strong>＝租户自己的代码（对外工具名带 custom__ 前缀）
+        <strong>{{ t('capabilities.hintTools') }}</strong>{{ t('capabilities.hintToolsDesc') }}
+        <strong>{{ t('capabilities.hintPlugins') }}</strong>{{ t('capabilities.hintPluginsDesc') }}
+        <strong>{{ t('capabilities.hintCustom') }}</strong>{{ t('capabilities.hintCustomDesc') }}
       </div>
     </div>
 
@@ -37,6 +37,7 @@
 
 <script setup>
 import { ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Tools, Grid, Document } from '@element-plus/icons-vue'
 import ToolsTab from './capabilities/ToolsTab.vue'
 import PluginsTab from './capabilities/PluginsTab.vue'
@@ -46,6 +47,8 @@ import CustomToolsTab from './capabilities/CustomToolsTab.vue'
 //   nav 字符串（如 'settings'）→ 只切页
 // 端点页（Endpoints.vue）自带 open 事件，不再经过这里。
 defineEmits(['nav'])
+
+const { t } = useI18n()
 
 // 会话里建 / 改了自定义工具：切到「自定义工具」页签，并把定位目标透传给子组件。
 // 转成新对象（含 ts）再传：同一工具重复点也能让子组件的 watch 触发。

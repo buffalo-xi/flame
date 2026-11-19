@@ -12,7 +12,7 @@
   <div class="section">
     <div class="split">
       <aside class="plug-nav">
-        <div class="nav-caption">插件（{{ plugins.length }}）</div>
+        <div class="nav-caption">{{ t('platform.plugins.navPluginsCaption') }}</div>
         <div
           v-for="p in plugins"
           :key="p.name"
@@ -23,13 +23,13 @@
           <div class="plug-item-name">{{ p.display_name || p.name }}</div>
           <div class="plug-item-desc">
             <span class="mono">{{ p.name }}</span>
-            <span>· {{ (p.implementations || []).length }} 个实现</span>
+            <span>{{ t('platform.plugins.implCount', { count: (p.implementations || []).length }) }}</span>
           </div>
-          <div class="plug-item-stat">已停用 {{ revokedCount(p.name) }}/{{ tenants.length }} 家</div>
+          <div class="plug-item-stat">{{ t('platform.plugins.revokedCount', { count: revokedCount(p.name), total: tenants.length }) }}</div>
         </div>
-        <div v-if="!plugins.length" class="empty">磁盘上还没有发现插件</div>
+        <div v-if="!plugins.length" class="empty">{{ t('platform.plugins.emptyPlugins') }}</div>
 
-        <div class="nav-caption nav-gap">能力（{{ capabilities.length }}）</div>
+        <div class="nav-caption nav-gap">{{ t('platform.plugins.navCapsCaption') }}</div>
         <div
           v-for="cap in capabilities"
           :key="cap.key"
@@ -37,21 +37,21 @@
           :class="{ active: mode === 'cap' && capSelected === cap.key }"
           @click="pickCapability(cap.key)"
         >
-          <div class="plug-item-name">{{ capShortName(cap.label) }}</div>
+          <div class="plug-item-name">{{ capLabel(cap, true) }}</div>
           <div class="plug-item-desc">
             <span class="mono">{{ cap.key }}</span>
           </div>
           <div class="plug-item-stat">
-            <template v-if="capLoaded">已开通 {{ capGrantedCount(cap.key) }}/{{ tenants.length }} 家</template>
-            <template v-else>统计中…</template>
+            <template v-if="capLoaded">{{ t('platform.plugins.grantedCount', { count: capGrantedCount(cap.key), total: tenants.length }) }}</template>
+            <template v-else>{{ t('platform.plugins.counting') }}</template>
           </div>
         </div>
-        <div v-if="!capabilities.length" class="empty">未取到能力清单</div>
+        <div v-if="!capabilities.length" class="empty">{{ t('platform.plugins.emptyCaps') }}</div>
       </aside>
 
       <section class="plug-body">
         <div v-if="loading" v-loading="true" class="blk placeholder" />
-        <div v-else-if="!current && !capCurrent" class="blk placeholder">左侧选一个插件或能力</div>
+        <div v-else-if="!current && !capCurrent" class="blk placeholder">{{ t('platform.plugins.selectItem') }}</div>
 
         <template v-if="current">
           <div class="blk">
@@ -61,11 +61,11 @@
                 <span class="mono">{{ current.name }}</span>
                 <span v-if="current.version" class="ver">v{{ current.version }}</span>
               </div>
-              <el-button link size="small" @click="load">刷新</el-button>
+              <el-button link size="small" @click="load">{{ t('common.refresh') }}</el-button>
             </div>
 
             <div class="blk-body">
-              <div class="desc">{{ current.description || '无描述' }}</div>
+              <div class="desc">{{ current.description || t('platform.plugins.noDescription') }}</div>
               <div v-if="(current.implementations || []).length" class="impls">
                 <span v-for="im in current.implementations" :key="im.name" class="impl-tag">
                   {{ im.display_name || im.name }}
@@ -75,61 +75,61 @@
               <!-- 全局停用：唯一带全局语义的东西。没有「系统默认行」了 ——
                    它只改缺省值，与急停是两种东西，混在一起会让人以为是总闸。 -->
               <div class="sub-title">
-                全局停用（急停）
-                <span class="sub-hint">缺省放行：一旦停用，所有租户立即失效，压过他们的单独授权</span>
+                {{ t('platform.plugins.gateTitle') }}
+                <span class="sub-hint">{{ t('platform.plugins.gateHint') }}</span>
               </div>
               <div class="row">
-                <el-switch v-model="gateForm.blocked" active-text="停用" inactive-text="放行" />
+                <el-switch v-model="gateForm.blocked" :active-text="t('platform.plugins.switchBlocked')" :inactive-text="t('platform.plugins.switchPass')" />
                 <span class="hint">
-                  {{ gateForm.blocked ? '所有租户都无法调用；各租户的原始授权不受影响，解闸即恢复' : '各租户按自己的授权使用' }}
+                  {{ gateForm.blocked ? t('platform.plugins.gateOnHint') : t('platform.plugins.gateOffHint') }}
                 </span>
                 <span class="spacer" />
                 <el-button
                   size="small"
                   :disabled="!gateDirty"
                   :loading="saving"
-                  title="只保存这一项的全局停用设置；表格里每一行另有自己的保存"
+                  :title="t('platform.plugins.saveGateTip')"
                   @click="saveGate"
-                >保存</el-button>
-                <el-button size="small" link :disabled="!current.blocked" @click="resetGate">解除停用</el-button>
+                >{{ t('common.save') }}</el-button>
+                <el-button size="small" link :disabled="!current.blocked" @click="resetGate">{{ t('platform.plugins.resetGate') }}</el-button>
               </div>
 
               <div class="sub-title">
-                租户停用
-                <span class="sub-hint">缺省开放：租户自己在「插件」页启用并选实现即可用；只有需要禁用某一家时才打开开关</span>
+                {{ t('platform.plugins.tenantTitle') }}
+                <span class="sub-hint">{{ t('platform.plugins.tenantHint') }}</span>
               </div>
               <div v-if="current.blocked" class="hint" style="margin-bottom: 8px">
-                该插件已被平台全局停用：下表的停用设置保存后仍不生效，解除停用即按原设置恢复。
+                {{ t('platform.plugins.blockedNote') }}
               </div>
               <div class="hint" style="margin-bottom: 8px">
-                开关只改草稿：每行改完要点该行的「保存」才提交；切到别的插件或点右上「刷新」会丢弃未保存的改动。
+                {{ t('platform.plugins.draftNote') }}
               </div>
               <el-table :data="rows" size="small" border class="tbl">
-                <el-table-column label="租户" min-width="160">
+                <el-table-column :label="t('platform.plugins.colTenant')" min-width="160">
                   <template #default="{ row }">
                     <span class="t-name">{{ row.display_name }}</span>
                     <span class="mono">{{ row.schema }}</span>
                   </template>
                 </el-table-column>
-                <el-table-column label="来源" width="110">
+                <el-table-column :label="t('platform.plugins.colSource')" width="110">
                   <template #default="{ row }">
-                    <el-tag v-if="row.row && !row.row.allowed" size="small" type="danger">已停用</el-tag>
+                    <el-tag v-if="row.row && !row.row.allowed" size="small" type="danger">{{ t('platform.plugins.tagDisabled') }}</el-tag>
                     <el-tag
                       v-else-if="row.row"
                       size="small"
                       type="info"
-                      title="显式存了一条「允许」，效果与缺省开放相同；属于历史遗留，可点「清除设置」删掉"
-                    >显式允许</el-tag>
-                    <el-tag v-else size="small" type="success">缺省开放</el-tag>
+                      :title="t('platform.plugins.explicitAllowTip')"
+                    >{{ t('platform.plugins.tagExplicitAllow') }}</el-tag>
+                    <el-tag v-else size="small" type="success">{{ t('platform.plugins.tagDefaultOpen') }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="租户侧" width="90">
+                <el-table-column :label="t('platform.plugins.colTenantSide')" width="90">
                   <template #default="{ row }">
-                    <span :class="row.enabled ? 'ok' : 'muted'">{{ row.enabled ? '已启用' : '未启用' }}</span>
+                    <span :class="row.enabled ? 'ok' : 'muted'">{{ row.enabled ? t('platform.plugins.enabled') : t('platform.plugins.notEnabled') }}</span>
                   </template>
                 </el-table-column>
                 <!-- 开关语义是「停用」：缺省所有租户都可用，打开才写一条 allowed=false -->
-                <el-table-column label="停用" width="70">
+                <el-table-column :label="t('platform.plugins.colBlocked')" width="70">
                   <template #default="{ row }">
                     <el-switch
                       :model-value="!row.form.allowed"
@@ -138,14 +138,14 @@
                     />
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="150">
+                <el-table-column :label="t('platform.plugins.colActions')" width="150">
                   <template #default="{ row }">
-                    <el-button link size="small" :disabled="!rowDirty(row)" @click="saveTenant(row)">保存</el-button>
-                    <el-button link size="small" :disabled="!row.row" @click="resetTenant(row)">清除设置</el-button>
+                    <el-button link size="small" :disabled="!rowDirty(row)" @click="saveTenant(row)">{{ t('common.save') }}</el-button>
+                    <el-button link size="small" :disabled="!row.row" @click="resetTenant(row)">{{ t('platform.plugins.clearSettings') }}</el-button>
                   </template>
                 </el-table-column>
               </el-table>
-              <div v-if="!rows.length" class="hint">还没有租户。</div>
+              <div v-if="!rows.length" class="hint">{{ t('platform.plugins.noTenants') }}</div>
             </div>
           </div>
         </template>
@@ -159,84 +159,82 @@
           <div class="blk">
             <div class="blk-head">
               <div class="hd-main">
-                <span class="blk-title">{{ capCurrent.label }}</span>
+                <span class="blk-title">{{ capLabel(capCurrent) }}</span>
                 <span class="mono">{{ capCurrent.key }}</span>
-                <el-tag v-if="capBlockedOf(capCurrent.key)" size="small" type="danger">平台已拦截</el-tag>
+                <el-tag v-if="capBlockedOf(capCurrent.key)" size="small" type="danger">{{ t('platform.plugins.capIntercepted') }}</el-tag>
               </div>
-              <el-button link size="small" @click="load">刷新</el-button>
+              <el-button link size="small" @click="load">{{ t('common.refresh') }}</el-button>
             </div>
 
             <div class="blk-body">
               <div class="desc">
-                租户授权与全局闸两层都要过：租户没开通 = 未开通；全局闸拦下则压过租户的显式开启。
-                被拦后租户即使把对应工具授给了 agent，目录里也会置灰并给出原因，执行层直接拒 ——
-                不只靠提示词约束。
+                {{ t('platform.plugins.capIntro') }}
               </div>
 
               <div class="sub-title">
-                全局硬闸（急停）
-                <span class="sub-hint">缺省放行：没有闸行 = 不拦；一旦拦下，所有租户立即失效</span>
+                {{ t('platform.plugins.capGateTitle') }}
+                <span class="sub-hint">{{ t('platform.plugins.capGateHint') }}</span>
               </div>
               <div class="row">
-                <el-switch v-model="capGateForm.blocked" active-text="拦截" inactive-text="放行" />
+                <el-switch v-model="capGateForm.blocked" :active-text="t('platform.plugins.capSwitchBlocked')" :inactive-text="t('platform.plugins.switchPass')" />
                 <span class="hint">
-                  这是「还开不开」，不是缺省值 —— 它压过租户的显式开启，用于发现问题时一键止血
+                  {{ t('platform.plugins.capGateOnHint') }}
                 </span>
                 <span class="spacer" />
                 <el-button
                   size="small"
                   :disabled="!capGateDirty"
                   :loading="saving"
-                  title="只保存这一项的全局硬闸；表格里每一行另有自己的保存"
+                  :title="t('platform.plugins.capSaveGateTip')"
                   @click="saveCapGate"
-                >保存</el-button>
+                >{{ t('common.save') }}</el-button>
                 <el-button size="small" link :disabled="!capBlockedOf(capCurrent.key)" @click="resetCapGate">
-                  解除拦截
+                  {{ t('platform.plugins.capResetGate') }}
                 </el-button>
               </div>
 
               <div class="sub-title">
-                租户授权
-                <span class="sub-hint">缺省未开通；平台放开只是前提，租户还得给具体 agent 授权</span>
+                {{ t('platform.plugins.capTenantTitle') }}
+                <span class="sub-hint">{{ t('platform.plugins.capTenantHint') }}</span>
               </div>
               <div class="hint" style="margin-bottom: 8px">
-                开关只改草稿：每行改完要点该行的「保存」才提交；切到别的能力或点右上「刷新」会丢弃未保存的改动。
+                {{ t('platform.plugins.capDraftNote') }}
               </div>
               <el-table :data="capRows" size="small" border class="tbl">
-                <el-table-column label="租户" min-width="160">
+                <el-table-column :label="t('platform.plugins.colTenant')" min-width="160">
                   <template #default="{ row }">
                     <span class="t-name">{{ row.display_name }}</span>
                     <span class="mono">{{ row.schema }}</span>
                   </template>
                 </el-table-column>
-                <el-table-column label="来源" width="110">
+                <el-table-column :label="t('platform.plugins.colSource')" width="110">
                   <template #default="{ row }">
-                    <el-tag v-if="row.row !== null" size="small" type="warning">单独设置</el-tag>
-                    <el-tag v-else size="small" type="danger">未开通</el-tag>
+                    <el-tag v-if="row.row !== null" size="small" type="warning">{{ t('platform.plugins.tagSingleSet') }}</el-tag>
+                    <el-tag v-else size="small" type="danger">{{ t('platform.plugins.tagNotOpened') }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="生效" width="90">
+                <el-table-column :label="t('platform.plugins.colEffective')" width="90">
                   <template #default="{ row }">
                     <span :class="row.effective ? 'ok' : 'muted'">
-                      {{ row.effective ? '已开通' : capBlockedOf(capCurrent.key) && row.row ? '被拦截' : '未开通' }}
+                      {{ row.effective ? t('platform.plugins.effectiveOpened') : capBlockedOf(capCurrent.key) && row.row ? t('platform.plugins.effectiveBlocked') : t('platform.plugins.tagNotOpened') }}
                     </span>
                   </template>
                 </el-table-column>
-                <el-table-column label="开通" width="70">
+                <el-table-column :label="t('platform.plugins.colOpen')" width="70">
                   <template #default="{ row }">
                     <!-- 被闸拦下时仍允许改租户行：原始配置与急停是两件事，
                          拦着不让点会让人以为要先解闸才能配置 -->
                     <el-switch v-model="row.form.allowed" size="small" />
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="150">
+                <el-table-column :label="t('platform.plugins.colActions')" width="150">
                   <template #default="{ row }">
-                    <el-button link size="small" :disabled="!capRowDirty(row)" @click="saveCapTenant(row)">保存</el-button>
-                    <el-button link size="small" :disabled="row.row === null" @click="resetCapTenant(row)">清除设置</el-button>
+                    <el-button link size="small" :disabled="!capRowDirty(row)" @click="saveCapTenant(row)">{{ t('common.save') }}</el-button>
+                    <el-button link size="small" :disabled="row.row === null" @click="resetCapTenant(row)">{{ t('platform.plugins.clearSettings') }}</el-button>
                   </template>
                 </el-table-column>
               </el-table>
-              <div v-if="!capRows.length" class="hint">还没有租户可授权。</div>
+              <div v-if="!capRows.length" class="hint">{{ t('platform.plugins.noCapTenants') }}</div>
             </div>
           </div>
         </template>
@@ -247,11 +245,15 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api'
+import { capabilityLabelKey } from '../../locales'
 
 // 一次取全：插件清单 + 租户列表 + 各租户原始行 + 租户启用状态。
 // 矩阵要同时看「平台给没给」与「租户开没开」，逐个租户请求会让页面一闪一闪。
+const { t, te } = useI18n()
+
 const loading = ref(false)
 const saving = ref(false)
 const plugins = ref([])
@@ -309,7 +311,7 @@ async function load() {
   try {
     await loadPlugins()
   } catch (err) {
-    ElMessage.error(err.message || '读取插件清单失败')
+    ElMessage.error(err.message || t('platform.plugins.loadPluginsFailed'))
   } finally {
     loading.value = false
   }
@@ -375,9 +377,12 @@ function pickCapability(key) {
   else capSelected.value = key
 }
 
-// 导航里只放短的档位名，完整说明（含实现的工具名）放在右侧详情标题上
-function capShortName(label) {
-  return String(label || '').split('（')[0]
+// 能力名以键为准查语言包：后端返回的 label 是中文硬编码，直接显示会在英文界面里露中文。
+// 导航里只放短的档位名，完整说明（含实现的工具名）放在右侧详情标题上。
+// 未知键（平台新增能力但前端还没翻译）才回落后端 label，不至于只剩一个裸键名。
+function capLabel(cap, short = false) {
+  const path = capabilityLabelKey(cap?.key, short)
+  return path && te(path) ? t(path) : (cap?.label || cap?.key || '')
 }
 
 function capBlockedOf(key) {
@@ -404,7 +409,7 @@ async function refreshCaps() {
     capabilities.value = []
     capCells.value = {}
     capLoaded.value = false
-    ElMessage.error(err.message || '读取能力清单失败')
+    ElMessage.error(err.message || t('platform.plugins.loadCapsFailed'))
     return
   }
   if (!capabilities.value.some((c) => c.key === capSelected.value)) {
@@ -474,10 +479,10 @@ async function saveGate() {
   try {
     // 后端把 blocked=false 翻译成删行：闸表只保留「确实被拦」的记录
     await api.setPluginGate(p.name, { blocked: !!gateForm.value.blocked })
-    ElMessage.success('全局停用设置已保存，立即生效')
+    ElMessage.success(t('platform.plugins.gateSaved'))
     await loadPlugins()
   } catch (err) {
-    ElMessage.error(err.message || '保存失败')
+    ElMessage.error(err.message || t('platform.plugins.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -488,8 +493,8 @@ async function resetGate() {
   if (!p) return
   try {
     await ElMessageBox.confirm(
-      `移除 ${p.name} 的全局停用？各租户对该插件的授权保持不变，立即恢复可选。`,
-      '解除停用',
+      t('platform.plugins.resetGateConfirm', { name: p.name }),
+      t('platform.plugins.resetGateTitle'),
       { type: 'warning' }
     )
   } catch {
@@ -497,10 +502,10 @@ async function resetGate() {
   }
   try {
     await api.deletePluginGate(p.name)
-    ElMessage.success('已解除停用')
+    ElMessage.success(t('platform.plugins.resetGateDone'))
     await loadPlugins()
   } catch (err) {
-    ElMessage.error(err.message || '操作失败')
+    ElMessage.error(err.message || t('platform.plugins.opFailed'))
   }
 }
 
@@ -509,10 +514,10 @@ async function saveTenant(row) {
   if (!p) return
   try {
     await api.setTenantPlugin(row.schema, p.name, row.form)
-    ElMessage.success(`${row.display_name} 的停用设置已保存`)
+    ElMessage.success(t('platform.plugins.tenantSaved', { name: row.display_name }))
     await loadPlugins()
   } catch (err) {
-    ElMessage.error(err.message || '保存失败')
+    ElMessage.error(err.message || t('platform.plugins.saveFailed'))
   }
 }
 
@@ -521,8 +526,8 @@ async function resetTenant(row) {
   if (!p) return
   try {
     await ElMessageBox.confirm(
-      `清除 ${row.display_name}（${row.schema}）对该插件的停用设置？此后该租户回到缺省（开放）。`,
-      '清除设置',
+      t('platform.plugins.resetTenantConfirm', { name: row.display_name, schema: row.schema }),
+      t('platform.plugins.clearSettings'),
       { type: 'info' }
     )
   } catch {
@@ -530,10 +535,10 @@ async function resetTenant(row) {
   }
   try {
     await api.deleteTenantPlugin(row.schema, p.name)
-    ElMessage.success('已清除该租户的停用设置')
+    ElMessage.success(t('platform.plugins.tenantResetDone'))
     await loadPlugins()
   } catch (err) {
-    ElMessage.error(err.message || '操作失败')
+    ElMessage.error(err.message || t('platform.plugins.opFailed'))
   }
 }
 
@@ -545,10 +550,10 @@ async function saveCapGate() {
     // 后端把 blocked=false 翻译成删行：闸表只保留「确实被拦」的记录，
     // 否则排查时看到一行 false 会以为「有人动过这个闸」。
     await api.setCapabilityGate(c.key, { blocked: !!capGateForm.value.blocked })
-    ElMessage.success('全局闸已保存，立即生效')
+    ElMessage.success(t('platform.plugins.capGateSaved'))
     await refreshCaps()
   } catch (err) {
-    ElMessage.error(err.message || '保存失败')
+    ElMessage.error(err.message || t('platform.plugins.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -559,8 +564,8 @@ async function resetCapGate() {
   if (!c) return
   try {
     await ElMessageBox.confirm(
-      `移除 ${c.key} 的全局闸？所有租户对该能力立即恢复可选（各租户自己的授权不变）。`,
-      '解除拦截',
+      t('platform.plugins.capResetGateConfirm', { key: c.key }),
+      t('platform.plugins.capResetGateTitle'),
       { type: 'warning' }
     )
   } catch {
@@ -568,10 +573,10 @@ async function resetCapGate() {
   }
   try {
     await api.deleteCapabilityGate(c.key)
-    ElMessage.success('已解除拦截')
+    ElMessage.success(t('platform.plugins.capResetDone'))
     await refreshCaps()
   } catch (err) {
-    ElMessage.error(err.message || '操作失败')
+    ElMessage.error(err.message || t('platform.plugins.opFailed'))
   }
 }
 
@@ -580,10 +585,10 @@ async function saveCapTenant(row) {
   if (!c) return
   try {
     await api.setTenantCapability(row.schema, c.key, { allowed: !!row.form.allowed })
-    ElMessage.success(`${row.display_name} 的授权已保存`)
+    ElMessage.success(t('platform.plugins.capTenantSaved', { name: row.display_name }))
     await refreshCaps()
   } catch (err) {
-    ElMessage.error(err.message || '保存失败')
+    ElMessage.error(err.message || t('platform.plugins.saveFailed'))
   }
 }
 
@@ -592,8 +597,8 @@ async function resetCapTenant(row) {
   if (!c) return
   try {
     await ElMessageBox.confirm(
-      `清除 ${row.display_name}（${row.schema}）对 ${c.key} 的授权？此后该租户为「未开通」（缺省拒绝）。`,
-      '清除设置',
+      t('platform.plugins.capResetTenantConfirm', { name: row.display_name, schema: row.schema, key: c.key }),
+      t('platform.plugins.clearSettings'),
       { type: 'info' }
     )
   } catch {
@@ -601,10 +606,10 @@ async function resetCapTenant(row) {
   }
   try {
     await api.deleteTenantCapability(row.schema, c.key)
-    ElMessage.success('已清除该租户的授权')
+    ElMessage.success(t('platform.plugins.capTenantResetDone'))
     await refreshCaps()
   } catch (err) {
-    ElMessage.error(err.message || '操作失败')
+    ElMessage.error(err.message || t('platform.plugins.opFailed'))
   }
 }
 

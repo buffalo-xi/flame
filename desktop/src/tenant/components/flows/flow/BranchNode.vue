@@ -5,14 +5,14 @@
       <Handle type="target" position="top" :id="'target' + id + 'top'" class="custom-handle custom-handle-top custom-handle-target" />
       <Handle type="target" position="right" :id="'target' + id + 'right'" class="custom-handle custom-handle-right custom-handle-target" />
       <div class="icon-wrapper icon-start"><el-icon><Connection /></el-icon></div>
-      <div class="node-label">{{ data.label || '分支' }}</div>
+      <div class="node-label">{{ data.label || t('flow.node.defaultLabel.branch') }}</div>
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item @click="deleteNode">
               <el-icon><Delete /></el-icon>
-              <span>删除节点</span>
+              <span>{{ t('flow.node.action.delete') }}</span>
             </el-dropdown-item>
             <BreakpointMenuItem :id="id" />
           </el-dropdown-menu>
@@ -28,8 +28,8 @@
     >
       <div class="child-content">
         <div class="child-label">
-          <span class="exclusive-star" :class="{ 'is-exclusive': child.exclusive }" :title="child.exclusive ? '排他：命中后不再尝试后续分支' : '非排他'">*</span>
-          {{ child.label || '分支 ' + (index + 1) }}
+          <span class="exclusive-star" :class="{ 'is-exclusive': child.exclusive }" :title="child.exclusive ? t('flow.node.branch.exclusiveTitle') : t('flow.node.branch.inclusiveTitle')">*</span>
+          {{ child.label || t('flow.node.branch.childName', { n: index + 1 }) }}
         </div>
         <el-dropdown trigger="hover" placement="right">
           <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
@@ -37,7 +37,7 @@
             <el-dropdown-menu>
               <el-dropdown-item @click="deleteChildNode(index)">
                 <el-icon><Delete /></el-icon>
-                <span>删除分支</span>
+                <span>{{ t('flow.node.branch.deleteChild') }}</span>
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -65,7 +65,7 @@
         class="custom-handle custom-handle-left"
       />
       <div class="child-content">
-        <div class="child-label child-label-default">默认分支</div>        
+        <div class="child-label child-label-default">{{ t('flow.node.branch.defaultBranch') }}</div>        
       </div>
       <Handle
         type="source"
@@ -88,11 +88,14 @@ import { ref, computed, onMounted, watch, inject } from 'vue'
 import { Connection, MoreFilled, Plus, Delete } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
 import random from '@/tenant/utils/random'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {
     type: Object,
-    default: () => ({ label: '条件分支' })
+    default: () => ({})
   },
   id: {
     type: String,
@@ -145,7 +148,7 @@ const addChild = () => {
   if (!props.data.config) props.data.config = {}
   if (!props.data.config.children) props.data.config.children = []
   const newId = random.randomNumberString(16)
-  const newChild = { id: newId, label: '子节点 ' + (props.data.config.children.length + 1), condition: '' }
+  const newChild = { id: newId, label: t('flow.node.branch.newChildName', { n: props.data.config.children.length + 1 }), condition: '' }
   props.data.config.children.push(newChild)
   children.value = props.data.config.children
   emit('updateData', { config: { ...props.data.config } })
@@ -155,7 +158,7 @@ const addChildNode = (index) => {
   if (!props.data.config) props.data.config = {}
   if (!props.data.config.children) props.data.config.children = []
   const newId = random.randomNumberString(16)
-  const newChild = { id: newId, label: '子节点 ' + (props.data.config.children.length + 1), condition: '' }
+  const newChild = { id: newId, label: t('flow.node.branch.newChildName', { n: props.data.config.children.length + 1 }), condition: '' }
   props.data.config.children.splice(index, 0, newChild)
   children.value = props.data.config.children
   emit('updateData', { config: { ...props.data.config } })
@@ -166,7 +169,7 @@ const addChildBeforeDefault = () => {
   if (!props.data.config.children) props.data.config.children = []
   const newId = random.randomNumberString(16)
   
-  const newChild = { id: newId, label: '子节点 ' + (props.data.config.children.length + 1), condition: '' }
+  const newChild = { id: newId, label: t('flow.node.branch.newChildName', { n: props.data.config.children.length + 1 }), condition: '' }
   props.data.config.children.push(newChild)
   children.value = props.data.config.children
   emit('updateData', { config: { ...props.data.config } })

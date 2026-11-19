@@ -1,39 +1,39 @@
 <template>
   <div class="module-section">
     <div class="module-head">
-      <h3>用户管理</h3>
+      <h3>{{ t('settings.tabs.users.title') }}</h3>
       <div class="head-actions">
-        <el-button size="small" :icon="Refresh" @click="loadUsers">刷新</el-button>
-        <el-button type="primary" size="small" :icon="Plus" @click="openUserDialog()">新建用户</el-button>
+        <el-button size="small" :icon="Refresh" @click="loadUsers">{{ t('settings.users.refresh') }}</el-button>
+        <el-button type="primary" size="small" :icon="Plus" @click="openUserDialog()">{{ t('settings.users.create') }}</el-button>
       </div>
     </div>
 
     <div class="editor-tip" style="margin-bottom:10px">
-      <strong>管理用户</strong>＝可登录控制台并使用后台；<strong>服务用户</strong>＝不可登录，只作为 API 调用身份
-      （在「服务凭证」里绑到 API Key / OAuth）。停用后该账号的登录与 API 调用同时失效。
+      <strong>{{ t('settings.users.introRoleManage') }}</strong>{{ t('settings.users.introRoleManageRest') }}<strong>{{ t('settings.users.introRoleService') }}</strong>{{ t('settings.users.introRoleServiceRest') }}
       <br />
-      配额「跟随租户」时用「租户配额」页的生效值；自定义只对该用户生效，且不得超过租户上限。
+      {{ t('settings.users.introQuota') }}
     </div>
 
     <el-table :data="users" v-loading="usersLoading" size="small" class="ut-table">
-      <el-table-column label="登录名" min-width="150">
+      <el-table-column :label="t('settings.users.colLogin')" min-width="150">
         <template #default="{ row }">
           <div>
             {{ row.name }}
             <!-- 平台开通租户时创建的根账号：不可编辑 / 不可停用（后端同样拦；删除接口本就不存在） -->
-            <el-tag v-if="isPrimaryRow(row)" size="small" type="warning" effect="plain">根账号</el-tag>
+            <el-tag v-if="isPrimaryRow(row)" size="small" type="warning" effect="plain">{{ t('settings.users.rootTag') }}</el-tag>
           </div>
           <div style="font-size:12px;color:#909399">{{ row.display_name || '-' }}</div>
         </template>
       </el-table-column>
-      <el-table-column label="角色" width="110">
+      <el-table-column :label="t('settings.users.colRole')" width="110">
         <template #default="{ row }">
           <el-tag size="small" :type="row.role === 'manage' ? 'primary' : 'info'">
-            {{ row.role === 'manage' ? '管理用户' : row.role === 'service' ? '服务用户' : (row.role || '-') }}
+            {{ row.role === 'manage' ? t('settings.users.roleManage')
+              : row.role === 'service' ? t('settings.users.roleService') : (row.role || '-') }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="100">
+      <el-table-column :label="t('settings.users.colStatus')" width="100">
         <template #default="{ row }">
           <el-tag size="small"
                   :type="row.status === 'active' ? 'success' : (row.status === 'locked' ? 'warning' : 'danger')">
@@ -41,7 +41,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="配额（会话 / 单会话空间）" min-width="200">
+      <el-table-column :label="t('settings.users.colQuota')" min-width="200">
         <template #default="{ row }">
           <div class="quota-cell">
             <span :class="{ 'q-custom': row.max_sessions != null }">{{ quotaSessionsText(row) }}</span>
@@ -49,24 +49,24 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="邮箱" min-width="180" prop="email" />
-      <el-table-column label="操作" width="320">
+      <el-table-column :label="t('settings.users.colEmail')" min-width="180" prop="email" />
+      <el-table-column :label="t('settings.users.colActions')" width="320">
         <template #default="{ row }">
           <el-button link type="primary" size="small"
                      :disabled="isPrimaryRow(row)"
-                     :title="isPrimaryRow(row) ? 'primary 是平台开通时创建的根账号，不可修改' : ''"
-                     @click="openUserDialog(row)">编辑</el-button>
+                     :title="isPrimaryRow(row) ? t('settings.users.primaryNoEditHint') : ''"
+                     @click="openUserDialog(row)">{{ t('settings.users.edit') }}</el-button>
           <el-button link type="primary" size="small"
                      :disabled="isPrimaryRow(row)"
-                     :title="isPrimaryRow(row) ? 'primary 的配额只能由平台调整' : '为这个用户单独设置配额'"
-                     @click="openQuotaDialog(row)">配额</el-button>
+                     :title="isPrimaryRow(row) ? t('settings.users.primaryQuotaHint') : t('settings.users.quotaActionHint')"
+                     @click="openQuotaDialog(row)">{{ t('settings.users.quotaAction') }}</el-button>
           <el-button v-if="row.role === 'manage'" link type="warning" size="small"
-                     @click="openResetPwd(row)">重置密码</el-button>
+                     @click="openResetPwd(row)">{{ t('settings.users.resetPwd') }}</el-button>
           <el-button link :type="row.status === 'active' ? 'info' : 'success'" size="small"
                      :disabled="isPrimaryRow(row)"
-                     :title="isPrimaryRow(row) ? 'primary 是根账号，不可停用' : ''"
+                     :title="isPrimaryRow(row) ? t('settings.users.primaryDisableHint') : ''"
                      @click="toggleUserActive(row)">
-            {{ row.status === 'active' ? '停用' : '启用' }}
+            {{ row.status === 'active' ? t('settings.users.disable') : t('settings.users.enable') }}
           </el-button>
         </template>
       </el-table-column>
@@ -77,86 +77,88 @@
                :panel-style="sidePanel.styleFor(520)"
                @close="userDialogVisible = false" @resize="sidePanel.startResize">
       <el-form label-position="top">
-        <el-form-item label="登录名（创建后不可改）">
-          <el-input v-model="userForm.name" :disabled="!!userForm.id" placeholder="字母/数字/下划线/横线，≤64" />
+        <el-form-item :label="t('settings.users.loginLabel')">
+          <el-input v-model="userForm.name" :disabled="!!userForm.id" :placeholder="t('settings.users.loginPlaceholder')" />
         </el-form-item>
-        <el-form-item label="显示名">
+        <el-form-item :label="t('settings.users.displayName')">
           <el-input v-model="userForm.display_name" />
         </el-form-item>
-        <el-form-item label="邮箱">
+        <el-form-item :label="t('settings.users.email')">
           <el-input v-model="userForm.email" />
         </el-form-item>
-        <el-form-item label="手机号">
+        <el-form-item :label="t('settings.users.phone')">
           <el-input v-model="userForm.phone" />
         </el-form-item>
-        <el-form-item label="角色">
+        <el-form-item :label="t('settings.users.roleLabel')">
           <el-radio-group v-model="userForm.role">
-            <el-radio value="manage">管理用户（可登录控制台）</el-radio>
-            <el-radio value="service">服务用户（不可登录，仅 API 身份）</el-radio>
+            <el-radio value="manage">{{ t('settings.users.roleManageRadio') }}</el-radio>
+            <el-radio value="service">{{ t('settings.users.roleServiceRadio') }}</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="userForm.role === 'manage'" :label="userForm.id ? '密码（留空表示不改）' : '密码'">
-          <el-input v-model="userForm.password" type="password" show-password placeholder="至少 8 位" />
+        <el-form-item v-if="userForm.role === 'manage'"
+                      :label="userForm.id ? t('settings.users.passwordEditLabel') : t('settings.users.passwordLabel')">
+          <el-input v-model="userForm.password" type="password" show-password
+                    :placeholder="t('settings.users.passwordPlaceholder')" />
         </el-form-item>
-        <el-form-item v-if="userForm.id" label="状态">
+        <el-form-item v-if="userForm.id" :label="t('settings.users.statusLabel')">
           <el-select v-model="userForm.status" style="width:180px" popper-class="settings-select-popper">
-            <el-option label="正常" value="active" />
-            <el-option label="停用" value="disabled" />
-            <el-option label="锁定" value="locked" />
+            <el-option :label="t('settings.users.statusNormal')" value="active" />
+            <el-option :label="t('settings.users.statusDisabledOpt')" value="disabled" />
+            <el-option :label="t('settings.users.statusLockedOpt')" value="locked" />
           </el-select>
         </el-form-item>
         <div class="editor-tip">
-          服务用户不设密码（避免将来改成管理用户时“突然获得”登录能力）；改角色时后端会自动处理密码。
+          {{ t('settings.users.serviceUserTip') }}
         </div>
       </el-form>
       <template #footer>
-        <el-button @click="userDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="userSaving" @click="saveUser">保存</el-button>
+        <el-button @click="userDialogVisible = false">{{ t('settings.users.cancel') }}</el-button>
+        <el-button type="primary" :loading="userSaving" @click="saveUser">{{ t('settings.users.save') }}</el-button>
       </template>
     </SidePanel>
 
     <!-- 用户：重置密码 -->
     <SidePanel :visible="resetPwdVisible"
-               :title="`重置密码 · ${(resetPwdTarget && (resetPwdTarget.display_name || resetPwdTarget.name)) || ''}`"
+               :title="t('settings.users.resetPwdTitle', { name: resetPwdTargetName })"
                :panel-style="sidePanel.styleFor(420)"
                @close="resetPwdVisible = false" @resize="sidePanel.startResize">
-      <el-input v-model="resetPwdValue" type="password" show-password placeholder="新密码（至少 8 位）" @keyup.enter="submitResetPwd" />
+      <el-input v-model="resetPwdValue" type="password" show-password
+                :placeholder="t('settings.users.resetPwdPlaceholder')" @keyup.enter="submitResetPwd" />
       <template #footer>
-        <el-button @click="resetPwdVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitResetPwd">确定</el-button>
+        <el-button @click="resetPwdVisible = false">{{ t('settings.users.cancel') }}</el-button>
+        <el-button type="primary" @click="submitResetPwd">{{ t('settings.users.confirm') }}</el-button>
       </template>
     </SidePanel>
 
     <!-- 用户：单用户配额覆盖（会话数 / 单会话空间）。
          只写 user_quotas，不动 users；留空 = 跟随租户默认 -->
-    <SidePanel :visible="quotaVisible" title="用户配额"
+    <SidePanel :visible="quotaVisible" :title="t('settings.users.quotaPanelTitle')"
                :panel-style="sidePanel.styleFor(480)"
                @close="quotaVisible = false" @resize="sidePanel.startResize">
       <el-form label-position="top">
-        <el-form-item label="设置方式">
+        <el-form-item :label="t('settings.users.quotaModeLabel')">
           <el-radio-group v-model="quotaForm.mode">
-            <el-radio value="follow">跟随租户默认</el-radio>
-            <el-radio value="custom">自定义</el-radio>
+            <el-radio value="follow">{{ t('settings.users.modeFollow') }}</el-radio>
+            <el-radio value="custom">{{ t('settings.users.modeCustom') }}</el-radio>
           </el-radio-group>
         </el-form-item>
         <template v-if="quotaForm.mode === 'custom'">
-          <el-form-item label="会话数上限（个）">
+          <el-form-item :label="t('settings.users.sessionsLabel')">
             <el-input v-model="quotaForm.sessions"
-                      :placeholder="`留空 = 跟随租户（${quotaDefaults.sessionsText}）；-1 = 不限`" />
+                      :placeholder="t('settings.users.sessionsPlaceholder', { text: quotaDefaults.sessionsText })" />
           </el-form-item>
-          <el-form-item label="单会话空间上限（MiB）">
+          <el-form-item :label="t('settings.users.storageLabel')">
             <el-input v-model="quotaForm.storageMiB"
-                      :placeholder="`留空 = 跟随租户（${quotaDefaults.storageText}）；-1 = 不限`" />
+                      :placeholder="t('settings.users.storagePlaceholder', { text: quotaDefaults.storageText })" />
           </el-form-item>
         </template>
         <div class="quota-hint">
-          不得超过租户上限：会话 {{ quotaDefaults.sessionsText }} / 空间 {{ quotaDefaults.storageText }}。
-          任一框留空表示该项跟随租户；设为 0 表示该用户不能新建会话或写入文件。
+          {{ t('settings.users.quotaHint', { sessions: quotaDefaults.sessionsText, storage: quotaDefaults.storageText }) }}
         </div>
       </el-form>
       <template #footer>
-        <el-button @click="quotaVisible = false">取消</el-button>
-        <el-button type="primary" :loading="quotaSaving" @click="saveQuota">保存</el-button>
+        <el-button @click="quotaVisible = false">{{ t('settings.users.cancel') }}</el-button>
+        <el-button type="primary" :loading="quotaSaving" @click="saveQuota">{{ t('settings.users.save') }}</el-button>
       </template>
     </SidePanel>
   </div>
@@ -164,6 +166,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import apiConfig from '../../../config/api.js'
@@ -171,6 +174,7 @@ import { getToken } from '../../../utils/auth.js'
 import SidePanel from '../SidePanel.vue'
 import { useSidePanelContext } from '../useSidePanel.js'
 import { useUsers } from '../useUsers.js'
+import { formatError } from '../../../../locales'
 
 const props = defineProps({
   active: { type: Boolean, default: false }
@@ -179,14 +183,20 @@ const props = defineProps({
 const { users, usersLoading, userQuotaDefaults, loadUsers } = useUsers()
 const sidePanel = useSidePanelContext()
 
+const { t } = useI18n()
+
 // ===== 根账号保护 =====
 // 平台开通租户时创建的根账号（与后端 shared/tenants.PrimaryUserName 同值）：
 // 不可编辑、不可停用；删除接口本就不存在。重置密码仍可用。
 const PRIMARY_NAME = 'primary'
 const isPrimaryRow = (row) => !!row && row.name === PRIMARY_NAME
 
-const userStatusLabel = (s) =>
-  s === 'active' ? '正常' : s === 'locked' ? '已锁定' : s === 'disabled' ? '已停用' : (s || '-')
+const userStatusLabel = (s) => {
+  if (s === 'active') return t('settings.users.statusActive')
+  if (s === 'locked') return t('settings.users.statusLocked')
+  if (s === 'disabled') return t('settings.users.statusDisabled')
+  return s || '-'
+}
 
 // ===== 单用户配额（user_quotas 覆盖；无行 = 跟随租户） =====
 const MIB = 1024 * 1024
@@ -208,20 +218,26 @@ const quotaDefaults = computed(() => {
   const s = d.sessions ?? 50
   const b = d.session_storage_bytes ?? 0
   return {
-    sessionsText: s === -1 ? '不限' : `${s} 个`,
-    storageText: b === -1 ? '不限' : fmtBytes(b),
+    sessionsText: s === -1 ? t('settings.users.unlimited') : t('settings.users.countUnit', { n: s }),
+    storageText: b === -1 ? t('settings.users.unlimited') : fmtBytes(b),
   }
 })
 
+const quotaLimitText = (v) => (v === -1 ? t('settings.users.unlimited') : t('settings.users.countUnit', { n: v }))
+
 const quotaSessionsText = (row) =>
   row.max_sessions == null
-    ? `会话：跟随租户（${quotaDefaults.value.sessionsText}）`
-    : `会话：自定义 ${row.max_sessions === -1 ? '不限' : `${row.max_sessions} 个`}`
+    ? t('settings.users.sessionsFollow', { text: quotaDefaults.value.sessionsText })
+    : t('settings.users.sessionsCustom', { text: quotaLimitText(row.max_sessions) })
 
 const quotaStorageText = (row) =>
   row.max_session_storage_bytes == null
-    ? `空间：跟随租户（${quotaDefaults.value.storageText}）`
-    : `空间：自定义 ${row.max_session_storage_bytes === -1 ? '不限' : fmtBytes(row.max_session_storage_bytes)}`
+    ? t('settings.users.storageFollow', { text: quotaDefaults.value.storageText })
+    : t('settings.users.storageCustom', {
+      text: row.max_session_storage_bytes === -1
+        ? t('settings.users.unlimited')
+        : fmtBytes(row.max_session_storage_bytes)
+    })
 
 const quotaVisible = ref(false)
 const quotaSaving = ref(false)
@@ -230,7 +246,7 @@ const quotaForm = ref({ mode: 'follow', sessions: '', storageMiB: '' })
 
 const openQuotaDialog = (row) => {
   if (isPrimaryRow(row)) {
-    return ElMessage.warning('primary 是平台开通时创建的根账号，配额只能由平台调整')
+    return ElMessage.warning(t('settings.users.primaryQuotaOnly'))
   }
   quotaTarget.value = row
   const hasOverride = row.max_sessions != null || row.max_session_storage_bytes != null
@@ -256,16 +272,16 @@ const saveQuota = async () => {
     const sRaw = String(quotaForm.value.sessions ?? '').trim()
     const mRaw = String(quotaForm.value.storageMiB ?? '').trim()
     if (sRaw === '' && mRaw === '') {
-      return ElMessage.warning('自定义模式下至少填一项，或改回「跟随租户默认」')
+      return ElMessage.warning(t('settings.users.customAtLeastOne'))
     }
     if (sRaw !== '') {
       const n = Number(sRaw)
-      if (!Number.isInteger(n) || n < -1) return ElMessage.warning('会话数需为 ≥ -1 的整数')
+      if (!Number.isInteger(n) || n < -1) return ElMessage.warning(t('settings.users.sessionsInvalid'))
       body.max_sessions = n
     }
     if (mRaw !== '') {
       const n = Number(mRaw)
-      if (!Number.isInteger(n) || n < -1) return ElMessage.warning('空间需为 ≥ -1 的整数（MiB）')
+      if (!Number.isInteger(n) || n < -1) return ElMessage.warning(t('settings.users.storageInvalid'))
       body.max_session_storage_bytes = n === -1 ? -1 : n * MIB
     }
   }
@@ -278,12 +294,12 @@ const saveQuota = async () => {
       body: JSON.stringify(body)
     })
     const data = await resp.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '保存失败')
-    ElMessage.success('配额已更新')
+    if (data.code !== 200) throw new Error(formatError(data) || t('settings.users.saveFailed'))
+    ElMessage.success(t('settings.users.quotaSaved'))
     quotaVisible.value = false
     await loadUsers()
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('settings.users.saveFailed'))
   } finally {
     quotaSaving.value = false
   }
@@ -291,12 +307,18 @@ const saveQuota = async () => {
 
 // ===== 新建 / 编辑 =====
 const userDialogVisible = ref(false)
-const userDialogTitle = ref('新建用户')
 const userSaving = ref(false)
 const userForm = ref({ id: '', name: '', display_name: '', email: '', phone: '', role: 'manage', password: '', status: 'active' })
+// 标题跟着表单判断（有 id = 编辑）：做成 computed，切语言时才跟着变
+const userDialogTitle = computed(() =>
+  userForm.value.id ? t('settings.users.dialogEdit') : t('settings.users.dialogCreate'))
 const resetPwdVisible = ref(false)
 const resetPwdTarget = ref(null)
 const resetPwdValue = ref('')
+const resetPwdTargetName = computed(() => {
+  const row = resetPwdTarget.value
+  return row ? (row.display_name || row.name) : ''
+})
 
 // 两个面板加入父级的互斥集合（点外部关闭、拖宽共用同一套坐标）
 sidePanel.register(userDialogVisible)
@@ -309,8 +331,7 @@ watch(() => props.active, (active) => {
 }, { immediate: true })
 
 const openUserDialog = (row) => {
-  if (isPrimaryRow(row)) return ElMessage.warning('primary 是平台开通时创建的根账号，不可修改')
-  userDialogTitle.value = row ? '编辑用户' : '新建用户'
+  if (isPrimaryRow(row)) return ElMessage.warning(t('settings.users.primaryNoEdit'))
   userForm.value = row
     ? {
         id: row.id, name: row.name, display_name: row.display_name || '', email: row.email || '',
@@ -322,10 +343,10 @@ const openUserDialog = (row) => {
 
 const saveUser = async () => {
   const f = userForm.value
-  if (!f.name) return ElMessage.warning('请填写登录名')
-  if (f.id && f.name === PRIMARY_NAME) return ElMessage.warning('primary 是平台开通时创建的根账号，不可修改')
+  if (!f.name) return ElMessage.warning(t('settings.users.fillLogin'))
+  if (f.id && f.name === PRIMARY_NAME) return ElMessage.warning(t('settings.users.primaryNoEdit'))
   if (!f.id && f.role === 'manage' && (f.password || '').length < 8) {
-    return ElMessage.warning('管理用户密码至少 8 位')
+    return ElMessage.warning(t('settings.users.managePwdMin'))
   }
   const isCreate = !f.id
   userSaving.value = true
@@ -346,12 +367,15 @@ const saveUser = async () => {
       body: JSON.stringify(payload)
     })
     const data = await resp.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '保存失败')
-    ElMessage.success({ message: isCreate ? '用户已创建' : '用户已更新', duration: 800 })
+    if (data.code !== 200) throw new Error(formatError(data) || t('settings.users.saveFailed'))
+    ElMessage.success({
+      message: isCreate ? t('settings.users.userCreated') : t('settings.users.userUpdated'),
+      duration: 800
+    })
     userDialogVisible.value = false
     await loadUsers()
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('settings.users.saveFailed'))
   } finally {
     userSaving.value = false
   }
@@ -359,7 +383,7 @@ const saveUser = async () => {
 
 // 启停：整行字段一起提交（后端 PUT 要求 role / status 必填）
 const toggleUserActive = async (row) => {
-  if (isPrimaryRow(row)) return ElMessage.warning('primary 是平台开通时创建的根账号，不可停用/启用')
+  if (isPrimaryRow(row)) return ElMessage.warning(t('settings.users.primaryNoToggle'))
   const nextStatus = row.status === 'active' ? 'disabled' : 'active'
   try {
     const token = getToken()
@@ -372,11 +396,14 @@ const toggleUserActive = async (row) => {
       })
     })
     const data = await resp.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '操作失败')
-    ElMessage.success({ message: nextStatus === 'active' ? '已启用' : '已停用', duration: 800 })
+    if (data.code !== 200) throw new Error(formatError(data) || t('settings.users.opFailed'))
+    ElMessage.success({
+      message: nextStatus === 'active' ? t('settings.users.enabled') : t('settings.users.disabled'),
+      duration: 800
+    })
     await loadUsers()
   } catch (e) {
-    ElMessage.error(e.message || '操作失败')
+    ElMessage.error(e.message || t('settings.users.opFailed'))
   }
 }
 
@@ -388,7 +415,7 @@ const openResetPwd = (row) => {
 
 const submitResetPwd = async () => {
   const pw = resetPwdValue.value || ''
-  if (pw.length < 8) return ElMessage.warning('密码至少 8 位')
+  if (pw.length < 8) return ElMessage.warning(t('settings.users.pwdMin'))
   try {
     const token = getToken()
     const resp = await fetch(apiConfig.admin.users.password(resetPwdTarget.value.id), {
@@ -397,11 +424,11 @@ const submitResetPwd = async () => {
       body: JSON.stringify({ password: pw })
     })
     const data = await resp.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '重置失败')
-    ElMessage.success({ message: '密码已重置', duration: 800 })
+    if (data.code !== 200) throw new Error(formatError(data) || t('settings.users.resetFailed'))
+    ElMessage.success({ message: t('settings.users.pwdReset'), duration: 800 })
     resetPwdVisible.value = false
   } catch (e) {
-    ElMessage.error(e.message || '重置失败')
+    ElMessage.error(e.message || t('settings.users.resetFailed'))
   }
 }
 

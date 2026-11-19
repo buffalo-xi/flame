@@ -1,26 +1,26 @@
 <template>
   <div class="props-section">
     <div class="section-title">
-      <span>输出变量</span>
+      <span>{{ t('flow.outputVars.title') }}</span>
       <button v-if="!readonly" class="add-variable-icon-btn" ref="addOutputBtnRef" @click="toggleOutputDropdown">
         <el-icon><Plus /></el-icon>
       </button>
     </div>
 
     <div v-if="bindingConflict" class="binding-conflict-hint">
-      <code>content</code> 与 <code>reasoning_content</code> 同时绑定到 result，会把思考过程混进最终答案。
-      建议保留 content 的绑定，取消 reasoning_content 的绑定（reasoning_content 仍可作为输出变量供下游引用）。
+      <code>content</code>{{ t('flow.outputVars.conflict.p1') }}<code>reasoning_content</code>{{ t('flow.outputVars.conflict.p2') }}
+      {{ t('flow.outputVars.conflict.advice') }}
     </div>
 
     <div v-if="httpBodyBindingHint" class="binding-note">
-      <code>body</code> 只在 complete（非流式）模式写入；SSE 模式下 body 为空、绑定不会触发，
-      需要流式输出请用 handler 脚本写自定义 string 变量。
-      另外非 2xx 响应也会写入 body（节点仍判成功），如需按状态码分流请配合 handler 或 on_error。
+      <code>body</code>{{ t('flow.outputVars.httpBody.p1') }}
+      {{ t('flow.outputVars.httpBody.p2') }}
+      {{ t('flow.outputVars.httpBody.p3') }}
     </div>
 
     <div class="output-variables-cards">
       <div v-if="Object.keys(sortedOutputVariables).length === 0" class="output-empty-state">
-        <p>{{ readonly ? (targetId ? '该函数没有输出变量' : '请先选择目标函数') : '暂无输出变量' }}</p>
+        <p>{{ readonly ? (targetId ? t('flow.outputVars.emptyNoFunctionOutputs') : t('flow.outputVars.emptyNoTarget')) : t('flow.outputVars.emptyDefault') }}</p>
       </div>
 
       <div
@@ -40,7 +40,7 @@
           >
             <el-icon><Delete /></el-icon>
           </button>
-          <span v-if="isFixedVariable(key)" class="fixed-output-var-lock" title="固定变量"><el-icon><Lock /></el-icon></span>
+          <span v-if="isFixedVariable(key)" class="fixed-output-var-lock" :title="t('flow.outputVars.fixedVariable')"><el-icon><Lock /></el-icon></span>
           <template v-if="readonly || isFixedVariable(key)">
             <span class="output-variable-name-readonly">{{ key }}</span>
           </template>
@@ -51,7 +51,7 @@
               :data-variable-key="`output-${key}`"
               class="output-variable-name-input"
               @change="handleRenameOutputVariable(key, $event.target.value)"
-              placeholder="变量名"
+              :placeholder="t('flow.common.varName')"
             />
           </template>
         </div>
@@ -64,7 +64,7 @@
               type="text"
               :value="config.description"
               class="output-description-input"
-              placeholder="添加描述"
+              :placeholder="t('flow.common.addDescription')"
               @change="handleUpdateOutputVariable(key, 'description', $event.target.value)"
             />
           </template>
@@ -73,7 +73,7 @@
             class="output-binding-btn"
             :class="{ 'binding-active': config.binding }"
             @click="openBindingConfig(key)"
-            title="流式外发绑定"
+            :title="t('flow.outputVars.bindingTitle')"
           >
             <el-icon><Connection /></el-icon>
           </button>
@@ -84,16 +84,16 @@
     <Teleport to="body">
       <div v-if="showOutputDropdown" class="output-dropdown-overlay" @click="closeOutputDropdown">
         <div class="output-dropdown-menu" :style="outputDropdownStyle" @click.stop>
-          <div class="output-dropdown-item" @click="handleAddOutputVariable('string')"><span class="dropdown-icon icon-string-inline">S</span>字符串</div>
-          <div class="output-dropdown-item" @click="handleAddOutputVariable('number')"><span class="dropdown-icon icon-number-inline">N</span>数字</div>
-          <div class="output-dropdown-item" @click="handleAddOutputVariable('boolean')"><span class="dropdown-icon icon-boolean-inline">B</span>布尔值</div>
-          <div class="output-dropdown-item" @click="handleAddOutputVariable('object')"><span class="dropdown-icon icon-object-inline">O</span>对象</div>
+          <div class="output-dropdown-item" @click="handleAddOutputVariable('string')"><span class="dropdown-icon icon-string-inline">S</span>{{ t('flow.typeOptions.string') }}</div>
+          <div class="output-dropdown-item" @click="handleAddOutputVariable('number')"><span class="dropdown-icon icon-number-inline">N</span>{{ t('flow.typeOptions.number') }}</div>
+          <div class="output-dropdown-item" @click="handleAddOutputVariable('boolean')"><span class="dropdown-icon icon-boolean-inline">B</span>{{ t('flow.typeOptions.boolean') }}</div>
+          <div class="output-dropdown-item" @click="handleAddOutputVariable('object')"><span class="dropdown-icon icon-object-inline">O</span>{{ t('flow.typeOptions.object') }}</div>
           <div class="output-dropdown-divider"></div>
-          <div class="output-dropdown-item" @click="handleAddOutputVariable('array[string]')"><span class="dropdown-icon icon-string-array-inline">S</span>字符串数组</div>
-          <div class="output-dropdown-item" @click="handleAddOutputVariable('array[number]')"><span class="dropdown-icon icon-number-array-inline">N</span>数字数组</div>
-          <div class="output-dropdown-item" @click="handleAddOutputVariable('array[boolean]')"><span class="dropdown-icon icon-boolean-array-inline">B</span>布尔数组</div>
+          <div class="output-dropdown-item" @click="handleAddOutputVariable('array[string]')"><span class="dropdown-icon icon-string-array-inline">S</span>{{ t('flow.typeOptions.arrayString') }}</div>
+          <div class="output-dropdown-item" @click="handleAddOutputVariable('array[number]')"><span class="dropdown-icon icon-number-array-inline">N</span>{{ t('flow.typeOptions.arrayNumber') }}</div>
+          <div class="output-dropdown-item" @click="handleAddOutputVariable('array[boolean]')"><span class="dropdown-icon icon-boolean-array-inline">B</span>{{ t('flow.typeOptions.arrayBoolean') }}</div>
           <div class="output-dropdown-divider"></div>
-          <div class="output-dropdown-item" @click="handleAddOutputVariable('array[object]')"><span class="dropdown-icon icon-object-array-inline">O</span>对象数组</div>
+          <div class="output-dropdown-item" @click="handleAddOutputVariable('array[object]')"><span class="dropdown-icon icon-object-array-inline">O</span>{{ t('flow.typeOptions.arrayObject') }}</div>
         </div>
       </div>
     </Teleport>
@@ -105,6 +105,9 @@ import { ref, watch, computed, inject, onMounted, onBeforeUnmount } from 'vue'
 import { Plus, Delete, Connection, Lock } from '@element-plus/icons-vue'
 import { getDataTypeIcon, getDataTypeIconClass, getDataTypeLabel } from './dataTypeBadge.js'
 import { useEscClose } from '../../../composables/useEscClose'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

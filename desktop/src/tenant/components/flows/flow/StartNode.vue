@@ -2,7 +2,7 @@
   <div class="start-node" :class="{ 'selected': isSelected }" ref="nodeRef" @click="handleNodeClick">
     <div class="node-content">
       <div class="icon-wrapper icon-start"><el-icon><Timer /></el-icon></div>
-      <div class="node-label">{{ data.label }}</div>
+      <div class="node-label">{{ data.label || t('flow.node.defaultLabel.start') }}</div>
     </div>
     <Handle type="source" position="right" :id="'source' + id + 'right'" class="custom-handle" />
     <Handle type="source" position="bottom" :id="'source' + id + 'bottom'" class="custom-handle" />
@@ -14,11 +14,14 @@
 import { ref, computed, nextTick, onMounted, onUnmounted, watch, inject } from 'vue'
 import { Timer } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {
     type: Object,
-    default: () => ({ label: '开始' })
+    default: () => ({})
   },
   id: {
     type: String,

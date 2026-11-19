@@ -17,12 +17,12 @@
           <span class="wb-tab-title">{{ t.title }}</span>
           <el-icon v-if="t.closable" class="wb-tab-close" @click.stop="close(t.id)"><Close /></el-icon>
         </div>
-        <button class="wb-tab-add" title="新建标签" @click="newTab">
+        <button class="wb-tab-add" :title="t('workbench.tabNew')" @click="newTab">
           <el-icon><Plus /></el-icon>
         </button>
       </div>
       <!-- 关闭整个工作台（对应会话工具的 ×）；标签保留，下次点顶栏「工作台」还能回来 -->
-      <button class="wb-close" title="关闭工作台" @click="closePanel">
+      <button class="wb-close" :title="t('workbench.closePanel')" @click="closePanel">
         <el-icon><Close /></el-icon>
       </button>
     </div>
@@ -31,19 +31,19 @@
     <div class="wb-body">
       <!-- 启动页：新标签的若干选项 -->
       <div v-if="active && active.type === 'home'" class="wb-home">
-        <div class="wb-home-title">新建标签</div>
+        <div class="wb-home-title">{{ t('workbench.tabNew') }}</div>
         <div class="wb-home-grid">
           <button class="wb-opt" @click="openWorkspace">
             <el-icon class="wb-opt-icon"><FolderOpened /></el-icon>
-            <span>打开工作区</span>
+            <span>{{ t('workbench.openWorkspace') }}</span>
           </button>
           <button class="wb-opt" @click="openRecentFiles">
             <el-icon class="wb-opt-icon"><Document /></el-icon>
-            <span>新生成的文件</span>
+            <span>{{ t('workbench.recentFiles') }}</span>
           </button>
           <button class="wb-opt" @click="openBrowser">
             <el-icon class="wb-opt-icon"><Monitor /></el-icon>
-            <span>打开浏览器</span>
+            <span>{{ t('workbench.openBrowser') }}</span>
           </button>
         </div>
       </div>
@@ -59,8 +59,8 @@
           <div class="wb-ws-bar">
             <!-- 根目录单独做成胶囊按钮：原来是一个 "/" 字符，点击目标只有几像素宽 -->
             <button class="wb-ws-root" :class="{ active: !wsSegs.length }"
-                    title="回到根目录" @click="wsOpen('')">
-              <el-icon><HomeFilled /></el-icon><span>根目录</span>
+                    :title="t('workbench.root')" @click="wsOpen('')">
+              <el-icon><HomeFilled /></el-icon><span>{{ t('workbench.root') }}</span>
             </button>
             <template v-for="(seg, i) in wsSegs" :key="i">
               <span class="wb-ws-sep">/</span>
@@ -71,16 +71,16 @@
             <span class="wb-ws-actions">
               <!-- 会话空间用量：只读计数（不扫目录），接近上限变红 -->
               <span v-if="wsUsageText" class="wb-ws-quota" :class="{ warn: wsUsagePct >= 90 }"
-                    :title="`本次会话空间占用 ${wsUsageText}`">{{ wsUsageText }}</span>
+                    :title="t('workbench.usageTitle', { text: wsUsageText })">{{ wsUsageText }}</span>
               <!-- 新建：落点同样是当前浏览的目录；名字里带 / 就是多级子目录（后端逐级建） -->
               <el-dropdown class="wb-ws-new" trigger="click" :disabled="wsSelectMode"
                            @command="onWsNewCommand">
                 <button class="wb-ws-selbtn" :disabled="wsSelectMode"
-                        :title="wsPath ? `在 /${wsPath} 下新建` : '在根目录新建'">新建</button>
+                        :title="wsPath ? t('workbench.newIn', { path: wsPath }) : t('workbench.newInRoot')">{{ t('workbench.newBtn') }}</button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="dir">新建文件夹</el-dropdown-item>
-                    <el-dropdown-item command="file">新建文件</el-dropdown-item>
+                    <el-dropdown-item command="dir">{{ t('workbench.newDir') }}</el-dropdown-item>
+                    <el-dropdown-item command="file">{{ t('workbench.newFile') }}</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -88,32 +88,32 @@
               <input ref="wsFileInputRef" type="file" multiple class="wb-ws-fileinput"
                      @change="onWsFilesPicked" />
               <button class="wb-ws-selbtn" :disabled="wsUploading"
-                      :title="wsPath ? `上传到 /${wsPath}` : '上传到根目录'"
-                      @click="pickWsFiles">{{ wsUploading ? '上传中…' : '上传' }}</button>
+                      :title="wsPath ? t('workbench.uploadTo', { path: wsPath }) : t('workbench.uploadToRoot')"
+                      @click="pickWsFiles">{{ wsUploading ? t('workbench.uploading') : t('workbench.upload') }}</button>
               <!-- 多选：产物清理常是一次删好几个，单条删太慢 -->
               <button class="wb-ws-selbtn" :class="{ active: wsSelectMode }"
-                      :title="wsSelectMode ? '退出多选' : '多选删除'"
-                      @click="toggleWsSelect">{{ wsSelectMode ? '取消' : '多选' }}</button>
+                      :title="wsSelectMode ? t('workbench.exitSelect') : t('workbench.selectDelete')"
+                      @click="toggleWsSelect">{{ wsSelectMode ? t('workbench.cancelSelect') : t('workbench.multiSelect') }}</button>
               <!-- 一键清空：清的是当前浏览的目录（在根目录就是整个工作区）；空目录 / 多选态下不显示 -->
               <button v-if="wsEntries.length" class="wb-ws-selbtn wb-ws-clear"
                       :disabled="wsClearing || wsSelectMode"
-                      :title="wsPath ? `删除 /${wsPath} 下的全部内容` : '删除工作区的全部内容'"
-                      @click="wsClearAll">{{ wsClearing ? '清空中…' : '清空' }}</button>
-              <el-icon v-if="wsSegs.length" class="wb-ws-up" title="上一级" @click="wsUp()"><Back /></el-icon>
-              <el-icon class="wb-ws-refresh" title="刷新" @click="wsList()"><Refresh /></el-icon>
+                      :title="wsPath ? t('workbench.clearUnder', { path: wsPath }) : t('workbench.clearAllWorkspace')"
+                      @click="wsClearAll">{{ wsClearing ? t('workbench.clearing') : t('workbench.clear') }}</button>
+              <el-icon v-if="wsSegs.length" class="wb-ws-up" :title="t('workbench.up')" @click="wsUp()"><Back /></el-icon>
+              <el-icon class="wb-ws-refresh" :title="t('workbench.refresh')" @click="wsList()"><Refresh /></el-icon>
             </span>
           </div>
           <!-- 拖拽中：把落点写出来，别让人靠猜 -->
           <div v-if="wsDragActive" class="wb-ws-dropbar">
-            释放以上传到 {{ wsPath ? '/' + wsPath : '根目录' }}
+            {{ t('workbench.dropHint', { where: wsPath ? '/' + wsPath : t('workbench.root') }) }}
           </div>
           <!-- 多选操作条：只在多选态出现，全选 / 计数 / 删除一行说完 -->
           <div v-if="wsSelectMode" class="wb-ws-selbar">
             <el-checkbox class="wb-ws-selall" :model-value="wsAllSelected"
-                         :indeterminate="wsSomeSelected" @change="toggleWsSelectAll">全选</el-checkbox>
-            <span class="wb-ws-selcount">已选 {{ wsSelected.length }} 项</span>
+                         :indeterminate="wsSomeSelected" @change="toggleWsSelectAll">{{ t('workbench.selectAll') }}</el-checkbox>
+            <span class="wb-ws-selcount">{{ t('workbench.selectedCount', { n: wsSelected.length }) }}</span>
             <el-button size="small" type="danger" plain
-                       :disabled="!wsSelected.length" @click="wsRemoveSelected">删除</el-button>
+                       :disabled="!wsSelected.length" @click="wsRemoveSelected">{{ t('workbench.delete') }}</el-button>
           </div>
           <!-- 拖拽落点只挂在列表容器上：挂整页的话，从桌面拖个文件划过工作区就会误传 -->
           <div ref="wsListRef" class="wb-ws-list" :class="{ 'drag-over': wsDragActive }"
@@ -138,41 +138,43 @@
               <el-checkbox v-if="wsSelectMode" class="wb-ws-check" :model-value="isWsSelected(e.path)" />
               <el-icon :style="{ color: e.color }"><component :is="e.icon" /></el-icon>
               <span class="wb-ws-name">{{ e.name }}</span>
-              <span class="wb-ws-size">{{ e.is_dir ? '文件夹' : fmtSize(e.size) }}</span>
+              <span class="wb-ws-size">{{ e.is_dir ? t('workbench.folder') : fmtSize(e.size) }}</span>
               <span class="wb-ws-time" :title="fmtWsTimeFull(e.mod_time)">{{ fmtWsTime(e.mod_time) }}</span>
               <!-- 重命名与删除：.stop 是必须的 —— 父层的点击是「进目录 / 开预览」 -->
-              <el-icon v-if="!wsSelectMode" class="wb-ws-edit" :title="e.is_dir ? '重命名目录' : '重命名文件'"
+              <el-icon v-if="!wsSelectMode" class="wb-ws-edit"
+                       :title="e.is_dir ? t('workbench.renameDir') : t('workbench.renameFile')"
                        @click.stop="wsRename(e)"><EditPen /></el-icon>
-              <el-icon v-if="!wsSelectMode" class="wb-ws-del" :title="e.is_dir ? '删除目录' : '删除文件'"
+              <el-icon v-if="!wsSelectMode" class="wb-ws-del"
+                       :title="e.is_dir ? t('workbench.deleteDir') : t('workbench.deleteFile')"
                        @click.stop="wsRemove(e)"><Delete /></el-icon>
             </div>
-            <div v-if="wsEntries.length === 0" class="wb-ws-empty">这个目录还没有文件</div>
+            <div v-if="wsEntries.length === 0" class="wb-ws-empty">{{ t('workbench.emptyDir') }}</div>
           </div>
         </template>
         <div v-else class="wb-tip">
-          <p>还没有进行中的会话</p>
-          <p class="wb-tip-sub">先与智能体对话，这里会显示本次会话产生的文件</p>
+          <p>{{ t('workbench.noSession') }}</p>
+          <p class="wb-tip-sub">{{ t('workbench.noSessionWsSub') }}</p>
         </div>
         <!-- 新建文件：名字 + 初始内容。内容必须在这里写 —— 文件标签是只读的（不提供就地编辑），
              不带内容的话新建出来的就只是个空壳。对话框放在 v-else 之后：v-else 必须紧邻上面的模板 -->
-        <el-dialog v-model="wsNewOpen" title="新建文件" width="520px" class="wb-newdlg"
+        <el-dialog v-model="wsNewOpen" :title="t('workbench.newFile')" width="520px" class="wb-newdlg"
                    :close-on-click-modal="false" @closed="wsNewContent = ''">
           <div class="wb-newrow">
-            <span class="wb-newlabel">路径</span>
-            <el-input v-model="wsNewName" placeholder="如 notes.md，或 docs/notes.md"
+            <span class="wb-newlabel">{{ t('workbench.pathLabel') }}</span>
+            <el-input v-model="wsNewName" :placeholder="t('workbench.pathPlaceholder')"
                       @keyup.enter="wsCreateFile" />
           </div>
           <div class="wb-newhint">
-            新建于 {{ wsPath ? '/' + wsPath : '根目录' }}；名字里带 / 表示多级子目录
+            {{ t('workbench.newFileHint', { where: wsPath ? '/' + wsPath : t('workbench.root') }) }}
           </div>
           <div class="wb-newrow">
-            <span class="wb-newlabel">内容</span>
+            <span class="wb-newlabel">{{ t('workbench.contentLabel') }}</span>
             <el-input v-model="wsNewContent" type="textarea" :rows="10"
-                      placeholder="可留空（上限 2 MB；更大的内容请用上传）" />
+                      :placeholder="t('workbench.contentPlaceholder')" />
           </div>
           <template #footer>
-            <el-button @click="wsNewOpen = false">取消</el-button>
-            <el-button type="primary" :loading="wsNewSaving" @click="wsCreateFile">创建</el-button>
+            <el-button @click="wsNewOpen = false">{{ t('workbench.cancel') }}</el-button>
+            <el-button type="primary" :loading="wsNewSaving" @click="wsCreateFile">{{ t('workbench.create') }}</el-button>
           </template>
         </el-dialog>
       </div>
@@ -185,16 +187,16 @@
             <!-- 仅 Markdown：渲染预览 ⇄ 源码 -->
             <el-icon v-if="active.payload.kind === 'markdown'" class="wb-wsfile-toggle"
                      :class="{ active: active.payload.preview }"
-                     :title="active.payload.preview ? '显示源码' : '按 Markdown 预览'"
+                     :title="active.payload.preview ? t('workbench.showSource') : t('workbench.showPreview')"
                      @click="active.payload.preview = !active.payload.preview"><View /></el-icon>
-            <el-icon class="wb-wsfile-refresh" title="重新读取" @click="loadWsFileTab(active)"><Refresh /></el-icon>
-            <el-icon class="wb-wsfile-download" title="下载" @click="downloadWsFile(active)"><Download /></el-icon>
+            <el-icon class="wb-wsfile-refresh" :title="t('workbench.reload')" @click="loadWsFileTab(active)"><Refresh /></el-icon>
+            <el-icon class="wb-wsfile-download" :title="t('workbench.download')" @click="downloadWsFile(active)"><Download /></el-icon>
           </span>
         </div>
-        <div v-if="active.payload.loading" class="wb-tip wb-wsfile-tip"><p>读取中…</p></div>
+        <div v-if="active.payload.loading" class="wb-tip wb-wsfile-tip"><p>{{ t('workbench.loading') }}</p></div>
         <div v-else-if="active.payload.error" class="wb-tip wb-wsfile-tip">
           <p>{{ active.payload.error }}</p>
-          <p class="wb-tip-sub">可以下载后用本地应用打开</p>
+          <p class="wb-tip-sub">{{ t('workbench.downloadToOpen') }}</p>
         </div>
         <!-- 图片 / PDF：用 blob URL 内联预览（token 走 fetch 头，不拼进 URL） -->
         <img v-else-if="active.payload.kind === 'image'" class="wb-wsfile-image"
@@ -205,8 +207,8 @@
              只有历史标签、或将来新增的入口才会落到这里 -->
         <div v-else-if="active.payload.kind === 'binary'" class="wb-tip wb-wsfile-tip">
           <p>{{ active.payload.name }}</p>
-          <p class="wb-tip-sub">该类型不支持在线预览，请下载后用本地应用打开</p>
-          <el-button size="small" type="primary" plain @click="downloadWsFile(active)">下载文件</el-button>
+          <p class="wb-tip-sub">{{ t('workbench.binaryUnsupported') }}</p>
+          <el-button size="small" type="primary" plain @click="downloadWsFile(active)">{{ t('workbench.downloadFile') }}</el-button>
         </div>
         <!-- Markdown 渲染：内容经 renderMarkdown 消毒后注入（与智能体编辑器的 md 预览同一套） -->
         <div v-else-if="active.payload.kind === 'markdown' && active.payload.preview"
@@ -216,8 +218,8 @@
 
       <!-- 文件：待接入 FileViewer（第一步先占位） -->
       <div v-else-if="active && active.type === 'file'" class="wb-tip">
-        <p>文件标签：{{ active.payload && active.payload.path }}</p>
-        <p class="wb-tip-sub">文件查看器（FileViewer）将在下一步接入</p>
+        <p>{{ t('workbench.fileTab', { path: active.payload && active.payload.path }) }}</p>
+        <p class="wb-tip-sub">{{ t('workbench.fileViewerNext') }}</p>
       </div>
 
       <!-- 最近改动/生成的文件：不分目录，按修改时间倒序摊平，点一下开文件标签 -->
@@ -225,13 +227,13 @@
            class="wb-ws">
         <template v-if="sessionContext.sessionId">
           <div class="wb-ws-bar">
-            <span class="wb-recent-title">本会话最近改动 / 生成的文件</span>
+            <span class="wb-recent-title">{{ t('workbench.recentTitle') }}</span>
             <span class="wb-ws-actions">
               <!-- 一键清空：删的是「当前列表里的这些文件」（后端只回最近 30 条，更深目录的文件不在这里） -->
               <button v-if="recentFiles.length" class="wb-ws-selbtn wb-ws-clear"
-                      :disabled="wsClearing" title="删除列表中的全部文件"
-                      @click="wsClearRecent">{{ wsClearing ? '清空中…' : '清空' }}</button>
-              <el-icon class="wb-ws-refresh" title="刷新" @click="loadRecent()"><Refresh /></el-icon>
+                      :disabled="wsClearing" :title="t('workbench.deleteAllInList')"
+                      @click="wsClearRecent">{{ wsClearing ? t('workbench.clearing') : t('workbench.clear') }}</button>
+              <el-icon class="wb-ws-refresh" :title="t('workbench.refresh')" @click="loadRecent()"><Refresh /></el-icon>
             </span>
           </div>
           <div class="wb-ws-list">
@@ -252,28 +254,28 @@
               </span>
               <span class="wb-ws-size">{{ fmtSize(f.size) }}</span>
               <span class="wb-ws-time" :title="fmtWsTimeFull(f.mod_time)">{{ fmtWsTime(f.mod_time) }}</span>
-              <el-icon class="wb-ws-edit" title="重命名文件" @click.stop="wsRename(f, true)"><EditPen /></el-icon>
-              <el-icon class="wb-ws-del" title="删除文件" @click.stop="wsRemoveRecent(f)"><Delete /></el-icon>
+              <el-icon class="wb-ws-edit" :title="t('workbench.renameFile')" @click.stop="wsRename(f, true)"><EditPen /></el-icon>
+              <el-icon class="wb-ws-del" :title="t('workbench.deleteFile')" @click.stop="wsRemoveRecent(f)"><Delete /></el-icon>
             </div>
-            <div v-if="recentLoading" class="wb-ws-empty">加载中…</div>
-            <div v-else-if="!recentFiles.length" class="wb-ws-empty">这个会话还没有生成文件</div>
+            <div v-if="recentLoading" class="wb-ws-empty">{{ t('workbench.recentLoading') }}</div>
+            <div v-else-if="!recentFiles.length" class="wb-ws-empty">{{ t('workbench.recentEmpty') }}</div>
           </div>
         </template>
         <div v-else class="wb-tip">
-          <p>还没有进行中的会话</p>
-          <p class="wb-tip-sub">先与智能体对话，这里会列出本次会话产生或改动过的文件</p>
+          <p>{{ t('workbench.noSession') }}</p>
+          <p class="wb-tip-sub">{{ t('workbench.noSessionRecentSub') }}</p>
         </div>
       </div>
 
       <!-- 其它类型的占位（workspace / custom） -->
       <div v-else-if="active" class="wb-tip">
         <p>{{ active.title }}</p>
-        <p class="wb-tip-sub">标签类型「{{ active.type }}」尚未实现</p>
+        <p class="wb-tip-sub">{{ t('workbench.notImplemented', { type: active.type }) }}</p>
       </div>
 
       <div v-else class="wb-tip">
-        <p>没有打开的标签</p>
-        <p class="wb-tip-sub">点标签条右侧的「+」新建一个标签</p>
+        <p>{{ t('workbench.noTabs') }}</p>
+        <p class="wb-tip-sub">{{ t('workbench.noTabsHint') }}</p>
       </div>
     </div>
   </div>
@@ -281,6 +283,7 @@
 
 <script setup>
 import { computed, inject, nextTick, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Close, Document, DocumentCopy, Folder, FolderOpened, Monitor, Refresh,
@@ -290,11 +293,15 @@ import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import { renderMarkdown } from '../utils/markdown.js'
 import { sessionContext } from '../store/sessionContext.js'
+import { formatError } from '../../locales'
+import { formatDateTime } from '@/utils/datetime.js'
 
 // 分割线侧：会话可见时贴左侧（对话区↔工作台）；工作台单独存在时贴右侧（工作台↔内容区）
 defineProps({
   dividerSide: { type: String, default: 'left' }, // 'left' | 'right'
 })
+
+const { t, locale } = useI18n()
 
 // 由 MainWindow provide；见 MainWindow.vue 的 provide('workbench', ...)
 const wb = inject('workbench')
@@ -334,7 +341,7 @@ const iconOf = (t) => ({
   custom: Document,
 }[t.type] || Document)
 
-const openWorkspace = () => open({ type: 'workspace', title: '工作区' })
+const openWorkspace = () => open({ type: 'workspace', title: t('workbench.workspaceTabTitle') })
 
 // ===== 工作区面板：浏览当前会话的运行场地（users/{uid}/sessions/{sid}/） =====
 // 可读 / 可下载 / 可删；刻意不提供新建与就地编辑 —— 这个目录归 agent 所有，
@@ -405,10 +412,7 @@ const fmtWsTime = (v) => {
     ? `${md} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
     : `${d.getFullYear()}-${md}`
 }
-const fmtWsTimeFull = (v) => {
-  const d = wsModTime(v)
-  return d ? d.toLocaleString() : ''
-}
+const fmtWsTimeFull = (v) => (wsModTime(v) ? formatDateTime(v) : '')
 
 // 按后缀决定图标与颜色：工作区里一眼分辨；认不出的一律中性灰的 Document
 const FILE_TYPES = [
@@ -432,7 +436,7 @@ const decorateWsEntries = (list) =>
     })
     .sort((a, b) => {
       if (!!a.is_dir !== !!b.is_dir) return a.is_dir ? -1 : 1
-      return String(a.name).localeCompare(String(b.name), 'zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+      return String(a.name).localeCompare(String(b.name), locale.value, { numeric: true, sensitivity: 'base' })
     })
 
 // ===== 会话空间用量 =====
@@ -478,9 +482,13 @@ const loadWsUsage = async () => {
 const showQuotaHint = async (msg) => {
   try {
     await ElMessageBox.confirm(
-      `${msg}\n\n可以先清空当前目录里的旧产物再重试。`,
-      '会话空间不足',
-      { type: 'warning', confirmButtonText: '清空当前目录', cancelButtonText: '稍后处理' }
+      t('workbench.quotaMsg', { msg }),
+      t('workbench.quotaTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('workbench.quotaClear'),
+        cancelButtonText: t('workbench.quotaLater')
+      }
     )
   } catch { return }
   await wsClearAll()
@@ -550,7 +558,7 @@ const ensureWorkspaceTab = () => {
     return exist.id
   }
   // 固定 id：复用已有工作区标签，点产物不该每次都多开一个工作区页
-  return open({ id: 'workspace:main', type: 'workspace', title: '工作区' })
+  return open({ id: 'workspace:main', type: 'workspace', title: t('workbench.workspaceTabTitle') })
 }
 
 watch(() => sessionContext.openNonce, () => {
@@ -595,12 +603,16 @@ const closeWsTabsUnder = (paths) => {
 const wsRemove = async (e) => {
   const { agentId, sessionId } = sessionContext
   if (!agentId || !sessionId) return
-  const kind = e.is_dir ? '目录（含其中全部文件）' : '文件'
+  const kind = e.is_dir ? t('workbench.deleteKindDir') : t('workbench.deleteKindFile')
   try {
     await ElMessageBox.confirm(
-      `确定删除${kind}「/${e.path}」？此操作不可恢复。`,
-      '删除确认',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      t('workbench.deleteConfirm', { kind, path: e.path }),
+      t('workbench.confirmDeleteTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('workbench.delete'),
+        cancelButtonText: t('workbench.cancel')
+      }
     )
   } catch { return }
   const token = getToken()
@@ -609,12 +621,12 @@ const wsRemove = async (e) => {
     const url = adminApi.agents.sessionFile(agentId, sessionId, e.path)
     const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
     const data = await res.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '删除失败')
-    ElMessage.success(`已删除 /${e.path}`)
+    if (data.code !== 200) throw new Error(formatError(data) || t('workbench.deleteFailed'))
+    ElMessage.success(t('workbench.deleted', { path: e.path }))
     closeWsTabsUnder([e.path])
     await wsList()
   } catch (err) {
-    ElMessage.error(err.message || '删除失败')
+    ElMessage.error(err.message || t('workbench.deleteFailed'))
   }
 }
 
@@ -627,20 +639,24 @@ const wsRename = async (e, fromRecent = false) => {
   if (!agentId || !sessionId) return
   let name = ''
   try {
-    const { value } = await ElMessageBox.prompt(`重命名「${e.path}」`, '重命名', {
-      inputValue: e.name,
-      inputPlaceholder: '新名字',
-      confirmButtonText: '重命名',
-      cancelButtonText: '取消',
-      inputValidator: (v) => {
-        const s = String(v || '').trim()
-        if (!s) return '请输入名字'
-        if (s.includes('/')) return '不能含 /（这里只改名，不换目录）'
-        if (s.startsWith('.')) return '不能以 . 开头（会被列表隐藏）'
-        if ([...s].length > 120) return '最多 120 个字符'
-        return true
+    const { value } = await ElMessageBox.prompt(
+      t('workbench.renameTitle', { path: e.path }),
+      t('workbench.rename'),
+      {
+        inputValue: e.name,
+        inputPlaceholder: t('workbench.renamePlaceholder'),
+        confirmButtonText: t('workbench.rename'),
+        cancelButtonText: t('workbench.cancel'),
+        inputValidator: (v) => {
+          const s = String(v || '').trim()
+          if (!s) return t('workbench.nameRequired')
+          if (s.includes('/')) return t('workbench.invalidSlash')
+          if (s.startsWith('.')) return t('workbench.invalidDot')
+          if ([...s].length > 120) return t('workbench.invalidLong')
+          return true
+        }
       }
-    })
+    )
     name = String(value || '').trim()
   } catch { return }
   if (name === e.name) return
@@ -655,8 +671,8 @@ const wsRename = async (e, fromRecent = false) => {
       body: JSON.stringify({ path: e.path, new_path: newPath })
     })
     const data = await res.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '重命名失败')
-    ElMessage.success(`已重命名为 /${newPath}`)
+    if (data.code !== 200) throw new Error(formatError(data) || t('workbench.renameFailed'))
+    ElMessage.success(t('workbench.renamed', { path: newPath }))
     // 旧路径上的一切都作废：预览标签是按路径绑定的，拖出缓存也按路径存
     closeWsTabsUnder([e.path])
     wsDataCache.delete(e.path)
@@ -664,7 +680,7 @@ const wsRename = async (e, fromRecent = false) => {
     if (fromRecent) await loadRecent()
     await wsList()
   } catch (err) {
-    ElMessage.error(err.message || '重命名失败')
+    ElMessage.error(err.message || t('workbench.renameFailed'))
   }
 }
 
@@ -681,8 +697,15 @@ const wsRemoveRecent = async (f) => {
   const { agentId, sessionId } = sessionContext
   if (!agentId || !sessionId) return
   try {
-    await ElMessageBox.confirm(`确定删除文件「/${f.path}」？此操作不可恢复。`, '删除确认',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+    await ElMessageBox.confirm(
+      t('workbench.deleteFileConfirm', { path: f.path }),
+      t('workbench.confirmDeleteTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('workbench.delete'),
+        cancelButtonText: t('workbench.cancel')
+      }
+    )
   } catch { return }
   const token = getToken()
   if (!token) return
@@ -690,8 +713,8 @@ const wsRemoveRecent = async (f) => {
     const url = adminApi.agents.sessionFile(agentId, sessionId, f.path)
     const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
     const data = await res.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '删除失败')
-    ElMessage.success(`已删除 /${f.path}`)
+    if (data.code !== 200) throw new Error(formatError(data) || t('workbench.deleteFailed'))
+    ElMessage.success(t('workbench.deleted', { path: f.path }))
     // 已打开的预览标签也要关掉，否则留一个点开是空的页
     closeWsTabsUnder([f.path])
     wsDataCache.delete(f.path)
@@ -700,7 +723,7 @@ const wsRemoveRecent = async (f) => {
     // 工作区面板可能正停在同一个目录：列表非空才刷新，空目录本来就没有残留
     if (wsEntries.value.length) await wsList()
   } catch (err) {
-    ElMessage.error(err.message || '删除失败')
+    ElMessage.error(err.message || t('workbench.deleteFailed'))
   }
 }
 
@@ -713,9 +736,13 @@ const wsClearRecent = async () => {
   if (!paths.length) return
   try {
     await ElMessageBox.confirm(
-      `确定删除列表中的全部 ${paths.length} 个文件？此操作不可恢复。`,
-      '清空确认',
-      { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }
+      t('workbench.clearRecentConfirm', { n: paths.length }),
+      t('workbench.clearConfirmTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('workbench.clear'),
+        cancelButtonText: t('workbench.cancel')
+      }
     )
   } catch { return }
   const token = getToken()
@@ -746,9 +773,11 @@ const wsClearRecent = async () => {
   // 工作区面板可能正停在同一个目录：列表非空才刷新，空目录本来就没有残留
   if (wsEntries.value.length) await wsList()
   if (failed.length) {
-    ElMessage.error(`${oks.length} 个已删除，${failed.length} 个失败：${failed.join('、')}`)
+    ElMessage.error(t('workbench.clearPartial', {
+      ok: oks.length, failed: failed.length, list: failed.join(t('common.listJoiner'))
+    }))
   } else {
-    ElMessage.success(`已清空 ${oks.length} 个文件`)
+    ElMessage.success(t('workbench.clearedFiles', { n: oks.length }))
   }
 }
 
@@ -759,9 +788,13 @@ const wsRemoveSelected = async () => {
   const paths = [...wsSelected.value]
   try {
     await ElMessageBox.confirm(
-      `确定删除选中的 ${paths.length} 项？目录会连同其中全部文件一起删掉，此操作不可恢复。`,
-      '批量删除确认',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      t('workbench.batchDeleteConfirm', { n: paths.length }),
+      t('workbench.batchDeleteTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('workbench.delete'),
+        cancelButtonText: t('workbench.cancel')
+      }
     )
   } catch { return }
   const token = getToken()
@@ -782,9 +815,11 @@ const wsRemoveSelected = async () => {
   wsSelected.value = failed // 只留下失败项，方便直接重试
   await wsList()
   if (failed.length) {
-    ElMessage.error(`${oks.length} 项已删除，${failed.length} 项失败：${failed.join('、')}`)
+    ElMessage.error(t('workbench.batchPartial', {
+      ok: oks.length, failed: failed.length, list: failed.join(t('common.listJoiner'))
+    }))
   } else {
-    ElMessage.success(`已删除 ${oks.length} 项`)
+    ElMessage.success(t('workbench.batchDeleted', { n: oks.length }))
     // 目录删空了就顺手退出多选，省得停在一个没有内容的勾选态
     if (!wsEntries.value.length) wsSelectMode.value = false
   }
@@ -797,12 +832,16 @@ const wsClearAll = async () => {
   if (!agentId || !sessionId || wsClearing.value) return
   const paths = wsEntries.value.map((e) => e.path)
   if (!paths.length) return
-  const where = wsPath.value ? `/${wsPath.value}` : '工作区根目录'
+  const where = wsPath.value ? `/${wsPath.value}` : t('workbench.clearAllWhereRoot')
   try {
     await ElMessageBox.confirm(
-      `确定清空 ${where} 下的全部 ${paths.length} 项？目录会连同其中全部文件一起删掉，此操作不可恢复。`,
-      '清空确认',
-      { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }
+      t('workbench.clearAllConfirm', { where, n: paths.length }),
+      t('workbench.clearConfirmTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('workbench.clear'),
+        cancelButtonText: t('workbench.cancel')
+      }
     )
   } catch { return }
   const token = getToken()
@@ -832,9 +871,9 @@ const wsClearAll = async () => {
   wsSelectMode.value = failed.length > 0
   await wsList()
   if (failed.length) {
-    ElMessage.error(`${oks.length} 项已删除，${failed.length} 项失败`)
+    ElMessage.error(t('workbench.clearAllPartial', { ok: oks.length, failed: failed.length }))
   } else {
-    ElMessage.success(`已清空 ${where}（${oks.length} 项）`)
+    ElMessage.success(t('workbench.clearAllDone', { where, n: oks.length }))
   }
 }
 
@@ -851,12 +890,12 @@ const wsNewSaving = ref(false)
 // 名字校验：去掉首尾空白与首尾 /；不允许空段、. / ..、. 开头（后端同样会挡）
 const validateWsNewName = (raw) => {
   const v = String(raw || '').trim().replace(/^\/+|\/+$/g, '')
-  if (!v) return '请输入名字'
+  if (!v) return t('workbench.nameRequired')
   const segs = v.split('/')
-  if (segs.some((s) => !s || s === '.' || s === '..')) return '路径不合法（不能有空段、. 或 ..）'
-  if (segs.some((s) => s.startsWith('.'))) return '名字不能以 . 开头（会被列表隐藏）'
-  if (segs.some((s) => [...s].length > 120)) return '每段名字最多 120 个字符'
-  if (segs.length > 16) return '层级太深（最多 16 层）'
+  if (segs.some((s) => !s || s === '.' || s === '..')) return t('workbench.invalidPath')
+  if (segs.some((s) => s.startsWith('.'))) return t('workbench.invalidDot')
+  if (segs.some((s) => [...s].length > 120)) return t('workbench.segLong')
+  if (segs.length > 16) return t('workbench.tooDeep')
   return true
 }
 
@@ -878,7 +917,10 @@ const wsCreateEntry = async (rawName, isDir, content = '') => {
   )
   const data = await res.json().catch(() => ({}))
   if (data.code !== 200) {
-    const err = new Error(data.msg === 'already exists' ? `/${full} 已存在` : (data.msg || '新建失败'))
+    // 判「同名已存在」按 error 编码，不比对中文 / 英文文案（改文案不该改行为）
+    const err = new Error(data.error === 'agent.file_exists'
+      ? t('workbench.exists', { path: full })
+      : (formatError(data) || t('workbench.createFailed')))
     err.code = data.code // 507 = 会话空间满，调用方据此给「去清理」引导
     throw err
   }
@@ -888,7 +930,7 @@ const wsCreateEntry = async (rawName, isDir, content = '') => {
 // 共用收尾：刷新列表 + 提示；只有直接落在当前目录的文件才顺手开标签，
 // 多层路径（docs/notes.md）把完整路径写在提示里就够了，别把列表切走
 const afterWsCreated = async (full, isDir) => {
-  ElMessage.success(`已创建 /${full}`)
+  ElMessage.success(t('workbench.created', { path: full }))
   await wsList()
   const name = full.split('/').pop()
   const inCurrentDir = full === (wsPath.value ? `${wsPath.value}/${name}` : name)
@@ -900,13 +942,15 @@ const wsCreateDir = async () => {
   let name = ''
   try {
     const { value } = await ElMessageBox.prompt(
-      wsPath.value ? `将在 /${wsPath.value} 下新建文件夹` : '将在根目录下新建文件夹',
-      '新建文件夹',
+      wsPath.value
+        ? t('workbench.newDirPrompt', { path: wsPath.value })
+        : t('workbench.newDirPromptRoot'),
+      t('workbench.newDirTitle'),
       {
-        confirmButtonText: '创建',
-        cancelButtonText: '取消',
-        inputValue: '新建文件夹',
-        inputPlaceholder: '如 reports，或 reports/2026',
+        confirmButtonText: t('workbench.create'),
+        cancelButtonText: t('workbench.cancel'),
+        inputValue: t('workbench.newDirDefault'),
+        inputPlaceholder: t('workbench.newDirPlaceholder'),
         inputValidator: validateWsNewName
       }
     )
@@ -918,7 +962,7 @@ const wsCreateDir = async () => {
     const full = await wsCreateEntry(name, true)
     if (full) await afterWsCreated(full, true)
   } catch (err) {
-    ElMessage.error(err.message || '新建失败')
+    ElMessage.error(err.message || t('workbench.createFailed'))
   }
 }
 
@@ -936,7 +980,7 @@ const wsCreateFile = async () => {
     await afterWsCreated(full, false)
   } catch (err) {
     if (err.code === 507) await showQuotaHint(err.message)
-    else ElMessage.error(err.message || '新建失败')
+    else ElMessage.error(err.message || t('workbench.createFailed'))
   } finally {
     wsNewSaving.value = false
   }
@@ -974,7 +1018,7 @@ const uploadToWsDir = async (files) => {
   const token = getToken()
   if (!token) return
   const dir = wsPath.value
-  const where = dir ? `/${dir}` : '根目录'
+  const where = dir ? `/${dir}` : t('workbench.root')
   wsUploading.value = true
   let ok = 0
   let quotaMsg = ''
@@ -993,12 +1037,12 @@ const uploadToWsDir = async (files) => {
         })
         const data = await res.json().catch(() => ({}))
         if (data.code !== 200) {
-          if (data.code === 507) quotaMsg = data.msg || '会话空间已满'
-          throw new Error(data.msg || '上传失败')
+          if (data.code === 507) quotaMsg = formatError(data) || t('workbench.quotaFull')
+          throw new Error(formatError(data) || t('workbench.uploadFailed'))
         }
         if (Array.isArray(data.data && data.data.evicted) && data.data.evicted.length) {
           // 后端为腾空间删了旧产物：必须告诉用户，别让人以为文件凭空消失
-          ElMessage.warning(`为腾出空间，已自动清理 ${data.data.evicted.length} 个较早的文件`)
+          ElMessage.warning(t('workbench.evicted', { n: data.data.evicted.length }))
         }
         ok++
       } catch {
@@ -1009,9 +1053,11 @@ const uploadToWsDir = async (files) => {
     wsUploading.value = false
   }
   if (failed.length) {
-    ElMessage.error(`${ok} 个已上传到 ${where}，${failed.length} 个失败：${failed.join('、')}`)
+    ElMessage.error(t('workbench.uploadPartial', {
+      ok, where, failed: failed.length, list: failed.join(t('common.listJoiner'))
+    }))
   } else {
-    ElMessage.success(`已上传 ${ok} 个文件到 ${where}`)
+    ElMessage.success(t('workbench.uploaded', { n: ok, where }))
   }
   await wsList()
   if (quotaMsg) await showQuotaHint(quotaMsg)
@@ -1047,7 +1093,7 @@ const onWsDrop = async (ev) => {
     return !!(entry && entry.isDirectory)
   })
   if (hasDir) {
-    ElMessage.warning('不支持拖入文件夹，请逐个上传或先压缩')
+    ElMessage.warning(t('workbench.dropFolder'))
     return
   }
   const files = Array.from(dt.files || [])
@@ -1189,7 +1235,7 @@ const onWsItemDragStart = (ev, e) => {
     console.debug('[drag-out] ticket-url', abs)
     return
   }
-  ElMessage.warning('下载链接还没准备好，请按住该文件稍等片刻再拖')
+  ElMessage.warning(t('workbench.dragNotReady'))
   ev.dataTransfer.setData('text/plain', `/${e.path}`)
 }
 
@@ -1310,7 +1356,7 @@ const loadWsFileTab = async (t) => {
       } else {
         t.payload.content = ''
         // 常见原因：超过 2 MiB 的查看上限、文件已被删除
-        t.payload.error = data.msg || '读取失败'
+        t.payload.error = formatError(data) || t('workbench.readFailed')
       }
       return
     }
@@ -1325,7 +1371,7 @@ const loadWsFileTab = async (t) => {
     const res = await fetch(adminApi.agents.sessionDownload(agentId, sessionId, p), { headers: { Authorization: `Bearer ${token}` } })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
-      throw new Error(body.msg || '读取失败')
+      throw new Error(formatError(body) || t('workbench.readFailed'))
     }
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
@@ -1334,7 +1380,7 @@ const loadWsFileTab = async (t) => {
     t.payload.size = blob.size
   } catch (err) {
     t.payload.content = ''
-    t.payload.error = err.message || '读取失败'
+    t.payload.error = err.message || t('workbench.readFailed')
     revokeWsBlob(t.id)
     t.payload.blobUrl = ''
   } finally {
@@ -1353,14 +1399,14 @@ const downloadWsFile = (t) => {
 // 下载按钮与「拖出到桌面」共用这一条路径，避免两处各写一遍 URL 拼接。
 const fetchTicketUrl = async ({ agentId, sessionId, path: p }) => {
   const token = getToken()
-  if (!token) throw new Error('未登录')
+  if (!token) throw new Error(t('workbench.notLoggedIn'))
   const res = await fetch(adminApi.agents.downloadTicket(agentId), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ session_id: sessionId, path: p })
   })
   const body = await res.json().catch(() => ({}))
-  if (body.code !== 200 || !body.data) throw new Error(body.msg || '下载失败')
+  if (body.code !== 200 || !body.data) throw new Error(formatError(body) || t('workbench.downloadFailed'))
   const d = body.data
   const qs = new URLSearchParams({
     session_id: sessionId,
@@ -1385,7 +1431,7 @@ const downloadFile = async ({ agentId, sessionId, path: p }) => {
     document.body.appendChild(iframe)
     setTimeout(() => iframe.remove(), 60000)
   } catch (err) {
-    ElMessage.error(err.message || '下载失败')
+    ElMessage.error(err.message || t('workbench.downloadFailed'))
   }
 }
 
@@ -1447,7 +1493,12 @@ watch(
   }
 )
 
-const openRecentFiles = () => open({ id: 'recent', type: 'custom', title: '新生成的文件', payload: { kind: 'recent' } })
+const openRecentFiles = () => open({
+  id: 'recent',
+  type: 'custom',
+  title: t('workbench.recentFiles'),
+  payload: { kind: 'recent' }
+})
 
 // 规范化地址：没写协议就补 http://
 const normalizeUrl = (raw) => {
@@ -1466,12 +1517,16 @@ const openBrowserTab = (raw) => {
 // 启动页「打开浏览器」：先问地址，再开工作台标签
 const openBrowser = async () => {
   try {
-    const { value } = await ElMessageBox.prompt('输入要打开的网址', '打开浏览器', {
-      inputPlaceholder: 'https://example.com',
-      inputValue: 'http://localhost:3000',
-      confirmButtonText: '打开',
-      cancelButtonText: '取消',
-    })
+    const { value } = await ElMessageBox.prompt(
+      t('workbench.browserPrompt'),
+      t('workbench.browserTitle'),
+      {
+        inputPlaceholder: 'https://example.com',
+        inputValue: 'http://localhost:3000',
+        confirmButtonText: t('workbench.browserOpen'),
+        cancelButtonText: t('workbench.cancel')
+      }
+    )
     openBrowserTab(value)
   } catch {
     /* 用户取消 */

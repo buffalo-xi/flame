@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -21,7 +21,7 @@
       <div v-if="activeTab === 'settings'" class="settings-panel">
         <div class="props-section">
           <div class="section-title">
-            <span>输入变量</span>
+            <span>{{ t('flow.common.inputVars') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddInputVariable">
               <el-icon><Plus /></el-icon>
             </button>
@@ -29,7 +29,7 @@
           
           <div class="input-variables-list">
             <div v-if="Object.keys(inputVariables).length === 0" class="input-empty-state">
-              <p>暂无输入变量</p>
+              <p>{{ t('flow.common.noInputVars') }}</p>
             </div>
             
             <div
@@ -43,7 +43,7 @@
                 class="input-variable-name-input"
                 @focus="handleInputVariableFocus(name, name)"
                 @blur="handleUpdateInputVariableName(name, $event.target.value)"
-                placeholder="变量名"
+                :placeholder="t('flow.common.varName')"
               />
               <div class="input-variable-content">
                 <button 
@@ -70,7 +70,7 @@
                     </template>
                   </template>
                   <template v-else>
-                    选择变量
+                    {{ t('flow.common.selectVar') }}
                   </template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteInputVariable(name)">
@@ -88,19 +88,19 @@
               v-model="codeContent"
               @keydown="handleCodeKeydown"
               @blur="handleCodeChange"
-              placeholder="输入要执行的代码..."
+              :placeholder="t('flow.codeNode.codePlaceholder')"
             ></textarea>
           </div>
 
           <div class="prop-group-horizontal">
             <div class="prop-item">
-              <label class="prop-label">语言</label>
+              <label class="prop-label">{{ t('flow.common.language') }}</label>
               <el-select v-model="codeLanguage" class="prop-select" @change="handleLanguageChange">
                 <el-option v-for="lang in codeScriptLanguages" :key="lang" :label="lang" :value="lang" />
               </el-select>
             </div>
             <div class="prop-item">
-              <label class="prop-label">超时控制</label>
+              <label class="prop-label">{{ t('flow.common.timeout') }}</label>
               <el-switch
                 v-model="timeoutEnabled"
                 @change="handleTimeoutEnabledChange"
@@ -115,14 +115,14 @@
                 :max="3600"
                 placeholder="30"
               />
-              <span v-if="timeoutEnabled" class="unit-text">秒</span>
+              <span v-if="timeoutEnabled" class="unit-text">{{ t('flow.common.seconds') }}</span>
             </div>
           </div>
         </div>
 
         <div class="props-section">
           <div class="section-title">
-            <span>写目标变量</span>
+            <span>{{ t('flow.codeNode.writeTargets') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddTargetVariable">
               <el-icon><Plus /></el-icon>
             </button>
@@ -130,7 +130,7 @@
 
           <div class="input-variables-list">
             <div v-if="Object.keys(targetVariables).length === 0" class="input-empty-state">
-              <p>暂无写目标变量</p>
+              <p>{{ t('flow.codeNode.noWriteTargets') }}</p>
             </div>
 
             <div
@@ -144,7 +144,7 @@
                 class="input-variable-name-input"
                 @focus="handleTargetVariableFocus(name, name)"
                 @blur="handleUpdateTargetVariableName(name, $event.target.value)"
-                placeholder="变量名"
+                :placeholder="t('flow.common.varName')"
               />
               <div class="input-variable-content">
                 <button
@@ -171,7 +171,7 @@
                     </template>
                   </template>
                   <template v-else>
-                    选择变量
+                    {{ t('flow.common.selectVar') }}
                   </template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteTargetVariable(name)">
@@ -212,6 +212,9 @@ import NodeLastRun from './NodeLastRun.vue'
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

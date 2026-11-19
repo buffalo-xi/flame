@@ -41,7 +41,7 @@
             ref="descriptionInputRef"
             v-model="editDescription"
             class="node-description-input"
-            placeholder="添加描述"
+            :placeholder="t('flow.common.addDescription')"
             @blur="handleDescriptionBlur"
             @keydown.enter="handleDescriptionConfirm"
             @keydown.esc="cancelDescription"
@@ -52,7 +52,7 @@
           class="node-description" 
           :class="{ 'node-description-placeholder': !item.description }"
           @click.stop="handleDescriptionClick"
-        >{{ item.description || '添加描述' }}</span>
+        >{{ item.description || t('flow.common.addDescription') }}</span>
       </div>
       <el-dropdown v-if="!item.isLeaf" @command="handleAddChild" trigger="click" class="add-child-dropdown">
         <el-icon class="add-child-icon">
@@ -61,28 +61,28 @@
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item command="number">
-              <span class="dropdown-icon icon-number-inline">N</span>数字
+              <span class="dropdown-icon icon-number-inline">N</span>{{ t('flow.typeOptions.number') }}
             </el-dropdown-item>
             <el-dropdown-item command="string">
-              <span class="dropdown-icon icon-string-inline">S</span>字符串
+              <span class="dropdown-icon icon-string-inline">S</span>{{ t('flow.typeOptions.string') }}
             </el-dropdown-item>
             <el-dropdown-item command="boolean">
-              <span class="dropdown-icon icon-boolean-inline">B</span>布尔值
+              <span class="dropdown-icon icon-boolean-inline">B</span>{{ t('flow.typeOptions.boolean') }}
             </el-dropdown-item>
             <el-dropdown-item command="object">
-              <span class="dropdown-icon icon-object-inline">O</span>对象
+              <span class="dropdown-icon icon-object-inline">O</span>{{ t('flow.typeOptions.object') }}
             </el-dropdown-item>
             <el-dropdown-item command="numberArray">
-              <span class="dropdown-icon icon-number-array-inline">N</span>数字数组
+              <span class="dropdown-icon icon-number-array-inline">N</span>{{ t('flow.typeOptions.arrayNumber') }}
             </el-dropdown-item>
             <el-dropdown-item command="stringArray">
-              <span class="dropdown-icon icon-string-array-inline">S</span>字符串数组
+              <span class="dropdown-icon icon-string-array-inline">S</span>{{ t('flow.typeOptions.arrayString') }}
             </el-dropdown-item>
             <el-dropdown-item command="booleanArray">
-              <span class="dropdown-icon icon-boolean-array-inline">B</span>布尔数组
+              <span class="dropdown-icon icon-boolean-array-inline">B</span>{{ t('flow.typeOptions.arrayBoolean') }}
             </el-dropdown-item>
             <el-dropdown-item command="objectArray">
-              <span class="dropdown-icon icon-object-array-inline">O</span>对象数组
+              <span class="dropdown-icon icon-object-array-inline">O</span>{{ t('flow.typeOptions.arrayObject') }}
             </el-dropdown-item>
           </el-dropdown-menu>
         </template>
@@ -112,6 +112,9 @@
 <script setup>
 import { ref, computed, inject, markRaw, nextTick } from 'vue'
 import { ArrowDown, ArrowUp, Minus, Plus, Delete } from '@element-plus/icons-vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   item: {

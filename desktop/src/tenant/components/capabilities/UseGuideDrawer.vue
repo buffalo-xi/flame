@@ -17,92 +17,94 @@
         <div class="ug">
           <!-- ===== 接入信息 ===== -->
           <section class="ug-sec">
-            <div class="ug-title">接入信息</div>
+            <div class="ug-title">{{ t('endpointGuide.accessTitle') }}</div>
             <p class="ug-p">
-              一个端点对外只有一个地址，按协议落在两段路径上：<code>POST {{ baseUrl }}/service/mcp/&lt;租户&gt;</code>
-              与 <code>POST {{ baseUrl }}/service/rpc/&lt;租户&gt;</code>。
-              请求都要带 <code>Authorization: Bearer &lt;服务凭证&gt;</code>；凭证能调哪些端点由「设置 → 服务凭证」里的绑定决定，
-              未被授权的端点对外表现为「不存在」。
+              {{ t('endpointGuide.accessBody', {
+                mcp: `POST ${baseUrl}/service/mcp/<tenant>`,
+                rpc: `POST ${baseUrl}/service/rpc/<tenant>`,
+                auth: 'Authorization: Bearer <credential>'
+              }) }}
             </p>
             <div v-if="row" class="ug-kv">
-              <div class="ug-kv-row"><span>端点名</span><code>{{ row.name }}</code></div>
-              <div class="ug-kv-row"><span>协议</span><span>{{ (row.protocol || '').toUpperCase() }}</span></div>
-              <div class="ug-kv-row"><span>目标</span><span>{{ targetKind }} · {{ row.target_name || row.target_id }}</span></div>
+              <div class="ug-kv-row"><span>{{ t('endpointGuide.fieldName') }}</span><code>{{ row.name }}</code></div>
+              <div class="ug-kv-row"><span>{{ t('endpointsTab.colProtocol') }}</span><span>{{ (row.protocol || '').toUpperCase() }}</span></div>
+              <div class="ug-kv-row"><span>{{ t('endpointsTab.dTarget') }}</span><span>{{ targetKind }} · {{ row.target_name || row.target_id }}</span></div>
               <div class="ug-kv-row">
-                <span>状态</span>
+                <span>{{ t('endpointGuide.fieldStatus') }}</span>
                 <span :class="row.exposed ? 'ug-ok' : 'ug-warn'">
-                  {{ row.exposed ? '对外开放（可被外部调用）' : '仅内部（外部调用会被拒绝，先在列表里打开开关）' }}
+                  {{ row.exposed ? t('endpointGuide.statusExposed') : t('endpointGuide.statusInternal') }}
                 </span>
               </div>
               <div class="ug-kv-row">
-                <span>调用地址</span>
+                <span>{{ t('endpointGuide.fieldUrl') }}</span>
                 <code>{{ callUrl }}</code>
-                <el-button link type="primary" size="small" @click="copy(callUrl)">复制</el-button>
+                <el-button link type="primary" size="small" @click="copy(callUrl)">{{ t('common.copy') }}</el-button>
               </div>
             </div>
           </section>
 
           <!-- ===== MCP ===== -->
           <section v-if="showMCP" class="ug-sec">
-            <div class="ug-title">MCP 客户端接入</div>
+            <div class="ug-title">{{ t('endpointGuide.mcpTitle') }}</div>
             <p class="ug-p">
-              每个对外开放的 MCP 端点就是一个标准 MCP 工具：<strong>工具名 = 端点名</strong>，
-              工具入参 = 端点的 <code>input_schema</code>。客户端连上后 <code>tools/list</code> 只会列出当前凭证有权访问的端点。
+              {{ t('endpointGuide.mcpBody', { schema: 'input_schema', list: 'tools/list' }) }}
             </p>
             <div class="ug-code">
-              <el-button class="ug-copy" link type="primary" size="small" @click="copy(mcpConfig)">复制</el-button>
+              <el-button class="ug-copy" link type="primary" size="small" @click="copy(mcpConfig)">{{ t('common.copy') }}</el-button>
               <pre class="ug-pre">{{ mcpConfig }}</pre>
             </div>
             <el-alert type="warning" :closable="false" show-icon class="ug-alert">
-              <template #title>只支持 MCP 协议 2026-07-28</template>
-              该版本无 <code>initialize</code> 握手，每个请求自带 <code>_meta.protocolVersion</code>。
-              默认使用旧协议（如 2025-11-25）的客户端会在传输层被直接拒绝 —— 需要新版客户端或前置协议适配代理。
+              <template #title>{{ t('endpointGuide.mcpAlertTitle') }}</template>
+              {{ t('endpointGuide.mcpAlertBody', { init: 'initialize', meta: '_meta.protocolVersion' }) }}
             </el-alert>
           </section>
 
           <!-- ===== RPC ===== -->
           <section v-if="showRPC" class="ug-sec">
-            <div class="ug-title">RPC 直连调用</div>
+            <div class="ug-title">{{ t('endpointGuide.rpcTitle') }}</div>
             <p class="ug-p">
-              JSON-RPC 2.0，端点名放在 <code>params.name</code>、业务入参放在 <code>params.arguments</code>
-              （信封形状与 MCP 的 <code>tools/call</code> 一致，<code>version</code> 缺省按 1 处理）。
-              返回 <code>result.content[]</code> 文本段与 <code>isError</code>；<code>method=tools/list</code> 可取端点清单。
+              {{ t('endpointGuide.rpcBody', {
+                name: 'params.name',
+                args: 'params.arguments',
+                call: 'tools/call',
+                version: 'version',
+                content: 'result.content[]',
+                isError: 'isError',
+                method: 'method=tools/list'
+              }) }}
             </p>
             <div class="ug-code">
-              <el-button class="ug-copy" link type="primary" size="small" @click="copy(rpcCurl)">复制</el-button>
+              <el-button class="ug-copy" link type="primary" size="small" @click="copy(rpcCurl)">{{ t('common.copy') }}</el-button>
               <pre class="ug-pre">{{ rpcCurl }}</pre>
             </div>
           </section>
 
           <!-- ===== 作为工具 ===== -->
           <section class="ug-sec">
-            <div class="ug-title">给智能体当工具用</div>
+            <div class="ug-title">{{ t('endpointGuide.toolTitle') }}</div>
             <p v-if="row && toolRef" class="ug-p">
-              工作流的 RPC 端点会以 <code>{{ toolRef }}</code> 出现在工具授权目录里，授权给智能体后即可被模型直接调用。
-              入口：智能体编辑页 → 工具授权（技能则在「工具依赖」里勾选）。
+              {{ t('endpointGuide.toolBodyRef', { ref: toolRef }) }}
             </p>
             <p v-else-if="row" class="ug-p ug-dim">
-              只有「工作流的 RPC 端点」会进入工具授权体系（{{ toolRefHint }}）。
-              当前端点不参与授权，只能按上面的地址被外部系统调用。
+              {{ t('endpointGuide.toolBodyUnavailable', { reason: toolRefHint }) }}
             </p>
             <p v-else class="ug-p">
-              只有「工作流的 RPC 端点」会以 <code>local:rpc:&lt;端点名&gt;</code> 进入工具授权体系，可在智能体编辑页 → 工具授权里勾选。
-              MCP 端点与智能体端点只供外部系统调用，不出现在工具目录里。
+              {{ t('endpointGuide.toolBodyGeneric', { ref: 'local:rpc:<endpoint>' }) }}
             </p>
             <div v-if="row && toolRef" class="ug-actions">
-              <el-button size="small" type="primary" plain @click="copy(toolRef)">复制 ref</el-button>
-              <el-button v-if="row.target_type === 'flow'" size="small" @click="goFlow">去工作流</el-button>
+              <el-button size="small" type="primary" plain @click="copy(toolRef)">{{ t('endpointGuide.copyRef') }}</el-button>
+              <el-button v-if="row.target_type === 'flow'" size="small" @click="goFlow">{{ t('endpointsTab.goFlows') }}</el-button>
             </div>
           </section>
 
           <!-- ===== 注意 ===== -->
           <section class="ug-sec">
-            <div class="ug-title">注意</div>
+            <div class="ug-title">{{ t('endpointGuide.notesTitle') }}</div>
             <ul class="ug-list">
-              <li>仅内部的端点对外<strong>不可调用</strong>：MCP 不会注册这个工具，RPC 直接返回「服务端点未对外开放」。列表里的开关就是对外开放 / 收回。</li>
-              <li>同一个目标、同一协议只能有一个端点；改端点入参 schema 会立刻影响调用方（工具契约变了）。</li>
-              <li>端点名与目标实体名解耦：工作流改名不会改端点名，反之亦然。</li>
-              <li>凭证范围按「目标实体」判定：同一个智能体下所有协议的端点共用一份授权。</li>
+              <li>{{ t('endpointGuide.noteInternal') }}</li>
+              <li>{{ t('endpointGuide.noteOnePerTarget') }}</li>
+              <li>{{ t('endpointGuide.noteDecoupled') }}</li>
+              <li>{{ t('endpointGuide.noteCredScope') }}</li>
             </ul>
           </section>
         </div>
@@ -113,6 +115,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { getUser } from '../../utils/auth.js'
 import { apiBase } from '../../config/base.js'
@@ -123,6 +126,8 @@ const props = defineProps({
   anchorEl: { type: Object, default: null }
 })
 
+const { t } = useI18n()
+
 const visible = ref(false)
 const row = ref(null)
 
@@ -130,7 +135,7 @@ const emit = defineEmits(['open'])
 
 useEscClose(visible, () => { visible.value = false })
 
-const schema = computed(() => getUser()?.schema || '<租户>')
+const schema = computed(() => getUser()?.schema || '<tenant>')
 
 // 对外地址 = 前端访问后端的同一前缀（部署走反向代理时就是 /nexus）
 const baseUrl = computed(() => {
@@ -138,7 +143,9 @@ const baseUrl = computed(() => {
   return /^https?:\/\//i.test(b) ? b : `${window.location.origin}${b}`
 })
 
-const title = computed(() => (row.value ? `端点用法 · ${row.value.name}` : '端点用法'))
+const title = computed(() => (row.value
+  ? t('endpointGuide.titleNamed', { name: row.value.name })
+  : t('endpointGuide.title')))
 
 const protocol = computed(() => (row.value ? row.value.protocol : ''))
 // 通用模式（无具体行）两种协议都讲；有行时只讲它自己的
@@ -148,8 +155,9 @@ const showRPC = computed(() => !row.value || protocol.value === 'rpc')
 const callUrl = computed(() => `${baseUrl.value}/service/${protocol.value || 'mcp'}/${schema.value}`)
 
 const targetKind = computed(() => {
-  const t = row.value?.target_type
-  return t === 'agent' ? '智能体' : t === 'flow' ? '工作流' : t
+  const kind = row.value?.target_type
+  return kind === 'agent' ? t('assetImport.kindAgent')
+    : kind === 'flow' ? t('assetImport.kindWorkflow') : kind
 })
 
 // 进工具授权体系的只有「工作流的 rpc 端点」，与列表页 usableAsTool 同口径
@@ -158,7 +166,7 @@ const toolRef = computed(() => {
   return row.value.protocol === 'rpc' && row.value.target_type === 'flow' ? `local:rpc:${row.value.name}` : ''
 })
 const toolRefHint = computed(() =>
-  row.value?.protocol !== 'rpc' ? 'MCP 端点只供外部系统调用' : '智能体端点不进工具目录，agent 之间请走 call_agent'
+  row.value?.protocol !== 'rpc' ? t('endpointGuide.reasonMcp') : t('endpointGuide.reasonAgent')
 )
 
 // ===== 面板几何（对齐 AgentSettingsPanel 的 settingsRect / startSettingsResize） =====
@@ -272,7 +280,7 @@ const sampleArgs = computed(() => {
   return out
 })
 
-const endpointName = computed(() => row.value?.name || '<端点名>')
+const endpointName = computed(() => row.value?.name || '<endpoint>')
 
 const mcpConfig = computed(() =>
   JSON.stringify(
@@ -281,7 +289,7 @@ const mcpConfig = computed(() =>
         [`flame-${schema.value}`]: {
           type: 'http',
           url: `${baseUrl.value}/service/mcp/${schema.value}`,
-          headers: { Authorization: 'Bearer <服务凭证>' }
+          headers: { Authorization: 'Bearer <credential>' }
         }
       }
     },
@@ -309,14 +317,14 @@ const rpcCurl = computed(() => {
   return [
     `curl -X POST '${baseUrl.value}/service/rpc/${schema.value}' \\`,
     `  -H 'Content-Type: application/json' \\`,
-    `  -H 'Authorization: Bearer <服务凭证>' \\`,
+    `  -H 'Authorization: Bearer <credential>' \\`,
     `  -d '${rpcBody.value}'`
   ].join('\n')
 })
 
 // ===== 行为 =====
 
-const copy = async (text, label = '已复制') => {
+const copy = async (text, label = t('common.copied')) => {
   try {
     await navigator.clipboard.writeText(text)
     ElMessage.success({ message: label, duration: 800 })
@@ -333,7 +341,7 @@ const copy = async (text, label = '已复制') => {
       document.body.removeChild(ta)
       ElMessage.success({ message: label, duration: 800 })
     } catch {
-      ElMessage.error('复制失败，请手动选中文本')
+      ElMessage.error(t('common.copyFailed'))
     }
   }
 }

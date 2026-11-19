@@ -6,31 +6,31 @@
         <!-- 计数 / 筛选 / 刷新 / 新建：列表卡内的第一行，不是独立卡头。
              控件尺寸与租户列表保持一致（small + 固定宽度 + 搜索带图标） -->
         <div class="lp-bar">
-          <span class="lp-count">共 {{ total }} 个平台用户</span>
+          <span class="lp-count">{{ t('platform.users.userCount', { total }) }}</span>
           <el-input
             v-model="filters.q"
             class="f-search"
             size="small"
-            placeholder="搜索账号 / 显示名，回车搜索"
+            :placeholder="t('platform.users.searchPlaceholder')"
             clearable
             @keyup.enter="reload"
             @clear="reload"
           >
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
-          <el-select v-model="filters.role" class="f-select" size="small" placeholder="全部角色" clearable @change="reload">
-            <el-option label="管理员" value="admin" />
-            <el-option label="用户" value="user" />
+          <el-select v-model="filters.role" class="f-select" size="small" :placeholder="t('platform.users.roleAll')" clearable @change="reload">
+            <el-option :label="t('platform.shared.roleAdmin')" value="admin" />
+            <el-option :label="t('platform.shared.roleUser')" value="user" />
           </el-select>
-          <el-select v-model="filters.status" class="f-select" size="small" placeholder="全部状态" clearable @change="reload">
-            <el-option label="正常" value="active" />
-            <el-option label="已停用" value="disabled" />
-            <el-option label="已锁定" value="locked" />
+          <el-select v-model="filters.status" class="f-select" size="small" :placeholder="t('platform.users.statusAll')" clearable @change="reload">
+            <el-option :label="t('platform.users.statusNormal')" value="active" />
+            <el-option :label="t('platform.users.statusDisabled')" value="disabled" />
+            <el-option :label="t('platform.users.statusLocked')" value="locked" />
           </el-select>
-          <el-button size="small" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+          <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('common.refresh') }}</el-button>
 
           <div class="lp-bar-right">
-            <el-button size="small" type="primary" :icon="Plus" @click="openCreate">新建用户</el-button>
+            <el-button size="small" type="primary" :icon="Plus" @click="openCreate">{{ t('platform.users.newUser') }}</el-button>
           </div>
         </div>
 
@@ -54,25 +54,25 @@
             </div>
             <div class="uc-sub">
               <span class="mono">{{ row.name }}</span>
-              <el-tag v-if="row.id === meId" size="small" type="info">我</el-tag>
+              <el-tag v-if="row.id === meId" size="small" type="info">{{ t('platform.users.me') }}</el-tag>
               <!-- 受保护管理员（固定 plat）：后端保护，不可修改 / 不可删除 -->
               <el-tag
                 v-if="row.protected"
                 size="small"
                 type="warning"
                 effect="plain"
-                title="平台受保护管理员账号：不可修改、不可删除"
-              >根账号</el-tag>
+                :title="t('platform.users.rootTitle')"
+              >{{ t('platform.users.root') }}</el-tag>
             </div>
             <div class="uc-meta">
               <el-tag size="small" :type="statusType(row.status)" effect="light">
                 {{ statusText(row.status) }}
               </el-tag>
               <span class="uc-dot">·</span>
-              <span>{{ row.role === 'user' ? `名下 ${row.tenant_count ?? 0} 个租户` : '不持有租户' }}</span>
+              <span>{{ row.role === 'user' ? t('platform.users.tenantsOwned', { count: row.tenant_count ?? 0 }) : t('platform.users.noTenantsHeld') }}</span>
             </div>
           </div>
-          <el-empty v-if="!items.length && !loading" description="没有匹配的用户" />
+          <el-empty v-if="!items.length && !loading" :description="t('platform.users.emptyUsers')" />
         </div>
 
         <div class="pager">
@@ -91,7 +91,7 @@
       </div>
 
       <section class="detail-pane">
-        <el-empty v-if="!selectedUser" description="左侧选择一个平台用户" />
+        <el-empty v-if="!selectedUser" :description="t('platform.users.selectUser')" />
 
         <template v-else>
           <!-- 头部：身份 + 启停（写操作，不混进「保存资料」） -->
@@ -112,24 +112,24 @@
               :title="statusTitle(selectedUser)"
               @click="toggleStatus(selectedUser)"
             >
-              {{ selectedUser.status === 'active' ? '停用' : '启用' }}
+              {{ selectedUser.status === 'active' ? t('platform.users.disable') : t('platform.users.enable') }}
             </el-button>
           </div>
 
           <div class="meta-grid">
             <div class="meta-cell">
-              <div class="meta-label">名下租户</div>
+              <div class="meta-label">{{ t('platform.users.labelTenants') }}</div>
               <div class="meta-value">
-                <template v-if="selectedUser.role === 'user'">{{ selectedUser.tenant_count ?? 0 }} 个</template>
-                <template v-else>管理员管全部</template>
+                <template v-if="selectedUser.role === 'user'">{{ t('platform.shared.countSuffix', { n: selectedUser.tenant_count ?? 0 }) }}</template>
+                <template v-else>{{ t('platform.users.adminManagesAll') }}</template>
               </div>
             </div>
             <div class="meta-cell">
-              <div class="meta-label">创建时间</div>
+              <div class="meta-label">{{ t('platform.users.labelCreatedAt') }}</div>
               <div class="meta-value">{{ fmtTime(selectedUser.created_at) }}</div>
             </div>
             <div class="meta-cell">
-              <div class="meta-label">更新时间</div>
+              <div class="meta-label">{{ t('platform.users.labelUpdatedAt') }}</div>
               <div class="meta-value">{{ fmtTime(selectedUser.updated_at) }}</div>
             </div>
           </div>
@@ -137,29 +137,29 @@
           <!-- 可折叠卡片①：账号资料（取代原「编辑」弹窗） -->
           <div class="blk">
             <button type="button" class="blk-head" @click="open.profile = !open.profile">
-              <span class="blk-title">账号资料</span>
-              <span class="blk-hint">账号不可改</span>
+              <span class="blk-title">{{ t('platform.users.blkProfile') }}</span>
+              <span class="blk-hint">{{ t('platform.users.blkProfileHint') }}</span>
               <el-icon class="blk-arrow" :class="{ open: open.profile }"><ArrowRight /></el-icon>
             </button>
             <div v-show="open.profile" class="blk-body">
               <div class="form-grid">
-                <label class="f-label">显示名</label>
-                <el-input v-model="profileForm.display_name" size="small" placeholder="可留空（留空则显示账号名）" />
+                <label class="f-label">{{ t('platform.users.labelDisplayName') }}</label>
+                <el-input v-model="profileForm.display_name" size="small" :placeholder="t('platform.users.phDisplayName')" />
 
-                <label class="f-label">账号</label>
+                <label class="f-label">{{ t('platform.users.labelAccount') }}</label>
                 <el-input :model-value="selectedUser.name" size="small" disabled />
 
-                <label class="f-label">角色</label>
+                <label class="f-label">{{ t('platform.users.labelRole') }}</label>
                 <el-radio-group v-model="profileForm.role" size="small">
-                  <el-radio value="admin">管理员（管全部租户）</el-radio>
-                  <el-radio value="user">用户（只管名下租户）</el-radio>
+                  <el-radio value="admin">{{ t('platform.users.roleAdminFull') }}</el-radio>
+                  <el-radio value="user">{{ t('platform.users.roleUserFull') }}</el-radio>
                 </el-radio-group>
 
-                <label class="f-label">状态</label>
+                <label class="f-label">{{ t('platform.users.labelStatus') }}</label>
                 <el-select v-model="profileForm.status" size="small" style="width: 100%">
-                  <el-option label="正常" value="active" />
-                  <el-option label="停用" value="disabled" />
-                  <el-option label="锁定" value="locked" />
+                  <el-option :label="t('platform.users.statusNormal')" value="active" />
+                  <el-option :label="t('platform.users.statusOff')" value="disabled" />
+                  <el-option :label="t('platform.users.statusLockedShort')" value="locked" />
                 </el-select>
               </div>
 
@@ -171,7 +171,7 @@
                   :loading="savingProfile"
                   :disabled="selectedUser.protected"
                   @click="submitProfile"
-                >保存资料</el-button>
+                >{{ t('platform.users.saveProfile') }}</el-button>
               </div>
             </div>
           </div>
@@ -179,31 +179,31 @@
           <!-- 可折叠卡片②：重置密码（取代原「重置密码」弹窗） -->
           <div class="blk">
             <button type="button" class="blk-head" @click="open.password = !open.password">
-              <span class="blk-title">重置密码</span>
-              <span class="blk-hint">管理员代为重置</span>
+              <span class="blk-title">{{ t('platform.users.blkPassword') }}</span>
+              <span class="blk-hint">{{ t('platform.users.blkPasswordHint') }}</span>
               <el-icon class="blk-arrow" :class="{ open: open.password }"><ArrowRight /></el-icon>
             </button>
             <div v-show="open.password" class="blk-body">
               <div class="form-grid">
-                <label class="f-label">新密码</label>
-                <el-input v-model="pwdForm.password" size="small" type="password" show-password placeholder="至少 8 位" />
+                <label class="f-label">{{ t('password.new') }}</label>
+                <el-input v-model="pwdForm.password" size="small" type="password" show-password :placeholder="t('password.newPlaceholder')" />
 
-                <label class="f-label">确认</label>
+                <label class="f-label">{{ t('platform.users.labelConfirm') }}</label>
                 <el-input
                   v-model="pwdForm.confirm"
                   size="small"
                   type="password"
                   show-password
-                  placeholder="再输一次"
+                  :placeholder="t('platform.users.phConfirm')"
                   @keyup.enter="submitPassword"
                 />
               </div>
 
               <div class="blk-foot">
                 <span class="tip">
-                  重置后该用户需用新密码登录；已签发的 token 不会失效，要立即踢下线请停用该账号。
+                  {{ t('platform.users.passwordHint') }}
                 </span>
-                <el-button size="small" type="primary" :loading="savingPwd" @click="submitPassword">保存密码</el-button>
+                <el-button size="small" type="primary" :loading="savingPwd" @click="submitPassword">{{ t('platform.users.savePassword') }}</el-button>
               </div>
             </div>
           </div>
@@ -211,21 +211,21 @@
           <!-- 可折叠卡片③：名下租户（只读；管理员不绑定租户，不出这块） -->
           <div v-if="selectedUser.role === 'user'" class="blk">
             <button type="button" class="blk-head" @click="open.tenants = !open.tenants">
-              <span class="blk-title">名下租户</span>
-              <span class="blk-hint">{{ selectedUser.tenant_count ?? userTenants.length }} 个</span>
+              <span class="blk-title">{{ t('platform.users.labelTenants') }}</span>
+              <span class="blk-hint">{{ t('platform.shared.countSuffix', { n: selectedUser.tenant_count ?? userTenants.length }) }}</span>
               <el-icon class="blk-arrow" :class="{ open: open.tenants }"><ArrowRight /></el-icon>
             </button>
             <div v-show="open.tenants" class="blk-body">
               <div v-loading="tenantsLoading" class="tn-list">
-                <div v-if="!tenantsLoading && !userTenants.length" class="tip">无（管理员代管）</div>
-                <div v-for="t in userTenants" :key="t.schema" class="tn-row">
-                  <span class="mono tn-schema">{{ t.schema }}</span>
-                  <span class="tn-name">{{ t.display_name || t.schema }}</span>
-                  <el-tag size="small" :type="tenantStatusType(t.status)">{{ tenantStatusText(t.status) }}</el-tag>
+                <div v-if="!tenantsLoading && !userTenants.length" class="tip">{{ t('platform.users.noTenantsAdmin') }}</div>
+                <div v-for="tn in userTenants" :key="tn.schema" class="tn-row">
+                  <span class="mono tn-schema">{{ tn.schema }}</span>
+                  <span class="tn-name">{{ tn.display_name || tn.schema }}</span>
+                  <el-tag size="small" :type="tenantStatusType(tn.status)">{{ tenantStatusText(tn.status) }}</el-tag>
                 </div>
               </div>
               <div class="blk-foot">
-                <span class="tip">只读：要转移归属，请到「租户管理」里改该租户的负责人。</span>
+                <span class="tip">{{ t('platform.users.tenantsReadonlyTip') }}</span>
               </div>
             </div>
           </div>
@@ -234,28 +234,28 @@
     </div>
 
     <!-- 新建平台用户 -->
-    <el-dialog v-model="createVisible" title="新建平台用户" width="460px">
+    <el-dialog v-model="createVisible" :title="t('platform.users.createTitle')" width="460px">
       <el-form :model="createForm" label-width="86px">
-        <el-form-item label="账号">
-          <el-input v-model="createForm.name" placeholder="字母/数字/下划线/横线，1-64 位" />
+        <el-form-item :label="t('platform.users.labelAccount')">
+          <el-input v-model="createForm.name" :placeholder="t('platform.users.phAccount')" />
         </el-form-item>
-        <el-form-item label="显示名">
-          <el-input v-model="createForm.display_name" placeholder="可选（留空则显示账号名）" />
+        <el-form-item :label="t('platform.users.labelDisplayName')">
+          <el-input v-model="createForm.display_name" :placeholder="t('platform.users.phDisplayNameCreate')" />
         </el-form-item>
-        <el-form-item label="角色">
+        <el-form-item :label="t('platform.users.labelRole')">
           <el-radio-group v-model="createForm.role">
-            <el-radio value="admin">管理员（管所有租户）</el-radio>
-            <el-radio value="user">用户（只管自己名下租户）</el-radio>
+            <el-radio value="admin">{{ t('platform.users.roleAdminCreate') }}</el-radio>
+            <el-radio value="user">{{ t('platform.users.roleUserCreate') }}</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="初始密码">
-          <el-input v-model="createForm.password" type="password" show-password placeholder="至少 8 位" />
-          <div class="tip">缺省 {{ DEFAULT_PASSWORD }}，可改；建议用户首次登录后立即修改</div>
+        <el-form-item :label="t('platform.users.labelInitialPassword')">
+          <el-input v-model="createForm.password" type="password" show-password :placeholder="t('password.newPlaceholder')" />
+          <div class="tip">{{ t('platform.users.defaultPasswordHint', { password: DEFAULT_PASSWORD }) }}</div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitCreate">创建</el-button>
+        <el-button @click="createVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="submitCreate">{{ t('platform.users.create') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -263,12 +263,15 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { api } from '../api'
 import { getUser } from '../auth'
 
 const emit = defineEmits(['count', 'session-expired'])
+
+const { t } = useI18n()
 
 const items = ref([])
 const loading = ref(false)
@@ -303,11 +306,25 @@ const pwdForm = reactive({ password: '', confirm: '' })
 const userTenants = ref([])
 const tenantsLoading = ref(false)
 
-const ROLE_TEXT = { admin: '管理员', user: '用户' }
-const roleText = (r) => ROLE_TEXT[r] || r
-const statusText = (s) => ({ active: '正常', disabled: '已停用', locked: '已锁定' }[s] || s)
+const roleText = (r) =>
+  ({
+    admin: t('platform.shared.roleAdmin'),
+    user: t('platform.shared.roleUser')
+  })[r] || r
+const statusText = (s) =>
+  ({
+    active: t('platform.users.statusNormal'),
+    disabled: t('platform.users.statusDisabled'),
+    locked: t('platform.users.statusLocked')
+  })[s] || s
 const statusType = (s) => ({ active: 'success', disabled: 'info', locked: 'warning' }[s] || 'info')
-const tenantStatusText = (s) => ({ active: '正常', suspended: '已停用', deleted: '已删除', pending: '待完成' }[s] || s)
+const tenantStatusText = (s) =>
+  ({
+    active: t('platform.users.statusNormal'),
+    suspended: t('platform.users.statusDisabled'),
+    deleted: t('platform.users.statusDeleted'),
+    pending: t('platform.users.statusPending')
+  })[s] || s
 const tenantStatusType = (s) => ({ active: 'success', suspended: 'warning', deleted: 'info', pending: 'info' }[s] || 'info')
 
 const isSelf = (u) => !!u && !!meId && u.id === meId
@@ -316,8 +333,8 @@ const isSelf = (u) => !!u && !!meId && u.id === meId
 // 自己（后端必拒，会把自己踢下线）/ 受保护管理员（protected，后端同样拒）
 const statusTitle = (u) => {
   if (!u) return ''
-  if (isSelf(u)) return '不能停用当前登录账号'
-  if (u.protected) return '平台受保护管理员账号，不可修改'
+  if (isSelf(u)) return t('platform.users.cannotDisableSelf')
+  if (u.protected) return t('platform.users.protectedReadonly')
   return ''
 }
 
@@ -334,7 +351,7 @@ function handleError(err) {
     emit('session-expired')
     return
   }
-  ElMessage.error(err?.message || '请求失败')
+  ElMessage.error(err?.message || t('platform.shared.requestFailed'))
 }
 
 // 把行数据灌进资料编辑态（重置密码的输入框不在这里：保存后就清空，不跟随选中项）
@@ -431,7 +448,7 @@ function openCreate() {
 
 async function submitCreate() {
   if (!createForm.name || !createForm.password) {
-    ElMessage.error('账号与初始密码必填')
+    ElMessage.error(t('platform.users.createRequired'))
     return
   }
   saving.value = true
@@ -442,7 +459,7 @@ async function submitCreate() {
       role: createForm.role,
       password: createForm.password
     })
-    ElMessage.success('已创建')
+    ElMessage.success(t('platform.users.created'))
     createVisible.value = false
     await load()
   } catch (err) {
@@ -456,27 +473,31 @@ async function submitCreate() {
 // 降级/停用的连带影响，以及「锁定」和「停用」到底差在哪（登录侧效果一样，只是标签不同）。
 const profileTip = computed(() =>
   selectedUser.value?.protected
-    ? '平台受保护管理员账号：不可修改（资料 / 角色 / 状态）。'
-    : '不能停用或降级自己；也不能停用或降级最后一个「正常」的管理员（后端拦）。' +
-      '角色决定权限范围，改动立即生效：管理员能管全部租户，用户只能管名下租户；' +
-      '降级后其名下租户不会自动转让，需要你手动改负责人。' +
-      '「锁定」与「停用」对登录的拦截相同（都拒登），只是标签不同；卡头的「启用」对两者都直接回到正常。'
+    ? t('platform.users.profileTipProtected')
+    : t('platform.users.profileTip1') +
+      t('platform.users.profileTip2') +
+      t('platform.users.profileTip3') +
+      t('platform.users.profileTip4')
 )
 
 // 保存资料：显示名 / 角色 / 状态一起提交（与卡头「停用/启用」走同一个接口）
 async function submitProfile() {
   const u = selectedUser.value
   if (!u) return
-  if (u.protected) return ElMessage.warning('平台受保护管理员账号，不可修改')
+  if (u.protected) return ElMessage.warning(t('platform.users.protectedReadonly'))
   // 角色一改就是权限范围的变化，且不等下次登录 —— 降级前先说清名下租户怎么办
   if (u.role !== profileForm.role) {
-    const to = profileForm.role === 'admin' ? '管理员（能管全部租户）' : '用户（只能管名下租户）'
+    const to = profileForm.role === 'admin' ? t('platform.users.roleToAdmin') : t('platform.users.roleToUser')
     try {
       await ElMessageBox.confirm(
-        `把「${u.name}」从「${roleText(u.role)}」改为「${to}」？权限立即变化。` +
-          (profileForm.role === 'user' ? '其名下租户不会自动转让，降级后需要你手动改负责人。' : ''),
-        '修改角色',
-        { type: 'warning', confirmButtonText: '确认修改', cancelButtonText: '取消' }
+        t('platform.users.roleChangeConfirm', {
+          name: u.name,
+          from: roleText(u.role),
+          to,
+          tail: profileForm.role === 'user' ? t('platform.users.roleChangeTail') : ''
+        }),
+        t('platform.users.roleChangeTitle'),
+        { type: 'warning', confirmButtonText: t('platform.users.roleChangeConfirmBtn'), cancelButtonText: t('common.cancel') }
       )
     } catch {
       return
@@ -493,7 +514,7 @@ async function submitProfile() {
     if (data?.warning) {
       ElMessage({ message: data.warning, type: 'warning', duration: 2000 })
     } else {
-      ElMessage.success('资料已保存')
+      ElMessage.success(t('platform.users.profileSaved'))
     }
     await load()
   } catch (err) {
@@ -508,17 +529,17 @@ async function submitPassword() {
   if (!u) return
   const pwd = pwdForm.password
   if (!pwd || pwd.length < 8) {
-    ElMessage.error('新密码至少 8 位')
+    ElMessage.error(t('password.minLength'))
     return
   }
   if (pwd !== pwdForm.confirm) {
-    ElMessage.error('两次输入的新密码不一致')
+    ElMessage.error(t('password.mismatch'))
     return
   }
   savingPwd.value = true
   try {
     await api.resetUserPassword(u.id, pwd)
-    ElMessage.success('密码已重置，该用户需用新密码重新登录')
+    ElMessage.success(t('platform.users.passwordReset'))
     pwdForm.password = ''
     pwdForm.confirm = ''
   } catch (err) {
@@ -531,16 +552,15 @@ async function submitPassword() {
 // 卡头快捷开关：只在 正常 ⇄ 停用 之间切（locked 视为"非正常"，点启用直接回 active）
 async function toggleStatus(u) {
   if (!u) return
-  if (u.protected) return ElMessage.warning('平台受保护管理员账号，不可修改')
+  if (u.protected) return ElMessage.warning(t('platform.users.protectedReadonly'))
   const next = u.status === 'active' ? 'disabled' : 'active'
-  const action = next === 'disabled' ? '停用' : '启用'
+  const action = next === 'disabled' ? t('platform.users.actionDisable') : t('platform.users.actionEnable')
   try {
     await ElMessageBox.confirm(
       next === 'disabled'
-        ? `停用 ${u.name} 后将无法登录平台管理台。其名下租户不会自动转让，也不会随之停用 —— ` +
-          '但该账号再也进不去，等于没人能自助管理，需要你事后到「租户管理」里改负责人。'
-        : `启用 ${u.name}？锁定与停用都会直接回到「正常」。`,
-      `${action}确认`,
+        ? t('platform.users.disableConfirm', { name: u.name })
+        : t('platform.users.enableConfirm', { name: u.name }),
+      t('platform.users.actionConfirmTitle', { action }),
       { type: next === 'disabled' ? 'warning' : 'info' }
     )
   } catch {
@@ -555,7 +575,7 @@ async function toggleStatus(u) {
     if (data?.warning) {
       ElMessage({ message: data.warning, type: 'warning', duration: 2000 })
     } else {
-      ElMessage.success(`已${action}`)
+      ElMessage.success(next === 'disabled' ? t('platform.users.disabledDone') : t('platform.users.enabledDone'))
     }
     await load()
   } catch (err) {

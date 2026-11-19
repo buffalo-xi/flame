@@ -7,14 +7,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        设置
+        {{ t('flow.startNode.tabSettings') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -26,7 +26,7 @@
         <!-- 入口参数 -->
         <div class="props-section">
           <div class="section-title">
-            <span>入口参数</span>
+            <span>{{ t('flow.varSource.entryArgs') }}</span>
             <el-dropdown @command="handleAddField" trigger="click" placement="bottom-end" popper-class="dropdown-align-right">
               <button class="add-variable-icon-btn">
                 <el-icon><Plus /></el-icon>
@@ -34,28 +34,28 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="number">
-                    <span class="dropdown-icon icon-number-inline">N</span>数字
+                    <span class="dropdown-icon icon-number-inline">N</span>{{ t('flow.typeOptions.number') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="string">
-                    <span class="dropdown-icon icon-string-inline">S</span>字符串
+                    <span class="dropdown-icon icon-string-inline">S</span>{{ t('flow.typeOptions.string') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="boolean">
-                    <span class="dropdown-icon icon-boolean-inline">B</span>布尔值
+                    <span class="dropdown-icon icon-boolean-inline">B</span>{{ t('flow.typeOptions.boolean') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="object">
-                    <span class="dropdown-icon icon-object-inline">O</span>对象
+                    <span class="dropdown-icon icon-object-inline">O</span>{{ t('flow.typeOptions.object') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="numberArray">
-                    <span class="dropdown-icon icon-number-array-inline">N</span>数字数组
+                    <span class="dropdown-icon icon-number-array-inline">N</span>{{ t('flow.typeOptions.arrayNumber') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="stringArray">
-                    <span class="dropdown-icon icon-string-array-inline">S</span>字符串数组
+                    <span class="dropdown-icon icon-string-array-inline">S</span>{{ t('flow.typeOptions.arrayString') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="booleanArray">
-                    <span class="dropdown-icon icon-boolean-array-inline">B</span>布尔数组
+                    <span class="dropdown-icon icon-boolean-array-inline">B</span>{{ t('flow.typeOptions.arrayBoolean') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="objectArray">
-                    <span class="dropdown-icon icon-object-array-inline">O</span>对象数组
+                    <span class="dropdown-icon icon-object-array-inline">O</span>{{ t('flow.typeOptions.arrayObject') }}
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -78,7 +78,7 @@
       />
           </template>
           <div v-else class="empty-tree">
-            <p>暂无入口参数</p>
+            <p>{{ t('flow.startNode.noEntryArgs') }}</p>
           </div>
         </div>
       </div>
@@ -86,11 +86,11 @@
       <!-- 流程配置 -->
         <div class="props-section">
           <div class="section-title">
-            <span>流程配置</span>
+            <span>{{ t('flow.startNode.flowConfig') }}</span>
           </div>
           <div class="config-item">
             <div class="config-item-header">
-              <label class="config-label">超时时间（秒）<span class="limit-hint">/ {{ limitHintText('timeout') }}</span></label>
+              <label class="config-label">{{ t('flow.startNode.timeoutSeconds') }}<span class="limit-hint">/ {{ limitHintText('timeout') }}</span></label>
               <div class="config-controls">
                 <el-input
                   v-if="isLimitEnabled('timeout')"
@@ -107,7 +107,7 @@
           </div>
           <div class="config-item">
             <div class="config-item-header">
-              <label class="config-label">最大递归深度<span class="limit-hint">/ {{ limitHintText('max_recursion_depth') }}</span></label>
+              <label class="config-label">{{ t('flow.startNode.maxRecursionDepth') }}<span class="limit-hint">/ {{ limitHintText('max_recursion_depth') }}</span></label>
               <div class="config-controls">
                 <el-input
                   v-if="isLimitEnabled('max_recursion_depth')"
@@ -124,7 +124,7 @@
           </div>
           <div class="config-item">
             <div class="config-item-header">
-              <label class="config-label">最大节点数<span class="limit-hint">/ {{ limitHintText('max_node_count') }}</span></label>
+              <label class="config-label">{{ t('flow.startNode.maxNodeCount') }}<span class="limit-hint">/ {{ limitHintText('max_node_count') }}</span></label>
               <div class="config-controls">
                 <el-input
                   v-if="isLimitEnabled('max_node_count')"
@@ -141,7 +141,7 @@
           </div>
           <div class="config-item">
             <div class="config-item-header">
-              <label class="config-label">最大执行次数<span class="limit-hint">/ {{ limitHintText('max_exec_count') }}</span></label>
+              <label class="config-label">{{ t('flow.startNode.maxExecCount') }}<span class="limit-hint">/ {{ limitHintText('max_exec_count') }}</span></label>
               <div class="config-controls">
                 <el-input
                   v-if="isLimitEnabled('max_exec_count')"
@@ -158,7 +158,7 @@
           </div>
           <div class="config-item">
             <div class="config-item-header">
-              <label class="config-label">运行记录保留<span class="limit-hint">/ 系统上限 {{ systemLimits.max_run_records }}，0 表示不存储</span></label>
+              <label class="config-label">{{ t('flow.startNode.runRecords') }}<span class="limit-hint">{{ t('flow.startNode.runRecordsHint', { max: systemLimits.max_run_records }) }}</span></label>
               <div class="config-controls">
                 <el-input
                   v-if="isLimitEnabled('max_run_records')"
@@ -176,7 +176,7 @@
           </div>
           <div class="config-item">
             <div class="config-item-header">
-              <label class="config-label">会话记忆保留<span class="limit-hint">/ 系统上限 {{ systemLimits.max_session_records }}，关闭表示不做记忆</span></label>
+              <label class="config-label">{{ t('flow.startNode.sessionRecords') }}<span class="limit-hint">{{ t('flow.startNode.sessionRecordsHint', { max: systemLimits.max_session_records }) }}</span></label>
               <div class="config-controls">
                 <el-input
                   v-if="isLimitEnabled('max_session_records')"
@@ -199,16 +199,16 @@
       <div v-if="activeTab === 'lastRun'" class="last-run-panel">
         <div class="props-section">
           <div class="result-item result-item-inline">
-            <label class="result-label">开始时间</label>
-            <span class="result-value">{{ lastRunTime || '暂无数据' }}</span>
+            <label class="result-label">{{ t('flow.startNode.startTime') }}</label>
+            <span class="result-value">{{ lastRunTime || t('flow.startNode.noData') }}</span>
           </div>
           <div class="result-item">
-            <label class="result-label">输入参数</label>
-            <pre class="result-output">{{ lastRunArgsText || '暂无输入参数' }}</pre>
+            <label class="result-label">{{ t('flow.startNode.inputArgs') }}</label>
+            <pre class="result-output">{{ lastRunArgsText || t('flow.startNode.noInputArgs') }}</pre>
           </div>
           <div class="result-item">
-            <label class="result-label">限额最终值</label>
-            <pre class="result-output">{{ lastRunLimitsText || '暂无限额' }}</pre>
+            <label class="result-label">{{ t('flow.startNode.finalLimits') }}</label>
+            <pre class="result-output">{{ lastRunLimitsText || t('flow.startNode.noLimits') }}</pre>
           </div>
         </div>
       </div>
@@ -221,8 +221,12 @@ import { ref, computed, provide } from 'vue'
 import { runInfo } from '@/tenant/composables/runData.js'
 import { Plus } from '@element-plus/icons-vue'
 import StartNodePropsTreeItem from './StartNodePropsTreeItem.vue'
+import { useI18n } from 'vue-i18n'
+import { formatDateTime } from '@/utils/datetime.js'
 
 // ==================== Props ====================
+const { t } = useI18n()
+
 const props = defineProps({
   selectedNode: {
     type: Object,
@@ -247,7 +251,8 @@ const props = defineProps({
 const lastRunTime = computed(() => {
   const t = runInfo.value.started_at
   if (!t) return ''
-  try { return new Date(t).toLocaleString() } catch (e) { return t }
+  // 解析失败时退回原串（比印 "Invalid Date" 有意义）
+  return formatDateTime(t) || t
 })
 
 // 输入参数（runInfo.run_args，实际入参）
@@ -291,7 +296,7 @@ const SYS_LIMIT_KEY_MAP = {
  */
 function limitHintText(key) {
   const max = systemLimits.value[SYS_LIMIT_KEY_MAP[key]]
-  return `上限 ${max}`
+  return t('flow.startNode.limitMax', { max })
 }
 
 // ==================== Emits ====================
@@ -763,14 +768,14 @@ function updateRequiredInNode(node, parentKey, map) {
  */
 function handleAddField(type) {
   const typeMap = {
-    'number': { type: 'number', label: '数字' },
-    'string': { type: 'string', label: '字符串' },
-    'boolean': { type: 'boolean', label: '布尔值' },
-    'object': { type: 'object', label: '对象' },
-    'numberArray': { type: 'array', label: '数字数组', items: { type: 'number' } },
-    'stringArray': { type: 'array', label: '字符串数组', items: { type: 'string' } },
-    'booleanArray': { type: 'array', label: '布尔数组', items: { type: 'boolean' } },
-    'objectArray': { type: 'array', label: '对象数组', items: { type: 'object', properties: {} } }
+    'number': { type: 'number', label: t('flow.typeOptions.number') },
+    'string': { type: 'string', label: t('flow.typeOptions.string') },
+    'boolean': { type: 'boolean', label: t('flow.typeOptions.boolean') },
+    'object': { type: 'object', label: t('flow.typeOptions.object') },
+    'numberArray': { type: 'array', label: t('flow.typeOptions.arrayNumber'), items: { type: 'number' } },
+    'stringArray': { type: 'array', label: t('flow.typeOptions.arrayString'), items: { type: 'string' } },
+    'booleanArray': { type: 'array', label: t('flow.typeOptions.arrayBoolean'), items: { type: 'boolean' } },
+    'objectArray': { type: 'array', label: t('flow.typeOptions.arrayObject'), items: { type: 'object', properties: {} } }
   }
 
   const config = typeMap[type]
@@ -807,14 +812,14 @@ function handleAddField(type) {
  */
 function handleAddChild(type, parentKey) {
   const typeMap = {
-    'number': { type: 'number', label: '数字' },
-    'string': { type: 'string', label: '字符串' },
-    'boolean': { type: 'boolean', label: '布尔值' },
-    'object': { type: 'object', label: '对象' },
-    'numberArray': { type: 'array', label: '数字数组', items: { type: 'number' } },
-    'stringArray': { type: 'array', label: '字符串数组', items: { type: 'string' } },
-    'booleanArray': { type: 'array', label: '布尔数组', items: { type: 'boolean' } },
-    'objectArray': { type: 'array', label: '对象数组', items: { type: 'object', properties: {} } }
+    'number': { type: 'number', label: t('flow.typeOptions.number') },
+    'string': { type: 'string', label: t('flow.typeOptions.string') },
+    'boolean': { type: 'boolean', label: t('flow.typeOptions.boolean') },
+    'object': { type: 'object', label: t('flow.typeOptions.object') },
+    'numberArray': { type: 'array', label: t('flow.typeOptions.arrayNumber'), items: { type: 'number' } },
+    'stringArray': { type: 'array', label: t('flow.typeOptions.arrayString'), items: { type: 'string' } },
+    'booleanArray': { type: 'array', label: t('flow.typeOptions.arrayBoolean'), items: { type: 'boolean' } },
+    'objectArray': { type: 'array', label: t('flow.typeOptions.arrayObject'), items: { type: 'object', properties: {} } }
   }
 
   const config = typeMap[type]

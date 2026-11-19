@@ -132,9 +132,14 @@
           <span>{{ $t('nav.settings') }}</span>
         </button>
 
-        <button class="logout-button" :title="$t('common.language')" @click="toggleLocale">
-          <span>{{ nextLocaleLabel }}</span>
-        </button>
+        <el-dropdown trigger="click" @command="setLocale">
+          <button class="logout-button" :title="$t('common.language')">
+            <span>{{ localeShort }}</span>
+          </button>
+          <template #dropdown>
+            <LocaleMenu :active="activeLocale" />
+          </template>
+        </el-dropdown>
         <button class="logout-button" @click="openPwdDialog">
           <el-icon><Lock /></el-icon>
           <span>{{ $t('nav.password') }}</span>
@@ -168,12 +173,12 @@
 
       <!-- 拖拽分隔条（带折叠按钮） -->
       <div v-show="chatVisible && !contentHidden" class="chat-resizer" @mousedown="startResize">
-        <button class="resizer-toggle" title="折叠内容区（对话全宽）" @click.stop="hideContent">‹</button>
+        <button class="resizer-toggle" :title="t('layout.collapse')" @click.stop="hideContent">‹</button>
       </div>
 
       <!-- 折叠后的展开入口（贴右边缘） -->
       <button v-show="chatVisible && contentHidden" class="resizer-toggle resizer-toggle--edge"
-              title="展开内容区" @click="restoreContent">›</button>
+              :title="t('layout.expand')" @click="restoreContent">›</button>
 
       <!-- 右侧：现有内容（Chat 关闭或内容区折叠时隐藏） -->
       <div ref="contentPanelRef" class="content-panel" v-show="!(chatVisible && contentHidden)">
@@ -192,30 +197,30 @@
         </div>
         <div v-else class="content-placeholder">
           <h2>{{ activeNav === 'models' ? 'Models' : 'Settings' }}</h2>
-          <p>内容将在这里显示</p>
+          <p>{{ t('common.placeholder') }}</p>
         </div>
       </div>
     </main>
 
     <!-- 修改密码（当前登录用户自助） -->
-    <el-dialog v-model="pwdDialogVisible" title="修改密码" width="440px">
+    <el-dialog v-model="pwdDialogVisible" :title="t('nav.passwordTitle')" width="440px">
       <el-form label-position="top">
-        <el-form-item label="当前密码">
-          <el-input v-model="pwdForm.old_password" type="password" show-password placeholder="请输入当前密码" />
+        <el-form-item :label="t('password.current')">
+          <el-input v-model="pwdForm.old_password" type="password" show-password :placeholder="t('password.currentPlaceholder')" />
         </el-form-item>
-        <el-form-item label="新密码">
-          <el-input v-model="pwdForm.new_password" type="password" show-password placeholder="至少 8 位" />
+        <el-form-item :label="t('password.new')">
+          <el-input v-model="pwdForm.new_password" type="password" show-password :placeholder="t('password.newPlaceholder')" />
         </el-form-item>
-        <el-form-item label="确认新密码">
+        <el-form-item :label="t('password.confirm')">
           <el-input v-model="pwdForm.confirm" type="password" show-password @keyup.enter="submitChangePwd" />
         </el-form-item>
         <div style="font-size:12px;color:#909399">
-          修改成功后，其它端已登录的会话仍保持有效（token 不会失效）；如需立即踢下线，请让管理员停用该账号。
+          {{ t('password.hint') }}
         </div>
       </el-form>
       <template #footer>
-        <el-button @click="pwdDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="pwdSaving" @click="submitChangePwd">确定</el-button>
+        <el-button @click="pwdDialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="pwdSaving" @click="submitChangePwd">{{ t('common.confirm') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -227,7 +232,8 @@ import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Cpu, ChatRound, Setting, SwitchButton, Share, Collection, Tools, Promotion, Lock, Grid, Shop, Odometer } from '@element-plus/icons-vue'
 import apiConfig from '../config/api.js'
 import { getToken, getUser } from '../utils/auth.js'
-import { currentLocale, setLocale } from '../../locales'
+import LocaleMenu from '../../LocaleMenu.vue'
+import { currentLocale, currentLocaleShort, setLocale } from '../../locales'
 import Agents from './Agents.vue'
 import AssetMarket from './AssetMarket.vue'
 import Capabilities from './Capabilities.vue'
@@ -237,20 +243,24 @@ import Running from './Running.vue'
 import Settings from './Settings.vue'
 import Skills from './Skills.vue'
 import Chat from './Chat.vue'
+import { useI18n } from 'vue-i18n'
+import { formatError } from '../../locales'
+
+const { t } = useI18n()
 
 const emit = defineEmits(['logout'])
 const activeNav = ref('agents')
 
 // 语言切换常驻入口：登录页那个按钮只在未登录时可见，登录后得有地方能切回来。
-// 按钮显示「将要切到」的语言，避免用户误以为当前就是英文界面。
-const nextLocaleLabel = computed(() => (currentLocale() === 'zh-CN' ? 'EN' : '中'))
-const toggleLocale = () => setLocale(currentLocale() === 'zh-CN' ? 'en' : 'zh-CN')
+// 按钮显示当前语言的短码，点开是全部可选语言（与登录页同一个 LocaleMenu）。
+const localeShort = computed(() => currentLocaleShort())
+const activeLocale = computed(() => currentLocale())
 // 跳进设置页时希望落在哪个页签（'' = 由 Settings 自己决定，默认 llm）
 const settingsTab = ref('')
 
 // ===== 右上角：当前登录用户 + 自助修改密码 =====
 const currentUser = getUser() || {}
-const currentUserName = computed(() => currentUser.display_name || currentUser.name || '未登录')
+const currentUserName = computed(() => currentUser.display_name || currentUser.name || t('user.notSignedIn'))
 // 头像里的首字母（大写）
 const avatarText = computed(() => String(currentUserName.value || 'U').slice(0, 1).toUpperCase())
 // 悬浮 tip：显示名 + 账号名（登录名）。显示名可以重复，账号名才是唯一身份；
@@ -258,9 +268,9 @@ const avatarText = computed(() => String(currentUserName.value || 'U').slice(0, 
 const avatarTip = computed(() => {
   const account = String(currentUser.name || '')
   const name = account && account !== currentUserName.value
-    ? `${currentUserName.value}（账号 ${account}）`
+    ? t('user.withAccount', { name: currentUserName.value, account })
     : currentUserName.value
-  return account ? `${name}，点击复制账号` : name
+  return account ? t('user.copyTip', { name }) : name
 })
 
 // 复制文本：优先 navigator.clipboard（需要 https 或 localhost）；
@@ -296,9 +306,9 @@ const copyAccount = async () => {
   if (!account) return
   const ok = await copyText(account)
   if (ok) {
-    ElMessage.success({ message: `账号已复制：${account}`, duration: 1200 })
+    ElMessage.success({ message: t('user.copied', { account }), duration: 1200 })
   } else {
-    ElMessage.error('复制失败，请手动选择账号名')
+    ElMessage.error(t('user.copyFailed'))
   }
 }
 
@@ -358,10 +368,10 @@ const openPwdDialog = () => {
 
 const submitChangePwd = async () => {
   const f = pwdForm.value
-  if (!f.old_password) return ElMessage.warning('请输入当前密码')
-  if (!f.new_password || f.new_password.length < 8) return ElMessage.warning('新密码至少 8 位')
-  if (f.new_password !== f.confirm) return ElMessage.warning('两次输入的新密码不一致')
-  if (f.new_password === f.old_password) return ElMessage.warning('新密码不能与当前密码相同')
+  if (!f.old_password) return ElMessage.warning(t('password.requiredCurrent'))
+  if (!f.new_password || f.new_password.length < 8) return ElMessage.warning(t('password.minLength'))
+  if (f.new_password !== f.confirm) return ElMessage.warning(t('password.mismatch'))
+  if (f.new_password === f.old_password) return ElMessage.warning(t('password.sameAsOld'))
 
   pwdSaving.value = true
   try {
@@ -371,11 +381,11 @@ const submitChangePwd = async () => {
       body: JSON.stringify({ old_password: f.old_password, new_password: f.new_password })
     })
     const data = await resp.json().catch(() => ({}))
-    if (data.code !== 200) throw new Error(data.msg || '修改失败')
-    ElMessage.success({ message: '密码已修改', duration: 1200 })
+    if (data.code !== 200) throw new Error(formatError(data) || t('password.failed'))
+    ElMessage.success({ message: t('password.changed'), duration: 1200 })
     pwdDialogVisible.value = false
   } catch (e) {
-    ElMessage.error(e.message || '修改失败')
+    ElMessage.error(e.message || t('password.failed'))
   } finally {
     pwdSaving.value = false
   }
@@ -413,7 +423,7 @@ const handleOpenEntity = (p) => {
 }
 
 const handleLogout = () => {
-  console.log('用户点击退出登录')
+  console.log(t('user.logoutClick'))
   emit('logout')
 }
 
@@ -554,11 +564,11 @@ const toggleChat = () => {
 // ===== 右侧工作台：开关 / 拖拽 / 标签协议 =====
 // 新建标签（启动页）：点「+」或首次打开工作台时调用
 const newWorkbenchTab = () => {
-  const t = { id: `wb${++wbSeq}`, type: 'home', title: '新标签', closable: true }
-  wbTabs.value.push(t)
-  wbActiveId.value = t.id
+  const tab = { id: `wb${++wbSeq}`, type: 'home', title: t('workbench.defaultTab'), closable: true }
+  wbTabs.value.push(tab)
+  wbActiveId.value = tab.id
   wbOpen.value = true
-  return t.id
+  return tab.id
 }
 
 // 程序推标签：同 id 已存在则激活，否则新建；返回标签 id
@@ -571,10 +581,10 @@ const openWorkbenchTab = (tab) => {
       return exist.id
     }
   }
-  const t = { id: tab.id || `wb${++wbSeq}`, closable: true, ...tab }
-  wbTabs.value.push(t)
-  wbActiveId.value = t.id
-  return t.id
+  const nextTab = { id: tab.id || `wb${++wbSeq}`, closable: true, ...tab }
+  wbTabs.value.push(nextTab)
+  wbActiveId.value = nextTab.id
+  return nextTab.id
 }
 
 const closeWorkbenchTab = (id) => {
@@ -793,29 +803,33 @@ const checkDefaultLLM = async () => {
     body = await res.json()
   } catch (e) {
     // 网络/网关异常不打扰：那不是"没配模型"，提示了反而误导
-    console.info('[llm-check] 请求失败，跳过提示:', e)
+    console.info(t('llmCheck.requestFailed'), e)
     return
   }
 
   // 后端有缺省模型 → code=200 直接返回；
   // 没有时是 ErrJSON("Default LLM model not found")，只认这一种情况
   if (body?.code === 200) {
-    console.info('[llm-check] 已有缺省模型:', body?.data?.name)
+    console.info(t('llmCheck.hasDefault'), body?.data?.name)
     return
   }
-  if (!/not found|不存在/i.test(body?.msg || '')) {
-    console.info('[llm-check] 非「缺少默认模型」的响应，跳过提示:', body?.code, body?.msg)
+  // 认编码（llm.model_not_found）；老后端没有 error 字段时退回文案匹配
+  const noDefault = body?.error
+    ? body.error === 'llm.model_not_found'
+    : /not found|不存在/i.test(body?.msg || '')
+  if (!noDefault) {
+    console.info(t('llmCheck.skipNotice'), body?.code, body?.msg)
     return
   }
 
   llmHintShown = true
-  console.info('[llm-check] 未检测到缺省模型，提示用户去配置')
+  console.info(t('llmCheck.noDefault'))
 
   try {
     await ElMessageBox.confirm(
-      '当前租户还没有配置缺省大模型，智能体无法开始对话。现在去「设置 → LLM 配置」添加服务商与模型吗？',
-      '未检测到大模型',
-      { type: 'warning', confirmButtonText: '去配置', cancelButtonText: '稍后' }
+      t('llmCheck.prompt'),
+      t('llmCheck.title'),
+      { type: 'warning', confirmButtonText: t('llmCheck.goConfig'), cancelButtonText: t('llmCheck.later') }
     )
     // 明确点名 llm 页签：用户之前的设置可能停在别的分区
     settingsTab.value = 'llm'

@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -23,10 +23,10 @@
           <div class="prop-group-horizontal">
             <div class="prop-item">
               <el-radio-group v-model="loopType" class="radio-group" @change="handleLoopTypeChange">
-                <el-radio label="count">计数</el-radio>
-                <el-radio label="each">遍历</el-radio>
-                <el-radio label="while">前置条件</el-radio>
-                <el-radio label="do_while">后置条件</el-radio>
+                <el-radio label="count">{{ t('flow.loopNode.modeCount') }}</el-radio>
+                <el-radio label="each">{{ t('flow.loopNode.modeEach') }}</el-radio>
+                <el-radio label="while">{{ t('flow.loopNode.modeWhile') }}</el-radio>
+                <el-radio label="do_while">{{ t('flow.loopNode.modeDoWhile') }}</el-radio>
               </el-radio-group>
             </div>
           </div>
@@ -34,12 +34,12 @@
         
         <div class="props-section" v-if="loopType === 'count'">
           <div class="section-title">
-            <span>计数配置</span>
+            <span>{{ t('flow.loopNode.countSection') }}</span>
           </div>
           
           <div class="prop-group-horizontal">
             <div class="prop-item">
-              <label class="prop-label">循环次数</label>
+              <label class="prop-label">{{ t('flow.loopNode.countLabel') }}</label>
               <el-input-number
                 v-model="loopCount"
                 class="prop-input"
@@ -52,7 +52,7 @@
               />
             </div>
             <div class="prop-item">
-              <label class="prop-label">循环变量名</label>
+              <label class="prop-label">{{ t('flow.loopNode.countVarName') }}</label>
               <el-input 
                 type="text" 
                 v-model="loopVariableName" 
@@ -66,12 +66,12 @@
         
         <div class="props-section" v-if="loopType === 'each'">
           <div class="section-title">
-            <span>遍历配置</span>
+            <span>{{ t('flow.loopNode.eachSection') }}</span>
           </div>
           
           <div class="prop-group-horizontal">
             <div class="prop-item flex-expand">
-              <label class="prop-label">遍历变量</label>
+              <label class="prop-label">{{ t('flow.loopNode.eachVar') }}</label>
               <button 
                 class="show-content-btn expand-btn variable-select-btn" 
                 @click="handleShowVariableSelectForEach($event)"
@@ -96,12 +96,12 @@
                   </template>
                 </template>
                 <template v-else>
-                  选择遍历变量
+                  {{ t('flow.loopNode.eachVarPlaceholder') }}
                 </template>
               </button>
             </div>
             <div class="prop-item">
-              <label class="prop-label">元素变量</label>
+              <label class="prop-label">{{ t('flow.loopNode.itemVar') }}</label>
               <el-input 
                 type="text" 
                 v-model="foreachItemName" 
@@ -115,11 +115,11 @@
         
         <div class="props-section" v-if="loopType === 'while' || loopType === 'do_while'">
           <div class="section-title">
-            <span>循环条件</span>
+            <span>{{ t('flow.loopNode.conditionSection') }}</span>
           </div>
 
           <div class="section-title">
-            <span class="title-as-label">输入变量</span>
+            <span class="title-as-label">{{ t('flow.common.inputVars') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddLoopInputVariable">
               <el-icon><Plus /></el-icon>
             </button>
@@ -127,7 +127,7 @@
 
           <div class="input-variables-list">
             <div v-if="Object.keys(loopInputVariables).length === 0" class="input-empty-state">
-              <p>暂无输入变量</p>
+              <p>{{ t('flow.common.noInputVars') }}</p>
             </div>
 
             <div
@@ -141,7 +141,7 @@
                 class="input-variable-name-input"
                 @focus="handleLoopInputVariableFocus(name)"
                 @blur="handleUpdateLoopInputVariableName(name, $event.target.value)"
-                placeholder="变量名"
+                :placeholder="t('flow.common.varName')"
               />
               <div class="input-variable-content">
                 <button
@@ -168,7 +168,7 @@
                     </template>
                   </template>
                   <template v-else>
-                    选择变量
+                    {{ t('flow.common.selectVar') }}
                   </template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteLoopInputVariable(name)">
@@ -184,19 +184,19 @@
               v-model="loopCondition"
               @keydown="handleConditionKeydown"
               @blur="handleConditionChange"
-              placeholder="输入条件脚本..."
+              :placeholder="t('flow.loopNode.conditionPlaceholder')"
             ></textarea>
           </div>
 
           <div class="prop-group-horizontal">
             <div class="prop-item">
-              <label class="prop-label">脚本语言</label>
+              <label class="prop-label">{{ t('flow.common.scriptLanguage') }}</label>
               <el-select v-model="conditionLang" class="prop-select" @change="handleConditionLangChange">
                 <el-option v-for="lang in scriptLanguages" :key="lang" :label="lang" :value="lang" />
               </el-select>
             </div>
             <div class="prop-item">
-              <label class="prop-label">最大次数</label>
+              <label class="prop-label">{{ t('flow.loopNode.maxIterations') }}</label>
               <el-input-number
                 v-model="maxLoopCount"
                 class="prop-input"
@@ -205,7 +205,7 @@
                 :step="1"
                 :precision="0"
                 controls-position="right"
-                placeholder="留空 = 系统上限"
+                :placeholder="t('flow.loopNode.maxIterationsPlaceholder')"
                 @change="handleMaxLoopCountChange"
               />
             </div>
@@ -213,7 +213,7 @@
 
           <div class="prop-group-horizontal">
             <div class="prop-item">
-              <label class="prop-label">超时（秒）</label>
+              <label class="prop-label">{{ t('flow.loopNode.timeoutSeconds') }}</label>
               <el-switch
                 v-model="conditionTimeoutEnabled"
                 @change="handleConditionTimeoutChange"
@@ -241,7 +241,7 @@
 
         <div class="props-section">
           <div ref="localSectionRef" class="section-title">
-            <span>局部变量</span>
+            <span>{{ t('flow.common.localVars') }}</span>
             <el-dropdown @command="handleAddLocalVariable" trigger="click" placement="bottom-end"
               popper-class="loop-local-popper"
               @visible-change="handleLocalDropdownVisible">
@@ -251,28 +251,28 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="string">
-                    <span class="dropdown-icon icon-string-inline">S</span>字符串
+                    <span class="dropdown-icon icon-string-inline">S</span>{{ t('flow.typeOptions.string') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="number">
-                    <span class="dropdown-icon icon-number-inline">N</span>数字
+                    <span class="dropdown-icon icon-number-inline">N</span>{{ t('flow.typeOptions.number') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="boolean">
-                    <span class="dropdown-icon icon-boolean-inline">B</span>布尔值
+                    <span class="dropdown-icon icon-boolean-inline">B</span>{{ t('flow.typeOptions.boolean') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="object">
-                    <span class="dropdown-icon icon-object-inline">O</span>对象
+                    <span class="dropdown-icon icon-object-inline">O</span>{{ t('flow.typeOptions.object') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="array[string]">
-                    <span class="dropdown-icon icon-string-array-inline">S</span>字符串数组
+                    <span class="dropdown-icon icon-string-array-inline">S</span>{{ t('flow.typeOptions.arrayString') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="array[number]">
-                    <span class="dropdown-icon icon-number-array-inline">N</span>数字数组
+                    <span class="dropdown-icon icon-number-array-inline">N</span>{{ t('flow.typeOptions.arrayNumber') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="array[boolean]">
-                    <span class="dropdown-icon icon-boolean-array-inline">B</span>布尔数组
+                    <span class="dropdown-icon icon-boolean-array-inline">B</span>{{ t('flow.typeOptions.arrayBoolean') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="array[object]">
-                    <span class="dropdown-icon icon-object-array-inline">O</span>对象数组
+                    <span class="dropdown-icon icon-object-array-inline">O</span>{{ t('flow.typeOptions.arrayObject') }}
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -281,7 +281,7 @@
           
           <div class="output-variables-cards">
             <div v-if="Object.keys(localVariables).length === 0" class="output-empty-state">
-              <p>暂无局部变量</p>
+              <p>{{ t('flow.common.noLocalVars') }}</p>
             </div>
             
             <div
@@ -299,7 +299,7 @@
                   :data-variable-key="`local-${key}`"
                   class="output-variable-name-input"
                   @change="handleRenameLocalVariable(key, $event.target.value)"
-                  placeholder="变量名"
+                  :placeholder="t('flow.common.varName')"
                 />
               </div>
               <div class="output-variable-content">
@@ -307,7 +307,7 @@
                   type="text"
                   :value="config.description"
                   class="output-description-input"
-                  placeholder="添加描述"
+                  :placeholder="t('flow.common.addDescription')"
                   @change="handleUpdateLocalVariable(key, 'description', $event.target.value)"
                 />
                 <button class="output-delete-btn" @click="handleDeleteLocalVariable(key)">
@@ -325,58 +325,58 @@
       </div>
 
       <div v-if="activeTab === 'lastRun'" class="last-run-panel">
-        <div v-if="!loopResult" class="nr-empty">暂无运行数据</div>
+        <div v-if="!loopResult" class="nr-empty">{{ t('flow.node.run.empty') }}</div>
         <div v-else class="props-section">
           <div class="result-item result-meta-row">
             <span class="meta-item">
-              <label class="result-label">运行状态</label>
+              <label class="result-label">{{ t('flow.node.run.status') }}</label>
               <span class="result-value" :class="loopStatusClass">{{ loopStatusText }}</span>
             </span>
             <span class="meta-item">
-              <label class="result-label">运行时间</label>
+              <label class="result-label">{{ t('flow.node.run.time') }}</label>
               <span class="result-value">{{ loopStartTimeText || '-' }}</span>
             </span>
             <span class="meta-item">
-              <label class="result-label">耗时</label>
+              <label class="result-label">{{ t('flow.node.run.duration') }}</label>
               <span class="result-value">{{ loopResult.duration_ms }}ms</span>
             </span>
           </div>
 
           <div class="result-item result-meta-row">
             <span class="meta-item">
-              <label class="result-label">循环类型</label>
+              <label class="result-label">{{ t('flow.loopNode.resultType') }}</label>
               <span class="result-value">{{ loopTypeText || '-' }}</span>
             </span>
             <span class="meta-item">
-              <label class="result-label">迭代次数</label>
+              <label class="result-label">{{ t('flow.loopNode.resultIterations') }}</label>
               <span class="result-value">{{ loopIterations }}</span>
             </span>
           </div>
 
           <div class="result-item">
-            <label class="result-label">输入</label>
+            <label class="result-label">{{ t('flow.node.run.input') }}</label>
             <pre class="result-output">{{ loopInputText }}</pre>
           </div>
 
           <div class="result-item">
-            <label class="result-label">输出</label>
+            <label class="result-label">{{ t('flow.node.run.output') }}</label>
             <pre class="result-output">{{ loopOutputText }}</pre>
           </div>
 
           <div v-if="loopLocalText" class="result-item">
-            <label class="result-label">本地变量</label>
+            <label class="result-label">{{ t('flow.node.run.localVars') }}</label>
             <pre class="result-output">{{ loopLocalText }}</pre>
           </div>
 
           <div v-if="loopLogs.length" class="result-item">
-            <label class="result-label">日志</label>
+            <label class="result-label">{{ t('flow.node.run.logs') }}</label>
             <div class="nr-logs">
               <div v-for="(log, i) in loopLogs" :key="i" class="nr-log">{{ log }}</div>
             </div>
           </div>
 
           <div v-if="loopResult.err_msg" class="result-item">
-            <label class="result-label">错误</label>
+            <label class="result-label">{{ t('flow.node.run.error') }}</label>
             <div class="nr-log nr-error">{{ loopResult.err_msg }}</div>
           </div>
         </div>
@@ -394,11 +394,14 @@ import OutputVarsConfig from './OutputVarsConfig.vue';
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
+import { useI18n } from 'vue-i18n'
 
 const FlowNodes = inject('FlowNodes', ref([]));
 const scriptLanguages = inject('scriptLanguages', ref(['lua']));
 const flowDebug = inject('flowDebug', null);
 const defaultLang = computed(() => scriptLanguages.value[0] || 'lua');
+const { t } = useI18n()
+
 const props = defineProps({
  selectedNode: {
  type: Object,
@@ -525,7 +528,7 @@ const handleLoopTypeChange = () => {
  newConfig.loop_vars = {
  [loopVariableName.value]: {
  type: 'number',
- description: '循环下标'
+ description: t('flow.nodeFactory.loopVarIndex')
  }
  };
  } else if (loopType.value === 'each') {
@@ -540,11 +543,11 @@ const handleLoopTypeChange = () => {
  newConfig.loop_vars = {
  [foreachItemName.value]: {
  type: itemType,
- description: '循环对象'
+ description: t('flow.nodeFactory.loopVarItem')
  },
  [loopVariableName.value]: {
  type: 'number',
- description: '循环下标'
+ description: t('flow.nodeFactory.loopVarIndex')
  }
  };
  } else if (loopType.value === 'while' || loopType.value === 'do_while') {
@@ -577,7 +580,7 @@ const handleLoopCountChange = () => {
  newConfig.loop_vars = {
  [loopVariableName.value]: {
  type: 'number',
- description: '循环下标'
+ description: t('flow.nodeFactory.loopVarIndex')
  }
  };
  emit('update-node-data', {
@@ -588,20 +591,21 @@ const handleLoopCountChange = () => {
 const handleLoopVariableNameChange = () => {
  const newConfig = { ...props.selectedNode.data.config };
  if (newConfig.loop_vars) {
- const itemName = Object.keys(newConfig.loop_vars).find(key => newConfig.loop_vars[key].description === '循环对象');
+ // 按 key 认出「非下标那一个」，不按 description 匹配：description 是给人看的、会随界面语言变
+ const itemName = Object.keys(newConfig.loop_vars).find(key => key !== loopVariableName.value);
  const itemType = itemName ? newConfig.loop_vars[itemName].type : 'string';
  
  newConfig.loop_vars = {
  [loopVariableName.value]: {
  type: 'number',
- description: '循环下标'
+ description: t('flow.nodeFactory.loopVarIndex')
  }
  };
  
  if (itemName) {
  newConfig.loop_vars[itemName] = {
  type: itemType,
- description: '循环对象'
+ description: t('flow.nodeFactory.loopVarItem')
  };
  }
  }
@@ -674,11 +678,11 @@ const handleForeachItemNameChange = () => {
  newConfig.loop_vars = {
  [foreachItemName.value]: {
  type: foreachItemType.value,
- description: '循环对象'
+ description: t('flow.nodeFactory.loopVarItem')
  },
  [loopVariableName.value]: {
  type: 'number',
- description: '循环下标'
+ description: t('flow.nodeFactory.loopVarIndex')
  }
  };
  emit('update-node-data', {
@@ -719,11 +723,11 @@ const handleShowVariableSelectForEach = (event) => {
  newConfig.loop_vars = {
  [foreachItemName.value]: {
  type: itemType,
- description: '循环对象'
+ description: t('flow.nodeFactory.loopVarItem')
  },
  [loopVariableName.value]: {
  type: 'number',
- description: '循环下标'
+ description: t('flow.nodeFactory.loopVarIndex')
  }
  };
 

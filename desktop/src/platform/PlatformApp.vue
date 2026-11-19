@@ -36,19 +36,27 @@
         <button
           v-if="hasDesk"
           class="top-btn"
-          title="浏览器里还留着租户控制台的会话"
+          :title="t('platform.app.backToConsoleTip')"
           @click="emit('switch-console')"
         >
           <el-icon><Back /></el-icon>
-          <span>返回控制台</span>
+          <span>{{ t('platform.app.backToConsole') }}</span>
         </button>
+        <el-dropdown trigger="click" @command="changeLocale">
+          <button class="top-btn" :title="t('common.language')">
+            <span>{{ localeShort }}</span>
+          </button>
+          <template #dropdown>
+            <LocaleMenu :active="activeLocale" />
+          </template>
+        </el-dropdown>
         <button class="top-btn" @click="openPwdDialog">
           <el-icon><Lock /></el-icon>
-          <span>密码</span>
+          <span>{{ t('nav.password') }}</span>
         </button>
         <button class="top-btn" @click="handleLogout">
           <el-icon><SwitchButton /></el-icon>
-          <span>退出</span>
+          <span>{{ t('nav.logout') }}</span>
         </button>
       </div>
     </header>
@@ -63,24 +71,24 @@
     </main>
 
     <!-- 修改密码（当前登录的平台账号自助；租户账号在控制台改自己的） -->
-    <el-dialog v-model="pwdDialogVisible" title="修改密码" width="440px">
+    <el-dialog v-model="pwdDialogVisible" :title="t('platform.app.changePassword')" width="440px">
       <el-form label-position="top">
-        <el-form-item label="当前密码">
-          <el-input v-model="pwdForm.old_password" type="password" show-password placeholder="请输入当前密码" />
+        <el-form-item :label="t('password.current')">
+          <el-input v-model="pwdForm.old_password" type="password" show-password :placeholder="t('password.currentPlaceholder')" />
         </el-form-item>
-        <el-form-item label="新密码">
-          <el-input v-model="pwdForm.new_password" type="password" show-password placeholder="至少 8 位" />
+        <el-form-item :label="t('password.new')">
+          <el-input v-model="pwdForm.new_password" type="password" show-password :placeholder="t('password.newPlaceholder')" />
         </el-form-item>
-        <el-form-item label="确认新密码">
+        <el-form-item :label="t('password.confirm')">
           <el-input v-model="pwdForm.confirm" type="password" show-password @keyup.enter="submitChangePwd" />
         </el-form-item>
         <div class="pwd-tip">
-          修改成功后，其它端已登录的会话仍保持有效（token 不会失效）；如需立即踢下线，请让管理员停用该账号。
+          {{ t('password.hint') }}
         </div>
       </el-form>
       <template #footer>
-        <el-button @click="pwdDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="pwdSaving" @click="submitChangePwd">确定</el-button>
+        <el-button @click="pwdDialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="pwdSaving" @click="submitChangePwd">{{ t('common.confirm') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -88,15 +96,31 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElIcon, ElMessage } from 'element-plus'
 import { Back, Box, Connection, Lock, OfficeBuilding, Setting, Shop, SwitchButton, UserFilled } from '@element-plus/icons-vue'
 import { api } from './api'
 import { clearAuth, getToken, getUser, saveAuth } from './auth'
 import { hasDeskSession } from '../mode'
+import LocaleMenu from '../LocaleMenu.vue'
+import { currentLocale, currentLocaleShort, setLocale } from '../locales'
+import { setTitle } from '../title'
 import AdminConsole from './views/AdminConsole.vue'
 import MyTenantsView from './views/MyTenantsView.vue'
 
 const emit = defineEmits(['logout', 'switch-console'])
+
+const { t } = useI18n()
+
+// 语言切换常驻入口：登录页那个按钮只在未登录时可见，登录后得有地方能切回来。
+// 按钮显示当前语言的短码，点开是全部可选语言（与登录页同一个 LocaleMenu）。
+const localeShort = computed(() => currentLocaleShort())
+const activeLocale = computed(() => currentLocale())
+const changeLocale = (value) => {
+  setLocale(value)
+  // 管理台的页签后缀是固定文案（不是租户号），切换语言后跟着改一次
+  setTitle(t('platform.app.consoleTitle'))
+}
 
 const user = ref(getUser() || {})
 const tenantCount = ref(0)
@@ -110,32 +134,36 @@ const isAdminRole = computed(() => user.value?.role === 'admin')
 const navGroups = computed(() =>
   isAdminRole.value
     ? [
-        [
-          { key: 'tenants', label: '租户管理', icon: OfficeBuilding },
-          { key: 'users', label: '平台用户', icon: UserFilled },
-          { key: 'plugins', label: '插件与能力', icon: Box },
-          { key: 'system', label: '系统设置', icon: Setting }
-        ],
-        [
-          { key: 'assets', label: '本地市场', icon: Shop },
-          { key: 'market', label: '远端市场', icon: Connection }
-        ]
+      [
+        { key: 'tenants', label: t('platform.app.navTenants'), icon: OfficeBuilding },
+        { key: 'users', label: t('platform.app.navUsers'), icon: UserFilled },
+        { key: 'plugins', label: t('platform.app.navPlugins'), icon: Box },
+        { key: 'system', label: t('platform.app.navSystem'), icon: Setting }
+      ],
+      [
+        { key: 'assets', label: t('platform.app.navAssets'), icon: Shop },
+        { key: 'market', label: t('platform.app.navMarket'), icon: Connection }
       ]
-    : [[{ key: 'my-tenants', label: '我的租户', icon: OfficeBuilding }]]
+    ]
+    : [[{ key: 'my-tenants', label: t('platform.app.navMyTenants'), icon: OfficeBuilding }]]
 )
 const activeNav = ref('tenants')
 
 const accountName = computed(() => user.value?.name || '')
-const userName = computed(() => user.value?.display_name || user.value?.name || '未知账号')
+const userName = computed(() => user.value?.display_name || user.value?.name || t('platform.app.unknownAccount'))
 const avatarText = computed(() => String(userName.value || 'U').slice(0, 1).toUpperCase())
 // tip 里带上账号名（登录名）：显示名可以重复，账号名才是唯一身份
 // （显示名为空时纯展示账号名，此时不重复打印一遍）
 const identityTip = computed(() => {
-  const role = isAdminRole.value ? '平台管理员' : '用户'
+  const role = isAdminRole.value ? t('platform.app.roleAdmin') : t('platform.app.roleUser')
   const account =
-    accountName.value && accountName.value !== userName.value ? `（账号 ${accountName.value}）` : ''
-  const sub = isAdminRole.value ? '管所有租户' : `名下 ${tenantCount.value} 个租户`
-  return `${role} · ${userName.value}${account} · ${sub}${accountName.value ? '，点击复制账号' : ''}`
+    accountName.value && accountName.value !== userName.value
+      ? t('platform.app.accountSuffix', { account: accountName.value })
+      : ''
+  const sub = isAdminRole.value
+    ? t('platform.app.subAdmin')
+    : t('platform.app.subUser', { count: tenantCount.value })
+  return `${role} · ${userName.value}${account} · ${sub}${accountName.value ? t('platform.app.copyAccountSuffix') : ''}`
 })
 
 // 复制文本：优先 navigator.clipboard（需要 https 或 localhost）；
@@ -170,9 +198,9 @@ const copyAccount = async () => {
   if (!accountName.value) return
   const ok = await copyText(accountName.value)
   if (ok) {
-    ElMessage.success({ message: `账号已复制：${accountName.value}`, duration: 1200 })
+    ElMessage.success({ message: t('user.copied', { account: accountName.value }), duration: 1200 })
   } else {
-    ElMessage.error('复制失败，请手动选择账号名')
+    ElMessage.error(t('user.copyFailed'))
   }
 }
 
@@ -196,7 +224,7 @@ onMounted(async () => {
     tenantCount.value = data?.tenant_count ?? 0
     ensureNav()
   } catch (err) {
-    ElMessage.error(err.message || '平台会话已失效，请重新登录')
+    ElMessage.error(err.message || t('apiError.sessionExpired'))
     clearAuth()
     emit('logout')
   }
@@ -214,24 +242,24 @@ const openPwdDialog = () => {
 
 const submitChangePwd = async () => {
   const f = pwdForm.value
-  if (!f.old_password) return ElMessage.warning('请输入当前密码')
-  if (!f.new_password || f.new_password.length < 8) return ElMessage.warning('新密码至少 8 位')
-  if (f.new_password !== f.confirm) return ElMessage.warning('两次输入的新密码不一致')
-  if (f.new_password === f.old_password) return ElMessage.warning('新密码不能与当前密码相同')
+  if (!f.old_password) return ElMessage.warning(t('password.requiredCurrent'))
+  if (!f.new_password || f.new_password.length < 8) return ElMessage.warning(t('password.minLength'))
+  if (f.new_password !== f.confirm) return ElMessage.warning(t('password.mismatch'))
+  if (f.new_password === f.old_password) return ElMessage.warning(t('password.sameAsOld'))
 
   pwdSaving.value = true
   try {
     await api.changeMyPassword(f.old_password, f.new_password)
-    ElMessage.success({ message: '密码已修改', duration: 1200 })
+    ElMessage.success({ message: t('password.changed'), duration: 1200 })
     pwdDialogVisible.value = false
   } catch (err) {
     // api.js 遇到 401 已清掉本地会话：账号被停用/删除 → 直接回登录页
     if (err?.status === 401) {
-      ElMessage.error(err.message || '平台会话已失效，请重新登录')
+      ElMessage.error(err.message || t('apiError.sessionExpired'))
       emit('logout')
       return
     }
-    ElMessage.error(err.message || '修改失败')
+    ElMessage.error(err.message || t('password.failed'))
   } finally {
     pwdSaving.value = false
   }

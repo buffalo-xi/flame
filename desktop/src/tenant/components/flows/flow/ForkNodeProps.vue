@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -21,7 +21,7 @@
       <div v-if="activeTab === 'settings'" class="settings-panel">
         <div class="props-section">
           <div class="section-title">
-            <span>并发控制</span>
+            <span>{{ t('flow.node.concurrency.title') }}</span>
           </div>
 
           <div class="conn-control-row">
@@ -30,7 +30,7 @@
                 v-model="connEnabled"
                 @change="handleConnEnabledChange"
               />
-              <span class="conn-label">最大并发数</span>
+              <span class="conn-label">{{ t('flow.nodeProps.fork.maxConcurrency') }}</span>
             </div>
             <div class="conn-control-input" v-if="connEnabled">
               <el-input
@@ -40,11 +40,11 @@
                 @blur="handleMaxConcurrencyBlur"
                 :min="1"
                 :max="9999"
-                placeholder="正整数"
+                :placeholder="t('flow.nodeProps.fork.positiveInt')"
               />
             </div>
             <div class="conn-control-hint" v-else>
-              <span class="hint-text">不限制</span>
+              <span class="hint-text">{{ t('flow.nodeProps.fork.unlimited') }}</span>
             </div>
           </div>
         </div>
@@ -65,8 +65,11 @@
 <script setup>
 import { ref, watch, computed } from 'vue';
 import NodeLastRun from './NodeLastRun.vue'
+import { useI18n } from 'vue-i18n'
 import { ElSwitch, ElInput } from 'element-plus';
 import OnErrorConfig from './OnErrorConfig.vue';
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

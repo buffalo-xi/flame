@@ -6,14 +6,14 @@
         :class="{ active: activeTab === 'settings' }"
         @click="activeTab = 'settings'"
       >
-        配置
+        {{ t('flow.nodeProps.tabConfig') }}
       </button>
       <button
         class="tab-btn"
         :class="{ active: activeTab === 'lastRun' }"
         @click="activeTab = 'lastRun'"
       >
-        执行结果
+        {{ t('flow.nodeProps.tabResult') }}
       </button>
     </div>
 
@@ -21,15 +21,15 @@
       <div v-if="activeTab === 'settings'" class="settings-panel">
         <div class="props-section">
           <div class="section-title">
-            <span>并发组同步</span>
+            <span>{{ t('flow.nodeProps.wait.syncTitle') }}</span>
           </div>
 
           <div class="fork-select-row">
-            <span class="fork-label">选择并发组:</span>
+            <span class="fork-label">{{ t('flow.nodeProps.wait.selectGroup') }}</span>
             <el-select
               v-model="selectedForkID"
               class="fork-select"
-              placeholder="请选择"
+              :placeholder="t('flow.nodeProps.wait.selectPlaceholder')"
               @change="handleForkChange"
             >
               <el-option
@@ -42,20 +42,20 @@
             <button
               v-if="selectedForkID"
               class="clear-btn"
-              title="清除选择"
+              :title="t('flow.common.clearSelection')"
               @click="clearForkSelection"
             >
               ✕
             </button>
           </div>
           <div class="fork-hint">
-            <span class="hint-text">选择要等待的 并发组 节点</span>
+            <span class="hint-text">{{ t('flow.nodeProps.wait.hint') }}</span>
           </div>
         </div>
 
         <div class="props-section">
           <div class="section-title">
-            <span>超时控制</span>
+            <span>{{ t('flow.common.timeout') }}</span>
           </div>
 
           <div class="timeout-row">
@@ -73,7 +73,7 @@
               :max="3600"
               placeholder="30"
             />
-            <span v-if="timeoutEnabled" class="unit-text">秒</span>
+            <span v-if="timeoutEnabled" class="unit-text">{{ t('flow.common.seconds') }}</span>
           </div>
         </div>
 
@@ -93,7 +93,10 @@
 <script setup>
 import { ref, watch, computed, inject } from 'vue';
 import NodeLastRun from './NodeLastRun.vue'
+import { useI18n } from 'vue-i18n'
 import OnErrorConfig from './OnErrorConfig.vue';
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: {

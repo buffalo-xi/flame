@@ -1,8 +1,8 @@
 <template>
   <div class="http-node-props">
     <div class="tabs">
-      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">配置</button>
-      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">执行结果</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">{{ t('flow.nodeProps.tabConfig') }}</button>
+      <button class="tab-btn" :class="{ active: activeTab === 'lastRun' }" @click="activeTab = 'lastRun'">{{ t('flow.nodeProps.tabResult') }}</button>
     </div>
 
     <div class="tab-content">
@@ -10,19 +10,19 @@
         <!-- 输入变量 -->
         <div class="props-section">
           <div class="section-title">
-            <span>输入变量</span>
+            <span>{{ t('flow.common.inputVars') }}</span>
             <button class="add-variable-icon-btn" @click="handleAddInputVariable">
               <el-icon><Plus /></el-icon>
             </button>
           </div>
           <div class="input-variables-list">
             <div v-if="Object.keys(inputVariables).length === 0" class="input-empty-state">
-              <p>暂无输入变量</p>
+              <p>{{ t('flow.common.noInputVars') }}</p>
             </div>
             <div v-for="(variable, name) in inputVariables" :key="name" class="input-variable-row">
               <input type="text" :value="name" class="input-variable-name-input"
                 @focus="handleInputVariableFocus(name)"
-                @blur="handleUpdateInputVariableName(name, $event.target.value)" placeholder="变量名" />
+                @blur="handleUpdateInputVariableName(name, $event.target.value)" :placeholder="t('flow.common.varName')" />
               <div class="input-variable-content">
                 <button class="show-content-btn input-variable-btn" @click="handleShowInputVariableSelect(name, $event)">
                   <template v-if="variable.source_key">
@@ -42,7 +42,7 @@
                       </template>
                     </template>
                   </template>
-                  <template v-else>选择变量</template>
+                  <template v-else>{{ t('flow.common.selectVar') }}</template>
                 </button>
                 <button class="input-delete-btn" @click="handleDeleteInputVariable(name)">
                   <el-icon><Delete /></el-icon>
@@ -54,7 +54,7 @@
 
         <!-- 请求配置 -->
         <div class="props-section">
-          <div class="section-title"><span>请求配置</span></div>
+          <div class="section-title"><span>{{ t('flow.httpNode.requestSection') }}</span></div>
           <div class="request-config">
             <!-- Method + URL -->
             <div class="request-line">
@@ -81,41 +81,41 @@
             <!-- Params 面板 -->
             <div v-if="subTab === 'params'" class="kv-panel">
               <div class="kv-list">
-                <div v-if="params.length === 0" class="kv-empty">暂无参数</div>
+                <div v-if="params.length === 0" class="kv-empty">{{ t('flow.common.noParams') }}</div>
                 <div v-for="(item, idx) in params" :key="'p'+idx" class="kv-row">
                   <input type="text" :value="item.key" class="kv-key-input" placeholder="Key"
                     @blur="handleUpdateKV('params', idx, 'key', $event.target.value)" />
-                  <input type="text" :value="item.value" class="kv-value-input" placeholder="Value (支持模板)"
+                  <input type="text" :value="item.value" class="kv-value-input" :placeholder="t('flow.httpNode.valuePlaceholder')"
                     @blur="handleUpdateKV('params', idx, 'value', $event.target.value)" />
                   <button class="kv-delete-btn" @click="handleDeleteKV('params', idx)">
                     <el-icon><Delete /></el-icon>
                   </button>
                 </div>
               </div>
-              <button class="kv-add-btn" @click="handleAddKV('params')">+ 添加参数</button>
+              <button class="kv-add-btn" @click="handleAddKV('params')">{{ t('flow.httpNode.addParam') }}</button>
             </div>
 
             <!-- Headers 面板 -->
             <div v-if="subTab === 'headers'" class="kv-panel">
               <div class="kv-list">
-                <div v-if="headers.length === 0" class="kv-empty">暂无自定义 Header</div>
+                <div v-if="headers.length === 0" class="kv-empty">{{ t('flow.httpNode.noHeaders') }}</div>
                 <div v-for="(item, idx) in headers" :key="'h'+idx" class="kv-row">
                   <input type="text" :value="item.key" class="kv-key-input" placeholder="Key"
                     @blur="handleUpdateKV('headers', idx, 'key', $event.target.value)" />
-                  <input type="text" :value="item.value" class="kv-value-input" placeholder="Value (支持模板)"
+                  <input type="text" :value="item.value" class="kv-value-input" :placeholder="t('flow.httpNode.valuePlaceholder')"
                     @blur="handleUpdateKV('headers', idx, 'value', $event.target.value)" />
                   <button class="kv-delete-btn" @click="handleDeleteKV('headers', idx)">
                     <el-icon><Delete /></el-icon>
                   </button>
                 </div>
               </div>
-              <button class="kv-add-btn" @click="handleAddKV('headers')">+ 添加 Header</button>
+              <button class="kv-add-btn" @click="handleAddKV('headers')">{{ t('flow.httpNode.addHeader') }}</button>
             </div>
 
             <!-- Body 面板 -->
             <div v-if="subTab === 'body'" class="body-panel">
               <div class="body-type-row">
-                <span class="body-type-label">Body 类型</span>
+                <span class="body-type-label">{{ t('flow.httpNode.bodyType') }}</span>
                 <el-select v-model="bodyType" class="body-type-select" size="small" @change="handleBodyTypeChange">
                   <el-option label="JSON" value="json" />
                   <el-option label="Form" value="form" />
@@ -128,21 +128,21 @@
               </div>
               <div v-else-if="bodyType === 'form'" class="kv-panel">
                 <div class="kv-list">
-                  <div v-if="formBody.length === 0" class="kv-empty">暂无表单字段</div>
+                  <div v-if="formBody.length === 0" class="kv-empty">{{ t('flow.httpNode.noFormFields') }}</div>
                   <div v-for="(item, idx) in formBody" :key="'f'+idx" class="kv-row">
                     <input type="text" :value="item.key" class="kv-key-input" placeholder="Key"
                       @blur="handleUpdateFormBody(idx, 'key', $event.target.value)" />
-                    <input type="text" :value="item.value" class="kv-value-input" placeholder="Value (支持模板)"
+                    <input type="text" :value="item.value" class="kv-value-input" :placeholder="t('flow.httpNode.valuePlaceholder')"
                       @blur="handleUpdateFormBody(idx, 'value', $event.target.value)" />
                     <button class="kv-delete-btn" @click="handleDeleteFormBody(idx)">
                       <el-icon><Delete /></el-icon>
                     </button>
                   </div>
                 </div>
-                <button class="kv-add-btn" @click="handleAddFormBody">+ 添加字段</button>
+                <button class="kv-add-btn" @click="handleAddFormBody">{{ t('flow.httpNode.addField') }}</button>
               </div>
               <div v-else class="body-editor-wrapper">
-                <textarea :value="body" class="body-editor" placeholder="输入原始请求体..." rows="6"
+                <textarea :value="body" class="body-editor" :placeholder="t('flow.httpNode.rawBodyPlaceholder')" rows="6"
                   @blur="handleUpdateBody($event.target.value)" spellcheck="false"></textarea>
               </div>
             </div>
@@ -151,23 +151,23 @@
 
         <!-- 响应模式 & 超时 -->
         <div class="props-section">
-          <div class="section-title"><span>响应设置</span></div>
+          <div class="section-title"><span>{{ t('flow.httpNode.responseSection') }}</span></div>
           <div class="response-settings">
             <div class="setting-row">
-              <label class="setting-label">识别模式</label>
+              <label class="setting-label">{{ t('flow.httpNode.detectMode') }}</label>
               <el-radio-group v-model="responseMode" size="small" class="response-mode-radio-group" @change="handleResponseModeChange">
-                <el-radio value="">自动</el-radio>
-                <el-radio value="complete">强制 Complete</el-radio>
-                <el-radio value="sse_stream">强制 SSE</el-radio>
+                <el-radio value="">{{ t('flow.httpNode.modeAuto') }}</el-radio>
+                <el-radio value="complete">{{ t('flow.httpNode.modeComplete') }}</el-radio>
+                <el-radio value="sse_stream">{{ t('flow.httpNode.modeSse') }}</el-radio>
               </el-radio-group>
             </div>
             <div class="setting-row">
-              <label class="setting-label">请求超时</label>
+              <label class="setting-label">{{ t('flow.httpNode.requestTimeout') }}</label>
               <div class="timeout-row">
                 <el-switch v-model="timeoutEnabled" size="small" @change="handleTimeoutToggle" />
                 <input v-if="timeoutEnabled" type="number" :value="timeoutSeconds" class="timeout-input"
                   min="1" max="300" @blur="handleTimeoutChange($event.target.value)" />
-                <span v-if="timeoutEnabled" class="timeout-unit">秒</span>
+                <span v-if="timeoutEnabled" class="timeout-unit">{{ t('flow.common.seconds') }}</span>
               </div>
             </div>
           </div>
@@ -176,26 +176,24 @@
         <!-- Handler 脚本 -->
         <div class="props-section">
           <div class="section-title">
-            <span>响应处理脚本（可选）</span>
+            <span>{{ t('flow.httpNode.handlerSection') }}</span>
             <el-switch v-model="handlerEnabled" size="small" @change="handleHandlerToggle" />
           </div>
           <div v-if="handlerEnabled" class="handler-config">
             <div class="handler-lang-row">
-              <label class="handler-label">脚本语言</label>
+              <label class="handler-label">{{ t('flow.common.scriptLanguage') }}</label>
               <el-select v-model="handlerLang" class="handler-lang-select" size="small" @change="handleHandlerLangChange">
                 <el-option v-for="l in handlerLanguages" :key="l" :label="l" :value="l" />
               </el-select>
-              <label class="handler-label">脚本超时</label>
+              <label class="handler-label">{{ t('flow.httpNode.handlerTimeout') }}</label>
               <el-switch v-model="handlerTimeoutEnabled" size="small" @change="handleHandlerTimeoutToggle" />
               <input v-if="handlerTimeoutEnabled" type="number" :value="handlerTimeoutSeconds" class="timeout-input"
                 min="1" max="300" @blur="handleHandlerTimeoutChange($event.target.value)" />
-              <span v-if="handlerTimeoutEnabled" class="timeout-unit">秒</span>
+              <span v-if="handlerTimeoutEnabled" class="timeout-unit">{{ t('flow.common.seconds') }}</span>
             </div>
             <div class="handler-hint">
-              固定输出变量 <code>mode</code> / <code>status</code> / <code>headers</code> / <code>body</code> /
-              <code>sse_events</code> / <code>stream_finished</code> 由节点自动写入（有没有脚本都一样），
-              脚本里 return 这些名字会被忽略并记日志；脚本只用于处理自定义输出变量。
-              注意 <code>input.headers</code> 是对象，输出变量 <code>headers</code> 是 JSON 字符串。
+              {{ t('flow.httpNode.hint.prefix') }}<code>mode</code> / <code>status</code> / <code>headers</code> / <code>body</code> /
+              <code>sse_events</code> / <code>stream_finished</code>{{ t('flow.httpNode.hint.mid') }}<code>input.headers</code>{{ t('flow.httpNode.hint.suffix') }}<code>headers</code>{{ t('flow.httpNode.hint.tail') }}
             </div>
             <textarea :value="handlerScript" class="handler-editor" :placeholder="handlerPlaceholder"
               rows="8" @blur="handleHandlerScriptChange($event.target.value)" spellcheck="false"></textarea>
@@ -236,6 +234,9 @@ import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { HTTP_OUTPUTS } from '../nodeFactory.js'
 import { useInputVariables } from './inputVariables.js'
 import { useHandlerConfig } from './handlerConfig.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   selectedNode: { type: Object, default: null },
@@ -299,19 +300,7 @@ const {
   onChange: () => saveHttpConfig()
 })
 
-const handlerPlaceholder = computed(() => {
-  return `-- 响应数据通过 input 传入：
--- input.mode     - "complete" | "sse_stream"
--- input.status   - HTTP 状态码
--- input.headers  - 响应头（对象）
--- input.body     - 响应体
--- input.event    - SSE 事件对象 {id, event, data}
--- input.done     - 流关闭标记 (true/false)
---
--- 固定输出变量 mode / status / headers / body / sse_events / stream_finished
--- 由节点自动写入，脚本不要写它们；脚本只写自定义输出变量：
--- return { text = input.body }   (string 追加、非 string 覆盖)`
-})
+const handlerPlaceholder = computed(() => t('flow.nodeProps.handlerPlaceholderHttp'))
 
 // ── 输入变量：增删改 / 校验 / 快照统一在 inputVariables.js ──
 const {

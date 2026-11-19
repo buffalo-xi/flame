@@ -1,18 +1,18 @@
 <template>
   <div class="last-run-panel">
-    <div v-if="!nodeResult" class="nr-empty">暂无运行数据</div>
+    <div v-if="!nodeResult" class="nr-empty">{{ t('flow.node.run.empty') }}</div>
     <div v-else class="props-section">
       <div class="result-item result-meta-row">
         <span class="meta-item">
-          <label class="result-label">运行状态</label>
+          <label class="result-label">{{ t('flow.node.run.status') }}</label>
           <span class="result-value" :class="statusClass">{{ statusText }}</span>
         </span>
         <span class="meta-item">
-          <label class="result-label">运行时间</label>
+          <label class="result-label">{{ t('flow.node.run.time') }}</label>
           <span class="result-value">{{ startTimeText || '-' }}</span>
         </span>
         <span class="meta-item">
-          <label class="result-label">耗时</label>
+          <label class="result-label">{{ t('flow.node.run.duration') }}</label>
           <span class="result-value">{{ nodeResult.duration_ms }}ms</span>
         </span>
       </div>
@@ -20,33 +20,33 @@
       <!-- 输出变量：按节点声明的 outputs 逐项列出，声明了但没赋值的也留着（标灰虚线），
            这样"该有值却没有"一眼可见；原先整块 JSON dump 看不出这一点 -->
       <div v-if="outputRows.length" class="result-item">
-        <label class="result-label">输出变量{{ nodeResult.output_vars_truncated ? '（已截断）' : '' }}</label>
+        <label class="result-label">{{ t('flow.node.run.outputVars') }}{{ nodeResult.output_vars_truncated ? t('flow.node.run.truncated') : '' }}</label>
         <VarList :rows="outputRows" />
       </div>
 
       <!-- 输入变量：默认收起 —— 排查"节点实际拿到了什么"时才需要 -->
       <div v-if="inputRows.length" class="result-item">
         <div class="nr-section-head">
-          <label class="result-label">输入变量{{ nodeResult.input_vars_truncated ? '（已截断）' : '' }}</label>
-          <a class="nr-toggle" @click="showInputVars = !showInputVars">{{ showInputVars ? '收起' : '展开' }}</a>
+          <label class="result-label">{{ t('flow.node.run.inputVars') }}{{ nodeResult.input_vars_truncated ? t('flow.node.run.truncated') : '' }}</label>
+          <a class="nr-toggle" @click="showInputVars = !showInputVars">{{ showInputVars ? t('flow.node.run.collapse') : t('flow.node.run.expand') }}</a>
         </div>
         <VarList v-show="showInputVars" :rows="inputRows" />
       </div>
 
       <div v-if="localText" class="result-item">
-        <label class="result-label">本地变量{{ nodeResult.local_vars_truncated ? '（已截断）' : '' }}</label>
+        <label class="result-label">{{ t('flow.node.run.localVars') }}{{ nodeResult.local_vars_truncated ? t('flow.node.run.truncated') : '' }}</label>
         <pre class="result-output">{{ localText }}</pre>
       </div>
 
       <div v-if="logs.length" class="result-item">
-        <label class="result-label">日志</label>
+        <label class="result-label">{{ t('flow.node.run.logs') }}</label>
         <div class="nr-logs">
           <div v-for="(log, i) in logs" :key="i" class="nr-log">{{ log }}</div>
         </div>
       </div>
 
       <div v-if="nodeResult.err_msg" class="result-item">
-        <label class="result-label">错误</label>
+        <label class="result-label">{{ t('flow.node.run.error') }}</label>
         <div class="nr-log nr-error">{{ nodeResult.err_msg }}</div>
         <div v-if="nodeResult.err_stack" class="nr-log nr-stack">{{ nodeResult.err_stack }}</div>
       </div>
@@ -58,6 +58,10 @@
 import { ref, computed, inject, watch } from 'vue'
 import { nodeResults } from '@/tenant/composables/runData.js'
 import VarList from './VarList.vue'
+import { useI18n } from 'vue-i18n'
+import { formatDateTime } from '@/utils/datetime.js'
+
+const { t, te } = useI18n()
 
 const props = defineProps({
   selectedNode: { type: Object, default: null }
@@ -72,8 +76,9 @@ const nodeResult = computed(() => {
 })
 
 const statusText = computed(() => {
-  const map = { success: '成功', failed: '失败', skipped: '跳过', running: '运行中', cancelled: '已取消' }
-  return map[nodeResult.value?.status] || nodeResult.value?.status || ''
+  const status = nodeResult.value?.status
+  if (!status) return ''
+  return te(`flow.node.run.statusMap.${status}`) ? t(`flow.node.run.statusMap.${status}`) : status
 })
 
 const statusClass = computed(() => {
@@ -88,9 +93,10 @@ const statusClass = computed(() => {
 })
 
 const startTimeText = computed(() => {
-  const t = nodeResult.value?.start_time
-  if (!t) return ''
-  try { return new Date(t).toLocaleString() } catch (e) { return t }
+  const startedAt = nodeResult.value?.start_time
+  if (!startedAt) return ''
+  // 解析失败时退回原串（比印 "Invalid Date" 有意义）
+  return formatDateTime(startedAt) || startedAt
 })
 
 const showInputVars = ref(false)
@@ -98,7 +104,7 @@ const showInputVars = ref(false)
 // 值的展示形态：字符串原样（避免多一层引号与转义），对象/数组缩进 JSON
 const formatVar = (v) => {
   if (v === null) return 'null'
-  if (v === undefined) return '（未赋值）'
+  if (v === undefined) return t('flow.node.run.unassigned')
   if (typeof v === 'string') return v
   return JSON.stringify(v, null, 2)
 }
@@ -116,7 +122,7 @@ const outputRows = computed(() => {
       name,
       type: def.type || '',
       desc: def.description || '',
-      text: has ? formatVar(vars[name]) : '（未赋值）',
+      text: has ? formatVar(vars[name]) : t('flow.node.run.unassigned'),
       empty: !has
     }
   })

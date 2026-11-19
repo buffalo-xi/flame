@@ -3,14 +3,14 @@
     <div class="node-content">
       <div class="node-header">
         <div class="icon-wrapper icon-wait"><el-icon><Link /></el-icon></div>
-        <div class="node-label">{{ data.label }}</div>
+        <div class="node-label">{{ data.label || t('flow.node.defaultLabel.wait') }}</div>
         <el-dropdown trigger="hover" placement="right">
           <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item @click="deleteNode">
                 <el-icon><Delete /></el-icon>
-                <span>删除节点</span>
+                <span>{{ t('flow.node.action.delete') }}</span>
               </el-dropdown-item>
               <BreakpointMenuItem :id="id" />
             </el-dropdown-menu>
@@ -18,7 +18,7 @@
         </el-dropdown>
       </div>
       <div class="fork-info">
-        <span class="fork-label">并发组:</span>
+        <span class="fork-label">{{ t('flow.node.forkGroup') }}</span>
         <span class="fork-value">{{ forkNodeName }}</span>
       </div>
     </div>
@@ -33,11 +33,14 @@
 import { ref, watch, onUnmounted, inject, computed } from 'vue'
 import { Link, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   data: {
     type: Object,
-    default: () => ({ label: '等待' })
+    default: () => ({})
   },
   id: {
     type: String,
@@ -57,7 +60,7 @@ const isSelected = ref(false)
 
 const forkNodeName = computed(() => {
   const forkID = props.data?.config?.fork_node_id
-  if (!forkID) return '未选择'
+  if (!forkID) return t('flow.node.notSelected')
   const forkNode = FlowNodes.value.find(n => String(n.id) === String(forkID))
   return forkNode?.data?.label || forkID
 })

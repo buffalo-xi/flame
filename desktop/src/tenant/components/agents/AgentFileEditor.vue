@@ -2,13 +2,13 @@
   <!-- 编辑器：左侧定义文件树 + 右侧多 tab 编辑区（Markdown 单视图预览） -->
   <!-- 左：定义文件树（AGENT.md 等；「工作区」一词已让给会话运行场地） -->
   <div class="editor-side">
-    <div v-if="!agentId" class="editor-tip">保存后自动创建 AGENT.md</div>
+    <div v-if="!agentId" class="editor-tip">{{ $t('fileEditor.noAgent') }}</div>
     <template v-else>
       <!-- 顶部：面包屑 + 操作，与工作台「工作区」/ 技能编辑同一套 -->
       <div class="side-bar">
-        <button class="side-root" :class="{ active: !dirSegs.length }" title="回到根目录"
+        <button class="side-root" :class="{ active: !dirSegs.length }" :title="$t('fileEditor.rootTip')"
                 @click="enterDir('')">
-          <el-icon><HomeFilled /></el-icon><span>根目录</span>
+          <el-icon><HomeFilled /></el-icon><span>{{ $t('fileEditor.root') }}</span>
         </button>
         <template v-for="(seg, i) in dirSegs" :key="i">
           <span class="side-sep">/</span>
@@ -21,34 +21,34 @@
           <input ref="fileInputRef" type="file" multiple class="side-fileinput"
                  @change="onFilesPicked" />
           <el-dropdown v-if="!locked" trigger="click" @command="onCreateCommand">
-            <button class="side-btn" :title="dirPath ? `在 /${dirPath} 下新建` : '在根目录新建'">新建</button>
+            <button class="side-btn" :title="dirPath ? $t('fileEditor.newInDir', { dir: dirPath }) : $t('fileEditor.newAtRoot')">{{ $t('fileEditor.new') }}</button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="dir">新建文件夹</el-dropdown-item>
-                <el-dropdown-item command="file">新建文件</el-dropdown-item>
+                <el-dropdown-item command="dir">{{ $t('fileEditor.newFolder') }}</el-dropdown-item>
+                <el-dropdown-item command="file">{{ $t('fileEditor.newFile') }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
           <button v-if="!locked" class="side-btn" :disabled="uploading"
-                  :title="dirPath ? `上传到 /${dirPath}` : '上传到根目录'"
-                  @click="pickFiles">{{ uploading ? '上传中…' : '上传' }}</button>
+                  :title="dirPath ? $t('fileEditor.uploadToDir', { dir: dirPath }) : $t('fileEditor.uploadToRoot')"
+                  @click="pickFiles">{{ uploading ? $t('fileEditor.uploading') : $t('fileEditor.upload') }}</button>
           <button v-if="!locked && dirEntries.length" class="side-btn"
                   :class="{ active: selectMode }"
-                  :title="selectMode ? '退出多选' : '多选删除'"
-                  @click="toggleSelect">{{ selectMode ? '取消' : '多选' }}</button>
-          <el-icon v-if="dirSegs.length" class="side-icon" title="上一级" @click="dirUp"><Back /></el-icon>
-          <el-icon class="side-icon" title="刷新" @click="loadDir()"><Refresh /></el-icon>
+                  :title="selectMode ? $t('fileEditor.exitSelect') : $t('fileEditor.selectDelete')"
+                  @click="toggleSelect">{{ selectMode ? $t('fileEditor.cancelSelect') : $t('fileEditor.selectMode') }}</button>
+          <el-icon v-if="dirSegs.length" class="side-icon" :title="$t('fileEditor.upTip')" @click="dirUp"><Back /></el-icon>
+          <el-icon class="side-icon" :title="$t('fileEditor.refreshTip')" @click="loadDir()"><Refresh /></el-icon>
         </span>
       </div>
       <div v-if="dragActive" class="side-dropbar">
-        释放以上传到 {{ dirPath ? '/' + dirPath : '根目录' }}
+        {{ $t('fileEditor.dropHint', { dir: dirPath ? '/' + dirPath : $t('fileEditor.root') }) }}
       </div>
       <div v-if="selectMode" class="side-selbar">
         <el-checkbox :model-value="allSelected" :indeterminate="someSelected"
-                     @change="toggleSelectAll">全选</el-checkbox>
-        <span class="side-selcount">已选 {{ selected.length }} 项</span>
+                     @change="toggleSelectAll">{{ $t('fileEditor.selectAll') }}</el-checkbox>
+        <span class="side-selcount">{{ $t('fileEditor.selectedCount', { n: selected.length }) }}</span>
         <el-button size="small" type="danger" plain :disabled="!selected.length"
-                   @click="removeSelected">删除</el-button>
+                   @click="removeSelected">{{ $t('common.delete') }}</el-button>
       </div>
       <!-- 落点只挂在列表容器上：挂整张卡片的话，从桌面拖个文件划过就会误传 -->
       <div class="side-list" :class="{ 'drag-over': dragActive }"
@@ -67,21 +67,21 @@
           </el-icon>
           <span class="side-name" :title="e.path">{{ e.name }}</span>
           <span class="side-size">{{ e.is_dir ? '' : fmtSize(e.size) }}</span>
-          <el-icon v-if="e.readonly" class="side-lock" title="技能目录，只读"><Lock /></el-icon>
+          <el-icon v-if="e.readonly" class="side-lock" :title="$t('fileEditor.readonlySkillDirTip')"><Lock /></el-icon>
           <!-- 入口文件 AGENT.md：与技能侧 SKILL.md 同口径 —— 可编辑，但不给删除入口 -->
           <el-icon v-else-if="isEntryFile(e)" class="side-lock"
-                   title="入口文件，不可删除（可编辑）"><Lock /></el-icon>
+                   :title="$t('fileEditor.entryFileTip')"><Lock /></el-icon>
           <el-icon v-else-if="!locked && !selectMode" class="side-del"
                    @click.stop="removeEntry(e)"><Delete /></el-icon>
         </div>
-        <div v-if="!dirEntries.length" class="side-empty">这个目录还没有文件</div>
+        <div v-if="!dirEntries.length" class="side-empty">{{ $t('fileEditor.emptyDir') }}</div>
       </div>
     </template>
   </div>
 
   <!-- 右：多 tab 编辑器 -->
   <div class="editor-main">
-    <div v-if="tabs.length === 0" class="editor-empty">从左侧选择一个文件开始编辑</div>
+    <div v-if="tabs.length === 0" class="editor-empty">{{ $t('fileEditor.emptyEditor') }}</div>
     <template v-else>
       <div class="editor-tabs">
         <div v-for="t in tabs" :key="t.path" class="editor-tab"
@@ -95,11 +95,11 @@
           v-if="isMarkdownTab"
           class="md-preview-toggle"
           :class="{ active: mdPreviewVisible }"
-          :title="mdPreviewVisible ? '回到编辑（源码）' : '按 Markdown 格式预览'"
+          :title="mdPreviewVisible ? $t('fileEditor.backToSource') : $t('fileEditor.mdPreviewTip')"
           @click="mdPreviewVisible = !mdPreviewVisible"
         >
           <el-icon><View /></el-icon>
-          <span>{{ mdPreviewVisible ? '返回编辑' : 'Markdown 预览' }}</span>
+          <span>{{ mdPreviewVisible ? $t('fileEditor.backToEdit') : $t('fileEditor.mdPreview') }}</span>
         </span>
       </div>
       <div class="editor-split">
@@ -117,11 +117,13 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { HomeFilled, Back, Folder, Document, Lock, Delete, Close, Refresh, View } from '@element-plus/icons-vue'
 import adminApi from '../../config/admin.js'
 import { getToken } from '../../utils/auth.js'
 import { renderMarkdown } from '../../utils/markdown.js'
+import { formatError } from '../../../locales'
 
 const props = defineProps({
   agentId: { type: String, default: '' },
@@ -132,6 +134,9 @@ const props = defineProps({
 })
 // state：让父组件的头部按钮知道「能不能保存 / 有没有未保存 / 是否正在保存」
 const emit = defineEmits(['state'])
+
+// 脚本侧文案（校验、toast、确认框）走 t()
+const { t } = useI18n()
 
 const authHeaders = () => ({
   'Content-Type': 'application/json',
@@ -185,7 +190,7 @@ const loadDir = async (p = dirPath.value) => {
   const res = await fetch(`${adminApi.agents.files(props.agentId)}?path=${encodeURIComponent(p || '')}`,
     { headers: authHeaders() })
   const body = await res.json().catch(() => ({}))
-  if (body.code !== 200) { ElMessage.error(body.msg || '读取目录失败'); return }
+  if (body.code !== 200) { ElMessage.error(formatError(body) || t('fileEditor.loadDirFailed')); return }
   dirPath.value = body.data?.path || ''
   dirEntries.value = (body.data?.entries || [])
     .map((e) => ({ ...e, readonly: !!e.readonly }))
@@ -242,7 +247,7 @@ const onFilesPicked = async (ev) => {
 }
 const uploadFiles = async (files) => {
   if (!files || !files.length || !props.agentId || props.locked) return
-  const where = dirPath.value ? `/${dirPath.value}` : '定义根目录'
+  const where = dirPath.value ? `/${dirPath.value}` : t('fileEditor.defineRoot')
   uploading.value = true
   let ok = 0
   const failed = []
@@ -259,7 +264,7 @@ const uploadFiles = async (files) => {
           body: fd
         })
         const body = await res.json().catch(() => ({}))
-        if (body.code !== 200) throw new Error(body.msg || '上传失败')
+        if (body.code !== 200) throw new Error(formatError(body) || t('fileEditor.uploadFailed'))
         ok++
       } catch {
         failed.push(f.name)
@@ -268,8 +273,13 @@ const uploadFiles = async (files) => {
   } finally {
     uploading.value = false
   }
-  if (failed.length) ElMessage.error(`${ok} 个已上传到 ${where}，${failed.length} 个失败：${failed.join('、')}`)
-  else ElMessage.success(`已上传 ${ok} 个文件到 ${where}`)
+  if (failed.length) {
+    ElMessage.error(t('fileEditor.uploadPartial', {
+      ok, where, failed: failed.length, names: failed.join(t('fileEditor.nameJoiner'))
+    }))
+  } else {
+    ElMessage.success(t('fileEditor.uploadOk', { n: ok, where }))
+  }
   await loadDir()
 }
 
@@ -295,7 +305,7 @@ const onDrop = async (ev) => {
     const entry = it.webkitGetAsEntry && it.webkitGetAsEntry()
     return !!(entry && entry.isDirectory)
   })
-  if (hasDir) { ElMessage.warning('不支持拖入文件夹，请逐个上传或先压缩'); return }
+  if (hasDir) { ElMessage.warning(t('fileEditor.folderUnsupported')); return }
   await uploadFiles(Array.from(dt.files || []))
 }
 
@@ -376,7 +386,7 @@ const onItemDragStart = (ev, e) => {
   ev.dataTransfer.clearData()
   const payload = dragPayload.get(e.path)
   if (!payload) {
-    ElMessage.warning('拖出前请按住该文件稍等片刻（正在准备内容）')
+    ElMessage.warning(t('fileEditor.dragPreparing'))
     ev.dataTransfer.setData('text/plain', e.path)
     return
   }
@@ -394,7 +404,7 @@ const openFile = async (path) => {
   if (exist) { activeTab.value = path; return }
   const res = await fetch(`${adminApi.agents.file(props.agentId)}?path=${encodeURIComponent(path)}`,
     { headers: authHeaders() })
-  if (!res.ok) { ElMessage.error('读取文件失败'); return }
+  if (!res.ok) { ElMessage.error(t('fileEditor.readFileFailed')); return }
   const data = await res.json()
   tabs.value.push({
     path,
@@ -407,23 +417,23 @@ const openFile = async (path) => {
 }
 const markDirty = () => { if (currentTab.value) currentTab.value.dirty = true }
 const saveCurrentFile = async () => {
-  const t = currentTab.value
-  if (!t?.path) return
-  if (t.readonly) { ElMessage.warning('技能目录为只读'); return }
+  const tab = currentTab.value
+  if (!tab?.path) return
+  if (tab.readonly) { ElMessage.warning(t('fileEditor.readonlySkillDir')); return }
   // 有端点对外开放时二次确认：保存即生效，线上调用方立刻看到新行为的差异
-  if (!(await props.confirmSave('保存该文件'))) return
+  if (!(await props.confirmSave(t('fileEditor.confirmSaveFile')))) return
   savingFile.value = true
   try {
     const res = await fetch(adminApi.agents.file(props.agentId), {
       method: 'PUT',
       headers: authHeaders(),
-      body: JSON.stringify({ path: t.path, content: t.content })
+      body: JSON.stringify({ path: tab.path, content: tab.content })
     })
-    if (!res.ok) throw new Error('保存失败')
-    t.dirty = false
-    ElMessage.success('已保存')
+    if (!res.ok) throw new Error(t('agent.saveFailed'))
+    tab.dirty = false
+    ElMessage.success(t('agent.saved'))
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || t('agent.saveFailed'))
   } finally {
     savingFile.value = false
   }
@@ -432,7 +442,7 @@ const closeTab = (path) => {
   const i = tabs.value.findIndex((t) => t.path === path)
   if (i < 0) return
   if (tabs.value[i].dirty) {
-    ElMessage.warning({ message: '该文件有未保存修改', duration: 2000, offset: 20 })
+    ElMessage.warning({ message: t('fileEditor.fileDirty'), duration: 2000, offset: 20 })
   }
   tabs.value.splice(i, 1)
   if (activeTab.value === path) {
@@ -444,12 +454,12 @@ const closeTab = (path) => {
 // 名字校验：去掉首尾空白与首尾 /；不允许空段、. / ..、. 开头（后端同样会挡）
 const validateNewName = (raw) => {
   const v = String(raw || '').trim().replace(/^\/+|\/+$/g, '')
-  if (!v) return '请输入名字'
+  if (!v) return t('fileEditor.nameRequired')
   const segs = v.split('/')
-  if (segs.some((s) => !s || s === '.' || s === '..')) return '路径不合法（不能有空段、. 或 ..）'
-  if (segs.some((s) => s.startsWith('.'))) return '名字不能以 . 开头（会被列表隐藏）'
-  if (segs.some((s) => [...s].length > 120)) return '每段名字最多 120 个字符'
-  if (segs.length > 16) return '层级太深（最多 16 层）'
+  if (segs.some((s) => !s || s === '.' || s === '..')) return t('fileEditor.pathInvalid')
+  if (segs.some((s) => s.startsWith('.'))) return t('fileEditor.nameDotPrefix')
+  if (segs.some((s) => [...s].length > 120)) return t('fileEditor.segmentTooLong')
+  if (segs.length > 16) return t('fileEditor.tooDeep')
   return true
 }
 // 「新建」下拉：与工作区一致，一个入口两个动作
@@ -458,22 +468,22 @@ const onCreateCommand = (cmd) => promptCreate(cmd === 'dir')
 // 新建：落点 = 当前目录；名字里带 / 表示多级子目录（中间层由存储层自然建出）
 const promptCreate = async (isDir) => {
   if (props.locked) return
-  if (!props.agentId) { ElMessage.warning('请先保存智能体'); return }
+  if (!props.agentId) { ElMessage.warning(t('fileEditor.saveAgentFirst')); return }
   // skills/ 是只读前缀（由技能页维护），当前目录在它下面就直接拦下，不等服务端报错
   if (dirSegs.value[0] === 'skills') {
-    ElMessage.warning('该目录只读（skills/ 由技能页维护）')
+    ElMessage.warning(t('fileEditor.dirReadonly'))
     return
   }
-  const where = dirPath.value ? `/${dirPath.value}` : '智能体根目录'
+  const where = dirPath.value ? `/${dirPath.value}` : t('fileEditor.agentRoot')
   let raw = ''
   try {
     const { value } = await ElMessageBox.prompt(
-      `创建在 ${where}；名字里带 / 表示多级子目录`,
-      isDir ? '新建文件夹' : '新建文件',
+      t('fileEditor.createAt', { where }),
+      isDir ? t('fileEditor.newFolder') : t('fileEditor.newFile'),
       {
-        confirmButtonText: '创建',
-        cancelButtonText: '取消',
-        inputPlaceholder: isDir ? '如 scripts' : '如 scripts/run.sh',
+        confirmButtonText: t('fileEditor.create'),
+        cancelButtonText: t('common.cancel'),
+        inputPlaceholder: isDir ? t('fileEditor.placeholderDir') : t('fileEditor.placeholderFile'),
         inputValidator: validateNewName
       }
     )
@@ -489,15 +499,18 @@ const promptCreate = async (isDir) => {
     })
     const body = await res.json().catch(() => ({}))
     if (body.code !== 200) {
-      throw new Error(body.msg === 'already exists' ? `${fullPath} 已存在` : (body.msg || '创建失败'))
+      // 判「同名已存在」按 error 编码，不比对文案（改文案不该改行为）
+      throw new Error(body.error === 'agent.file_exists'
+        ? t('fileEditor.alreadyExists', { path: fullPath })
+        : (formatError(body) || t('fileEditor.createFailed')))
     }
     // 多层路径（scripts/run.sh）在当前层看不到，提示里必须写完整路径
-    ElMessage.success(`已创建${isDir ? '目录' : '文件'} ${fullPath}`)
+    ElMessage.success(t(isDir ? 'fileEditor.createdDir' : 'fileEditor.createdFile', { path: fullPath }))
     await loadDir()
     // 文件建完直接进编辑器 —— 这里本来就是编辑器，不需要「先写内容再建」
     if (!isDir) await openFile(fullPath)
   } catch (e) {
-    ElMessage.error(e.message || '创建失败')
+    ElMessage.error(e.message || t('fileEditor.createFailed'))
   }
 }
 // 工作区根的入口文件 AGENT.md：可编辑但不可删除（与技能侧 SKILL.md 同口径）。
@@ -515,12 +528,12 @@ const closeTabsUnder = (paths) => {
 
 const removeEntry = async (e) => {
   if (props.locked) return
-  if (isEntryFile(e)) { ElMessage.warning('入口文件 AGENT.md 不可删除（可编辑内容）'); return }
-  if (e.readonly) { ElMessage.warning('技能目录为只读'); return }
-  const kind = e.is_dir ? '目录（含其中全部文件）' : '文件'
+  if (isEntryFile(e)) { ElMessage.warning(t('fileEditor.entryNotDeletable')); return }
+  if (e.readonly) { ElMessage.warning(t('fileEditor.readonlySkillDir')); return }
+  const kind = e.is_dir ? t('fileEditor.kindDir') : t('fileEditor.kindFile')
   try {
-    await ElMessageBox.confirm(`确定删除${kind}「${e.path}」？此操作不可恢复。`, '删除确认',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+    await ElMessageBox.confirm(t('fileEditor.deleteConfirm', { kind, name: e.path }), t('fileEditor.deleteTitle'),
+      { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') })
   } catch { return }
   try {
     const res = await fetch(`${adminApi.agents.file(props.agentId)}?path=${encodeURIComponent(e.path)}`, {
@@ -528,12 +541,12 @@ const removeEntry = async (e) => {
       headers: authHeaders()
     })
     const body = await res.json().catch(() => ({}))
-    if (body.code !== 200) throw new Error(body.msg || '删除失败')
-    ElMessage.success(`已删除 ${e.path}`)
+    if (body.code !== 200) throw new Error(formatError(body) || t('fileEditor.deleteFailed'))
+    ElMessage.success(t('fileEditor.deleted', { name: e.path }))
     closeTabsUnder([e.path])
     await loadDir()
   } catch (err) {
-    ElMessage.error(err.message || '删除失败')
+    ElMessage.error(err.message || t('fileEditor.deleteFailed'))
   }
 }
 
@@ -543,9 +556,9 @@ const removeSelected = async () => {
   const paths = [...selected.value]
   try {
     await ElMessageBox.confirm(
-      `确定删除选中的 ${paths.length} 项？目录会连同其中全部文件一起删掉，此操作不可恢复。`,
-      '批量删除确认',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+      t('fileEditor.batchDeleteConfirm', { n: paths.length }),
+      t('fileEditor.batchDeleteTitle'),
+      { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
     )
   } catch { return }
   const failed = []
@@ -566,9 +579,11 @@ const removeSelected = async () => {
   selected.value = failed // 只留失败项，方便直接重试
   await loadDir()
   if (failed.length) {
-    ElMessage.error(`${oks.length} 项已删除，${failed.length} 项失败：${failed.join('、')}`)
+    ElMessage.error(t('fileEditor.batchDeletePartial', {
+      ok: oks.length, failed: failed.length, names: failed.join(t('fileEditor.nameJoiner'))
+    }))
   } else {
-    ElMessage.success(`已删除 ${oks.length} 项`)
+    ElMessage.success(t('fileEditor.batchDeleted', { n: oks.length }))
     if (!dirEntries.value.length) selectMode.value = false
   }
 }
