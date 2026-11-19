@@ -7,8 +7,8 @@ import (
 	"flame/nexus/service/flow/core"
 )
 
-// 老节点可能没配全 HTTP 固定变量（例如缺少 stream_finished），
-// 执行器写入前必须补齐，否则写入直接失败、节点判失败。
+// An old node may not declare every HTTP fixed variable (stream_finished, say), so the executor has to top them up
+// before writing — otherwise the write fails outright and the node is failed with it.
 func TestEnsureFixedOutputsFillsHTTPVars(t *testing.T) {
 	merged := ensureFixedOutputs(map[string]interface{}{
 		"body": map[string]interface{}{"type": "string"},
@@ -16,12 +16,13 @@ func TestEnsureFixedOutputsFillsHTTPVars(t *testing.T) {
 
 	for _, name := range []string{"mode", "status", "headers", "body", "sse_events", "stream_finished"} {
 		if _, ok := merged[name]; !ok {
-			t.Errorf("merged 缺少固定变量 %s", name)
+			t.Errorf("merged is missing the fixed variable %s", name)
 		}
 	}
 }
 
-// 脚本返回固定变量必须被忽略：body 是追加语义，执行器写过之后再拼一次会变成两份。
+// A script returning a fixed variable must be ignored: body means append, and stitching once more after the
+// executor wrote it would produce two copies.
 func TestApplyHandlerAppendDeniesHTTPFixedOutputs(t *testing.T) {
 	node := &flow.Node{ID: "n1", Type: "http"}
 	nr := flow.NewNodeResult(node, "1", &flow.ExecContext{})
@@ -30,20 +31,20 @@ func TestApplyHandlerAppendDeniesHTTPFixedOutputs(t *testing.T) {
 	nr.InitOutputVars(merged)
 
 	if err := applyHandlerAppend(nr, map[string]any{
-		"body":   "脚本想追加的响应体",
+		"body":   "response body the script wanted to append",
 		"status": float64(500),
-		"text":   "脚本加工结果",
+		"text":   "script result",
 	}, httpReservedOutputVars); err != nil {
-		t.Fatalf("applyHandlerAppend 失败: %v", err)
+		t.Fatalf("applyHandlerAppend failed: %v", err)
 	}
 
 	if v, _ := nr.GetVariable("body"); v != "" {
-		t.Errorf("body = %v，应保持空串（固定变量不许脚本写）", v)
+		t.Errorf("body = %v, should stay empty (a fixed variable is off-limits to scripts)", v)
 	}
 	if v, _ := nr.GetVariable("status"); fmt.Sprint(v) != "0" {
-		t.Errorf("status = %v，应保持初始值 0（固定变量不许脚本写）", v)
+		t.Errorf("status = %v, should keep its initial value 0 (a fixed variable is off-limits to scripts)", v)
 	}
-	if v, _ := nr.GetVariable("text"); v != "脚本加工结果" {
-		t.Errorf("text = %v，want 脚本加工结果（自定义变量应可写）", v)
+	if v, _ := nr.GetVariable("text"); v != "script result" {
+		t.Errorf("text = %v, want script result (a custom variable should be writable)", v)
 	}
 }

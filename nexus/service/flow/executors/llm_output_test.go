@@ -6,8 +6,9 @@ import (
 	"flame/nexus/service/flow/core"
 )
 
-// 固定输出变量不能依赖前端是否配置：前端某模式漏配 reasoning_content 时，
-// 执行器写入会得到 "output var reasoning_content not defined" 并把节点判失败。
+// A fixed output variable must not depend on whether the frontend configured it: when one mode forgets
+// reasoning_content, the executor's write fails with "output var reasoning_content not defined" and fails the
+// node.
 func TestEnsureFixedOutputsFillsMissing(t *testing.T) {
 	outputs := map[string]interface{}{
 		"content": map[string]interface{}{"type": "string"},
@@ -18,19 +19,19 @@ func TestEnsureFixedOutputsFillsMissing(t *testing.T) {
 
 	for _, name := range []string{"content", "reasoning_content", "tool_calls"} {
 		if _, ok := merged[name]; !ok {
-			t.Errorf("merged 缺少固定变量 %s", name)
+			t.Errorf("merged is missing the fixed variable %s", name)
 		}
 	}
 	if _, ok := merged["answer"]; !ok {
-		t.Error("merged 丢了自定义变量 answer")
+		t.Error("merged lost the custom variable answer")
 	}
 	if _, ok := outputs["reasoning_content"]; ok {
-		t.Error("ensureFixedOutputs 不应修改调用方传入的 map")
+		t.Error("ensureFixedOutputs must not modify the map the caller passed in")
 	}
 }
 
-// 脚本返回固定变量必须被忽略：content 是追加语义，执行器写过之后再拼一次
-// 会变成两份内容，"最终结果"就没有唯一答案了。
+// A script returning a fixed variable must be ignored: content means append, and stitching once more after the
+// executor wrote it would produce two copies, leaving "the final result" without a single answer.
 func TestApplyHandlerAppendDeniesLLMFixedOutputs(t *testing.T) {
 	node := &flow.Node{ID: "n1", Type: "llm"}
 	nr := flow.NewNodeResult(node, "1", &flow.ExecContext{})
@@ -39,20 +40,20 @@ func TestApplyHandlerAppendDeniesLLMFixedOutputs(t *testing.T) {
 	nr.InitOutputVars(merged)
 
 	if err := applyHandlerAppend(nr, map[string]any{
-		"content":           "脚本想追加的正文",
-		"reasoning_content": "脚本想追加的推理",
-		"answer":            "脚本加工结果",
+		"content":           "text the script wanted to append",
+		"reasoning_content": "reasoning the script wanted to append",
+		"answer":            "script result",
 	}, llmReservedOutputVars); err != nil {
-		t.Fatalf("applyHandlerAppend 失败: %v", err)
+		t.Fatalf("applyHandlerAppend failed: %v", err)
 	}
 
 	if v, _ := nr.GetVariable("content"); v != "" {
-		t.Errorf("content = %v，应保持空串（固定变量不许脚本写）", v)
+		t.Errorf("content = %v, should stay empty (a fixed variable is off-limits to scripts)", v)
 	}
 	if v, _ := nr.GetVariable("reasoning_content"); v != "" {
-		t.Errorf("reasoning_content = %v，应保持空串（固定变量不许脚本写）", v)
+		t.Errorf("reasoning_content = %v, should stay empty (a fixed variable is off-limits to scripts)", v)
 	}
-	if v, _ := nr.GetVariable("answer"); v != "脚本加工结果" {
-		t.Errorf("answer = %v，want 脚本加工结果（自定义变量应可写）", v)
+	if v, _ := nr.GetVariable("answer"); v != "script result" {
+		t.Errorf("answer = %v, want script result (a custom variable should be writable)", v)
 	}
 }

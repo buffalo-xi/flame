@@ -10,23 +10,24 @@ import (
 	"flame/tools/code"
 )
 
-// 「沙箱繁忙」必须独立成码：它是一次可重试的瞬时拒绝（脚本压根没执行），
-// 一旦被折回 script，on_error.retry.codes 就永远配不上（见 scriptErrCode 的说明）。
+// "The sandbox is busy" has to be a code of its own: it is a retryable transient rejection (the script never ran),
+// and once folded back into script, on_error.retry.codes could never match it (see the note on scriptErrCode).
 func TestScriptErrCode(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
 		want string
 	}{
-		{"繁忙", code.NewError(code.ErrCodeBusy, "sandbox busy: lua 并发已达上限 32", nil), flow.ErrCodeBusy},
-		{"繁忙（经 fmt.Errorf 包裹）", fmt.Errorf("handler: %w",
+		{"busy", code.NewError(code.ErrCodeBusy, "sandbox busy: lua concurrency is at its limit of 32", nil), flow.ErrCodeBusy},
+		{"busy (wrapped by fmt.Errorf)", fmt.Errorf("handler: %w",
 			code.NewError(code.ErrCodeBusy, "sandbox busy", nil)), flow.ErrCodeBusy},
-		{"脚本自身报错", code.NewError(code.ErrCodeScriptError, "boom", nil), flow.ErrCodeScript},
-		{"连接失败", code.NewError(code.ErrCodeConnectFail, "dial: refused", nil), flow.ErrCodeScript},
-		{"非脚本错误", errors.New("code client not initialized"), flow.ErrCodeScript},
-		// 平台未开通的代码片段能力：必须单独成码，不能被 on_error 当成脚本问题重试
-		{"能力未开通", &capabilityError{capability: capability.Code}, flow.ErrCodeCapability},
-		{"能力未开通（经包裹）", fmt.Errorf("handler: %w", &capabilityError{capability: capability.Code}), flow.ErrCodeCapability},
+		{"script error", code.NewError(code.ErrCodeScriptError, "boom", nil), flow.ErrCodeScript},
+		{"connect failure", code.NewError(code.ErrCodeConnectFail, "dial: refused", nil), flow.ErrCodeScript},
+		{"not a script error", errors.New("code client not initialized"), flow.ErrCodeScript},
+		// The snippet capability is not granted by the platform: it needs a code of its own so on_error does not
+		// retry it as a script problem
+		{"capability not granted", &capabilityError{capability: capability.Code}, flow.ErrCodeCapability},
+		{"capability not granted (wrapped)", fmt.Errorf("handler: %w", &capabilityError{capability: capability.Code}), flow.ErrCodeCapability},
 	}
 
 	for _, tc := range cases {

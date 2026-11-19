@@ -7,11 +7,11 @@ const (
 	testFlowKey  = "f1111111-1111-1111-1111-111111111111|flow"
 )
 
-// _call_chain 必须从运行参数里剥离：它若留在 args 里会变成流程变量
-// （{{_call_chain}}），也会跟着会话记忆落库。
+// _call_chain has to be stripped from the run arguments: left in args it would become a flow variable
+// ({{_call_chain}}) and would be stored with the session memory.
 func TestExtractCallChainStripsArgument(t *testing.T) {
 	in := map[string]interface{}{
-		"topic":       "周报",
+		"topic":       "weekly report",
 		"_call_chain": []interface{}{testAgentKey},
 	}
 	chain, clean := extractCallChain(in)
@@ -20,18 +20,18 @@ func TestExtractCallChainStripsArgument(t *testing.T) {
 		t.Fatalf("chain = %v", chain)
 	}
 	if _, existed := clean["_call_chain"]; existed {
-		t.Fatal("_call_chain 必须从业务参数里剥离")
+		t.Fatal("_call_chain must be stripped from the business arguments")
 	}
-	if clean["topic"] != "周报" {
-		t.Fatalf("业务参数被破坏: %v", clean)
+	if clean["topic"] != "weekly report" {
+		t.Fatalf("a business argument was damaged: %v", clean)
 	}
-	// 原始 map 不能被改：调用方可能还要用（同 extractCallDepth 的约定）
+	// The original map must not be modified: the caller may still use it (the same convention as extractCallDepth)
 	if _, existed := in["_call_chain"]; !existed {
-		t.Fatal("不应该修改入参")
+		t.Fatal("the input must not be modified")
 	}
 }
 
-// 没有链时原样返回，避免给普通调用凭空造一个新 map。
+// With no chain the input is returned as is, so an ordinary call does not get a needless new map.
 func TestExtractCallChainAbsent(t *testing.T) {
 	in := map[string]interface{}{"topic": "x"}
 	chain, clean := extractCallChain(in)
@@ -43,7 +43,8 @@ func TestExtractCallChainAbsent(t *testing.T) {
 	}
 }
 
-// 脏元素丢弃而不是整条链失败：链是协作式信息，不能因为一个坏元素拒掉正常调用。
+// Dirty elements are dropped rather than failing the whole chain: the chain is cooperative information, and one bad
+// element must not reject a normal call.
 func TestExtractCallChainDropsGarbage(t *testing.T) {
 	in := map[string]interface{}{"_call_chain": []interface{}{42, "bad key", testFlowKey}}
 	chain, _ := extractCallChain(in)
