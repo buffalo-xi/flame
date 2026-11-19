@@ -19,7 +19,7 @@ func (e *ProgressExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proce
 		return err
 	}
 
-	// 结果 → ProgressChan（category 由节点配置决定：text | thinking）
+	// result -> ProgressChan (the category comes from the node config: text | thinking)
 	msg := resultToString(raw)
 	ctx.SendProgressAs(cfg.Category, msg)
 	nr.SetOutputVarsFrom(map[string]interface{}{"output": msg})

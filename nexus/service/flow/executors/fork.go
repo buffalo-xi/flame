@@ -10,7 +10,7 @@ var _ Executor = (*ForkExecutor)(nil)
 type ForkExecutor struct{}
 
 func (e *ForkExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID string, nr *flow.NodeResult) error {
-	// 获取最大并发数，默认为 -1（不限制）
+	// Read the maximum concurrency, defaulting to -1 (unlimited)
 	maxConcurrency := -1
 	if node.Data != nil && node.Data.Config != nil {
 		if val, ok := node.Data.Config["max_concurrency"]; ok && val != nil {
@@ -20,8 +20,10 @@ func (e *ForkExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 			case float64:
 				maxConcurrency = int(v)
 			default:
-				// 静默退回 -1 会让用户配的上限彻底失效（并发不受限），而界面看不出任何异常。
-				// 前端存的是 number，走到这里基本是手改 diagram 或资产包导入的类型错。
+				// Silently falling back to -1 would void the limit the user configured (concurrency
+				// would be unbounded) while the UI shows nothing wrong. The frontend stores a number,
+				// so reaching this point means a hand-edited diagram or a type error in an imported
+				// asset package.
 				return failf(nr, flow.ErrCodeConfig,
 					fmt.Sprintf("max_concurrency must be a number, got %T", val))
 			}

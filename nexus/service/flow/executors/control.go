@@ -5,7 +5,7 @@ import (
 	"flame/nexus/service/flow/core"
 )
 
-// 控制信号：借用 error 接口传播，语义上是正常控制流，不是错误
+// Control signals: they travel through the error interface but are normal control flow, not errors
 var (
 	SignalBreak    = errors.New("loop_break")
 	SignalContinue = errors.New("loop_continue")
@@ -13,7 +13,7 @@ var (
 	SignalExit     = errors.New("flow_exit")
 )
 
-// isControlSignal 判断是否为控制信号（区别于真正的错误）
+// isControlSignal reports whether this is a control signal (as opposed to a real error)
 func isControlSignal(err error) bool {
 	return errors.Is(err, SignalBreak) ||
 		errors.Is(err, SignalContinue) ||

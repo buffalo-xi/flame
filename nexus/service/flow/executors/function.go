@@ -13,12 +13,13 @@ var _ Executor = (*FunctionExecutor)(nil)
 type FunctionExecutor struct{}
 
 func (e *FunctionExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID string, nr *flow.NodeResult) error {
-	// call 节点调用时会预创建 FunctionResult 并注入参数，此处保留不覆盖
+	// A call node pre-creates FunctionResult and injects the arguments before invoking this; keep it and
+	// do not overwrite
 	if nr.FunctionResult == nil {
 		nr.FunctionResult = &flow.FunctionResult{}
 	}
 
-	// 初始化输出变量
+	// Initialise the output variables
 	if node.Data != nil && node.Data.Config != nil {
 		if outputs, ok := node.Data.Config["outputs"].(map[string]any); ok {
 			nr.InitOutputVars(outputs)
@@ -30,26 +31,28 @@ func (e *FunctionExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proce
 		return failf(nr, flow.ErrCodeConfig, "node data or config is nil")
 	}
 
-	// 初始化局部变量
+	// Initialise the local variables
 	if locals, ok := node.Data.Config["locals"].(map[string]any); ok {
 		nr.InitLocalVars(locals)
 	} else {
 		nr.InitLocalVars(nil)
 	}
 
-	// params 不在此初始化，由 call 节点执行时创建 FunctionResult 时注入
+	// params are not initialised here: a call node injects them when it creates FunctionResult
 
-	// 查找入口节点
+	// Look up the entry node
 	entryNode := findEntryNode(ctx.Flow, node.ID)
 	if entryNode == nil {
-		// 与 loop / process 一致：缺入口不是「可选跳过」。
-		// 静默成功会让 call 拿到一个「成功但没有任何输出」的结果，比直接报错难查得多。
+		// Same as loop / process: a missing entry is not "optionally skipped".
+		// Succeeding silently would hand call a "succeeded with no output" result, which is much harder
+		// to trace than an outright error.
 		return failf(nr, flow.ErrCodeConfig,
 			fmt.Sprintf("function node %s: body entry node not found", node.ID))
 	}
-	//nr.AddLog("入口节点: " + entryNode.ID)
+	//nr.AddLog("entry node: " + entryNode.ID)
 
-	// 创建子 process 执行子链（function 子节点在子流程中，隔离子流程变量并区分调试调用栈）
+	// Create a child process to run the child chain (function children live in the sub-flow, isolating
+	// the sub-flow variables and distinguishing the debug stack level)
 	childPID, err := ctx.ProcessManager.NewProcess(processID, nil)
 	if err != nil {
 		return failf(nr, flow.ErrCodeInternal, "create function process: "+err.Error())
@@ -67,21 +70,21 @@ func (e *FunctionExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proce
 		if errors.Is(err, SignalExit) {
 			nr.Finish(flow.StatusSuccess, "", "")
 			nr.AddLog("received the exit signal, exiting the whole flow")
-			return err // 传播 SignalExit 到上层
+			return err // propagate SignalExit upwards
 		}
 
-		// break/continue 只在 loop 上下文有效，
-		// 泄漏到 function 说明子链里存在 loop 外部的 break/continue 节点
+		// break/continue only make sense inside a loop; leaking into function means the child chain
+		// holds a break/continue node outside any loop
 		if errors.Is(err, SignalBreak) || errors.Is(err, SignalContinue) {
 			return failf(nr, flow.ErrCodeConfig,
 				fmt.Sprintf("break/continue cannot appear outside a loop of the function(node %s) child chain", node.ID))
 		}
 
-		// 2. stdCtx 取消（超时/中断）：置当前节点 cancel，逐层退出
+		// 2. stdCtx cancelled (timeout / interruption): mark this node cancelled and unwind layer by layer
 		if ctx.StdCtx.Err() != nil {
-			errCode := flow.ErrCodeTimeout // context.DeadlineExceeded -> 超时
+			errCode := flow.ErrCodeTimeout // context.DeadlineExceeded -> timeout
 			if ctx.StdCtx.Err() == context.Canceled {
-				errCode = flow.ErrCodeCancel // 用户主动取消
+				errCode = flow.ErrCodeCancel // the user cancelled it
 			}
 			nr.Finish(flow.StatusCancelled, errCode, ctx.StdCtx.Err().Error())
 			return ctx.StdCtx.Err()

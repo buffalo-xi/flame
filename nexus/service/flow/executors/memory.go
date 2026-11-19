@@ -10,7 +10,8 @@ import (
 
 var _ Executor = (*MemoryExecutor)(nil)
 
-// MemoryExecutor 记忆节点：读取当前 session 的历史输入/输出，输出 messages（对话消息数组）。
+// MemoryExecutor is the memory node: it reads the current session's past inputs and outputs and emits
+// messages (the conversation message array).
 type MemoryExecutor struct{}
 
 func (e *MemoryExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID string, nr *flow.NodeResult) error {
@@ -18,7 +19,7 @@ func (e *MemoryExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 		return failf(nr, flow.ErrCodeConfig, "node data or config is nil")
 	}
 
-	// 合并输出变量：固定 messages（对话消息格式）
+	// Merge the output variables: the fixed messages one (conversation message format)
 	outputs := make(map[string]interface{})
 	if v, ok := node.Data.Config["outputs"].(map[string]interface{}); ok {
 		for k, val := range v {
@@ -31,14 +32,14 @@ func (e *MemoryExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 	nr.InitOutputVars(outputs)
 	nr.InitOutputBindings(outputs)
 
-	// 无 session_id 或不允许记忆 → 输出空数组
+	// No session_id or memory not allowed -> emit an empty array
 	if ctx.SessionID == "" {
 		_ = nr.SetOutputVarWithFire("messages", []map[string]interface{}{})
 		nr.Finish(flow.StatusSuccess, "", "")
 		return nil
 	}
 
-	// 解析 limit（<=0 回退为 max_session_records）
+	// Parse limit (<=0 falls back to max_session_records)
 	limit := 0
 	if v, ok := node.Data.Config["limit"].(float64); ok {
 		limit = int(v)
@@ -52,7 +53,7 @@ func (e *MemoryExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 		return nil
 	}
 
-	// 解析 window 时间窗口（enabled 且 value>0 时生效）
+	// Parse the window (only in effect when enabled and value>0)
 	var since *time.Time
 	if w, ok := node.Data.Config["window"].(map[string]interface{}); ok {
 		if enabled, _ := w["enabled"].(bool); enabled {
@@ -73,11 +74,12 @@ func (e *MemoryExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 		return failf(nr, flow.ErrCodeInternal, "failed to load session memory: "+err.Error())
 	}
 
-	// 组装 messages 数组（旧→新），每条记忆拆成 user/assistant 两条消息（OpenAI messages 格式）
+	// Assemble the messages array (oldest first), splitting each record into a user and an assistant
+	// message (the OpenAI messages format)
 	messages := make([]map[string]interface{}, 0, len(records)*2)
 	for _, rec := range records {
 		ts := time.Time(rec.CreatedAt).Format(time.RFC3339)
-		// user 消息：content = 入参完整 JSON（jsonb 原始字节转字符串，空入参用 "{}"）
+		// user message: content is the full input JSON (raw jsonb bytes as a string, "{}" when empty)
 		userContent := "{}"
 		if len(rec.Input) > 0 {
 			userContent = string(rec.Input)
@@ -111,7 +113,8 @@ func init() {
 	RegisterExecutor("memory", NewMemoryExecutor())
 }
 
-// timeWindowDuration 将时间窗口单位+数值换算为 Duration，非法或非正值返回 0
+// timeWindowDuration converts a window unit plus value into a Duration; invalid or non-positive values
+// return 0
 func timeWindowDuration(unit string, value int) time.Duration {
 	if value <= 0 {
 		return 0

@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// fireOutputBinding 检查并触发指定变量的所有 binding，任一 binding 出错立即返回
+// fireOutputBinding checks and fires every binding of the given variable, returning at the first failure
 func fireOutputBinding(nr *flow.NodeResult, varName string, value interface{}) error {
 	if nr.OutputBindings == nil {
 		return nil
@@ -16,7 +16,7 @@ func fireOutputBinding(nr *flow.NodeResult, varName string, value interface{}) e
 	if !ok || len(bindings) == 0 {
 		return nil
 	}
-	// 遍历该变量的所有 binding（可同时绑 result + progress）
+	// Walk every binding of this variable (one variable may be bound to result and progress at once)
 	for _, binding := range bindings {
 		if err := fireSingleBinding(nr, binding, varName, value); err != nil {
 			return err
@@ -25,13 +25,13 @@ func fireOutputBinding(nr *flow.NodeResult, varName string, value interface{}) e
 	return nil
 }
 
-// fireSingleBinding 触发单个 binding
+// fireSingleBinding fires one binding
 func fireSingleBinding(nr *flow.NodeResult, binding *flow.OutputBinding, varName string, value interface{}) error {
 	if binding.Channel == "" {
 		return nil
 	}
 
-	// 计算输出字符串
+	// Compute the output string
 	var output string
 	if binding.Transform != nil && binding.Transform.Script != "" {
 		result, err := executeBindingTransform(nr, binding, varName, value)
@@ -47,9 +47,11 @@ func fireSingleBinding(nr *flow.NodeResult, binding *flow.OutputBinding, varName
 	if nr.Ctx == nil {
 		return nil
 	}
-	// 与 result / progress 节点同语义：先累积（最终结果 + 落库消息），再尽力外发。
-	// 通道满或无人读（非流式调用方从不读通道）只影响流式通知，不影响最终结果。
-	// 这里 channel 是用户在编辑器里显式选择的输出意图，所以 result 一律按"外发"处理。
+	// Same semantics as the result / progress nodes: accumulate first (final result plus stored
+	// message), then emit best-effort. A full channel or no reader (a non-streaming caller never reads
+	// the channel) only affects streamed notifications, not the final result.
+	// Here the channel is an output intent the user picked explicitly in the editor, so result always
+	// counts as "emit".
 	switch binding.Channel {
 	case "result":
 		nr.Ctx.EmitResult(output, binding.StreamEnabled())
@@ -59,7 +61,7 @@ func fireSingleBinding(nr *flow.NodeResult, binding *flow.OutputBinding, varName
 	return nil
 }
 
-// fireOutputBindings 批量触发（用于 wf_write_outputs），任一变量出错立即返回
+// fireOutputBindings fires a batch (used by wf_write_outputs), returning at the first failing variable
 func fireOutputBindings(nr *flow.NodeResult, vars map[string]interface{}) error {
 	if nr.OutputBindings == nil {
 		return nil
@@ -73,11 +75,11 @@ func fireOutputBindings(nr *flow.NodeResult, vars map[string]interface{}) error 
 	return nil
 }
 
-// executeBindingTransform 执行 binding 的 transform 脚本（受限模式：禁止写变量回调）
+// executeBindingTransform runs a binding's transform script (restricted mode: no variable-writing callback)
 func executeBindingTransform(nr *flow.NodeResult, binding *flow.OutputBinding,
 	varName string, value interface{}) (string, error) {
 
-	timeout := -1 // -1 表示不限时
+	timeout := -1 // -1 means no time limit
 	if binding.Transform.Timeout != nil && binding.Transform.Timeout.Enabled {
 		timeout = binding.Transform.Timeout.Seconds
 		if timeout <= 0 {
@@ -85,7 +87,7 @@ func executeBindingTransform(nr *flow.NodeResult, binding *flow.OutputBinding,
 		}
 	}
 
-	// 1. 解析 transform 的 inputs（与 code 节点 inputs 同机制）
+	// 1. Resolve the transform's inputs (the same mechanism as the code node's inputs)
 	var inputs map[string]any
 	if binding.Transform.Inputs != nil {
 		var err error
@@ -97,21 +99,22 @@ func executeBindingTransform(nr *flow.NodeResult, binding *flow.OutputBinding,
 		inputs = make(map[string]any)
 	}
 
-	// 2. 用输出变量的实际名字注入值（如 inputs["response"] = "Hello"）
+	// 2. Inject the value under the output variable's real name (e.g. inputs["response"] = "Hello")
 	inputs[varName] = value
 
-	// 脚本是纯「输入 → 返回」：没有回调，也无法写变量 —— 「禁止写」由模型本身保证，
-	// 不再需要受限回调白名单（脚本根本没有写变量、再触发 binding 的通道）。
-	// 重算超时
+	// The script is a pure "input -> return": it has no callback and cannot write variables — "cannot
+	// write" is guaranteed by the model itself, so a restricted callback allowlist is no longer needed
+	// (the script has no channel to write a variable and fire the binding again).
+	// Recompute the timeout
 	timeout = nr.Ctx.ResolveScriptTimeout(binding.Transform.Lang, timeout)
 
-	// 3. template 直接渲染为字符串，跳过 JSON decode（binding 最终只需字符串）
+	// 3. A template renders straight to a string, skipping the JSON decode (a binding only needs a string)
 	if binding.Transform.Lang == "template" {
 		ctxData := BuildScriptTemplateContext(nr, inputs)
 		return RenderTemplate(binding.Transform.Script, ctxData)
 	}
 
-	// 4. 调用 ExecuteScript
+	// 4. Call ExecuteScript
 	result, err := ExecuteScript(nr.Ctx.StdCtx, binding.Transform.Lang,
 		binding.Transform.Script, inputs, nr, timeout)
 	if err != nil {
@@ -121,7 +124,7 @@ func executeBindingTransform(nr *flow.NodeResult, binding *flow.OutputBinding,
 	return resultToString(result), nil
 }
 
-// resultToString 将脚本返回值转为字符串
+// resultToString turns a script return value into a string
 func resultToString(result any) string {
 	switch v := result.(type) {
 	case string:
@@ -133,7 +136,7 @@ func resultToString(result any) string {
 	}
 }
 
-// valueToString 将变量值转为字符串（无 transform 时使用）
+// valueToString turns a variable value into a string (used when there is no transform)
 func valueToString(value interface{}) string {
 	switch v := value.(type) {
 	case string:

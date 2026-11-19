@@ -1,13 +1,13 @@
 package executors
 
-// parseTimeoutConfig 解析统一的节点级超时配置 {enabled, seconds}。
+// parseTimeoutConfig parses the shared node-level timeout config {enabled, seconds}.
 //
-// 语义统一为：未配置 / enabled=false / seconds<=0 都表示「不设节点级超时」，
-// 由运行的全局上限（ResolveTimeout / ResolveScriptTimeout）兜底；只有显式启用且
-// 秒数合法时才返回正整数。
+// The semantics are uniform: unconfigured / enabled=false / seconds<=0 all mean "no node-level
+// timeout", leaving the run's global ceiling (ResolveTimeout / ResolveScriptTimeout) as the fallback;
+// only an explicitly enabled timeout with a valid number of seconds yields a positive integer.
 //
-// 目前 branch / loop / code / result / progress / wait / http 共用这一份解析，
-// 避免同一种配置形状在不同节点里出现「关闭了还生效」的差异。
+// branch / loop / code / result / progress / wait / http share this parser today, so one config shape
+// cannot behave differently between nodes ("switched off but still in effect").
 func parseTimeoutConfig(raw interface{}) int {
 	cfg, ok := raw.(map[string]interface{})
 	if !ok {

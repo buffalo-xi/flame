@@ -2,14 +2,15 @@ package executors
 
 import "flame/nexus/service/flow/core"
 
-// ExecError 携带错误码的执行错误，供容器节点透传子链错误码。
+// ExecError is an execution error carrying an error code, so container nodes can pass a child chain's
+// error code through.
 //
-// executeNode 在失败出口包装此错误，loop/function/process 等容器节点
-// 通过 errors.As(err, &ee) 提取 ee.Code，避免硬编码 ErrCodeOther/Internal，
-// 从而把子链真实错误类型逐层传给祖先节点。
+// executeNode wraps it at the failure exit, and container nodes such as loop/function/process extract
+// ee.Code with errors.As(err, &ee) instead of hard-coding ErrCodeOther/Internal, which lets the child
+// chain's real error type travel up through every ancestor.
 //
-// 仅承载 Code 和 Msg：Code 来自失败节点的 nr.ErrCode，Msg 来自 nr.ErrMsg
-// （容器节点会逐层叠加上下文前缀，如 "iteration X failed: ..."）。
+// It only carries Code and Msg: Code comes from the failing node's nr.ErrCode, Msg from nr.ErrMsg (a
+// container node prefixes context layer by layer, e.g. "iteration X failed: ...").
 type ExecError struct {
 	Code string
 	Msg  string
@@ -17,7 +18,7 @@ type ExecError struct {
 
 func (e *ExecError) Error() string { return e.Msg }
 
-// newExecError 构造携带错误码的执行错误，code 为空时降级为 other。
+// newExecError builds an execution error carrying an error code; an empty code degrades to other.
 func newExecError(code, msg string) error {
 	if code == "" {
 		code = flow.ErrCodeOther
@@ -25,12 +26,14 @@ func newExecError(code, msg string) error {
 	return &ExecError{Code: code, Msg: msg}
 }
 
-// failf 收尾为失败并返回对应的 *ExecError。
-// 把「nr.Finish(...) + return newExecError(...)」这对固定搭配收成一处：
-// 手工重复时容易漏写 return 或返回错误的变量，导致节点状态与函数返回值不一致。
+// failf finishes as a failure and returns the matching *ExecError.
+// It folds the fixed pair of "nr.Finish(...) + return newExecError(...)" into one place: repeating it by
+// hand easily drops the return or returns the wrong variable, leaving the node status and the function
+// result disagreeing.
 func failf(nr *flow.NodeResult, errCode, msg string) error {
 	nr.Finish(flow.StatusFailed, errCode, msg)
-	// 用 nr 上的实际值而不是入参：脚本可以通过 wf_set_error 先设过错误，
-	// Finish 是「先到先得」，此时节点状态与入参已经不同，返回入参会造成两者不一致。
+	// The values on nr are used rather than the arguments: a script may have set the error first via
+	// wf_set_error, Finish is first-come-first-served, and at that point the node status no longer
+	// matches the arguments — returning the arguments would leave the two disagreeing.
 	return newExecError(nr.ErrCode, nr.ErrMsg)
 }

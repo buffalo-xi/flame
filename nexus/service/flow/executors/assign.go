@@ -12,12 +12,12 @@ var _ Executor = (*AssignExecutor)(nil)
 
 type AssignExecutor struct{}
 
-// Assignment 单条赋值声明
+// Assignment is one assignment declaration
 type Assignment struct {
 	Kind   string `json:"kind"`   // "output" | "target"
-	Target string `json:"target"` // 变量名；kind=target 时是 targets 里的键名
-	Path   string `json:"path"`   // 子路径，空=直接赋值
-	Value  string `json:"value"`  // Go template 模板字符串
+	Target string `json:"target"` // variable name; for kind=target it is a key of targets
+	Path   string `json:"path"`   // sub-path, empty = assign directly
+	Value  string `json:"value"`  // Go template string
 }
 
 func (e *AssignExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID string, nr *flow.NodeResult) error {
@@ -25,13 +25,13 @@ func (e *AssignExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 		return failf(nr, flow.ErrCodeConfig, "node data or config is nil")
 	}
 
-	// 1. 初始化输出变量（从 config.outputs）
+	// 1. Initialise the output variables (from config.outputs)
 	if outputs, ok := node.Data.Config["outputs"].(map[string]interface{}); ok {
 		nr.InitOutputVars(outputs)
 		nr.InitOutputBindings(outputs)
 	}
 
-	// 2. 解析 assignments
+	// 2. Parse the assignments
 	rawAssignments, ok := node.Data.Config["assignments"].([]interface{})
 	if !ok {
 		nr.Finish(flow.StatusSuccess, "", "")
@@ -48,7 +48,7 @@ func (e *AssignExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 		return nil
 	}
 
-	// 3. 解析输入变量（从 config.inputs）
+	// 3. Resolve the input variables (from config.inputs)
 	var inputArgs map[string]interface{}
 	inputs, inputsExist := node.Data.Config["inputs"].(map[string]interface{})
 	if inputsExist {
@@ -62,20 +62,21 @@ func (e *AssignExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 	}
 	nr.SetInputVars(inputArgs)
 
-	// 4. 构建模板上下文（全局变量已并入输入变量，没有单独的 .global_vars）
+	// 4. Build the template context (global variables are already merged into the inputs, there is no
+	// separate .global_vars)
 	ctxData := BuildScriptTemplateContext(nr, inputArgs)
 
-	// 5. 逐条执行
+	// 5. Run them one by one
 	for _, a := range assignments {
 		rendered, err := RenderTemplate(a.Value, ctxData)
 		if err != nil {
 			return failf(nr, flow.ErrCodeScript, err.Error())
 		}
 
-		// 按变量类型转换值
+		// Convert the value according to the variable type
 		converted := convertByType(rendered, a, node)
 
-		// 构建完整路径
+		// Build the full path
 		fullPath := buildFullPath(a, node)
 
 		switch a.Kind {
@@ -93,7 +94,7 @@ func (e *AssignExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 				return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("target %s: invalid definition", a.Target))
 			}
 
-			// 有子路径时，修正 source_key
+			// With a sub-path, fix up source_key
 			if a.Path != "" {
 				target = copyMap(target)
 				sourceKey, _ := target["source_key"].(string)
@@ -117,8 +118,9 @@ func (e *AssignExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 
 func (e *AssignExecutor) Capabilities() NodeCapabilities {
 	return NodeCapabilities{
-		// var：写变量失败（见上面 SetVariableWithFire 那条）会产出它。
-		// 少声明会被 runner 降级成 other，用户按 var 配的 on_error 就永远匹配不上。
+		// var: a failed variable write (see SetVariableWithFire above) produces it.
+		// Leaving it out makes the runner degrade the code to other, and an on_error keyed on var would
+		// never match.
 		ErrorCodes: []string{flow.ErrCodeConfig, flow.ErrCodeScript, flow.ErrCodeVar},
 		HasPost:    false,
 	}
@@ -132,7 +134,7 @@ func init() {
 	RegisterExecutor("assign", NewAssignExecutor())
 }
 
-// parseAssignments 解析 assignments 配置
+// parseAssignments parses the assignments config
 func parseAssignments(raw []interface{}) ([]Assignment, error) {
 	result := make([]Assignment, 0, len(raw))
 	for i, item := range raw {
@@ -162,7 +164,7 @@ func parseAssignments(raw []interface{}) ([]Assignment, error) {
 	return result, nil
 }
 
-// buildFullPath 构建完整变量路径
+// buildFullPath builds the complete variable path
 func buildFullPath(a Assignment, node *flow.Node) string {
 	if a.Path == "" {
 		return a.Target
@@ -178,8 +180,8 @@ func buildFullPath(a Assignment, node *flow.Node) string {
 			}
 		}
 	} else {
-		// target: type 已从 targets 中读取，但这里先不重复查
-		// 用 path 格式判断：路径以 [ 开头的是 array
+		// target: the type was already read from targets, so it is not looked up again here.
+		// The path format decides: a path starting with [ means an array
 		if strings.HasPrefix(a.Path, "[") {
 			varType = "array"
 		}
@@ -191,7 +193,7 @@ func buildFullPath(a Assignment, node *flow.Node) string {
 	return a.Target + "." + a.Path // response.meta.title
 }
 
-// convertByType 根据变量类型转换模板渲染后的字符串值
+// convertByType converts the rendered template string according to the variable type
 func convertByType(rendered string, a Assignment, node *flow.Node) interface{} {
 	var varType string
 
@@ -207,7 +209,7 @@ func convertByType(rendered string, a Assignment, node *flow.Node) interface{} {
 
 	switch varType {
 	case "number":
-		// 尝试 json.Number
+		// Try json.Number first
 		var num json.Number
 		if err := json.Unmarshal([]byte(rendered), &num); err == nil {
 			return num
@@ -227,7 +229,7 @@ func convertByType(rendered string, a Assignment, node *flow.Node) interface{} {
 	}
 }
 
-// copyMap 浅拷贝 map
+// copyMap shallow-copies a map
 func copyMap(src map[string]interface{}) map[string]interface{} {
 	dst := make(map[string]interface{}, len(src))
 	for k, v := range src {

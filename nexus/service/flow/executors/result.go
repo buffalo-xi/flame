@@ -14,7 +14,8 @@ func (e *ResultExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 		return err
 	}
 
-	// 是否作为流式结果逐条外发（缺省 false：只累积，结束时一次性返回）
+	// Whether to emit it as a streamed result item by item (default false: accumulate and return the
+	// whole thing at the end)
 	stream, _ := node.Data.Config["stream"].(bool)
 
 	raw, err := runScript(ctx, nr, cfg, true)
@@ -22,7 +23,7 @@ func (e *ResultExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 		return err
 	}
 
-	// 结果 → 累积（必要时同时外发到结果流）
+	// result -> accumulate (and emit onto the result stream when asked)
 	msg := resultToString(raw)
 	ctx.EmitResult(msg, stream)
 	nr.SetOutputVarsFrom(map[string]interface{}{"output": msg})

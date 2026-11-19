@@ -6,9 +6,9 @@ import (
 )
 
 type NodeCapabilities struct {
-	ErrorCodes []string           `json:"error_codes"` // 该节点可能产生的错误码
-	Actions    []flow.ErrorAction `json:"actions"`     // 除 fail 以外，额外支持的动作
-	HasPost    bool               `json:"has_post"`    // 是否支持后处理（失败收尾）
+	ErrorCodes []string           `json:"error_codes"` // the error codes this node can produce
+	Actions    []flow.ErrorAction `json:"actions"`     // additional actions supported besides fail
+	HasPost    bool               `json:"has_post"`    // whether it supports post-processing (failure cleanup)
 }
 
 type Executor interface {
@@ -34,7 +34,8 @@ func GetExecutor(nodeType string) (Executor, bool) {
 	return executor, exists
 }
 
-// GetNodeCapabilities 返回所有已注册节点类型的能力声明 + 全局错误编码
+// GetNodeCapabilities returns the capability declarations of every registered node type plus the global
+// error codes
 func GetNodeCapabilities() map[string]interface{} {
 	mu.RLock()
 	defer mu.RUnlock()

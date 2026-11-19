@@ -8,7 +8,7 @@ import (
 	flow "flame/nexus/service/flow/core"
 )
 
-// StopRun 能取消本进程上的一条 flow 运行；注销之后就不再命中。
+// StopRun cancels a flow run on this process; after unregistering it no longer matches.
 func TestStopRunCancelsExecContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ec := &flow.ExecContext{RunID: "run-flow-stop", StdCtx: ctx}
@@ -23,16 +23,16 @@ func TestStopRunCancelsExecContext(t *testing.T) {
 	select {
 	case <-ctx.Done():
 	case <-time.After(time.Second):
-		t.Fatal("ExecContext 没有被取消")
+		t.Fatal("the ExecContext was not cancelled")
 	}
 
-	// 不在这台的 run：返回 false，不能误伤别人
+	// A run living elsewhere: returns false and must not hit someone else
 	if StopRun("run-elsewhere") {
 		t.Fatal("StopRun on an unknown run returned true")
 	}
 
 	unreg()
 	if StopRun("run-flow-stop") {
-		t.Fatal("注销后仍能命中")
+		t.Fatal("it still matched after unregistering")
 	}
 }

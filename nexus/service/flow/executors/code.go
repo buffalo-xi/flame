@@ -10,10 +10,11 @@ var _ Executor = (*CodeExecutor)(nil)
 type CodeExecutor struct{}
 
 func (e *CodeExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID string, nr *flow.NodeResult) error {
-	// 设置 CodeResult
+	// Set CodeResult
 	nr.CodeResult = &flow.CodeResult{}
 
-	// 初始化输出变量（须在解析配置前就位：脚本返回值的落地依赖这些声明）
+	// Initialise the output variables (they must be in place before the config is parsed: landing
+	// the script's return value depends on these declarations)
 	if node.Data != nil && node.Data.Config != nil {
 		if outputs, ok := node.Data.Config["outputs"].(map[string]interface{}); ok {
 			nr.InitOutputVars(outputs)

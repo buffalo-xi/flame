@@ -10,15 +10,16 @@ var _ Executor = (*CallExecutor)(nil)
 
 type CallExecutor struct{}
 
-// Execute 执行 call 节点：解析实参 → 创建子流程 → 预注入参数到 FunctionResult →
-// 复用 FunctionExecutor 在子流程中执行目标 function 子链 → 镜像输出与状态。
+// Execute runs a call node: resolve the arguments -> create a child process -> pre-inject the arguments
+// into FunctionResult -> reuse FunctionExecutor to run the target function's child chain in the
+// sub-flow -> mirror the outputs and status.
 func (e *CallExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID string, nr *flow.NodeResult) error {
-	// 1. 校验配置
+	// 1. Validate the config
 	if node.Data == nil || node.Data.Config == nil {
 		return failf(nr, flow.ErrCodeConfig, "node data or config is nil")
 	}
 
-	// 初始化输出变量
+	// Initialise the output variables
 	if outputs, ok := node.Data.Config["outputs"].(map[string]any); ok {
 		nr.InitOutputVars(outputs)
 		nr.InitOutputBindings(outputs)
@@ -29,7 +30,7 @@ func (e *CallExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 		return failf(nr, flow.ErrCodeConfig, "call node missing config.target")
 	}
 
-	// 2. 找到目标 function 节点
+	// 2. Find the target function node
 	funcNode := GetNodeByID(ctx.Flow, targetID)
 	if funcNode == nil {
 		return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("target function node %s not found", targetID))
@@ -38,7 +39,8 @@ func (e *CallExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 		return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("target node %s is not a function node", targetID))
 	}
 
-	// 3. 校验实参与目标函数的形参声明一致（多传 / 漏传必填都在这里报错）
+	// 3. Check the arguments against the target function's parameter declarations (an extra or a missing
+	// required argument is reported here)
 	argsConfig, _ := node.Data.Config["args"].(map[string]interface{})
 	var paramsConfig map[string]interface{}
 	if funcNode.Data != nil {
@@ -62,13 +64,14 @@ func (e *CallExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 		}
 	}
 
-	// 4. 解析实参（在父流程上下文中解析变量来源，再注入子流程）
+	// 4. Resolve the arguments (resolve the variable sources in the parent flow context, then inject into
+	// the sub-flow)
 	paramValues, err := ctx.GetVariables(argsConfig, processID)
 	if err != nil {
 		return failf(nr, flow.ErrCodeConfig, "resolve args failed: "+err.Error())
 	}
 
-	// 5. 检查递归深度（在创建子进程之前）
+	// 5. Check the recursion depth (before creating the child process)
 	maxDepth := ctx.ResolveRecursionDepth()
 	if maxDepth > 0 {
 		currentDepth := ctx.ProcessManager.GetCallDepth(processID)
@@ -78,7 +81,7 @@ func (e *CallExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 		}
 	}
 
-	// 6. 创建子流程，标记为 call_func 用于递归深度追踪
+	// 6. Create the child process, flagged call_func for recursion depth tracking
 	childPID, err := ctx.ProcessManager.NewProcess(processID, map[string]interface{}{
 		"call_func": true,
 	})
@@ -86,7 +89,7 @@ func (e *CallExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 		return failf(nr, flow.ErrCodeInternal, "create call child process: "+err.Error())
 	}
 
-	// 7. 为 function 节点创建 funcNR 并预注入参数
+	// 7. Create funcNR for the function node and pre-inject the arguments
 	funcNR := flow.NewNodeResult(funcNode, childPID, ctx)
 	funcNR.FunctionResult = &flow.FunctionResult{}
 	for k, v := range paramValues {
@@ -104,15 +107,15 @@ func (e *CallExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 	}
 	nr.AddLog(fmt.Sprintf("calling function %s(%s)", label, funcNode.ID))
 
-	// 8. 复用 FunctionExecutor 执行（function.go 已改为 FunctionResult 为 nil 时才创建，
-	//    因此这里预注入的参数不会被覆盖）
+	// 8. Reuse FunctionExecutor to run it (function.go only creates FunctionResult when it is nil, so the
+	//    arguments pre-injected here are not overwritten)
 	funcExec := NewFunctionExecutor()
 	err = funcExec.Execute(funcNode, ctx, childPID, funcNR)
 
-	// 9. 复制输出到 call 节点
+	// 9. Copy the outputs onto the call node
 	nr.SetOutputVarsFrom(funcNR.OutputVars)
 
-	// 10. 镜像 funcNR 状态（FunctionExecutor 已 Finish funcNR）
+	// 10. Mirror funcNR's status (FunctionExecutor already finished it)
 	if err != nil {
 		nr.Finish(funcNR.Status, funcNR.ErrCode, funcNR.ErrMsg)
 		return err
@@ -123,7 +126,7 @@ func (e *CallExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 
 func (e *CallExecutor) Capabilities() NodeCapabilities {
 	return NodeCapabilities{
-		ErrorCodes: nil, // 未定义：使用全局错误码，透传子链所有错误码
+		ErrorCodes: nil, // undeclared: the global error codes apply, and every child-chain code passes through
 		Actions:    []flow.ErrorAction{flow.ErrorActionRetry, flow.ErrorActionSkip, flow.ErrorActionHandler},
 		HasPost:    true,
 	}

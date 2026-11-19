@@ -12,12 +12,12 @@ var _ Executor = (*BranchExecutor)(nil)
 
 type BranchExecutor struct{}
 
-// branchConfig 单个分支的配置
+// branchConfig is the config of one branch
 type branchConfig struct {
-	id        string // 唯一标识，对应边 source_handle 中的 childId
-	label     string // 显示名称（用于日志，不保证唯一）
+	id        string // unique id, matching childId in an edge's source_handle
+	label     string // display name (for logs, not guaranteed unique)
 	condition string
-	exclusive bool // 排他：命中并执行完成后，停止尝试后续分支与默认分支
+	exclusive bool // exclusive: once it matches and completes, further branches and the default are not tried
 }
 
 func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
@@ -25,13 +25,13 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 
 	nr.BranchResult = &flow.BranchResult{}
 
-	// ── 1. 解析配置 ──
+	// ── 1. Parse the config ──
 	config := node.Data.Config
 	if config == nil {
 		return failf(nr, flow.ErrCodeConfig, "branch node is missing its configuration")
 	}
 
-	// 脚本相关配置统一放在 config.branch 块：{lang, timeout}
+	// The script-related config lives in one config.branch block: {lang, timeout}
 	lang := "lua"
 	timeout := -1
 	if branchCfg, ok := config["branch"].(map[string]interface{}); ok {
@@ -52,7 +52,7 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 		return failf(nr, flow.ErrCodeConfig, "failed to parse the branch config: "+err.Error())
 	}
 
-	// 获取输入变量（config 顶层，所有分支共用）
+	// Read the input variables (top level of the config, shared by every branch)
 	inputVars := make(map[string]interface{})
 	if inputsConfig, ok := config["inputs"].(map[string]interface{}); ok {
 		vars, err := ctx.GetVariables(inputsConfig, processID)
@@ -66,7 +66,7 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 
 	nr.AddLogf("%d plain branch(es) in total", len(branches))
 
-	// ── 2. 遍历普通分支 ──
+	// ── 2. Walk the plain branches ──
 	for _, branch := range branches {
 		if err := ctx.StdCtx.Err(); err != nil {
 			nr.Finish(flow.StatusCancelled, getCancelErrCode(ctx), err.Error())
@@ -88,13 +88,14 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 			continue
 		}
 
-		// 条件满足，执行分支链
+		// The condition matched, run the branch chain
 		result := e.executeBranch(node, ctx, processID, nr, branch.id, branch.label)
 		if result != nil {
 			return result
 		}
 
-		// 排他分支：命中并执行完成后，停止尝试后续分支与默认分支，结束 branch 节点
+		// An exclusive branch: once it matched and completed, no further branch or default is tried and
+		// the branch node finishes
 		if branch.exclusive {
 			nr.AddLogf("branch %s(%s) matched and completed (exclusive), no further branches are tried", branch.label, branch.id)
 			nr.Finish(flow.StatusSuccess, "", "")
@@ -104,7 +105,7 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 		nr.AddLogf("branch %s(%s) completed normally, checking the next branch", branch.label, branch.id)
 	}
 
-	// ── 3. 默认分支 ──
+	// ── 3. The default branch ──
 	if err := ctx.StdCtx.Err(); err != nil {
 		nr.Finish(flow.StatusCancelled, getCancelErrCode(ctx), err.Error())
 		return err
@@ -126,7 +127,7 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 	return nil
 }
 
-// executeBranch 执行一条分支链，返回 nil 表示正常完成，非 nil 表示需要向上传播
+// executeBranch runs one branch chain; nil means it completed normally, non-nil must be propagated
 func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 	processID string, nr *flow.NodeResult, edgeKey string, label string) error {
 
@@ -142,7 +143,7 @@ func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 		return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("branch %s points at a missing target node %s, returning an error", label, targetEdge.Target))
 	}
 
-	// 记录执行的分支 id
+	// Record the executed branch id
 	nr.BranchResult.AddExecutedBranch(edgeKey)
 
 	childPID, err := ctx.ProcessManager.NewProcess(processID, nil)
@@ -153,19 +154,19 @@ func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 	nr.AddLogf("running branch %s → node %s(%s)", label, targetNode.Data.Label, targetNode.ID)
 	execErr := execute(targetNode, ctx, childPID, 0)
 
-	// 正常完成
+	// Completed normally
 	if execErr == nil {
 		return nil
 	}
 
-	// 控制信号（break/continue/return/exit）→ 节点成功，向上传播
+	// A control signal (break/continue/return/exit) -> the node succeeded, propagate it upwards
 	if isControlSignal(execErr) {
 		nr.AddLogf("branch %s returned control signal %s, node succeeded", label, execErr.Error())
 		nr.Finish(flow.StatusSuccess, "", "")
 		return execErr
 	}
 
-	// 上下文取消
+	// The context was cancelled
 	if ctx.StdCtx.Err() != nil {
 		errCode := flow.ErrCodeTimeout
 		if ctx.StdCtx.Err() == context.Canceled {
@@ -175,11 +176,13 @@ func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 		return ctx.StdCtx.Err()
 	}
 
-	// 子链错误 → 容器节点自身不算失败（条件判断/意图分类已完成），
-	// 记 Success 后向上透传：runner 对非 Failed 状态自动绕过容器节点的
-	// on_error，错误码经 ExecError 逐层传给祖先/顶层。
-	// （目标节点不存在、子进程创建失败等 execute 之前的错误，
-	//  已在上方 Finish(StatusFailed)，仍归属容器节点并走其 on_error。）
+	// A child-chain error -> the container node itself is not a failure (the condition evaluation /
+	// intent classification already succeeded): record Success and propagate upwards, since the runner
+	// bypasses a container node's on_error for any status other than Failed, and the error code travels
+	// through ExecError layer by layer to the ancestor / top level.
+	// (Errors that happen before execute — missing target node, failed child process creation — already
+	//  finished as StatusFailed above, so they still belong to the container node and go through its
+	//  on_error.)
 	code := flow.ErrCodeOther
 	var ee *ExecError
 	if errors.As(execErr, &ee) {
@@ -190,7 +193,7 @@ func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 	return newExecError(code, fmt.Sprintf("branch %s failed: %v", label, execErr))
 }
 
-// parseBranchChildren 解析 children 配置为 branchConfig 切片（只解析普通分支）
+// parseBranchChildren parses the children config into branchConfig values (plain branches only)
 func parseBranchChildren(children []interface{}) ([]branchConfig, error) {
 	branches := make([]branchConfig, 0, len(children))
 	for _, child := range children {
@@ -211,8 +214,9 @@ func parseBranchChildren(children []interface{}) ([]branchConfig, error) {
 
 		condition, _ := childMap["condition"].(string)
 
-		// 解析 exclusive：缺省 true（排他：首个命中即结束本节点）。
-		// 只有显式 false / "false" / "0" / "no" 才是非排他，其余（缺键、非法值）按 true。
+		// Parse exclusive: default true (exclusive: the first match ends this node).
+		// Only an explicit false / "false" / "0" / "no" makes it non-exclusive; anything else (missing
+		// key, invalid value) counts as true.
 		exclusive := true
 		switch v := childMap["exclusive"].(type) {
 		case bool:
@@ -239,7 +243,7 @@ func parseBranchChildren(children []interface{}) ([]branchConfig, error) {
 	return branches, nil
 }
 
-// evaluateBranchCondition 评估分支条件脚本，返回是否匹配
+// evaluateBranchCondition evaluates a branch condition script and reports whether it matched
 func evaluateBranchCondition(ctx *flow.ExecContext, nr *flow.NodeResult, branch branchConfig,
 	lang string, timeout int, inputVars map[string]interface{}) (bool, error) {
 
@@ -251,7 +255,7 @@ func evaluateBranchCondition(ctx *flow.ExecContext, nr *flow.NodeResult, branch 
 	return isConditionTrue(result), nil
 }
 
-// findBranchEdge 前缀匹配 source_handle，兼容 right/left/bottom 方向
+// findBranchEdge prefix-matches source_handle, tolerating the right/left/bottom directions
 func findBranchEdge(node *flow.Node, branchID string) *flow.Edge {
 	prefix := "source" + branchID
 	for _, edge := range node.OutEdges {
@@ -262,7 +266,7 @@ func findBranchEdge(node *flow.Node, branchID string) *flow.Edge {
 	return nil
 }
 
-// isConditionTrue 判断条件脚本的返回值是否为 true
+// isConditionTrue reports whether the condition script returned true
 func isConditionTrue(result interface{}) bool {
 	if result == nil {
 		return false

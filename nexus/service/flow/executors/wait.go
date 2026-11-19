@@ -12,7 +12,7 @@ type WaitExecutor struct{}
 func (e *WaitExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID string, nr *flow.NodeResult) error {
 	nr.WaitResult = &flow.WaitResult{}
 
-	// 获取关联的 fork 节点 ID
+	// Read the id of the fork node this node waits for
 	forkNodeID := ""
 	if node.Data != nil && node.Data.Config != nil {
 		if val, ok := node.Data.Config["fork_node_id"].(string); ok {
@@ -24,15 +24,17 @@ func (e *WaitExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 		return failf(nr, flow.ErrCodeConfig, "fork_node_id not configured")
 	}
 
-	// 查找 fork 节点对应的 NodeResult
+	// Look up the fork node's NodeResult
 	forkNR := ctx.FindNodeResultByProcessChain(forkNodeID, processID)
 	if forkNR == nil || forkNR.ForkResult == nil {
-		// fork_node_id 指错了（指向不存在的 fork、或那个 fork 不在本链上）：
-		// 图配置错误，与上一行「没配置」同属一类，报 internal 会把人引去查平台
+		// fork_node_id points at the wrong place (a fork that does not exist, or one that is not on
+		// this chain): a graph configuration error, the same class as "not configured" above — reporting
+		// internal here would send people off to investigate the platform.
 		return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("fork node result not found: %s", forkNodeID))
 	}
 
-	// 从当前节点的 config 中获取超时配置（与其它节点同口径：关闭即不设节点级超时）
+	// Read the timeout from this node's config (the same rule as other nodes: off means no node-level
+	// timeout)
 	timeout := -1
 	if node.Data != nil && node.Data.Config != nil {
 		timeout = parseTimeoutConfig(node.Data.Config["timeout"])
@@ -43,27 +45,30 @@ func (e *WaitExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 	nr.AddLogf("waiting for concurrent group %s, timeout %ds", forkNodeID, timeout)
 	completed, err := forkNR.ForkResult.WaitTimeoutCtx(ctx.StdCtx, timeout)
 	if err != nil {
-		// ctx 取消/超时：交由上层按取消处理，不当作 wait 节点自身失败
+		// ctx cancelled or timed out: let the caller handle it as a cancellation rather than a wait node
+		// failure
 		if ctxErr := ctx.StdCtx.Err(); ctxErr != nil {
 			nr.Finish(flow.StatusCancelled, getCancelErrCode(ctx), ctxErr.Error())
 			return ctxErr
 		}
-		// 状态异常：fork 已被 wait 过（重复 wait）
+		// A state error: the fork has already been waited on (a duplicate wait)
 		nr.AddLog(fmt.Sprintf("wait failed: %v", err))
-		// 同一个 fork 被 wait 两次是图结构错误（不是平台故障）
+		// Waiting on the same fork twice is a graph structure error (not a platform fault)
 		return failf(nr, flow.ErrCodeConfig, err.Error())
 	}
 	if completed {
 		nr.AddLog("wait finished: every concurrent task completed")
-		// 扫描同 fork 组成员状态：任一失败则 wait 失败（fail-fast）
-		// 注意：扫描的是节点状态而非输出变量，不违反"wait 后不引用并发分支结果"约束
+		// Scan the statuses of the fork group members: any failure fails the wait (fail-fast)
+		// Note: it scans node statuses, not output variables, so it does not violate the "do not
+		// reference concurrent branch results after wait" rule
 		failed := scanForkMembersFailed(ctx, forkNR.ForkResult)
 		if failed != "" {
 			nr.AddLog("concurrent branch failed: " + failed)
 			return failf(nr, flow.ErrCodeOther, "concurrent branch failed: "+failed)
 		}
 	} else {
-		// 真正的超时：部分并发任务未完成，交由 onError 规则决定 skip/retry/terminate
+		// A real timeout: some concurrent tasks did not finish, leaving skip/retry/terminate to the
+		// onError rules
 		nr.AddLog("wait timed out: some concurrent tasks did not finish")
 		return failf(nr, flow.ErrCodeTimeout, "wait timed out: some concurrent tasks did not finish")
 	}
@@ -72,7 +77,8 @@ func (e *WaitExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 	return nil
 }
 
-// scanForkMembersFailed 扫描 fork 组成员的节点状态，返回第一个失败成员的描述（空串表示无失败）
+// scanForkMembersFailed scans the node statuses of the fork group members and returns a description of
+// the first failing member (an empty string means no failure)
 func scanForkMembersFailed(ctx *flow.ExecContext, fr *flow.ForkResult) string {
 	errMsg := ""
 	for _, m := range fr.Members() {
@@ -93,7 +99,8 @@ func scanForkMembersFailed(ctx *flow.ExecContext, fr *flow.ForkResult) string {
 
 func (e *WaitExecutor) Capabilities() NodeCapabilities {
 	return NodeCapabilities{
-		// config：fork_node_id 没填 / 指错、同一个 fork 被 wait 两次，都是图配置错误
+		// config: fork_node_id missing or wrong, and the same fork waited on twice, are all graph
+		// configuration errors
 		ErrorCodes: []string{flow.ErrCodeConfig, flow.ErrCodeTimeout, flow.ErrCodeOther},
 		Actions:    []flow.ErrorAction{flow.ErrorActionSkip},
 		HasPost:    false,

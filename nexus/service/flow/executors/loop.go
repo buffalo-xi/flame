@@ -18,23 +18,23 @@ func (e *LoopExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 		return failf(nr, flow.ErrCodeConfig, "node data or config is nil")
 	}
 
-	// 初始化 locals
+	// Initialise the locals
 	if locals, ok := node.Data.Config["locals"].(map[string]any); ok {
 		nr.InitLocalVars(locals)
 	}
 
-	// 初始化 outputs
+	// Initialise the outputs
 	if outputs, ok := node.Data.Config["outputs"].(map[string]any); ok {
 		nr.InitOutputVars(outputs)
 		nr.InitOutputBindings(outputs)
 	}
 
-	// 初始化循环变量
+	// Initialise the loop variables
 	if loopVars, ok := node.Data.Config["loop_vars"].(map[string]any); ok {
 		nr.LoopResult.LoopVars = flow.InitLoopVars(loopVars)
 	}
 
-	// 统一解析 inputs（config 顶层）到 NodeResult.InputVars
+	// Resolve inputs uniformly (top level of the config) into NodeResult.InputVars
 	if inputsCfg, ok := node.Data.Config["inputs"].(map[string]interface{}); ok {
 		inputVars, err := ctx.GetVariables(inputsCfg, processID)
 		if err != nil {
@@ -82,7 +82,7 @@ func (e *LoopExecutor) Capabilities() NodeCapabilities {
 	}
 }
 
-// ========== 四种循环执行 ==========
+// ========== the four loop kinds ==========
 
 func (e *LoopExecutor) executeLoopCount(node *flow.Node, ctx *flow.ExecContext,
 	processID string, nr *flow.NodeResult, totalTimes int) error {
@@ -117,7 +117,7 @@ func (e *LoopExecutor) executeLoopCount(node *flow.Node, ctx *flow.ExecContext,
 func (e *LoopExecutor) executeLoopEach(node *flow.Node, ctx *flow.ExecContext,
 	processID string, nr *flow.NodeResult, sourceKey string, breakOnEmpty bool) error {
 
-	// 从统一 inputs 中按 source_key 取遍历数组
+	// Take the array to iterate from the shared inputs by source_key
 	inputVars := nr.GetInputVars()
 	arrayData, exists := inputVars[sourceKey]
 	if !exists {
@@ -185,7 +185,7 @@ func (e *LoopExecutor) executeLoopWhile(node *flow.Node, ctx *flow.ExecContext,
 			return err
 		}
 
-		// 先判断条件
+		// Check the condition first
 
 		ok, errScript := evaluateCondition(ctx, nr, lc)
 		if errScript != nil {
@@ -230,7 +230,7 @@ func (e *LoopExecutor) executeLoopDoWhile(node *flow.Node, ctx *flow.ExecContext
 			return err
 		}
 
-		// 先执行（至少一轮）
+		// Run first (at least one round)
 		nr.LoopResult.IncIteration()
 		err := runIteration(node, ctx, processID)
 		if err != nil {
@@ -244,7 +244,7 @@ func (e *LoopExecutor) executeLoopDoWhile(node *flow.Node, ctx *flow.ExecContext
 			continue
 		}
 
-		// 后判断条件
+		// Then check the condition
 		ok, errScript := evaluateCondition(ctx, nr, lc)
 		if errScript != nil {
 			nr.Finish(flow.StatusFailed, flow.ErrCodeScript, "failed to run the condition script: "+errScript.Error())
@@ -260,14 +260,14 @@ func (e *LoopExecutor) executeLoopDoWhile(node *flow.Node, ctx *flow.ExecContext
 	return nil
 }
 
-// ========== 子函数 ==========
+// ========== helpers ==========
 
-// handleIterationError 处理一轮迭代的错误，把控制信号翻译成循环语义。
+// handleIterationError handles one iteration's error, translating control signals into loop semantics.
 //
-// 四种循环（count / each / while / do-while）共用：控制信号的处理规则必须一致，
-// 否则 break / return 在不同循环里表现不同。
-//   - stop=true  循环应当结束（break / return / exit / 取消 / 失败）
-//   - retErr!=nil 调用方直接返回该错误
+// All four loop kinds (count / each / while / do-while) share it: the control signal rules must agree,
+// otherwise break / return behave differently depending on the loop.
+//   - stop=true    the loop should end (break / return / exit / cancellation / failure)
+//   - retErr!=nil  the caller returns that error directly
 func handleIterationError(ctx *flow.ExecContext, nr *flow.NodeResult, i int, err error) (stop bool, retErr error) {
 	if errors.Is(err, SignalBreak) {
 		nr.AddLogf("break on round %d", i)
@@ -293,7 +293,7 @@ func handleIterationError(ctx *flow.ExecContext, nr *flow.NodeResult, i int, err
 	return true, failIteration(nr, i, err)
 }
 
-// runIteration 执行一轮迭代：创建子进程，执行子节点链
+// runIteration runs one iteration: create a child process and execute the child node chain
 func runIteration(node *flow.Node, ctx *flow.ExecContext, processID string) error {
 	childPID, err := ctx.ProcessManager.NewProcess(processID, nil)
 	if err != nil {
@@ -302,8 +302,8 @@ func runIteration(node *flow.Node, ctx *flow.ExecContext, processID string) erro
 
 	entryNode := findEntryNode(ctx.Flow, node.ID)
 	if entryNode == nil {
-		// 静默跳过会让循环空转 N 轮、整体还判成功，日志里一条线索都没有。
-		// 找不到循环体入口是流程图结构错误，运行期一发现就得报出来。
+		// Skipping silently would spin the loop N rounds and still report success, with no clue in the
+		// logs. A missing loop body entry is a flow structure error and has to surface at runtime.
 		return newExecError(flow.ErrCodeConfig,
 			fmt.Sprintf("loop node %s: body entry node not found", node.ID))
 	}
@@ -311,7 +311,7 @@ func runIteration(node *flow.Node, ctx *flow.ExecContext, processID string) erro
 	return execute(entryNode, ctx, childPID, 0)
 }
 
-// evaluateCondition 评估 while/do_while 条件脚本
+// evaluateCondition evaluates a while/do_while condition script
 func evaluateCondition(ctx *flow.ExecContext,
 	nr *flow.NodeResult, lc map[string]interface{}) (bool, error) {
 
@@ -319,11 +319,13 @@ func evaluateCondition(ctx *flow.ExecContext,
 	if lang == "" {
 		lang = "lua"
 	}
-	// 条件脚本超时与 code/branch 同口径：config.loop.timeout，关闭时不设节点级超时。
+	// The condition script timeout follows the same rule as code/branch: config.loop.timeout, with no
+	// node-level timeout when it is off.
 	timeout := ctx.ResolveScriptTimeout(lang, parseTimeoutConfig(lc["timeout"]))
 	condition, _ := lc["condition"].(string)
 
-	// inputs 已在 Execute 时统一解析到 NodeResult.InputVars（拷贝避免污染原始值）
+	// inputs were already resolved into NodeResult.InputVars in Execute (copied so the originals are not
+	// polluted)
 	inputs := make(map[string]interface{})
 	if src := nr.GetInputVars(); src != nil {
 		for k, v := range src {
@@ -331,7 +333,7 @@ func evaluateCondition(ctx *flow.ExecContext,
 		}
 	}
 
-	// 注入 loop vars 到 input（条件脚本可通过 input.index / input.item 访问）
+	// Inject the loop variables into the input (the condition script can read input.index / input.item)
 	if nr.LoopResult != nil && nr.LoopResult.LoopVars != nil {
 		for k, v := range nr.LoopResult.LoopVars {
 			inputs[k] = v
@@ -341,8 +343,9 @@ func evaluateCondition(ctx *flow.ExecContext,
 	result, err := ExecuteScript(ctx.StdCtx, lang, condition, inputs, nr, timeout)
 	if err != nil {
 		nr.AddLogf("condition evaluation failed: %v", err)
-		// 归 script 而不是 internal：条件脚本写错属于用户可修复的问题，
-		// 归 internal 会被 shouldBypassOnError 直接终止，on_error 永远配不上。
+		// Classified as script rather than internal: a wrong condition script is something the user can
+		// fix, while internal is aborted outright by shouldBypassOnError and an on_error keyed on it would
+		// never match.
 		return false, newExecError(flow.ErrCodeScript, "evaluate condition: "+err.Error())
 	}
 
@@ -350,11 +353,13 @@ func evaluateCondition(ctx *flow.ExecContext,
 	return ok && b, nil
 }
 
-// parseCountInt 解析循环配置里的整数字段（count 的 total_times、while / do_while 的 max_times）。
+// parseCountInt parses an integer field of the loop config (count's total_times, while / do_while's
+// max_times).
 //
-// 键缺失返回 0，由 resolveMaxTimes 按「<=0 取系统上限」处理（这是文档写明的语义）。
-// 但**类型不是数字**必须报错：静默当 0 的后果是「用户以为设了 5 次，实际跑满系统上限
-// 10000 次」—— 一次配错类型放大成万次执行，比直接失败贵得多。
+// A missing key returns 0, which resolveMaxTimes treats as "take the system ceiling" (the documented
+// semantics). But a **value that is not a number** must be an error: silently treating it as 0 means
+// "the user thought they set 5 rounds, it actually ran the system ceiling of 10000" — one mistyped value
+// amplified into ten thousand executions, far more expensive than a plain failure.
 func parseCountInt(lc map[string]interface{}, key string) (int, error) {
 	raw, ok := lc[key]
 	if !ok || raw == nil {
@@ -429,7 +434,7 @@ func toSlice(v interface{}) []interface{} {
 	}
 }
 
-// getCancelErrCode 根据 ctx.StdCtx.Err() 返回对应的错误码
+// getCancelErrCode returns the error code matching ctx.StdCtx.Err()
 func getCancelErrCode(ctx *flow.ExecContext) string {
 	if ctx.StdCtx.Err() == context.Canceled {
 		return flow.ErrCodeCancel
