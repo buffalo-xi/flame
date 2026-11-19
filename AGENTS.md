@@ -47,6 +47,9 @@ tenant's language:
 - **also covered**: Go source comments (including `_test.go`), internal error strings, `msg` diagnostics and log lines are
   **English** (2026-11 decision). Diagnostic text addresses operators and `curl`; it is never what a user reads — user-facing
   copy comes from the `error` code plus the frontend locale bundles, see `nexus/docs/error-codes.md`;
+- **legacy files are converted when touched**: a change to a Go file that still carries Chinese must leave that whole file
+  English (comments, internal error strings, `msg`) in the same commit. Do not translate half a file — a mixed file reads as
+  "this half was reviewed, the other half was not";
 - **not covered**: tenant-built agents / skills (follow the user's language — Chinese for Chinese users), runtime data under
   `nexus/data/tenants/**`, and business fixtures inside tests (e.g. `"张三"`) — those are data, not prose.
 
@@ -61,8 +64,8 @@ Imperative mood, lower case after the colon, no trailing period. The terminology
 messages: `list` / `delist`, `expose` / `retract`, `release` / `deploy` / `rollback` / `apply`, `revoke` — never `publish`
 or `hide`.
 
-Scope of the rule: the **commit message** only. Go source comments and internal error strings stay Chinese (see above), and
-history is not rewritten — commits made before this rule keep their original language.
+Scope of the rule: the **commit message** only; the body-text rules above (comments, internal error strings and `msg` are
+English) stand on their own. History is not rewritten — commits made before these rules keep their original language.
 
 ## Documentation is English-primary, with a Chinese mirror
 
@@ -100,3 +103,8 @@ Verification:
   the compiler, so a mangled identifier (2026-11: every `s` / `c` silently became `o`, e.g. `platform.tenant_oapabilitieo`)
   survives `go build`, review and the locale checks, and only fails when someone runs it on a fresh environment. The script
   creates a throwaway database, runs every script that can run on an empty schema in dependency order, and drops it again.
+- running the tests: `powershell -File scripts/run-tests.ps1` covers all four modules (separate modules, no `go.work`). The
+  sandboxd E2E packages are skipped and listed when Docker is unreachable; `-RequireDocker` turns that into a failure.
+- checking the copy rules: `powershell -File scripts/check-locale.ps1` reports the Chinese left in Go sources, the
+  user-visible copy that never reaches a locale bundle (`ErrJSON` without a code, hardcoded Chinese display fields), and the
+  code-versus-bundle diff for `en` / `zh-CN`. It is a baseline, not a gate.
