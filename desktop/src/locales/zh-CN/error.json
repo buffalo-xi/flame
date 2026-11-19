@@ -54,7 +54,9 @@
       "file_too_large": "文件过大（上限 {limit_mb} MB）",
       "skills_dir_readonly": "skills/ 目录只读，请到技能编辑页修改",
       "last_version_undeletable": "v{version} 是唯一的版本，不能删除；如需清理历史请先发布一个新版本",
-      "rename_failed": "定义域/版本目录迁移失败，改名未生效"
+      "rename_failed": "定义域/版本目录迁移失败，改名未生效",
+      "protected": "{name} 是内置受保护智能体，不允许改名或删除",
+      "relations_failed": "智能体已创建，但保存调用授权失败。请检查该智能体后重试。"
     },
     "skill": {
       "not_found": "技能不存在",

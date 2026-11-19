@@ -27,15 +27,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 全局Repository实例
+// Package-level repository instance.
 var (
 	repo     = repository.NewRepository()
 	relRepo  = agentrelations.NewRepository()
 	flowRepo = flowsrepo.NewPostgresRepository()
 )
 
-// validateAgentNameUnique 先校验 agent 名是否可用：不与其它 agent、工作流重名。
-// excludeID 非空表示改名场景，忽略自身那条记录。
+// validateAgentNameUnique checks the agent name first: it must not clash with another agent or a flow.
+// A non-empty excludeID means a rename: ignore the entity's own row.
 func validateAgentNameUnique(info *auth.AuthInfo, name string, excludeID string) error {
 	exist, err := repo.ExistsName(info, name, excludeID)
 	if err != nil {
@@ -54,7 +54,7 @@ func validateAgentNameUnique(info *auth.AuthInfo, name string, excludeID string)
 	return nil
 }
 
-// agentToMap 将 Agent 转为响应 map
+// agentToMap renders an Agent as a response map.
 func agentToMap(instance *models.Agent) gin.H {
 	return gin.H{
 		"id":          instance.ID,
@@ -63,15 +63,15 @@ func agentToMap(instance *models.Agent) gin.H {
 		"config":      instance.Config,
 		"status":      instance.Status,
 		"endpoints":   instance.Endpoints,
-		// 两个 agent 级开关（同名列，均由 agents 表承载）
+		// The two agent-level switches (same-named columns, both carried by the agents table).
 		"tools_unrestricted": instance.ToolsUnrestricted,
 		"skill_discovery":    instance.SkillDiscovery,
 		"created_by":         instance.CreatedBy,
 		"updated_by":         instance.UpdatedBy,
 		"updated_by_name":    instance.UpdatedByName,
-		// 两个判据语义正交，前端不要互相替代（见 shared/models/protected.go）：
-		// protected     = 不允许删除/改名（预置资产名单，目前只有 main）；
-		// is_supervisor = 超级权限身份（缺省拥有全部内置工具、任何入口都读草稿，可配置多个）。
+		// The two criteria are orthogonal and must not stand in for each other (see shared/models/protected.go):
+		// protected     = cannot be deleted or renamed (the preinstalled list, currently main only);
+		// is_supervisor = the super-power identity (all built-in tools by default, reads the draft on every entry point, more than one allowed).
 		"protected":     models.IsProtectedAgent(instance.Name),
 		"is_supervisor": instance.IsSupervisor,
 		"created_at":    instance.CreatedAt,
@@ -79,9 +79,9 @@ func agentToMap(instance *models.Agent) gin.H {
 	}
 }
 
-// ListAgents 获取智能体列表
+// ListAgents lists agents.
 func ListAgents(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 
 	if !exists {
@@ -89,32 +89,32 @@ func ListAgents(c *gin.Context) {
 		return
 	}
 
-	// 解析请求参数
+	// Decode the request parameters.
 	var req repository.ListAgentsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request parameters", "")
 		return
 	}
 
-	// 查询数据
+	// Query the data.
 	instances, total, err := repo.ListAgents(authInfo.(*auth.AuthInfo), &req)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 当前版本号：一次批量查（列表卡片要显示 vN），读失败不影响列表本身
+	// Current version numbers in one batch query (the cards show vN); a read failure does not affect the list itself.
 	curVers, _ := versioning.CurrentVersions(authInfo.(*auth.AuthInfo).Schema, "agent_versions")
 
 	var items []gin.H
 	for i := range instances {
 		item := agentToMap(&instances[i])
-		// 0 = 尚未发布正式版本（卡片显示「未发布」）
+		// 0 = no released version yet (the card shows "not released").
 		item["current_version"] = curVers[instances[i].ID]
 		items = append(items, item)
 	}
 
-	// 构建响应
+	// Build the response.
 	response := gin.H{
 		"items": items,
 		"total": total,
@@ -125,9 +125,9 @@ func ListAgents(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", response, "")
 }
 
-// GetAgent 获取单个智能体
+// GetAgent returns one agent.
 func GetAgent(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
@@ -142,13 +142,13 @@ func GetAgent(c *gin.Context) {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
 	body := agentToMap(s)
-	// 版本状态：编辑器头部要能区分「未发布 / 已发布但有改动 / 与线上一致」（与 flow 同口径）。
-	// 文件之外还比私有技能元数据 —— 那是 agent 定义的一部分。
+	// Version state: the editor header distinguishes "not released / released but modified / identical to production" (same rule as flows).
+	// Besides files it also compares the private skill metadata - that is part of the definition too.
 	body["current_version"], body["dirty"] = 0, false
 	if st, serr := getStorage(); serr == nil {
 		v, dirty := versioning.AgentVersionState(context.Background(), st, authInfo.(*auth.AuthInfo).Schema, s.ID, s.Name)
@@ -157,30 +157,30 @@ func GetAgent(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", body, "")
 }
 
-// agentRequest 创建/更新的请求结构
+// agentRequest is the create / update payload.
 type agentRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Config      string `json:"config"`
-	Status      int    `json:"status"` // 1=正常 | 3=废弃
+	Status      int    `json:"status"` // 1=active | 3=deprecated
 	Endpoints   string `json:"endpoints"`
-	// 两个 agent 级开关：指针类型以区分「未传」(nil) 与「显式置 false」。
-	// 更新时未传则沿用库中旧值（UpdateAgent 是全字段覆盖式 UPDATE，见其回填逻辑）。
+	// The two agent-level switches are pointers so "not sent" (nil) is distinguishable from an explicit false.
+	// On update an unsent switch keeps the stored value (UpdateAgent is a full-column UPDATE, see the fallback there).
 	ToolsUnrestricted *bool `json:"tools_unrestricted"`
 	SkillDiscovery    *bool `json:"skill_discovery"`
-	// IsSupervisor 超级权限属性（agents.is_supervisor）。管理端就是人工管理面，
-	// 是授予该属性的权威入口之一（另一个是 supervisor 自己调的 update_agent）。
-	// 更新时走单列 SetSupervisor，不混进 UpdateAgent 的全字段覆盖。
+	// IsSupervisor is the super-power flag (agents.is_supervisor). The admin API is the human management
+	// surface and one of the authoritative entry points for it (the other is update_agent, called by the
+	// supervisor itself). Updates go through the single-column SetSupervisor, never through UpdateAgent.
 	IsSupervisor *bool `json:"is_supervisor"`
-	// 调用授权（仅创建时生效）：新 agent 可调用谁 / 谁能调用新 agent
+	// Call grants (create only): who the new agent may call / who may call it.
 	CanCallIDs  []string `json:"can_call_ids"`
 	CalledByIDs []string `json:"called_by_ids"`
-	// Lang 新建时用于生成 AGENT.md 骨架的语言（仅创建时生效，不进库）。
-	// 不传 / 不认识 → 英文骨架（见 shared/skeleton.Normalize）。
+	// Lang picks the language of the generated AGENT.md skeleton (create only, never stored).
+	// Absent or unknown means the English skeleton (see shared/skeleton.Normalize).
 	Lang string `json:"lang"`
 }
 
-// toModel 将请求转为 Agent
+// toModel turns the request into an Agent.
 func (req *agentRequest) toModel() models.Agent {
 	m := models.Agent{
 		Name:        req.Name,
@@ -224,9 +224,9 @@ func (req *agentRequest) checkJSONPayload() (string, bool) {
 	return "", true
 }
 
-// CreateAgent 创建智能体
+// CreateAgent creates an agent.
 func CreateAgent(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
@@ -248,72 +248,72 @@ func CreateAgent(c *gin.Context) {
 		return
 	}
 
-	// 先校验：名称合法 + 不与其它 agent、工作流重名（任何写库之前）
+	// Validate first: name shape and no clash with another agent or a flow, before anything is written.
 	req.Name = strings.TrimSpace(req.Name)
 	if !tools.ValidName(req.Name) {
-		xhttp.ErrCode(c, "agent.invalid_name", nil, "Invalid agent name (只允许字母数字横线，长度≤64)", "")
+		xhttp.ErrCode(c, "agent.invalid_name", nil, "invalid agent name (letters, digits and hyphens only, max 64)", "")
 		return
 	}
 	if err := validateAgentNameUnique(info, req.Name, ""); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 同名重建：清掉上一个同名实体留下的版本目录（DB 里没有行不代表盘上没有）。
+	// Recreate under the same name: drop the version directory the previous entity left behind (no row in the DB does not mean nothing on disk).
 	if st, serr := getStorage(); serr == nil {
 		_ = st.DeletePrefix(context.Background(),
 			paths.VersionEntityKey(info.Schema, paths.VersionAgents, req.Name))
 	}
 
-	// 状态只接受两态；未传按「正常」处理（前端新建即 1，这里兜住直接调 API 的情形）
+	// Only two states are accepted; absent means active (the UI always sends 1, this covers direct API calls).
 	if req.Status == 0 {
 		req.Status = models.StatusNormal
 	}
 	if req.Status != models.StatusNormal && req.Status != models.StatusDeprecated {
-		xhttp.ErrCode(c, "agent.invalid_status", nil, "status must be 1(正常) / 3(废弃)", "")
+		xhttp.ErrCode(c, "agent.invalid_status", nil, "status must be 1 (active) or 3 (deprecated)", "")
 		return
 	}
 
 	agent := req.toModel()
 
-	// 配额检查：租户内 agent 数量上限
+	// Quota check: the per-tenant agent cap.
 	schema := info.Schema
 	cnt, err := quota.CountAgents(schema)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := models.CheckQuota("agent", cnt, quota.Resolve(schema).MaxAgents); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 插入数据（人创建 → 无"创建者 agent"，不自动授权）
+	// Insert (created by a human, so there is no creator agent and no automatic grant).
 	id, err := repo.CreateAgent(info, &agent, "")
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 显式授权（可选）：出边（它能调用谁）+ 入边（谁能调用它）
+	// Explicit grants (optional): out-edges (who it calls) + in-edges (who calls it).
 	if len(req.CanCallIDs) > 0 || len(req.CalledByIDs) > 0 {
-		// 出边与入边一视同仁，都允许包含 supervisor（它可被调用，能不能调由这条关系决定）
+		// Out- and in-edges are treated alike and may include the supervisor (it can be called; this grant alone decides whether it may call).
 		canCall := filterValidAgentIDs(info, id, req.CanCallIDs)
 		calledBy := filterValidAgentIDs(info, id, req.CalledByIDs)
 		if err := relRepo.ReplaceByCaller(info.Schema, id, canCall, info.ID); err != nil {
-			xhttp.ErrJSON(c, "agent created but relations failed: "+err.Error(), gin.H{"id": id}, "")
+			xhttp.ErrCode(c, "agent.relations_failed", gin.H{"id": id}, "agent created but relations failed: "+err.Error(), "")
 			return
 		}
 		if err := relRepo.ReplaceByCallee(info.Schema, id, calledBy, info.ID); err != nil {
-			xhttp.ErrJSON(c, "agent created but relations failed: "+err.Error(), gin.H{"id": id}, "")
+			xhttp.ErrCode(c, "agent.relations_failed", gin.H{"id": id}, "agent created but relations failed: "+err.Error(), "")
 			return
 		}
 	}
 
-	// 确保工作区有入口文件（agent 即文件夹，便于新建后立刻进入编辑）。
-	// 入口文件名取自 shared/paths.AgentEntryFile（单一真源）：与运行时
-	// loadSystemPrompt / create_agent / read_agent 的约定一致，
-	// 不做成可配置（否则会出现"配了却不生效"的误导）。
+	// Make sure the workspace has an entry file (an agent is a folder, so editing can start right away).
+	// The entry file name comes from shared/paths.AgentEntryFile (single source of truth): it matches the
+	// convention of loadSystemPrompt / create_agent / read_agent at run time, and is deliberately not
+	// configurable (a setting that silently does nothing is worse than none).
 	entryFile := paths.AgentEntryFile
 	if st, serr := getStorage(); serr == nil {
 		key := path.Join(tools.AgentsKey(info.Schema, agent.Name), entryFile)
@@ -326,10 +326,10 @@ func CreateAgent(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"id": id}, "")
 }
 
-// filterValidAgentIDs 过滤空值、自身与不存在的 agent，返回去重后的 id 列表。
+// filterValidAgentIDs drops blanks, the agent itself and unknown ids, and returns the de-duplicated list.
 //
-// 不再排除 supervisor：它可被调用，能不能调完全由这条授权关系决定
-// （与 caller.go 的判定一致 —— 有授权行才放行，与身份无关）。
+// The supervisor is no longer excluded: it can be called, and this grant alone decides whether it may
+// call (same rule as caller.go - a grant row allows it, identity is irrelevant).
 func filterValidAgentIDs(info *auth.AuthInfo, selfID string, ids []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(ids))
@@ -347,7 +347,7 @@ func filterValidAgentIDs(info *auth.AuthInfo, selfID string, ids []string) []str
 	return out
 }
 
-// GetAgentRelations 获取 agent 的调用授权（出边：可调用谁；入边：谁能调用它）。
+// GetAgentRelations returns the call grants (out: who it may call; in: who may call it).
 func GetAgentRelations(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -359,7 +359,7 @@ func GetAgentRelations(c *gin.Context) {
 
 	inst, err := repo.GetAgent(info, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if inst == nil {
@@ -369,22 +369,22 @@ func GetAgentRelations(c *gin.Context) {
 
 	callable, err := relRepo.ListByCaller(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	callers, err := relRepo.ListByCallee(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
-		"can_call":  callable, // 该 agent 可调用的目标
-		"called_by": callers,  // 可调用该 agent 的来源
+		"can_call":  callable, // who this agent may call
+		"called_by": callers,  // who may call this agent
 	}, "")
 }
 
-// SetAgentRelations 全量替换 agent 的调用授权（双向）。
-// body: {"can_call_ids":["uuid",...],"called_by_ids":["uuid",...]}；空数组 = 清空该方向。
+// SetAgentRelations replaces both directions of the call grants.
+// body: {"can_call_ids":["uuid",...],"called_by_ids":["uuid",...]}; an empty array clears that direction.
 func SetAgentRelations(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -405,36 +405,36 @@ func SetAgentRelations(c *gin.Context) {
 
 	inst, err := repo.GetAgent(info, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if inst == nil {
 		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return
 	}
-	// 只有正常态允许改定义（端点对外开放不会自动带入任何冻结）
+	// Only an active agent may change its definition (exposing an endpoint never freezes anything).
 	if !inst.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能修改（如需修改请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot be modified (switch it back to Active first)", "")
 		return
 	}
 
-	// 出边与入边一视同仁，都允许包含 supervisor（它可被调用，能不能调由这条关系决定）
+	// Out- and in-edges are treated alike and may include the supervisor (it can be called; this grant alone decides whether it may call).
 	canCall := filterValidAgentIDs(info, id, body.CanCallIDs)
 	calledBy := filterValidAgentIDs(info, id, body.CalledByIDs)
 
 	if err := relRepo.ReplaceByCaller(info.Schema, id, canCall, info.ID); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if err := relRepo.ReplaceByCallee(info.Schema, id, calledBy, info.ID); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"can_call": len(canCall), "called_by": len(calledBy)}, "")
 }
 
-// GetAgentSkillBindings 读取该 agent 绑定的技能（agent_skill_bindings 的 agent 侧视角）。
-// 返回 {"skill_ids":[...]}；「全员可见」的技能也允许先绑定，便于后续把技能切成白名单时保留授权。
+// GetAgentSkillBindings reads the skills bound to this agent (the agent side of agent_skill_bindings).
+// Returns {"skill_ids":[...]}; tenant-wide skills may be bound in advance, so switching a skill to a whitelist keeps the grant.
 func GetAgentSkillBindings(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -450,7 +450,7 @@ func GetAgentSkillBindings(c *gin.Context) {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if inst == nil {
@@ -461,19 +461,19 @@ func GetAgentSkillBindings(c *gin.Context) {
 	skillRepo := skills.NewRepository()
 	ids, err := skillRepo.ListSkillIDsByAgent(info.Schema, id)
 	if err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	discovery, derr := skillRepo.GetAgentSkillDiscovery(info.Schema, id)
 	if derr != nil {
-		xhttp.ErrJSON(c, derr.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, derr.Error(), "")
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"skill_ids": ids, "discovery": discovery}, "")
 }
 
-// SetAgentSkillBindings 全量替换该 agent 的 skill 绑定。
-// body: {"skill_ids":["uuid",...]}；空数组 = 清空（该 agent 只能看到「全员可见」的租户级 skill）。
+// SetAgentSkillBindings replaces the skill bindings of this agent.
+// body: {"skill_ids":["uuid",...]}; an empty array clears them (the agent then only sees tenant-wide skills).
 func SetAgentSkillBindings(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -485,7 +485,7 @@ func SetAgentSkillBindings(c *gin.Context) {
 
 	var body struct {
 		SkillIDs []string `json:"skill_ids"`
-		// Discovery 省略（nil）时保持原值；显式传入才修改「可发现未绑定的技能」开关
+		// An omitted Discovery (nil) keeps the stored value; only an explicit value changes the "may discover unbound skills" switch.
 		Discovery *bool `json:"discovery"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -499,36 +499,36 @@ func SetAgentSkillBindings(c *gin.Context) {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if inst == nil {
 		xhttp.ErrCode(c, "agent.not_found", nil, "Agent not found", "")
 		return
 	}
-	// 只有正常态允许改定义（与调用授权一致）
+	// Only an active agent may change its definition (same rule as the call grants).
 	if !inst.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能修改（如需修改请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot be modified (switch it back to Active first)", "")
 		return
 	}
 
 	skillRepo := skills.NewRepository()
 	if err := skillRepo.ReplaceByAgent(info.Schema, id, body.SkillIDs, info.ID); err != nil {
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 	if body.Discovery != nil {
 		if err := skillRepo.SetAgentSkillDiscovery(info.Schema, id, *body.Discovery); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 	}
 	xhttp.OkJSON(c, "Success", gin.H{"count": len(body.SkillIDs)}, "")
 }
 
-// UpdateAgent 更新智能体
+// UpdateAgent updates an agent.
 func UpdateAgent(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
@@ -545,43 +545,43 @@ func UpdateAgent(c *gin.Context) {
 
 	ai := authInfo.(*auth.AuthInfo)
 
-	// 先取旧实例：拿旧名用于改名时的目录迁移
+	// Load the old instance first: its name drives the directory migration on rename.
 	old, err := repo.GetAgent(ai, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
-	// 只有正常态允许改定义（含改名 / 迁移目录）
+	// Only an active agent may change its definition (renames and directory moves included).
 	if old != nil && !old.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能修改（如需修改请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot be modified (switch it back to Active first)", "")
 		return
 	}
 
-	// 改名场景：先做全部校验，再写库 / 迁移目录（避免部分成功）
+	// Rename: run every check first, then write the DB / move the directory (no partial success).
 	if old != nil && req.Name != old.Name {
 		req.Name = strings.TrimSpace(req.Name)
-		// 内置受保护智能体（如 main）不允许改名
+		// A protected built-in agent (main) cannot be renamed.
 		if models.IsProtectedAgent(old.Name) {
-			xhttp.ErrJSON(c, "protected agent "+old.Name+" cannot be renamed", nil, "")
+			xhttp.ErrCode(c, "agent.protected", gin.H{"name": old.Name}, "protected agent "+old.Name+" cannot be renamed", "")
 			return
 		}
 		if !tools.ValidName(req.Name) {
-			xhttp.ErrCode(c, "agent.invalid_name", nil, "Invalid agent name (只允许字母数字横线，长度≤64)", "")
+			xhttp.ErrCode(c, "agent.invalid_name", nil, "invalid agent name (letters, digits and hyphens only, max 64)", "")
 			return
 		}
 		if err := validateAgentNameUnique(ai, req.Name, id); err != nil {
-			xhttp.ErrJSON(c, err.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
 		}
 	}
 
-	// config / endpoints 在请求里是字符串字段，空串表示"本次未提供"。
-	// UpdateAgent 是全字段覆盖式 UPDATE，直接透传空串会写成 NULL（config 列有 NOT NULL 约束）→ 报错，
-	// 因此这里回落：优先沿用库里的旧值，取不到时给安全默认值（{} / []）。
+	// config / endpoints are string fields in the request; an empty string means "not provided this time".
+	// UpdateAgent is a full-column UPDATE, so passing an empty string writes NULL (config is NOT NULL)
+	// and fails; fall back to the stored value, or to a safe default ({} / []) when there is none.
 	if req.Config == "" {
 		req.Config = "{}"
 		if old != nil && !old.Config.IsNil() {
@@ -606,18 +606,18 @@ func UpdateAgent(c *gin.Context) {
 		return
 	}
 
-	// 状态只接受两态：未传则沿用库中旧值（全字段覆盖式 UPDATE 不能把状态清零）
+	// Only two states are accepted; absent keeps the stored one (a full-column UPDATE must not zero the status).
 	if req.Status == 0 && old != nil {
 		req.Status = int(old.Status)
 	}
 	if req.Status != models.StatusNormal && req.Status != models.StatusDeprecated {
-		xhttp.ErrCode(c, "agent.invalid_status", nil, "status must be 1(正常) / 3(废弃)", "")
+		xhttp.ErrCode(c, "agent.invalid_status", nil, "status must be 1 (active) or 3 (deprecated)", "")
 		return
 	}
 
 	agent := req.toModel()
-	// 两个 agent 级开关：请求未显式提供时沿用库中旧值，避免全字段覆盖式 UPDATE 把开关误清零。
-	// 专用写入口仍可直改（技能可见性见 SetAgentSkillBindings，工具面见 toolgrants 的 SetUnrestricted）。
+	// The two agent-level switches keep the stored value when the request omits them, so a full-column UPDATE does not silently clear them.
+	// The dedicated endpoints still write them directly (skill visibility via SetAgentSkillBindings, the tool surface via toolgrants.SetUnrestricted).
 	if old != nil {
 		if req.ToolsUnrestricted == nil {
 			agent.ToolsUnrestricted = old.ToolsUnrestricted
@@ -627,29 +627,29 @@ func UpdateAgent(c *gin.Context) {
 		}
 	}
 
-	// 改名：**先搬盘、再写库**（盘是内容，库是索引；见 paths.MoveEntityStorage 的调用方约定）。
-	// 版本目录按名字键：盘没搬成却先把库改了，正式调用就会按新名拼出一个空版本目录。
+	// Rename: **move the disk first, then the DB** (disk holds content, the DB is the index; see the caller contract of paths.MoveEntityStorage).
+	// Version directories are keyed by name: changing the DB before the disk would make a production call assemble an empty version directory under the new name.
 	renamed := old != nil && old.Name != "" && agent.Name != "" && old.Name != agent.Name
 	if renamed {
 		st, serr := getStorage()
 		if serr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "存储未就绪，无法迁移定义域/版本目录: "+serr.Error(), "")
+			xhttp.ErrCode(c, "common.internal", nil, "storage not ready, cannot migrate the definition/version directories: "+serr.Error(), "")
 			return
 		}
 		if rerr := paths.MoveEntityStorage(st, ai.Schema, paths.VersionAgents, old.Name, agent.Name); rerr != nil {
-			xhttp.ErrCode(c, "agent.rename_failed", nil, "迁移定义域/版本目录失败（改名未生效）: "+rerr.Error(), "")
+			xhttp.ErrCode(c, "agent.rename_failed", nil, "failed to migrate the definition/version directories, so the rename did not take effect: "+rerr.Error(), "")
 			return
 		}
 	}
 
-	// 更新数据
+	// Update the row.
 	err = repo.UpdateAgent(ai, id, &agent)
 	if err != nil {
 		if renamed {
-			// 库没改成 → 把盘搬回去，别留「盘新名、库旧名」的半套
+			// The DB write failed, so move the disk back: never leave new names on disk and old ones in the DB.
 			if st, serr := getStorage(); serr == nil {
 				if rerr := paths.MoveEntityStorage(st, ai.Schema, paths.VersionAgents, agent.Name, old.Name); rerr != nil {
-					xlog.Error("回滚定义域/版本目录失败 schema=%s %s→%s: %v", ai.Schema, agent.Name, old.Name, rerr)
+					xlog.Error("failed to roll back the definition/version directories schema=%s %s->%s: %v", ai.Schema, agent.Name, old.Name, rerr)
 				}
 			}
 		}
@@ -657,16 +657,16 @@ func UpdateAgent(c *gin.Context) {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 超权属性：单列更新 —— UpdateAgent 刻意不覆盖 is_supervisor
-	// （全字段覆盖会把请求里未传的 false 静默写进去，等于一次改描述就把权限清零）。
-	// 降级本租户最后一个 supervisor 会被仓储拒绝，这里如实回传。
+	// The super-power flag is a single-column update: UpdateAgent deliberately does not touch is_supervisor
+	// (a full-column overwrite would silently write the false the request never sent, so one description edit would clear the privilege).
+	// Demoting the last supervisor of the tenant is rejected by the repository; that error is passed through as is.
 	if req.IsSupervisor != nil && (old == nil || old.IsSupervisor != *req.IsSupervisor) {
 		if serr := repo.SetSupervisor(ai, id, *req.IsSupervisor); serr != nil {
-			xhttp.ErrJSON(c, serr.Error(), nil, "")
+			xhttp.ErrCode(c, "common.internal", nil, serr.Error(), "")
 			return
 		}
 	}
@@ -674,9 +674,9 @@ func UpdateAgent(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"id": id}, "")
 }
 
-// DeleteAgent 删除智能体
+// DeleteAgent deletes an agent.
 func DeleteAgent(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
@@ -686,44 +686,44 @@ func DeleteAgent(c *gin.Context) {
 	ai := authInfo.(*auth.AuthInfo)
 	id := c.Param("id")
 
-	// 先取实例：拿 name 用于清理定义域目录
+	// Load the instance first: its name drives the directory cleanup.
 	inst, err := repo.GetAgent(ai, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
-	// 内置受保护智能体不允许删除
+	// A protected built-in agent cannot be deleted.
 	if inst != nil && models.IsProtectedAgent(inst.Name) {
-		xhttp.ErrJSON(c, "protected agent "+inst.Name+" cannot be deleted", nil, "")
+		xhttp.ErrCode(c, "agent.protected", gin.H{"name": inst.Name}, "protected agent "+inst.Name+" cannot be deleted", "")
 		return
 	}
-	// 废弃不允许删除（需先切回「正常」）
+	// A deprecated agent cannot be deleted (switch it back to Active first).
 	if inst != nil && !inst.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "agent 已废弃，不能删除（如需删除请先切回「正常」）", "")
+		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot be deleted (switch it back to Active first)", "")
 		return
 	}
 
-	// 删除数据：私有 skill 记录、授权关联与 agents 行由仓储同一事务完成
-	// （skills.agent_id 没有外键，不能指望 DB 级联）。
+	// Delete the rows: the private skill records, the grant links and the agents row are handled in one
+	// repository transaction (skills.agent_id has no foreign key, so DB-level cascading cannot be relied on).
 	if err := repo.DeleteAgent(ai, id); err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 清理定义域目录 + 版本域（走 storage，local / s3 通用）。
-	// DB 的 cascade 删不掉盘：版本目录按名字键留着，同名重建就会继承旧历史。
+	// Clean the definition directory and the version domain (through storage, local / s3 alike).
+	// A DB cascade cannot delete disk: a version directory left behind under that name would be inherited by a recreate.
 	if inst != nil && inst.Name != "" {
 		if st, serr := getStorage(); serr == nil {
 			if rerr := paths.DeleteEntityStorage(st, ai.Schema, paths.VersionAgents, inst.Name); rerr != nil {
-				xlog.Error("清理定义域/版本目录失败 schema=%s name=%s: %v", ai.Schema, inst.Name, rerr)
+				xlog.Error("failed to clean the definition/version directories schema=%s name=%s: %v", ai.Schema, inst.Name, rerr)
 			}
 		}
 	}
@@ -731,12 +731,12 @@ func DeleteAgent(c *gin.Context) {
 	xhttp.OkJSON(c, "Agent instance deleted successfully", id, "")
 }
 
-// SetAgentStatus 切换 agent 状态（1=正常 | 3=废弃，见 models.StatusXxx）。
+// SetAgentStatus switches the agent state (1=active | 3=deprecated, see models.StatusXxx).
 //
-// 切「废弃」时会自动收回该 agent 全部端点的对外（exposed=false，记录保留）：
-// 废弃态不该再对外服务。切「正常」不动端点（端点对外与定义状态无关）。
+// Switching to deprecated retracts every endpoint of the agent (exposed=false, the records stay):
+// a deprecated agent must not serve outside. Switching back to active leaves the endpoints alone (exposure is independent of the definition state).
 func SetAgentStatus(c *gin.Context) {
-	// 从context中获取认证信息
+	// Tenant from the request context.
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
 		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
@@ -756,7 +756,7 @@ func SetAgentStatus(c *gin.Context) {
 	switch body.Status {
 	case models.StatusNormal, models.StatusDeprecated:
 	default:
-		xhttp.ErrCode(c, "agent.invalid_status", nil, "status must be 1(正常) / 3(废弃)", "")
+		xhttp.ErrCode(c, "agent.invalid_status", nil, "status must be 1 (active) or 3 (deprecated)", "")
 		return
 	}
 
@@ -765,16 +765,16 @@ func SetAgentStatus(c *gin.Context) {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
 			return
 		}
-		xhttp.ErrJSON(c, err.Error(), nil, "")
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	// 只有切「废弃」才收回端点对外：废弃态不该再对外服务。
-	// 切「正常」不收回 —— 端点对外与定义可编辑是两件事，恢复编辑不该把线上服务打掉。
-	// 状态已改，收回失败不回滚，只记日志（下次切换或手工收回可恢复）。
+	// Only switching to deprecated retracts the endpoints: a deprecated agent must not serve outside.
+	// Switching to active does not retract: exposure and editability are separate, and restoring edits must not take production down.
+	// The state is already changed, so a failed retract is logged instead of rolled back (the next switch or a manual retract recovers).
 	if body.Status == models.StatusDeprecated {
 		if uerr := svcendpoints.NewRepository().RetractByTarget(ai, "agent", id); uerr != nil {
-			xlog.Error("下架 agent 端点失败 id=%s: %v", id, uerr)
+			xlog.Error("failed to retract the agent endpoints id=%s: %v", id, uerr)
 		}
 	}
 
