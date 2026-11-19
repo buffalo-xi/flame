@@ -71,8 +71,8 @@ and both `README` files link to them.
 English is the source: write the English version first, then align the Chinese mirror. Editing one version obliges you to
 update the other in the same commit — a half-updated pair is worse than a single language.
 
-Documents not yet migrated (`asset-sharing.md`, `sandbox-design.md`, `tenant-template-pack.md`,
-`workspace-layout-and-supervisor-power.md`) stay Chinese until they are translated; do not half-translate a file in place.
+Documents not yet migrated (`asset-sharing.md`, `tenant-template-pack.md`, `workspace-layout-and-supervisor-power.md`) stay
+Chinese until they are translated; do not half-translate a file in place.
 
 ## Module map
 
