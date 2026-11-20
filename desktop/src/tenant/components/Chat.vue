@@ -499,13 +499,14 @@ const sessionsQuotaWarn = computed(() =>
   sessionsLimit.value > 0 && sessionsUsed.value >= sessionsLimit.value)
 const messages = ref([])
 const input = ref('')
-// 斜杠命令（/<技能名>）：列表来自当前 agent 的 user_invocable 技能，切 agent 后重新拉取
+// 斜杠命令（/<技能名>）：列表来自当前 agent 的 user_invocable 技能。
+// 每次打开菜单都重新拉：技能设置里改「开放为用户命令 / 直达工具」后，旧快照会让菜单停在改动前的样子，
+// 看上去像后端没生效；这是一次只读请求，不值得为它缓存。
 const inputRef = ref(null)
 const commands = ref([])
 const cmdOpen = ref(false)
 const cmdIndex = ref(0)
 const cmdQuery = ref('')
-const commandsAgentId = ref('') // 缓存归属：只有同一个 agent 才复用，避免绑定关系变了还显示旧菜单
 const streaming = ref(false)
 // 当前这一轮对话的 AbortController：停止 = 断开这条 SSE 连接（见 stopRun）
 let chatAbort = null
@@ -626,7 +627,7 @@ const closeCommands = () => {
 
 const fetchCommands = async () => {
   const agentId = selectedAgentId.value
-  if (!agentId || commandsAgentId.value === agentId) return
+  if (!agentId) return
   const token = getToken()
   if (!token) return
   try {
@@ -634,14 +635,20 @@ const fetchCommands = async () => {
       headers: { Authorization: `Bearer ${token}` }
     })
     const body = await res.json().catch(() => ({}))
-    // 辅助功能：拉不到就当没有命令，不打断对话（发送时后端还会再判一次）
+    // 辅助功能：拉不到就保留上一次的列表（本来没有就当作没有命令），不打断对话（发送时后端还会再判一次）
     if (!res.ok || body.code !== 200) return
+    // 请求期间切换了 agent：这份结果属于上一个 agent，丢掉
+    if (selectedAgentId.value !== agentId) return
     commands.value = (body.data && body.data.items) || []
-    commandsAgentId.value = agentId
   } catch (e) {
     console.error('load commands failed:', e)
   }
 }
+
+// 切 agent 后先清空：否则刚切完就敲 "/"，会在新列表回来之前闪出一批不属于它的命令
+watch(selectedAgentId, () => {
+  commands.value = []
+})
 
 // 只有整条输入是 "/token" 时才弹菜单：正文里的路径（/tmp/x）和日期（3/5）不触发；
 // 一旦开始写参数（"/name 参数"）就自动收起，免得挡住正文。
