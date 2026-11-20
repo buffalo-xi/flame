@@ -72,6 +72,12 @@ type agentImpl struct {
 	toolDefs []gateway.ToolDef
 	modelIn  gateway.ModelInput
 
+	// toolNamesByRef maps the grant ref of every bound tool (builtin:exec) to the name the runtime dispatches to (exec).
+	// A skill's command target is picked from its tool dependencies, so the stored value is a ref, while ExecuteTool and
+	// AllowedTools speak in names; without this map a dispatch target could never match its own grant.
+	// Filled by refreshToolDefs from the same list that fills AllowedTools.
+	toolNamesByRef map[string]string
+
 	// skillDiscovery says whether this agent may discover unbound skills (skill_discovery).
 	// A production run takes the value frozen into the **current version** (versioning.AgentCurrentAttributes); draft mode takes the
 	// current value in the agents table.
@@ -311,7 +317,7 @@ func (a *agentImpl) refreshToolDefs() {
 	if a.instance == nil || a.toolCtx == nil {
 		return
 	}
-	defs := a.buildToolDefs(a.instance)
+	defs, namesByRef := a.buildToolDefs(a.instance)
 	a.toolDefs = defs
 	// The execution gate shares one source with "the tools declared to the model": non-nil (possibly empty) means any ungranted tool is
 	// refused. This guards against text-form tool calls (the model writing a call into its content, for example with |DSML| markers)
@@ -321,6 +327,7 @@ func (a *agentImpl) refreshToolDefs() {
 		allowed[d.Name] = true
 	}
 	a.toolCtx.AllowedTools = allowed
+	a.toolNamesByRef = namesByRef
 }
 
 // buildToolDefs binds the tools available to this run:
@@ -335,7 +342,10 @@ func (a *agentImpl) refreshToolDefs() {
 //
 // The schema comes straight from the resolution's FinalTools (leaf ToolInfo, carrying its own Parameters): built-in tool names sit in
 // the same list as external ones, so a plugin tool's schema cannot be dropped in a "second pass through tools.List()".
-func (a *agentImpl) buildToolDefs(instance *models.Agent) []gateway.ToolDef {
+//
+// The second return value maps each bound tool's grant ref (builtin:exec) to its runtime name (exec). It comes from the very same
+// list that fills AllowedTools, so "what may run" and "what a ref means" can never disagree; see commandTargetName.
+func (a *agentImpl) buildToolDefs(instance *models.Agent) ([]gateway.ToolDef, map[string]string) {
 	infos, err := a.resolveGrantedTools(instance)
 	if err != nil {
 		// Resolution failed: only the built-in super agent may stay fully open; every other agent binds nothing (so an anomaly never
@@ -358,10 +368,11 @@ func (a *agentImpl) buildToolDefs(instance *models.Agent) []gateway.ToolDef {
 			return builtinToolDefs(a.capabilities())
 		}
 		xlog.Info("agent %s has no tool grants configured, binding no tool schema=%s", instance.Name, a.schema)
-		return nil
+		return nil, nil
 	}
 
 	defs := make([]gateway.ToolDef, 0, len(infos))
+	namesByRef := make(map[string]string, len(infos))
 	for _, info := range infos {
 		params := info.Parameters
 		if params == nil {
@@ -374,8 +385,11 @@ func (a *agentImpl) buildToolDefs(instance *models.Agent) []gateway.ToolDef {
 			Description: info.Description,
 			Parameters:  params,
 		})
+		if info.Ref != "" {
+			namesByRef[info.Ref] = info.Name
+		}
 	}
-	return defs
+	return defs, namesByRef
 }
 
 // emptyObjectSchema is the JSON Schema for "no parameters" (the shape must be valid; nil is not acceptable).
@@ -478,9 +492,13 @@ const maxToolNameLen = 64
 //
 // caps is the platform capability view: the schema of an ungranted exec / browser tool is not handed to the model - the execution layer
 // has its own hard gate, but handing it out first only lures the model into a call that is bound to fail.
-func builtinToolDefs(caps map[string]bool) []gateway.ToolDef {
+//
+// The ref map is filled here too: the fuse path binds by name, but a command target may still be configured as a ref
+// (builtin:exec), so dispatch has to be able to resolve it in this branch as well.
+func builtinToolDefs(caps map[string]bool) ([]gateway.ToolDef, map[string]string) {
 	infos := toolgrant.BuiltinTools()
 	defs := make([]gateway.ToolDef, 0, len(infos))
+	namesByRef := make(map[string]string, len(infos))
 	for _, info := range infos {
 		t, ok := tools.Get(info.Name)
 		if !ok {
@@ -495,8 +513,11 @@ func builtinToolDefs(caps map[string]bool) []gateway.ToolDef {
 			Description: m.Description,
 			Parameters:  m.Parameters,
 		})
+		if info.Ref != "" {
+			namesByRef[info.Ref] = m.Name
+		}
 	}
-	return defs
+	return defs, namesByRef
 }
 
 // Stream runs the agent loop: LLM inference -> tool calls -> result feedback -> inference again, until there are no tool calls.

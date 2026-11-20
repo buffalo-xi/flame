@@ -122,13 +122,17 @@ func (a *agentImpl) dispatchCommand(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	// The grant gate is part of the contract, so fail with a sentence that says where to fix it. ExecuteTool would refuse just as
-	// well, but "tool X is not granted to agent Y" leaves the user guessing whether the skill or the agent is misconfigured -
-	// and the answer is always the agent: a skill's declaration never grants anything.
-	if a.toolCtx.AllowedTools != nil && !a.toolCtx.AllowedTools[detail.CommandTool] {
-		msg := fmt.Sprintf("command /%s dispatches to %s, but agent %s has not been granted that tool - grant it in the agent's "+
-			"tool configuration, or point the command at a tool the agent already has",
-			detail.Name, detail.CommandTool, a.toolCtx.AgentName)
+	// The target is normally a grant ref (it is picked from the skill's tool dependencies), so it has to be resolved to the
+	// runtime tool name before the grant gate can judge it - the gate speaks in names, and feeding the ref through unchanged
+	// made a tool the agent really holds look ungranted.
+	target, granted := a.commandTargetName(strings.TrimSpace(detail.CommandTool))
+	if !granted {
+		// The grant gate is part of the contract, so fail with a sentence that says where to fix it. ExecuteTool would refuse
+		// just as well, but "tool X is not granted to agent Y" leaves the user guessing whether the skill or the agent is
+		// misconfigured - and the answer is always the agent: a skill's declaration never grants anything.
+		msg := fmt.Sprintf("command /%s dispatches to %s, but agent %s does not hold that tool in this run - a tool dependency "+
+			"declared by a skill is not a grant, so grant it in the agent's tool configuration",
+			detail.Name, target, a.toolCtx.AgentName)
 		a.SetError(msg)
 		return true, errors.New(msg)
 	}
@@ -140,7 +144,7 @@ func (a *agentImpl) dispatchCommand(ctx context.Context) (bool, error) {
 		"commandName": "/" + detail.Name,
 		"skillName":   detail.Name,
 	}
-	result, execErr := tools.ExecuteTool(ctx, a.toolCtx, detail.CommandTool, args)
+	result, execErr := tools.ExecuteTool(ctx, a.toolCtx, target, args)
 	if execErr != nil {
 		msg := fmt.Sprintf("command /%s failed: %v", detail.Name, execErr)
 		a.SetError(msg)
@@ -150,6 +154,27 @@ func (a *agentImpl) dispatchCommand(ctx context.Context) (bool, error) {
 	a.pushEvent(core.Event{Type: core.EventText, Delta: text})
 	a.SetResult(text)
 	return true, nil
+}
+
+// commandTargetName resolves a command's configured target to the tool name this run dispatches to.
+//
+// The field is picked from the skill's tool dependencies, so it normally holds a grant ref (builtin:exec / custom:greet),
+// while ExecuteTool and AllowedTools speak in tool names (exec / custom__greet). A hand-typed name is accepted unchanged -
+// the UI hint offers both, and a name bound in this run is unambiguous.
+//
+// ok=false means the resolved name is not held in this run; the returned string is still the most informative form of what
+// was configured, so the caller can report it. The ref map only translates, it never authorizes: AllowedTools decides.
+func (a *agentImpl) commandTargetName(target string) (name string, ok bool) {
+	name = target
+	if mapped, ok := a.toolNamesByRef[target]; ok {
+		name = mapped
+	}
+	if a.toolCtx == nil || a.toolCtx.AllowedTools == nil {
+		// No grant gate in this context (callers without grant semantics): there is nothing to resolve against, so the value
+		// travels as a name and ExecuteTool reports it if no such tool exists.
+		return name, true
+	}
+	return name, a.toolCtx.AllowedTools[name]
 }
 
 // dispatchResultText renders a tool result as the answer the user sees: a plain string passes through untouched, everything

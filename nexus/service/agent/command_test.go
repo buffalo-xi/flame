@@ -165,8 +165,45 @@ func TestDispatchCommandReportsFailure(t *testing.T) {
 	if a.GetError() == "" {
 		t.Fatal("the failure must be recorded, otherwise the entry point reports RUN_FINISHED with no answer")
 	}
-	if !strings.Contains(a.GetError(), "has not been granted") {
-		t.Fatalf("error = %q, want it to say which grant is missing and where to add it", a.GetError())
+	if !strings.Contains(a.GetError(), "does not hold that tool") || !strings.Contains(a.GetError(), "local:daily-report") {
+		t.Fatalf("error = %q, want it to name the configured target and say where to add the grant", a.GetError())
+	}
+}
+
+// TestCommandTargetName: the configured target is a grant ref when it comes from the dependency list and a tool name when it
+// is typed by hand, so both forms have to resolve to the name the runtime dispatches to. Everything else stays unbound, which
+// is what turns into the "does not hold that tool" message.
+func TestCommandTargetName(t *testing.T) {
+	a := &agentImpl{
+		toolCtx: &tools.Context{AllowedTools: map[string]bool{"exec": true, "custom__greet": true}},
+		toolNamesByRef: map[string]string{
+			"builtin:exec": "exec",
+			"custom:greet": "custom__greet",
+			"local:report": "local__report", // not bound: the ref resolves but the tool is not in AllowedTools
+		},
+	}
+	cases := []struct {
+		in      string
+		name    string
+		granted bool
+	}{
+		{"builtin:exec", "exec", true}, // ref form: picked from the dependency list
+		{"exec", "exec", true},         // name form: typed by hand
+		{"custom:greet", "custom__greet", true},
+		{"local:report", "local__report", false}, // the ref exists but the tool is not held in this run
+		{"builtin:browser", "builtin:browser", false},
+	}
+	for _, tc := range cases {
+		name, granted := a.commandTargetName(tc.in)
+		if name != tc.name || granted != tc.granted {
+			t.Errorf("commandTargetName(%q) = (%q, %v), want (%q, %v)", tc.in, name, granted, tc.name, tc.granted)
+		}
+	}
+
+	// No grant gate (callers without grant semantics): the value travels unchanged instead of being reported as ungranted.
+	open := &agentImpl{}
+	if name, granted := open.commandTargetName("builtin:exec"); name != "builtin:exec" || !granted {
+		t.Errorf("commandTargetName without a gate = (%q, %v), want the value passed through", name, granted)
 	}
 }
 
@@ -207,6 +244,38 @@ func TestDispatchCommandPassesOpenClawShape(t *testing.T) {
 	if tool.got["command"] != "today please" || tool.got["commandName"] != "/daily-report" ||
 		tool.got["skillName"] != "daily-report" {
 		t.Fatalf("tool args = %+v, want the {command, commandName, skillName} shape", tool.got)
+	}
+	if got := a.GetResult(); got != "report ready" {
+		t.Fatalf("result = %q, want the tool output", got)
+	}
+}
+
+// TestDispatchCommandAcceptsRefTarget: the target is picked from the skill's tool dependencies, so it arrives as a grant ref
+// (builtin:...). Dispatch has to map it to the runtime name, otherwise a tool the agent really holds answers "not granted".
+func TestDispatchCommandAcceptsRefTarget(t *testing.T) {
+	tool := &captureCommandTool{}
+	tools.Register(tool)
+
+	skills := &stubCommandSkills{detail: &tools.SkillDetail{
+		SkillInfo: tools.SkillInfo{
+			ID: "s1", Name: "daily-report", UserInvocable: true,
+			CommandDispatch: "tool", CommandTool: "builtin:test__capture_command",
+		},
+	}}
+	tc := &tools.Context{
+		Skills:       skills,
+		AllowedTools: map[string]bool{"test__capture_command": true},
+	}
+	a := &agentImpl{
+		toolCtx:        tc,
+		args:           map[string]interface{}{},
+		toolNamesByRef: map[string]string{"builtin:test__capture_command": "test__capture_command"},
+	}
+	WithCommand(a.args, "daily-report", "today please")
+
+	handled, err := a.dispatchCommand(context.Background())
+	if !handled || err != nil {
+		t.Fatalf("dispatchCommand = (%v, %v), want the ref target resolved and the command executed", handled, err)
 	}
 	if got := a.GetResult(); got != "report ready" {
 		t.Fatalf("result = %q, want the tool output", got)
