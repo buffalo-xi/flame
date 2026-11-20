@@ -20,7 +20,9 @@ metrics_interval_sec: 2
 #   state);
 #   binding expires after the process → the next open lands on the original backend and lazily creates a new process,
 #   costing only one extra record that the TTL eventually clears.
-# So err on the long side: sandboxd is currently 1800 + at most 60s of sweep delay, hence 2100.
+# So err on the long side. sandboxd now defaults to 300, so the hard lower bound is 420 (300 + 2×60); 2100 is kept
+# because it also covers a deployment that left interactive_idle_sec at the old 1800, and the cost of a binding that
+# outlives the process is one stale record.
 # After a kill sandboxd reports session_empty and the gateway unbinds immediately, without relying on this value.
 sticky_ttl_sec: 2100
 

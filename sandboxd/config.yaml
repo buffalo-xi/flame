@@ -357,8 +357,13 @@ code_max_sec: 120
 # release the container.
 # The difference from code_max_sec: that one is the hard gate of a **single interaction**, this one is the idle backstop
 # of a **cross-call resident process**.
+#
+# Why 5 minutes: a session container is the most expensive idle resource (a resident Chromium alone costs hundreds of
+# MB), while the state it keeps barely outlives the task. The browser profile sits in the container's tmpfs and dies
+# with it, so a longer idle never preserves logins; and a headed browser — the only case where a human really watches
+# the session — exists only under mode=none (local development). Raise it only for that local, human-in-the-loop use.
 # ---------------------------------------------------------------------------
-interactive_idle_sec: 1800
+interactive_idle_sec: 300
 
 # Short idle backstop of temporary interactive processes without a session (seconds).
 #

@@ -103,9 +103,11 @@ func (c *Config) applyDefaults() {
 		c.MetricsIntervalSec = 2
 	}
 	if c.StickyTTLSec <= 0 {
-		// sandboxd defaults to interactive_idle_sec=1800 plus at most 60s of sweep delay; 240s of margin is
-		// left on top, because leaving extra garbage is better than letting the binding disappear before
-		// the process.
+		// The hard requirement is sticky_ttl > sandboxd's interactive_idle_sec + 2×janitor_sec, checked at run
+		// time against /v1/capabilities. sandboxd now defaults to 300, making the lower bound 420, but 2100 stays
+		// the default: it still covers a deployment that left interactive_idle_sec at the old 1800, and the two
+		// failure modes are not symmetric - a binding that outlives the process costs one stale record, while one
+		// that expires early can split a session across two backends.
 		c.StickyTTLSec = 2100
 	}
 	if c.HealthCheckIntervalSec <= 0 {

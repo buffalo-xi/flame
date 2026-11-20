@@ -92,7 +92,7 @@ func NewServer(cfg *Config, iso sandbox.Sandbox) (*Server, error) {
 
 	// Long-interaction registry: the session-level logical sandbox (docker reuses a container; nsjail/none start
 	// an independent one).
-	// The idle-reclaim ceiling comes from interactive_idle_sec in the config (seconds), 1800 by default.
+	// The idle-reclaim ceiling comes from interactive_idle_sec in the config (seconds), 300 by default.
 	s.interactive = newInteractiveRegistryWithJanitor(
 		iso,
 		time.Duration(cfg.InteractiveIdleSec)*time.Second,

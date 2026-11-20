@@ -175,6 +175,13 @@ type Config struct {
 	// idle longer than this (counted from the most recent call) makes the background janitor reclaim them — kill
 	// the process, release the container. This is the lifetime backstop of session-level long-lived processes and is
 	// a different thing from code_max_sec (the hard gate of a single interaction).
+	//
+	// Why 5 minutes and not 30: a session container is the most expensive idle resource (a resident Chromium alone
+	// costs hundreds of MB), while the state it preserves barely reaches past the current task. The browser profile
+	// lives in the container's tmpfs and dies with it, so a long idle never buys persistent logins; headed browsers
+	// (the only case where a human is actually watching) exist only under mode=none, i.e. local development.
+	// In production (docker, headless) the window between "the model stopped" and "the container goes away" is
+	// waste, so the default is kept short and deployments that want longer local sessions raise it in their config.
 	InteractiveIdleSec int `yaml:"interactive_idle_sec"`
 
 	// InteractiveEphemeralIdleSec is the short idle reclaim cap of temporary interactive processes without a
@@ -1205,7 +1212,7 @@ func (c *Config) applyDefaults() {
 		c.CodeMaxSec = 120
 	}
 	if c.InteractiveIdleSec <= 0 {
-		c.InteractiveIdleSec = 1800 // 30 minutes: the idle reclaim backstop of cross-connection resident processes
+		c.InteractiveIdleSec = 300 // 5 minutes: the idle reclaim backstop of cross-connection resident processes (see the field comment)
 	}
 	if c.InteractiveEphemeralIdleSec <= 0 {
 		c.InteractiveEphemeralIdleSec = 120 // 2 minutes: the short backstop of temporary processes without a session
