@@ -1,8 +1,10 @@
-// Command sandboxg 是 sandboxd 的网关：对 nexus 暴露与 sandboxd 相同的 /v1/*
-// 协议，对后端做负载均衡（exec/code）与粘性路由（interactive，按 session_id）。
+// Command sandboxg is the gateway in front of sandboxd: it exposes the same /v1/* protocol to nexus as
+// sandboxd does, and load-balances the backends (exec/code) while routing sticky (interactive, by
+// session_id).
 //
-// 协议透明：不重写帧，只做「读 open 帧 → 选后端 → 双向透传」。多实例部署时
-// 粘性绑定存 redis（共享），保证同一 session 尽量打到同一 sandboxd。
+// The protocol is transparent: frames are not rewritten, it only "reads the open frame → picks a backend
+// → pipes both directions". In a multi-instance deployment the sticky binding lives in redis (shared), so
+// the same session lands on the same sandboxd as far as possible.
 package main
 
 import (
@@ -20,7 +22,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "配置文件路径")
+	configPath := flag.String("config", "config.yaml", "path to the configuration file")
 	flag.Parse()
 
 	cfg, err := gw.LoadConfig(*configPath)
@@ -29,7 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 初始化日志（xlog 需先 Init，否则 Info/Error 会 panic）
+	// Initialize logging (xlog must be Init'ed first, otherwise Info/Error panic).
 	if err := xlog.Init(cfg.LogDir, "sandboxg"); err != nil {
 		fmt.Fprintln(os.Stderr, "sandboxg: init log:", err)
 		os.Exit(1)

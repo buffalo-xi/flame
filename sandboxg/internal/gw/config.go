@@ -7,66 +7,75 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config sandboxg 网关配置。
+// Config is the sandboxg gateway configuration.
 type Config struct {
-	// Listen 对 nexus 暴露的监听地址。
+	// Listen is the address exposed to nexus.
 	Listen string `yaml:"listen"`
-	// LogDir 日志目录。
+	// LogDir is the log directory.
 	LogDir string `yaml:"log_dir"`
-	// Token 对 nexus 的鉴权（可选）。空表示不鉴权。
+	// Token authenticates nexus (optional). Empty means no authentication.
 	Token string `yaml:"token"`
-	// MetricsIntervalSec 拉取后端 /v1/metrics 的间隔（秒）。
+	// MetricsIntervalSec is how often the backend /v1/metrics is scraped (seconds).
 	MetricsIntervalSec int `yaml:"metrics_interval_sec"`
-	// StickyTTLSec interactive 粘性绑定的存活时长（秒）。
+	// StickyTTLSec is the lifetime of an interactive sticky binding (seconds).
 	//
-	// 必须**大于** sandboxd 的 interactive_idle_sec + 2×janitor 巡检间隔（60s）：
-	//   - 绑定比进程先过期 → 同一 session 可能落到两个后端、各建一个进程（状态分裂）；
-	//   - 绑定比进程晚过期 → 下次 open 落到原后端懒建新进程，只多一条会被 TTL 清掉的记录。
-	// 宁长勿短。kill 给出的 FrameSessionEmpty 是即时失效口，不依赖这个值。
+	// It must be **greater** than sandboxd's interactive_idle_sec + 2× the janitor sweep interval (60s):
+	//   - binding expiring before the process → the same session may land on two backends and build one
+	//     process on each (split state);
+	//   - binding expiring after the process → the next open lands on the original backend and lazily
+	//     builds a new process, leaving just one more record that the TTL will clear.
+	// Too long beats too short. The FrameSessionEmpty returned by kill is the immediate invalidation path
+	// and does not depend on this value.
 	StickyTTLSec int `yaml:"sticky_ttl_sec"`
-	// HealthCheckIntervalSec 探 /healthz 的间隔（秒）。
+	// HealthCheckIntervalSec is how often /healthz is probed (seconds).
 	HealthCheckIntervalSec int `yaml:"health_check_interval_sec"`
-	// HealthCheckFailThreshold 连续失败 N 次判为不健康并摘除。
+	// HealthCheckFailThreshold evicts a backend after N consecutive failures.
 	HealthCheckFailThreshold int `yaml:"health_check_fail_threshold"`
-	// Redis 粘性绑定的共享存储（多实例 gateway 必配；留空则退化为单机内存）。
+	// Redis is the shared store for sticky bindings (mandatory for a multi-instance gateway; empty falls
+	// back to per-process memory).
 	Redis RedisConfig `yaml:"redis"`
-	// Backends 静态 sandboxd 实例池（discovery 留空时使用；discovery 配置后作为种子/兜底）。
+	// Backends is the static sandboxd instance pool (used when discovery is empty; a seed / fallback once
+	// discovery is configured).
 	Backends []BackendConfig `yaml:"backends"`
-	// SandboxToken 所有后端共用的 token（服务发现只给地址，token 统一附加）。
+	// SandboxToken is the token shared by every backend (service discovery only yields addresses, the
+	// token is attached uniformly).
 	SandboxToken string `yaml:"sandbox_token"`
-	// Discovery 服务发现（后端列表来源）。type 留空则退回静态 backends。
+	// Discovery is service discovery (the source of the backend list). An empty type falls back to the
+	// static backends.
 	Discovery DiscoveryConfig `yaml:"discovery"`
 }
 
-// RedisConfig 粘性存储的 redis 配置。
+// RedisConfig is the redis configuration of the sticky store.
 type RedisConfig struct {
-	// Addr 地址（如 localhost:6379）。空表示不用 redis、退化为单机内存。
+	// Addr is the address (such as localhost:6379). Empty means no redis and per-process memory instead.
 	Addr     string `yaml:"addr"`
 	Password string `yaml:"password"`
 	DB       int    `yaml:"db"`
 }
 
-// BackendConfig 单个 sandboxd 实例。
+// BackendConfig is a single sandboxd instance.
 type BackendConfig struct {
-	// URL HTTP 基地址（如 http://127.0.0.1:27081）。gateway 内部自动换算 ws 与 /metrics。
+	// URL is the HTTP base address (such as http://127.0.0.1:27081). The gateway derives ws and /metrics
+	// from it.
 	URL string `yaml:"url"`
-	// Token 连后端的鉴权（可选）。
+	// Token authenticates against the backend (optional).
 	Token string `yaml:"token"`
 }
 
-// DiscoveryConfig 服务发现配置（后端列表来源）。
+// DiscoveryConfig is the service discovery configuration (the source of the backend list).
 type DiscoveryConfig struct {
-	// Type 注册中心类型：consul | nacos。留空表示不用发现、退回静态 backends。
+	// Type is the registry kind: consul | nacos. Empty means no discovery and a fallback to the static
+	// backends.
 	Type string `yaml:"type"`
-	// Address 注册中心地址（如 localhost:8500）。
+	// Address is the registry address (such as localhost:8500).
 	Address string `yaml:"address"`
-	// ServiceName 要发现的服务名（默认 sandboxd）。
+	// ServiceName is the service to discover (sandboxd by default).
 	ServiceName string `yaml:"service_name"`
-	// IntervalSec 拉取实例列表并对账的间隔（秒）。
+	// IntervalSec is how often the instance list is fetched and reconciled (seconds).
 	IntervalSec int `yaml:"interval_sec"`
 }
 
-// LoadConfig 读取并校验配置。
+// LoadConfig reads and validates the configuration.
 func LoadConfig(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -94,8 +103,9 @@ func (c *Config) applyDefaults() {
 		c.MetricsIntervalSec = 2
 	}
 	if c.StickyTTLSec <= 0 {
-		// sandboxd 缺省 interactive_idle_sec=1800 + 最多 60s 的巡检延迟；
-		// 留 240s 余量，宁可多留垃圾也不能让绑定先于进程消失。
+		// sandboxd defaults to interactive_idle_sec=1800 plus at most 60s of sweep delay; 240s of margin is
+		// left on top, because leaving extra garbage is better than letting the binding disappear before
+		// the process.
 		c.StickyTTLSec = 2100
 	}
 	if c.HealthCheckIntervalSec <= 0 {

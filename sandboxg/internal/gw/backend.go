@@ -11,56 +11,59 @@ import (
 	"time"
 )
 
-// Backend 一个 sandboxd 实例 + 它的负载快照。
+// Backend is one sandboxd instance plus its load snapshot.
 //
-// 负载是「估计值」：快照之间可能有瞬时漂移，但足以支撑负载均衡。
-// refresh 失败时保留旧值（lastSeen 不变），宁可给出过时估计、不主动摘除
-// （摘除与健康检查是后续阶段的事）。
+// The load is an "estimate": snapshots may drift momentarily, but that is enough to drive load balancing.
+// A failed refresh keeps the old values (lastSeen unchanged) — a stale estimate is preferred over
+// evicting proactively (eviction belongs to the health check, a later stage).
 type Backend struct {
-	URL   string // HTTP 基地址（配置值）
+	URL   string // HTTP base address (the configured value)
 	Token string
 
 	mu       sync.RWMutex
 	exec     int64     // exec_inflight
-	code   int64     // Σ code_busy
-	active   int64     // interactive_active（正服务调用的进程，用于计重）
-	sessions int64     // interactive_sessions（观测用）
-	procs    int64     // interactive_processes（观测用，含空闲）
-	lastSeen time.Time // 最近一次成功拉取
-	err      error     // 最近一次拉取错误（观测用）
+	code     int64     // Σ code_busy
+	active   int64     // interactive_active (processes serving a call, used for scoring)
+	sessions int64     // interactive_sessions (for observation)
+	procs    int64     // interactive_processes (for observation, idle ones included)
+	lastSeen time.Time // the last successful pull
+	err      error     // the last pull error (for observation)
 
-	// healthy 健康状态（atomic，健康检查 loop 更新）。默认 true，连续失败达到
-	// 阈值后置 false（摘除），恢复后置回 true。
+	// healthy is the health state (atomic, updated by the health-check loop). It starts true and turns
+	// false once consecutive failures reach the threshold (evicted), then back to true on recovery.
 	healthy   atomic.Bool
-	failCount atomic.Int32 // 连续失败次数
+	failCount atomic.Int32 // consecutive failure count
 
-	// 长交互超时（/v1/capabilities 的 interactive 段）。只用于校验本网关的
-	// sticky_ttl 是否覆盖得住对方的空闲回收上界，属于「启动后拉一次」的静态信息。
+	// Interactive timeouts (the interactive section of /v1/capabilities). Only used to check whether this
+	// gateway's sticky_ttl covers the peer's idle-reclaim upper bound; it is static information pulled after
+	// startup.
 	capsMu sync.Mutex
 	caps   interactiveCaps
 }
 
-// capsRefresh capabilities 的重新拉取间隔。
+// capsRefresh is how often capabilities is re-pulled.
 //
-// 为什么不能只拉一次：sandboxd 改配置重启是常态，而 idle/janitor 就写在它的配置里。
-// 缓存永不过期会导致「对端已改、这边仍按旧值判断」—— 更糟的是判断结果为"合格"，
-// 于是连一条日志都没有，人以为校验生效了。
+// Why not pull once: restarting sandboxd with a changed config is routine, and idle/janitor live in that
+// config. A cache that never expires leads to "the peer changed, this side still judges by the old
+// values" — worse, when the verdict is "fine" there is not even a log line, so people believe the check
+// is in effect.
 //
-// 变量而非常量：测试要能把间隔压到毫秒级。
+// A variable rather than a constant: tests need to shrink the interval to milliseconds.
 var capsRefresh = time.Minute
 
-// interactiveCaps sandboxd 声明的长交互生命周期参数。
+// interactiveCaps are the long-interaction lifecycle parameters sandboxd declares.
 type interactiveCaps struct {
-	IdleSec    int // interactive_idle_sec：持久 session 进程的空闲回收
-	EphSec     int // interactive_ephemeral_idle_sec：临时进程的短兜底
-	JanitorSec int // interactive_janitor_sec：巡检间隔（回收延迟的上界）
+	IdleSec    int // interactive_idle_sec: idle reclaim of a persistent session process
+	EphSec     int // interactive_ephemeral_idle_sec: the short backstop for ephemeral processes
+	JanitorSec int // interactive_janitor_sec: the sweep interval (upper bound of the reclaim delay)
 
-	known     bool      // 是否已成功拉到（失败时下次刷新再试）
-	at        time.Time // 拉取时刻（决定何时该重新拉）
-	ttlWarned bool      // 是否已就当前这组值报过 TTL 不足
+	known     bool      // whether a pull succeeded (a failure retries on the next refresh)
+	at        time.Time // when it was pulled (decides when to re-pull)
+	ttlWarned bool      // whether the TTL shortfall was already reported for this set of values
 }
 
-// capsPayload 只取校验 TTL 需要的字段，其余（mode/network/langs/environment）网关不关心。
+// capsPayload only takes the fields needed to validate the TTL; the rest (mode/network/langs/environment)
+// does not concern the gateway.
 type capsPayload struct {
 	Interactive struct {
 		IdleSec          int `json:"idle_sec"`
@@ -69,9 +72,10 @@ type capsPayload struct {
 	} `json:"interactive"`
 }
 
-// fetchInteractiveCaps 拉一次 /v1/capabilities，取 sandboxd 的 interactive 段。
+// fetchInteractiveCaps pulls /v1/capabilities once and takes the interactive section from sandboxd.
 //
-// 老版本 sandboxd 没有这一段：解出来全是 0，调用方按「未知」处理（不校验、不告警）。
+// An older sandboxd has no such section: everything decodes as 0 and the caller treats it as "unknown"
+// (no validation, no warning).
 func (b *Backend) fetchInteractiveCaps(ctx context.Context) (interactiveCaps, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -103,10 +107,11 @@ func (b *Backend) fetchInteractiveCaps(ctx context.Context) (interactiveCaps, er
 	}, nil
 }
 
-// setCaps 记下对方的能力。
+// setCaps records the peer's capabilities.
 //
-// 值没变就沿用旧的告警标记（避免同一条反复刷）；值变了就清掉标记 —— 说明对端改过
-// 配置重启了，需要重新判一次，哪怕上次已经报过。
+// Unchanged values keep the old warning flag (so the same line is not repeated); changed values clear it —
+// the peer was restarted with a different config, so the verdict must be re-evaluated even if it was
+// reported last time.
 func (b *Backend) setCaps(c interactiveCaps) {
 	b.capsMu.Lock()
 	defer b.capsMu.Unlock()
@@ -117,22 +122,24 @@ func (b *Backend) setCaps(c interactiveCaps) {
 	b.caps = c
 }
 
-// capsSnapshot 当前已知的长交互参数；known=false 表示还没拉到或对方没报。
+// capsSnapshot returns the currently known long-interaction parameters; known=false means it has not been
+// pulled yet or the peer does not report them.
 func (b *Backend) capsSnapshot() interactiveCaps {
 	b.capsMu.Lock()
 	defer b.capsMu.Unlock()
 	return b.caps
 }
 
-// invalidateCaps 把缓存标记为过期，下次巡检重新拉取。
-// 后端从「不健康」恢复时调用：它多半刚重启过，配置可能变了。
+// invalidateCaps marks the cache as stale so the next sweep pulls it again.
+// Called when a backend recovers from "unhealthy": it most likely just restarted with a new config.
 func (b *Backend) invalidateCaps() {
 	b.capsMu.Lock()
 	defer b.capsMu.Unlock()
 	b.caps.known = false
 }
 
-// refreshCapsIfStale 缓存过期时重新拉一次；失败保留旧值（下次再试），不刷日志。
+// refreshCapsIfStale pulls again when the cache is stale; a failure keeps the old values (retried next
+// time) without spamming the log.
 func (b *Backend) refreshCapsIfStale(ctx context.Context) {
 	b.capsMu.Lock()
 	fresh := b.caps.known && time.Since(b.caps.at) < capsRefresh
@@ -147,7 +154,7 @@ func (b *Backend) refreshCapsIfStale(ctx context.Context) {
 	b.setCaps(got)
 }
 
-// markTTLWarned 标记「已就 TTL 不足告警过」，返回是否是第一次。
+// markTTLWarned marks "the TTL shortfall was already reported" and returns whether this is the first time.
 func (b *Backend) markTTLWarned() bool {
 	b.capsMu.Lock()
 	defer b.capsMu.Unlock()
@@ -158,24 +165,24 @@ func (b *Backend) markTTLWarned() bool {
 	return true
 }
 
-// metricsPayload 与 sandboxd /v1/metrics 的 JSON 对齐。
+// metricsPayload matches the JSON of sandboxd /v1/metrics.
 type metricsPayload struct {
 	ExecInFlight        int64            `json:"exec_inflight"`
-	CodeBusy          map[string]int64 `json:"code_busy"`
+	CodeBusy            map[string]int64 `json:"code_busy"`
 	InteractiveSessions int64            `json:"interactive_sessions"`
 	InteractiveProcess  int64            `json:"interactive_processes"`
 	InteractiveActive   int64            `json:"interactive_active"`
 }
 
-// score 负载分数：三类占用同源相加。interactive 只计活跃进程（空闲不烧 CPU）。
-// 分数越低越闲。
+// score is the load score: the three kinds of occupancy are summed because they share the same source.
+// Only active interactive processes count (idle ones burn no CPU). A lower score means idler.
 func (b *Backend) score() int64 {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.exec + b.code + b.active
 }
 
-// refresh 拉一次 /v1/metrics，更新快照。
+// refresh pulls /v1/metrics once and updates the snapshot.
 func (b *Backend) refresh(ctx context.Context) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.metricsURL(), nil)
 	if err != nil {
@@ -221,13 +228,13 @@ func (b *Backend) setErr(err error) {
 	b.mu.Unlock()
 }
 
-// backendSnapshot 单个后端的只读负载快照（gateway /metrics 输出用）。
+// backendSnapshot is the read-only load snapshot of one backend (for the gateway /metrics output).
 type backendSnapshot struct {
 	URL       string    `json:"url"`
 	Healthy   bool      `json:"healthy"`
 	Score     int64     `json:"score"`
 	Exec      int64     `json:"exec_inflight"`
-	Code    int64     `json:"code_busy"`
+	Code      int64     `json:"code_busy"`
 	Active    int64     `json:"interactive_active"`
 	Sessions  int64     `json:"interactive_sessions"`
 	Processes int64     `json:"interactive_processes"`
@@ -235,7 +242,7 @@ type backendSnapshot struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-// snapshot 返回后端当前负载快照（只读拷贝）。
+// snapshot returns the backend's current load snapshot (a read-only copy).
 func (b *Backend) snapshot() backendSnapshot {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -244,7 +251,7 @@ func (b *Backend) snapshot() backendSnapshot {
 		Healthy:   b.healthy.Load(),
 		Score:     b.exec + b.code + b.active,
 		Exec:      b.exec,
-		Code:    b.code,
+		Code:      b.code,
 		Active:    b.active,
 		Sessions:  b.sessions,
 		Processes: b.procs,
@@ -256,7 +263,7 @@ func (b *Backend) snapshot() backendSnapshot {
 	return s
 }
 
-// wsURL 把 HTTP 基地址换成 ws，并拼上路径（如 /v1/exec）。
+// wsURL turns the HTTP base address into ws and appends the path (such as /v1/exec).
 func (b *Backend) wsURL(path string) string {
 	return strings.NewReplacer("http://", "ws://", "https://", "wss://").Replace(b.URL) + path
 }
@@ -273,7 +280,7 @@ func (b *Backend) healthURL() string {
 	return b.URL + "/healthz"
 }
 
-// ping 探一次 /healthz，返回是否健康。
+// ping probes /healthz once and reports whether the backend is healthy.
 func (b *Backend) ping(ctx context.Context) bool {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.healthURL(), nil)
 	if err != nil {

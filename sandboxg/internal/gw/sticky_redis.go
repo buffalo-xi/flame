@@ -7,16 +7,16 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisSticky 多实例 gateway 的共享粘性存储（redis）。
+// RedisSticky is the shared sticky store of a multi-instance gateway (redis).
 //
-// 抢占用 SET NX EX（原子：并发下只有一个 gateway 能首次绑定成功）；
-// 反向索引 set（backend → sessions）供 RemoveBackend 快速定位要删的绑定。
-// 键命名：sandboxg:session:<id> 存后端 key，sandboxg:backend:<key> 存 session 集合。
+// A grab uses SET NX EX (atomic: under concurrency only one gateway wins the first bind); a reverse index
+// set (backend → sessions) lets RemoveBackend locate the bindings to delete quickly.
+// Key naming: sandboxg:session:<id> holds the backend key, sandboxg:backend:<key> holds the session set.
 type RedisSticky struct {
 	client redis.UniversalClient
 }
 
-// NewRedisSticky 构造 redis 粘性存储。
+// NewRedisSticky creates a redis sticky store.
 func NewRedisSticky(client redis.UniversalClient) *RedisSticky {
 	return &RedisSticky{client: client}
 }
@@ -24,8 +24,10 @@ func NewRedisSticky(client redis.UniversalClient) *RedisSticky {
 func (s *RedisSticky) sessionKey(sid string) string { return "sandboxg:session:" + sid }
 func (s *RedisSticky) backendKey(key string) string { return "sandboxg:backend:" + key }
 
-// unbindScript 条件删除：只有当前值仍指向这条绑定所属的后端才删。
-// 裸 DEL 会在「解绑信号到达时 nexus 已经用同一 session 重新 open」的竞态下误删新绑定。
+// unbindScript is a conditional delete: it only deletes while the current value still points at the
+// backend this binding belongs to.
+// A bare DEL would wrongly delete the new binding in the race where "nexus already re-opened with the same
+// session by the time the unbind signal arrives".
 var unbindScript = redis.NewScript(`
 if redis.call('GET', KEYS[1]) == ARGV[1] then
 	return redis.call('DEL', KEYS[1])
@@ -41,7 +43,7 @@ func (s *RedisSticky) Lookup(ctx context.Context, sessionID string, ttl time.Dur
 	if err != nil {
 		return "", false, err
 	}
-	_ = s.client.Expire(ctx, s.sessionKey(sessionID), ttl).Err() // 续期失败不致命
+	_ = s.client.Expire(ctx, s.sessionKey(sessionID), ttl).Err() // a failed renewal is not fatal
 	return val, true, nil
 }
 
@@ -50,10 +52,12 @@ func (s *RedisSticky) Bind(ctx context.Context, sessionID, backendKey string, tt
 	if err != nil {
 		return false, err
 	}
-	// 反向索引：抢到与否都 SADD（幂等），供 RemoveBackend 定位。
+	// Reverse index: SADD whether or not the grab succeeded (it is idempotent), so RemoveBackend can
+	// locate the bindings.
 	//
-	// 同时续一个比绑定更长的过期时间：集合没有成员级 TTL，不续的话 session 键过期后
-	// 成员会永远留着（只增不减），直到整个后端被摘除才清。
+	// A longer expiry than the binding is renewed at the same time: a set has no member-level TTL, so
+	// without the renewal the members would stay forever (only growing) once the session keys expire, until
+	// the whole backend is evicted.
 	pipe := s.client.Pipeline()
 	pipe.SAdd(ctx, s.backendKey(backendKey), sessionID)
 	pipe.Expire(ctx, s.backendKey(backendKey), 2*ttl)
@@ -61,12 +65,12 @@ func (s *RedisSticky) Bind(ctx context.Context, sessionID, backendKey string, tt
 	return grabbed, nil
 }
 
-// Unbind 条件删除绑定，并从反向索引里摘掉这个 session。
+// Unbind conditionally deletes the binding and drops the session from the reverse index.
 func (s *RedisSticky) Unbind(ctx context.Context, sessionID, backendKey string) error {
 	if err := unbindScript.Run(ctx, s.client, []string{s.sessionKey(sessionID)}, backendKey).Err(); err != nil {
 		return err
 	}
-	// 反向索引同步摘掉，免得 RemoveBackend 再为它做一次无意义的 DEL。
+	// Remove it from the reverse index as well, so RemoveBackend does not issue a pointless DEL for it later.
 	_ = s.client.SRem(ctx, s.backendKey(backendKey), sessionID).Err()
 	return nil
 }

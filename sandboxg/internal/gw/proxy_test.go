@@ -15,8 +15,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// newFakeBackend 起一个假 sandboxd：收到 open 回 ready，
-// 之后由 onMessage 决定怎么回应（nil 表示丢弃）。
+// newFakeBackend starts a fake sandboxd: ready is returned on open, then onMessage decides how to answer
+// (nil means drop).
 func newFakeBackend(t *testing.T, onMessage func(ws *websocket.Conn, f sandbox.Frame)) *httptest.Server {
 	t.Helper()
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -51,7 +51,7 @@ func newFakeBackend(t *testing.T, onMessage func(ws *websocket.Conn, f sandbox.F
 	return srv
 }
 
-// newTestGateway 构造一个只挂这个后端的网关，并把粘性存储换成可观测的 fake。
+// newTestGateway builds a gateway with only this backend and swaps the sticky store for an observable fake.
 func newTestGateway(t *testing.T, backendURL string) (*Gateway, *fakeSticky) {
 	t.Helper()
 	g, err := New(&Config{
@@ -66,7 +66,7 @@ func newTestGateway(t *testing.T, backendURL string) (*Gateway, *fakeSticky) {
 	return g, fs
 }
 
-// dialGateway 连上网关的 /v1/interactive 并走完 open → ready。
+// dialGateway connects to the gateway's /v1/interactive and completes open → ready.
 func dialGateway(t *testing.T, g *Gateway, sessionID string) *websocket.Conn {
 	t.Helper()
 	srv := httptest.NewServer(g.Router())
@@ -83,14 +83,14 @@ func dialGateway(t *testing.T, g *Gateway, sessionID string) *websocket.Conn {
 	if err := conn.WriteMessage(websocket.TextMessage, open); err != nil {
 		t.Fatalf("send open: %v", err)
 	}
-	if _, _, err := conn.ReadMessage(); err != nil { // 等 ready，确认代理已建立
+	if _, _, err := conn.ReadMessage(); err != nil { // wait for ready, confirming the proxy is up
 		t.Fatalf("read ready: %v", err)
 	}
 	return conn
 }
 
-// sandboxd 说「这个 session 已经没有长交互工具」时，粘性绑定必须立刻失效 ——
-// 否则它还会把会话钉在原后端，最长 sticky_ttl_sec。
+// When sandboxd says "this session has no long-interaction tool left", the sticky binding must be dropped at
+// once — otherwise it keeps pinning the session to the original backend for up to sticky_ttl_sec.
 func TestProxyUnbindOnSessionEmpty(t *testing.T) {
 	backend := newFakeBackend(t, func(ws *websocket.Conn, f sandbox.Frame) {
 		if f.Type != sandbox.FrameKill {
@@ -115,19 +115,19 @@ func TestProxyUnbindOnSessionEmpty(t *testing.T) {
 		fs.mu.Unlock()
 		if len(got) > 0 {
 			if got[0] != [2]string{"s1", backend.URL} {
-				t.Fatalf("解绑参数 = %v, want [s1 %s]", got[0], backend.URL)
+				t.Fatalf("unbind arguments = %v, want [s1 %s]", got[0], backend.URL)
 			}
 			if stillBound {
-				t.Errorf("解绑后绑定应被删掉")
+				t.Errorf("the binding should be deleted after unbinding")
 			}
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("收到 session_empty 后没有触发解绑")
+	t.Fatal("receiving session_empty did not trigger an unbind")
 }
 
-// 新起一个只回 /v1/capabilities 的假后端。
+// newCapsBackend starts a throwaway backend that only answers /v1/capabilities.
 func newCapsBackend(t *testing.T, payload string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -141,53 +141,54 @@ func newCapsBackend(t *testing.T, payload string) *httptest.Server {
 	return srv
 }
 
-// 粘性 TTL 必须覆盖 sandboxd 的空闲回收上界：sticky_ttl > idle + 2×janitor。
-// 两个值在两个进程的配置文件里，网关只能靠 capabilities 报出来的值校验。
+// The sticky TTL must cover sandboxd's idle-reclaim upper bound: sticky_ttl > idle + 2×janitor.
+// The two values live in the config files of two different processes, so the gateway can only validate
+// against what capabilities reports.
 func TestStickyTTLProblems(t *testing.T) {
 	srv := newCapsBackend(t, `{"mode":"none","interactive":{"idle_sec":1800,"ephemeral_idle_sec":120,"janitor_sec":60}}`)
 	ctx := context.Background()
 
-	// 2100 > 1800 + 240 → 合格
+	// 2100 > 1800 + 240 → passes
 	ok, err := New(&Config{StickyTTLSec: 2100, Backends: []BackendConfig{{URL: srv.URL}}})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 	if p := ok.stickyTTLProblems(ctx); len(p) != 0 {
-		t.Fatalf("2100s 应合格，got %v", p)
+		t.Fatalf("2100s should pass, got %v", p)
 	}
 
-	// 1900 不大于 1920 → 报一次
+	// 1900 is not greater than 1920 → reported once
 	bad, err := New(&Config{StickyTTLSec: 1900, Backends: []BackendConfig{{URL: srv.URL}}})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 	p := bad.stickyTTLProblems(ctx)
 	if len(p) != 1 {
-		t.Fatalf("应报一条，got %v", p)
+		t.Fatalf("one problem should be reported, got %v", p)
 	}
 	for _, want := range []string{"sticky_ttl_sec=1900", "1800", "1920"} {
 		if !strings.Contains(p[0], want) {
-			t.Errorf("诊断信息缺 %q: %s", want, p[0])
+			t.Errorf("the diagnostic is missing %q: %s", want, p[0])
 		}
 	}
-	// 同一个后端只报一次，否则每 2s 刷一条
+	// Each backend is reported once, otherwise a line would be emitted every 2s
 	if again := bad.stickyTTLProblems(ctx); len(again) != 0 {
-		t.Errorf("不该重复告警，got %v", again)
+		t.Errorf("must not repeat the warning, got %v", again)
 	}
 
-	// 老版本 sandboxd 没报 interactive 段：无从校验，当合格
+	// An older sandboxd does not report the interactive section: nothing to validate against, so it passes
 	legacy := newCapsBackend(t, `{"mode":"none"}`)
 	old, err := New(&Config{StickyTTLSec: 1, Backends: []BackendConfig{{URL: legacy.URL}}})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 	if p := old.stickyTTLProblems(ctx); len(p) != 0 {
-		t.Errorf("对方未上报时不该告警，got %v", p)
+		t.Errorf("must not warn when the peer reports nothing, got %v", p)
 	}
 }
 
-// 对端改配置重启后必须重新校验：缓存永不过期会让「新值不合格」被旧值掩盖，
-// 且旧值合格时连一条日志都没有。
+// After the peer is restarted with a changed config the check must run again: a cache that never expires
+// would let the old values mask a new failing one — and when the old values pass there is not even a log line.
 func TestStickyTTLProblemsRefreshesCaps(t *testing.T) {
 	var payload atomic.Value
 	payload.Store(`{"mode":"none","interactive":{"idle_sec":1800,"ephemeral_idle_sec":120,"janitor_sec":60}}`)
@@ -206,25 +207,26 @@ func TestStickyTTLProblemsRefreshesCaps(t *testing.T) {
 	}
 	ctx := context.Background()
 	if p := g.stickyTTLProblems(ctx); len(p) != 0 {
-		t.Fatalf("2100 对 idle=1800 应合格，got %v", p)
+		t.Fatalf("2100 against idle=1800 should pass, got %v", p)
 	}
 
-	// sandboxd 改成 idle=2800 并重启（地址不变）
+	// sandboxd switches to idle=2800 and restarts (same address)
 	payload.Store(`{"mode":"none","interactive":{"idle_sec":2800,"ephemeral_idle_sec":120,"janitor_sec":60}}`)
-	time.Sleep(5 * time.Millisecond) // 让缓存过期
+	time.Sleep(5 * time.Millisecond) // let the cache expire
 
 	p := g.stickyTTLProblems(ctx)
 	if len(p) != 1 {
-		t.Fatalf("对端把 idle 改大后应重新告警，got %v", p)
+		t.Fatalf("a larger idle on the peer should be reported again, got %v", p)
 	}
 	if !strings.Contains(p[0], "2800") || !strings.Contains(p[0], "2920") {
-		t.Errorf("诊断信息应基于新值：%s", p[0])
+		t.Errorf("the diagnostic should be based on the new values: %s", p[0])
 	}
 }
 
-// 反面：没有 session_empty（例如同 session 还有别的工具没杀完）就绝不能解绑。
+// The negative case: without session_empty (other tools of the same session may still be alive) unbinding must
+// never happen.
 func TestProxyKeepsBindingWithoutEmptyFrame(t *testing.T) {
-	backend := newFakeBackend(t, nil) // 对 kill 不回任何东西
+	backend := newFakeBackend(t, nil) // answers nothing to kill
 	g, fs := newTestGateway(t, backend.URL)
 
 	conn := dialGateway(t, g, "s1")
@@ -232,17 +234,17 @@ func TestProxyKeepsBindingWithoutEmptyFrame(t *testing.T) {
 	if err := conn.WriteMessage(websocket.TextMessage, kill); err != nil {
 		t.Fatalf("send kill: %v", err)
 	}
-	_ = conn.Close() // 结束本次代理
+	_ = conn.Close() // end this proxy session
 
-	// 留出足够时间让（本不该发生的）解绑发生并被记录。
+	// Leave enough time for an (unwanted) unbind to happen and be recorded.
 	time.Sleep(200 * time.Millisecond)
 
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	if len(fs.unbinds) != 0 {
-		t.Errorf("没有 session_empty 却解绑了: %v", fs.unbinds)
+		t.Errorf("unbound without session_empty: %v", fs.unbinds)
 	}
 	if _, ok := fs.bindings["s1"]; !ok {
-		t.Errorf("绑定应保留（其余工具还在用这个后端）")
+		t.Errorf("the binding should be kept (other tools still use this backend)")
 	}
 }

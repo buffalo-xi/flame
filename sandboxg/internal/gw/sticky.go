@@ -6,33 +6,36 @@ import (
 	"time"
 )
 
-// StickyStore 粘性绑定存储：session_id → 后端 key。
+// StickyStore is the sticky binding store: session_id → backend key.
 //
-// 多实例 gateway 需要共享存储（redis），单机用内存。接口抽象出「查询/抢占/续期」。
-// 正确性不依赖粘性：绑定的唯一用途是「尽量把同一 session 打到同一实例」，
-// sandboxd 侧懒建兜底。
+// A multi-instance gateway needs shared storage (redis); a single instance uses memory. The interface
+// abstracts "lookup / grab / renew".
+// Correctness does not depend on stickiness: the only purpose of a binding is "send the same session to
+// the same instance as far as possible", and sandboxd's lazy creation is the backstop.
 type StickyStore interface {
-	// Lookup 返回 session 绑定的后端 key，无绑定或已过期返回空串 + ok=false。
-	// 命中时续期 ttl（惰性续期，等价 redis 的 EXPIRE）。
+	// Lookup returns the backend key a session is bound to; with no binding, or an expired one, it returns
+	// an empty string with ok=false. A hit renews the ttl (lazy renewal, equivalent to redis EXPIRE).
 	Lookup(ctx context.Context, sessionID string, ttl time.Duration) (backendKey string, ok bool, err error)
 
-	// Bind 原子抢占绑定：session → backendKey。返回是否抢到 —— false 表示已存在
-	// 未过期绑定（并发下只有一个 gateway 能首次抢占成功）。调用方在抢不到时应
-	// 重新 Lookup 拿到已绑定的后端，避免同一 session 打到多个实例。
+	// Bind grabs the binding atomically: session → backendKey. It reports whether the grab succeeded —
+	// false means an unexpired binding already exists (under concurrency only one gateway wins the first
+	// grab). The caller should Lookup again after losing, to pick up the already bound backend and avoid
+	// sending the same session to several instances.
 	Bind(ctx context.Context, sessionID, backendKey string, ttl time.Duration) (grabbed bool, err error)
 
-	// RemoveBackend 删掉指向该后端的所有绑定（健康摘除时调用）。
+	// RemoveBackend deletes every binding that points at this backend (called on health eviction).
 	RemoveBackend(ctx context.Context, backendKey string) error
 
-	// Unbind 解掉一条绑定，但**仅当它仍指向 backendKey**。
+	// Unbind drops one binding, but **only while it still points at backendKey**.
 	//
-	// 「这个 session 已经没有长交互工具了」的唯一主动失效口（sandboxd 的
-	// FrameSessionEmpty），其余情况只能靠 TTL。条件删除不是洁癖：解绑信号
-	// 到达时 nexus 可能已经用同一 session_id 重新 open，那条新绑定不该被顺手删掉。
+	// This is the only proactive invalidation path for "this session no longer has a long-interaction tool"
+	// (sandboxd's FrameSessionEmpty); everything else relies on the TTL. The conditional delete is not
+	// pedantry: by the time the unbind signal arrives, nexus may already have re-opened with the same
+	// session_id, and that new binding must not be swept away with it.
 	Unbind(ctx context.Context, sessionID, backendKey string) error
 }
 
-// MemorySticky 单机内存实现（单实例 / 测试用）。
+// MemorySticky is the single-process in-memory implementation (single instance / tests).
 type MemorySticky struct {
 	mu sync.Mutex
 	m  map[string]memBinding
@@ -43,7 +46,7 @@ type memBinding struct {
 	expires time.Time
 }
 
-// NewMemorySticky 构造内存粘性存储。
+// NewMemorySticky creates an in-memory sticky store.
 func NewMemorySticky() *MemorySticky {
 	return &MemorySticky{m: make(map[string]memBinding)}
 }
@@ -59,7 +62,7 @@ func (s *MemorySticky) Lookup(ctx context.Context, sessionID string, ttl time.Du
 		delete(s.m, sessionID)
 		return "", false, nil
 	}
-	b.expires = time.Now().Add(ttl) // 惰性续期
+	b.expires = time.Now().Add(ttl) // lazy renewal
 	s.m[sessionID] = b
 	return b.backend, true, nil
 }
@@ -70,7 +73,7 @@ func (s *MemorySticky) Bind(ctx context.Context, sessionID, backendKey string, t
 	if b, ok := s.m[sessionID]; ok && time.Now().Before(b.expires) {
 		b.expires = time.Now().Add(ttl)
 		s.m[sessionID] = b
-		return false, nil // 已存在未过期：没抢到，保持原后端
+		return false, nil // already present and unexpired: not grabbed, keep the original backend
 	}
 	s.m[sessionID] = memBinding{backend: backendKey, expires: time.Now().Add(ttl)}
 	return true, nil

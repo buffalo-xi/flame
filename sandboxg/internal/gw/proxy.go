@@ -18,10 +18,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// maxFrameBytes 单条消息上限，与 sandbox 包同口径。
+// maxFrameBytes is the per-message limit, matching the sandbox package.
 const maxFrameBytes = 32 << 20 // 32 MiB
 
-// Gateway 网关：WS 代理 + 后端池 + 负载快照 + 粘性路由。
+// Gateway is the gateway: WS proxy + backend pool + load snapshots + sticky routing.
 type Gateway struct {
 	cfg       *Config
 	pool      *Pool
@@ -30,7 +30,8 @@ type Gateway struct {
 	upgrader  websocket.Upgrader
 }
 
-// New 构造网关。粘性存储按配置选：配了 redis.addr 用 redis，否则单机内存。
+// New builds the gateway. The sticky store follows the config: redis.addr present uses redis, otherwise
+// per-process memory.
 func New(cfg *Config) (*Gateway, error) {
 	sticky, err := newSticky(cfg)
 	if err != nil {
@@ -57,7 +58,8 @@ func New(cfg *Config) (*Gateway, error) {
 	return g, nil
 }
 
-// newSticky 按配置构造粘性存储。redis 连不上直接报错（多实例下粘性错乱比失败更糟）。
+// newSticky builds the sticky store from the config. An unreachable redis is a hard error (with several
+// instances, scrambled stickiness is worse than failing).
 func newSticky(cfg *Config) (StickyStore, error) {
 	if cfg.Redis.Addr == "" {
 		return NewMemorySticky(), nil
@@ -76,7 +78,7 @@ func newSticky(cfg *Config) (StickyStore, error) {
 	return NewRedisSticky(client), nil
 }
 
-// Router 对 nexus 暴露与 sandboxd 相同的 /v1/* 端点。
+// Router exposes the same /v1/* endpoints to nexus as sandboxd does.
 func (g *Gateway) Router() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -87,21 +89,23 @@ func (g *Gateway) Router() *gin.Engine {
 		api.Use(tokenAuth(g.cfg.Token))
 	}
 	api.GET("/exec", g.handleProxy)
-	api.GET("/code", g.handleProxy) // 2026-10 由 /v1/code 更名，与 sandboxd 路由同步
+	api.GET("/code", g.handleProxy) // renamed from /v1/code in 2026-10, in step with the sandboxd routes
 	api.GET("/interactive", g.handleProxy)
-	// 能力快照：透传某个健康后端（普通 HTTP，非 WS）。
+	// Capability snapshot: proxied from a healthy backend (plain HTTP, not WS).
 	api.GET("/capabilities", g.handleCapabilities)
-	// gateway 自身负载视图：供监控 / 上层负载均衡观测各后端分数与健康状态。
+	// The gateway's own load view: monitoring / an upstream load balancer observes each backend's score and
+	// health here.
 	api.GET("/metrics", g.handleMetrics)
 	return r
 }
 
-// RefreshLoop 定期拉取后端负载快照。
+// RefreshLoop periodically pulls the backend load snapshots.
 func (g *Gateway) RefreshLoop(ctx context.Context) {
 	interval := time.Duration(g.cfg.MetricsIntervalSec) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	// 启动先拉一次，让快照尽快可用（否则第一批请求全打到第一个后端）。
+	// Pull once at startup so the snapshots become usable immediately (otherwise the first batch of
+	// requests all lands on the first backend).
 	g.pool.refreshAll(ctx)
 	g.checkStickyTTL(ctx)
 	for {
@@ -110,40 +114,42 @@ func (g *Gateway) RefreshLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			g.pool.refreshAll(ctx)
-			// 顺带校验 TTL 与对方 idle 的关系（拉到一次后就近乎零成本）。
+			// Check the TTL against the peer's idle values along the way (nearly free once pulled).
 			g.checkStickyTTL(ctx)
 		}
 	}
 }
 
-// checkStickyTTL 校验粘性 TTL 是否覆盖得住对方的空闲回收上界：
+// checkStickyTTL verifies that the sticky TTL covers the peer's idle-reclaim upper bound:
 //
 //	sticky_ttl > interactive_idle_sec + 2×interactive_janitor_sec
 //
-// 为什么必须运行时校验：这两个值分别在 sandboxd 与 sandboxg 两个进程的配置文件里，
-// 没有任何机制保证同步。sandboxd 通过 /v1/capabilities 的 interactive 段把它自己
-// 的配置报出来，网关据此比对。
+// Why it must be checked at run time: the two values live in the configuration files of two different
+// processes (sandboxd and sandboxg) and nothing keeps them in sync. sandboxd reports its own config through
+// the interactive section of /v1/capabilities, and the gateway compares against it.
 //
-// 不满足时只告警、不阻断服务：后果是「绑定可能在进程仍存活时过期」，可能把同一
-// session 路由到另一台后端、各建一个进程（状态分裂）—— 是正确性风险，但配置写错
-// 也不该让整个网关拒绝服务。
+// When it does not hold, warn only and do not block service: the consequence is "the binding may expire
+// while the process is still alive", which may route the same session to another backend and build one
+// process on each (split state) — a correctness risk, but a misconfiguration should not make the whole
+// gateway refuse service.
 func (g *Gateway) checkStickyTTL(ctx context.Context) {
 	for _, problem := range g.stickyTTLProblems(ctx) {
 		xlog.Error("sandboxg: %s", problem)
 	}
 }
 
-// stickyTTLProblems 返回 TTL 不足的诊断（空 = 合格）。抽成纯查询是为了能在单测里
-// 直接断言，不必去抓日志。
+// stickyTTLProblems returns the TTL shortfall diagnostics (empty means fine). It is split out as a pure query
+// so a unit test can assert on it directly instead of scraping the log.
 func (g *Gateway) stickyTTLProblems(ctx context.Context) []string {
 	ttl := time.Duration(g.cfg.StickyTTLSec) * time.Second
 	var out []string
 	for _, b := range g.pool.all() {
-		// 按 capsRefresh 周期重新拉：sandboxd 改 idle 重启后必须能被告知，
-		// 否则这里会一直拿旧值判断，而且"旧值合格"时连一条日志都不会有。
+		// Re-pull every capsRefresh: after sandboxd is restarted with a different idle value it must be able
+		// to say so, otherwise this keeps judging by the old values — and when the old values "pass" there is
+		// not even a log line.
 		b.refreshCapsIfStale(ctx)
 		c := b.capsSnapshot()
-		// 对方没报这一段（老版本 sandboxd）：无从校验，当合格处理。
+		// The peer does not report the section (older sandboxd): nothing to check, treat it as passing.
 		if c.IdleSec <= 0 {
 			continue
 		}
@@ -151,22 +157,24 @@ func (g *Gateway) stickyTTLProblems(ctx context.Context) []string {
 		if ttl > need {
 			continue
 		}
-		if !b.markTTLWarned() { // 每个后端只报一次，这个值不会自己变
+		if !b.markTTLWarned() { // report once per backend, the value does not change by itself
 			continue
 		}
 		out = append(out, fmt.Sprintf(
-			"sticky_ttl_sec=%ds 覆盖不住 %s 的长交互空闲回收上界 "+
-				"interactive_idle_sec(%ds) + 2×interactive_janitor_sec(%ds) = %ds："+
-				"绑定可能在进程仍存活时过期，同一 session 有落到两个后端各建一个进程的风险；"+
-				"请把 sandboxg 的 sticky_ttl_sec 调到 > %d",
+			"sticky_ttl_sec=%ds does not cover the long-interaction idle-reclaim upper bound of %s "+
+				"interactive_idle_sec(%ds) + 2×interactive_janitor_sec(%ds) = %ds: "+
+				"the binding may expire while the process is still alive, so the same session risks landing "+
+				"on two backends and building one process on each; "+
+				"set sandboxg's sticky_ttl_sec to > %d",
 			g.cfg.StickyTTLSec, b.URL, c.IdleSec, c.JanitorSec,
 			int(need.Seconds()), int(need.Seconds())))
 	}
 	return out
 }
 
-// DiscoveryLoop 周期从服务发现拉实例列表并对账（新增进池、消失移出并清粘性）。
-// 失败保留旧列表不摘除（避免 discovery 抖动清空整个池）。
+// DiscoveryLoop periodically pulls the instance list from service discovery and reconciles it (new ones
+// join the pool, vanished ones leave and their sticky bindings are cleared).
+// A failed pull keeps the old list instead of evicting (so a discovery blip cannot empty the whole pool).
 func (g *Gateway) DiscoveryLoop(ctx context.Context) {
 	if g.discovery == nil {
 		return
@@ -185,7 +193,8 @@ func (g *Gateway) DiscoveryLoop(ctx context.Context) {
 	}
 }
 
-// discoverOnce 拉一次实例列表并对账，摘除的后端清粘性绑定。
+// discoverOnce pulls the instance list once and reconciles it, clearing the sticky bindings of the backends
+// that were evicted.
 func (g *Gateway) discoverOnce(ctx context.Context) {
 	insts, err := g.discovery.ListInstances(ctx, g.cfg.Discovery.ServiceName)
 	if err != nil {
@@ -199,11 +208,12 @@ func (g *Gateway) discoverOnce(ctx context.Context) {
 	}
 }
 
-// route 决定一条请求发往哪个后端。
+// route decides which backend a request goes to.
 //
-// interactive（带 session_id）走粘性：命中绑定固定转发；未命中按负载 + 原子抢占
-// 绑定。抢占失败（并发下另一个 gateway 先绑了）时读回它绑的后端并重定向过去，
-// 避免同一 session 打到多个实例。其余（exec/code、无 session_id）纯负载。
+// interactive (with a session_id) is sticky: a binding hit is forwarded there unconditionally; a miss picks
+// by load and grabs the binding atomically. When the grab loses (another gateway bound first under
+// concurrency) the backend it bound is read back and used, so the same session does not hit several
+// instances. Everything else (exec/code, no session_id) is pure load balancing.
 func (g *Gateway) route(ctx context.Context, path, sessionID string) (*Backend, error) {
 	if path != "/v1/interactive" || sessionID == "" {
 		if b := g.pool.leastLoaded(); b != nil {
@@ -214,14 +224,14 @@ func (g *Gateway) route(ctx context.Context, path, sessionID string) (*Backend, 
 
 	ttl := time.Duration(g.cfg.StickyTTLSec) * time.Second
 
-	// 先查已有绑定
+	// Look for an existing binding first.
 	if key, ok, err := g.sticky.Lookup(ctx, sessionID, ttl); err != nil {
 		return nil, err
 	} else if ok {
 		if b := g.pool.byURL(key); b != nil {
 			return b, nil
 		}
-		// 绑定指向已摘除的后端：落到负载 + 重新抢占
+		// The binding points at an evicted backend: fall back to load balancing and grab again.
 	}
 
 	backend := g.pool.leastLoaded()
@@ -235,7 +245,7 @@ func (g *Gateway) route(ctx context.Context, path, sessionID string) (*Backend, 
 	if grabbed {
 		return backend, nil
 	}
-	// 没抢到：读回别人刚绑的后端，重定向过去
+	// Lost the grab: read back the backend someone else just bound and use it instead.
 	if key, ok, err := g.sticky.Lookup(ctx, sessionID, ttl); err == nil && ok {
 		if b := g.pool.byURL(key); b != nil {
 			return b, nil
@@ -244,7 +254,8 @@ func (g *Gateway) route(ctx context.Context, path, sessionID string) (*Backend, 
 	return backend, nil
 }
 
-// HealthLoop 定期探后端 /healthz，摘除不健康实例并清理其粘性绑定。
+// HealthLoop periodically probes the backend /healthz, evicts unhealthy instances and clears their sticky
+// bindings.
 func (g *Gateway) HealthLoop(ctx context.Context) {
 	interval := time.Duration(g.cfg.HealthCheckIntervalSec) * time.Second
 	ticker := time.NewTicker(interval)
@@ -263,10 +274,12 @@ func (g *Gateway) HealthLoop(ctx context.Context) {
 	}
 }
 
-// handleProxy 一次 WS 代理：读 open 帧 → 选后端 → 连后端 → 转 open → 双向透传。
+// handleProxy proxying one WS connection: read the open frame → pick a backend → connect → forward the open
+// frame → pipe both directions.
 //
-// 协议透明：不重写帧。open 帧 peek 出来只为路由决策（后续阶段粘性路由要读
-// session_id），决策后原样转发。透传用裸 gorilla 连接，保证帧字节原样往返。
+// The protocol is transparent: frames are not rewritten. The open frame is peeked only for the routing
+// decision (sticky routing needs the session_id) and is forwarded as is afterwards. Piping uses bare gorilla
+// connections so the frame bytes go back and forth unchanged.
 func (g *Gateway) handleProxy(c *gin.Context) {
 	client, err := g.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -274,7 +287,7 @@ func (g *Gateway) handleProxy(c *gin.Context) {
 	}
 	defer func() { _ = client.Close() }()
 
-	// 1) 读第一条 open 帧（peek，不消费语义 —— 原样转发给后端）
+	// 1) Read the first open frame (a peek, its meaning is not consumed — it is forwarded to the backend as is).
 	typ, payload, err := client.ReadMessage()
 	if err != nil {
 		return
@@ -289,7 +302,7 @@ func (g *Gateway) handleProxy(c *gin.Context) {
 		return
 	}
 
-	// 2) 路由：interactive 按 session 粘性，其余按负载。
+	// 2) Route: interactive is sticky by session, everything else goes by load.
 	backend, rerr := g.route(c.Request.Context(), c.Request.URL.Path, open.SessionID)
 	if rerr != nil {
 		xlog.Error("sandboxg: route: %v", rerr)
@@ -297,7 +310,7 @@ func (g *Gateway) handleProxy(c *gin.Context) {
 		return
 	}
 
-	// 3) 连后端（ws://base + 当前请求路径）
+	// 3) Connect to the backend (ws://base + the current request path).
 	dialCtx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 	h := http.Header{}
@@ -314,12 +327,12 @@ func (g *Gateway) handleProxy(c *gin.Context) {
 	bws.SetReadLimit(maxFrameBytes)
 	defer func() { _ = bws.Close() }()
 
-	// 4) 转发 open 帧（原样）
+	// 4) Forward the open frame (as is).
 	if err := bws.WriteMessage(typ, payload); err != nil {
 		return
 	}
 
-	// 5) 双向透传：任一侧断开即结束本次代理。
+	// 5) Pipe both directions: whichever side drops ends this proxy.
 	errc := make(chan error, 2)
 	go func() { // client → backend
 		for {
@@ -345,10 +358,11 @@ func (g *Gateway) handleProxy(c *gin.Context) {
 				errc <- werr
 				return
 			}
-			// sandboxd 说这个 session 已经没有任何长交互工具了 —— 粘性绑定到此为止。
+			// sandboxd says this session has no long-interaction tool left — the sticky binding ends here.
 			//
-			// 不能反过来「收到 kill 就解绑」：一个 session 可以有多个长交互工具，
-			// 杀掉其中一个时会话仍然有效，是否为空只有 sandboxd 的注册表知道。
+			// The opposite rule ("unbind on any kill") does not work: a session may hold several
+			// long-interaction tools, and killing one of them leaves the session valid; only sandboxd's
+			// registry knows whether it is empty.
 			if open.SessionID != "" && isEmptyFrame(t, d) {
 				go g.unbind(open.SessionID, backend.URL)
 			}
@@ -357,10 +371,10 @@ func (g *Gateway) handleProxy(c *gin.Context) {
 	<-errc
 }
 
-// handleMetrics 返回 gateway 自身的负载视图：各后端快照 + 汇总分数。
+// handleMetrics returns the gateway's own load view: the per-backend snapshots plus the aggregate score.
 //
-// 与 sandboxd /v1/metrics 不同：这里是「gateway 看到的世界」——后端健康状态、
-// 各自分数、汇总分。上层监控可据此判断 gateway 是否已经打满（total_score 高）。
+// Unlike sandboxd /v1/metrics this is "the world as the gateway sees it" — backend health, each score, the
+// total. Upstream monitoring can use it to decide whether the gateway is saturated (a high total_score).
 func (g *Gateway) handleMetrics(c *gin.Context) {
 	snaps := g.pool.snapshots()
 	var total int64
@@ -379,10 +393,11 @@ func (g *Gateway) handleMetrics(c *gin.Context) {
 	})
 }
 
-// handleCapabilities 透传某个健康后端的 /v1/capabilities（普通 HTTP，非 WS）。
+// handleCapabilities proxies /v1/capabilities from a healthy backend (plain HTTP, not WS).
 //
-// 与 exec/code 的负载路由不同，能力快照是元数据、与负载无关，这里按确定性顺序
-// 挑第一个健康后端，避免快照来源随负载跳变。响应原样透传，保持协议透明。
+// Unlike the load-balanced exec/code routes, the capability snapshot is metadata and unrelated to load, so
+// the first healthy backend in a deterministic order is used here, keeping the snapshot source from jumping
+// with load. The response is proxied as is, preserving protocol transparency.
 func (g *Gateway) handleCapabilities(c *gin.Context) {
 	b := g.pool.firstHealthy()
 	if b == nil {
@@ -392,7 +407,7 @@ func (g *Gateway) handleCapabilities(c *gin.Context) {
 	g.proxyHTTP(c, b.capabilitiesURL(), b.Token)
 }
 
-// proxyHTTP 把一次 GET 请求透传到一个后端并原样回传（状态码 + Content-Type + 体）。
+// proxyHTTP forwards one GET to a backend and returns it as is (status code + Content-Type + body).
 func (g *Gateway) proxyHTTP(c *gin.Context, url, token string) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -414,7 +429,8 @@ func (g *Gateway) proxyHTTP(c *gin.Context, url, token string) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// 只透传 Content-Type；其余 hop-by-hop 头（Content-Length/Connection 等）由 http 层自行处理。
+	// Only Content-Type is forwarded; the other hop-by-hop headers (Content-Length/Connection ...) are
+	// handled by the http layer itself.
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		c.Writer.Header().Set("Content-Type", ct)
 	}
@@ -422,8 +438,9 @@ func (g *Gateway) proxyHTTP(c *gin.Context, url, token string) {
 	_, _ = io.Copy(c.Writer, resp.Body)
 }
 
-// isEmptyFrame 判断后端发来的「session 已无长交互工具」信号。
-// 非文本帧、非 JSON 一律放过 —— 透传路径不该因为解析失败改变行为。
+// isEmptyFrame recognizes the "session has no long-interaction tool left" signal sent by the backend.
+// Non-text frames and non-JSON payloads always pass through — the proxy path must not change behaviour
+// because parsing failed.
 func isEmptyFrame(typ int, payload []byte) bool {
 	if typ != websocket.TextMessage {
 		return false
@@ -435,10 +452,10 @@ func isEmptyFrame(typ int, payload []byte) bool {
 	return f.Type == sandbox.FrameSessionEmpty
 }
 
-// unbind 解掉一条粘性绑定（尽力而为：失败只记日志，TTL 仍是兜底）。
+// unbind drops one sticky binding (best effort: a failure is only logged and the TTL remains the backstop).
 //
-// 用独立 ctx：信号之后客户端通常立刻断开，请求 ctx 已被取消，
-// 拿它来解绑等于把该做的事直接取消掉。
+// It uses a standalone ctx: the client usually disconnects right after the signal, so the request ctx is
+// already cancelled and using it would cancel the very work that must happen.
 func (g *Gateway) unbind(sessionID, backendURL string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -447,13 +464,13 @@ func (g *Gateway) unbind(sessionID, backendURL string) {
 	}
 }
 
-// errFrame 构造一条 error 控制帧。
+// errFrame builds an error control frame.
 func errFrame(msg string) []byte {
 	b, _ := json.Marshal(&sandbox.Frame{Type: sandbox.FrameError, Message: msg})
 	return b
 }
 
-// tokenAuth 与 sandboxd 同口径的 Bearer 鉴权。
+// tokenAuth is the same Bearer authentication as sandboxd.
 func tokenAuth(token string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
