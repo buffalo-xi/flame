@@ -149,8 +149,14 @@
         </div>
         <div v-if="form.command_dispatch === 'tool'" class="settings-field">
           <div class="field-label">{{ $t('skill.targetTool') }}</div>
-          <el-input v-model="form.command_tool" size="small" :disabled="!skillId || readonly"
-                    :placeholder="$t('skill.targetToolPlaceholder')" @blur="saveProps" />
+          <el-select v-model="form.command_tool" size="small" style="width:100%"
+                     filterable allow-create default-first-option clearable
+                     :disabled="!skillId || readonly"
+                     :placeholder="$t('skill.targetToolPlaceholder')" @change="saveProps">
+            <el-option v-for="opt in commandToolOptions" :key="opt.ref"
+                       :label="opt.label === opt.ref ? opt.ref : `${opt.label} · ${opt.ref}`"
+                       :value="opt.ref" />
+          </el-select>
           <div class="editor-tip">{{ $t('skill.targetToolHint') }}</div>
         </div>
       </template>
@@ -332,11 +338,14 @@ const putSkill = async (patch) => {
 //（选择面板是 4000 的 body 级浮层，悬空会压住面板里的 Element Plus 下拉）
 const switchSettingsTab = async (tab) => {
   settingsTab.value = tab
-  if (tab === 'tools') {
-    await loadDeps()
-  } else {
+  if (tab !== 'tools') {
     depPickerVisible.value = false
     agentPickerVisible.value = false
+  }
+  // 「属性」页的「目标工具」候选来自工具依赖，所以两个页签都要先拿到依赖
+  // （loadDeps 自带缓存与草稿保护，切回来不会冲掉未保存的勾选）
+  if (tab === 'tools' || tab === 'props') {
+    await loadDeps()
   }
 }
 // 设置面板宽度拖拽
@@ -566,6 +575,21 @@ const loadDeps = async (force = false) => {
     ElMessage.error(e.message || t('skill.loadDepsFailed'))
   }
 }
+
+// 「目标工具」的候选：该技能声明的工具依赖（一个直达命令通常就是其中某一个的薄壳），
+// 外加当前已保存的值 —— 它可能不在依赖里（以前手填过），不补进来就会显示成一个来历不明的 ref。
+// 仍然允许手填：命令可以直达没写进依赖的工具，能不能跑由运行时该 agent 的授权决定，这里不替后端下结论。
+const commandToolOptions = computed(() => {
+  const opts = depItems.value
+    .filter((it) => it.item_type === 'tool')
+    .map((it) => ({ ref: it.ref, label: it.label || it.ref }))
+  const cur = props.form.command_tool
+  if (cur && !opts.some((o) => o.ref === cur)) {
+    const d = describeRef(cur, 'tool')
+    opts.unshift({ ref: cur, label: d.label || cur })
+  }
+  return opts
+})
 
 // 保存（全量替换）：显式点「保存」才提交，避免左侧勾选过程中的中间态直接落库
 const saveDeps = async () => {
