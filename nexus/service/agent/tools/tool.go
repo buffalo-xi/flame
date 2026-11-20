@@ -1065,8 +1065,11 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// String renders the captured bytes as text, decoding the Windows console code page when they are not UTF-8 (see
+// decodeConsoleOutput). Every consumer takes text - a tool result, the model's tool message, the chat window - and none of
+// them carries raw bytes: without this step a `dir` on a Chinese Windows arrives as a wall of U+FFFD.
 func (b *limitedBuffer) String() string {
-	return string(b.buf)
+	return decodeConsoleOutput(b.buf)
 }
 
 func (b *limitedBuffer) Truncated() bool {

@@ -93,13 +93,15 @@ func (t *shellTool) Execute(ctx context.Context, c *Context, args map[string]any
 		return nil, err
 	}
 
+	// The client hands the output back as a string built from raw bytes, so the same console code page decode applies here
+	// (see decodeConsoleOutput): a resident cmd session writes dir output in the OEM code page just like a one-shot command.
 	out := map[string]any{
-		"stdout":    res.Stdout,
+		"stdout":    decodeConsoleOutput([]byte(res.Stdout)),
 		"exit_code": res.ExitCode,
 		"alive":     true,
 	}
 	if res.Stderr != "" {
-		out["stderr"] = res.Stderr
+		out["stderr"] = decodeConsoleOutput([]byte(res.Stderr))
 	}
 	if !res.Completed {
 		// No sentinel was read: the command may not have finished (partial output already returned on idle timeout)
