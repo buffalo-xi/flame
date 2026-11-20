@@ -243,6 +243,10 @@
       "duplicate_label": "Node names must be unique: {names}. A name is used by source_ref / call.target references, so a duplicate points at the wrong node; rename before saving.",
       "description_required": "The workflow description must not be empty."
     },
+    "agentconfig": {
+      "invalid_value": "{field} must be an integer of at least 1 (these four settings do not accept -1 for unlimited)",
+      "exceeds_system_limit": "{field} cannot exceed the system value ({limit})"
+    },
     "common": {
       "internal": "Internal error, please try again later",
       "invalid_params": "Invalid request parameters",

@@ -319,6 +319,8 @@
       "colItem": "配置项",
       "colSystemLevel": "系统级",
       "colTenantValue": "租户配置",
+      "colEffective": "实际生效",
+      "colEffectiveHint": "运行期实际生效的值：租户值 → 系统级 → 兜底值，且不超过系统级",
       "phFallbackSystemLevel": "留空回退系统级",
       "flowTip": "留空 = 回退系统级；-1 = 不限制；租户值不能超过系统级。保存后立即生效。",
       "scopeTip": "只影响本租户；系统级由平台管理员设定。",

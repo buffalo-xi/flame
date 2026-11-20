@@ -47,6 +47,17 @@
               </div>
 
               <div class="settings-field">
+                <div class="field-label">{{ $t('agentSettings.defaultLanguage') }}</div>
+                <el-select v-model="defaultLanguage" size="small" style="width: 100%"
+                           popper-class="agent-lang-select-popper"
+                           :disabled="!agentId || locked" @change="saveDefaultLanguage">
+                  <el-option v-for="opt in languageOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
+                <div class="editor-tip">{{ $t('agentSettings.defaultLanguageHint') }}</div>
+                <div v-if="!agentId" class="editor-tip">{{ $t('agentSettings.needSaveLanguage') }}</div>
+              </div>
+
+              <div class="settings-field">
                 <div class="field-label">{{ $t('agentSettings.supervisorLabel') }}</div>
                 <el-switch v-model="agent.is_supervisor"
                            :disabled="!agentId || locked"
@@ -752,7 +763,7 @@ const loadToolCatalog = async (agentId = '') => {
       ElMessage.warning(formatError(body) || t('agentSettings.catalogLoadFailed'))
     }
   } catch (e) {
-    console.error('获取工具目录失败:', e)
+    console.error('failed to load the tool catalog:', e)
   }
 }
 
@@ -1125,7 +1136,7 @@ const loadEffectiveInfo = async () => {
     const body = await res.json().catch(() => ({}))
     if (body.code === 200) previewData.value = body.data || null
   } catch (e) {
-    console.error('读取生效工具失败:', e)
+    console.error('failed to load the effective tools:', e)
   }
 }
 
@@ -1231,7 +1242,7 @@ const loadSkillBindings = async (id = props.agentId) => {
     allSkills.value = sbody?.data?.items || []
     boundSkillIds.value = bbody?.data?.skill_ids || []
   } catch (e) {
-    console.error('加载技能绑定失败:', e)
+    console.error('failed to load skill bindings:', e)
   }
 }
 
@@ -1310,6 +1321,55 @@ const saveSkillDiscovery = async (val) => {
   }
 }
 
+// Default reply language (agents.default_language): an agent attribute, saved on change like the two switches.
+//
+// It is a definition column of its own, not a key inside config, so the value is read straight off the agent object and
+// written back with the same object - no config round-trip, and no way to wipe another key by saving it.
+const LANGUAGE_LABEL_KEYS = {
+  'zh-CN': 'langZhCN', en: 'langEn', ja: 'langJa', ko: 'langKo', fr: 'langFr',
+  de: 'langDe', es: 'langEs', pt: 'langPt', ru: 'langRu', ar: 'langAr', it: 'langIt'
+}
+
+// The list is a convenience set, not a whitelist (the backend accepts any valid BCP-47 tag), so a stored tag outside it is
+// appended as itself - otherwise the select would render blank and look like "not configured" while a value is stored.
+const languageOptions = computed(() => {
+  const options = [
+    { value: '', label: t('agentSettings.langFollowCaller') },
+    ...Object.keys(LANGUAGE_LABEL_KEYS).map(code => ({ value: code, label: t('agentSettings.' + LANGUAGE_LABEL_KEYS[code]) }))
+  ]
+  const current = defaultLanguage.value
+  if (current && !LANGUAGE_LABEL_KEYS[current]) options.push({ value: current, label: current })
+  return options
+})
+
+const defaultLanguage = ref(props.agent?.default_language || '')
+
+// The parent replaces the agent object whenever it opens another agent or loads a version, so follow it instead of
+// keeping the previous agent's value on screen.
+watch(() => props.agent?.default_language, () => {
+  defaultLanguage.value = props.agent?.default_language || ''
+})
+
+const saveDefaultLanguage = async (val) => {
+  if (!props.agentId) return
+  const tag = val || ''
+  try {
+    const res = await fetch(adminApi.agents.update + props.agentId, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ ...props.agent, default_language: tag })
+    })
+    const body = await res.json().catch(() => ({}))
+    if (body.code !== 200) throw new Error(formatError(body) || t('agentSettings.saveFailed'))
+    // Keep the local copy in sync: the next rename / description save echoes {...agent} and would otherwise undo this.
+    props.agent.default_language = tag
+    ElMessage.success(t('agentSettings.langSaved'))
+  } catch (e) {
+    defaultLanguage.value = props.agent?.default_language || '' // roll back to what is still stored
+    ElMessage.error(e.message || t('agentSettings.saveFailed'))
+  }
+}
+
 // 「超级权限」（agents.is_supervisor）：与内置超级智能体同级，改动即保存。
 // 走 update 接口的单列分支（后端 SetSupervisor）—— UpdateAgent 是全字段覆盖，
 // 但刻意不写这一列，所以这里提交整份表单也不会误清零别人。
@@ -1366,6 +1426,12 @@ watch(() => props.refreshToken, async (token) => {
 </script>
 
 <style scoped>
+/* 语言下拉的弹层：设置面板本身是 body 级浮层（z-index 3200），而 Element Plus 的 popper 从 2000 起，
+   会被面板压在下面 —— 现象就是「点下拉没反应 / 打开也没内容」。弹层 teleport 到 body，只能用全局选择器抬高层级。 */
+:global(.agent-lang-select-popper) {
+  z-index: 5000 !important;
+}
+
 /* ========== 智能体设置面板（对齐工作流试运行面板） ========== */
 .settings-panel {
   /* teleport 到 body + fixed：脱离 .agents / .content-panel 的 overflow:hidden，

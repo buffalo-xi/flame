@@ -224,15 +224,17 @@
             </button>
             <div v-show="open.agent" class="blk-body">
               <div v-loading="agentLoading" class="flow-table">
-                <div class="flow-head">
+                <div class="flow-head agent-head">
                   <span>{{ t('platform.myTenants.colItem') }}</span>
                   <span>{{ t('platform.myTenants.colSystemLevel') }}</span>
                   <span>{{ t('platform.myTenants.colTenantValue') }}</span>
+                  <span :title="t('platform.myTenants.colEffectiveHint')">{{ t('platform.myTenants.colEffective') }}</span>
                 </div>
-                <div v-for="f in AGENT_FIELDS" :key="f.key" class="flow-row">
+                <div v-for="f in AGENT_FIELDS" :key="f.key" class="flow-row agent-row">
                   <span class="flow-name">{{ f.label }}</span>
                   <span class="flow-sys">{{ flowText(systemAgent[f.key]) }}</span>
                   <el-input v-model="tenantAgent[f.key]" size="small" :placeholder="t('platform.myTenants.phFallbackSystemLevel')" />
+                  <span class="flow-eff">{{ flowText(effectiveAgent[f.key]) }}</span>
                 </div>
               </div>
 
@@ -504,6 +506,8 @@ const agentLoading = ref(false)
 const agentSaving = ref(false)
 const systemAgent = ref({})
 const tenantAgent = ref({})
+// Effective = what the runtime really applies; it differs from the stored tenant value when the ceiling is lower
+const effectiveAgent = ref({})
 
 async function loadAgentConfigs(schema) {
   agentLoading.value = true
@@ -517,6 +521,7 @@ async function loadAgentConfigs(schema) {
       obj[f.key] = v === null || v === undefined ? '' : String(v)
     }
     tenantAgent.value = obj
+    effectiveAgent.value = data?.effective || {}
   } catch (err) {
     handleError(err)
   } finally {
@@ -1180,6 +1185,17 @@ onMounted(load)
   font-size: 12px;
   font-weight: 600;
   color: #909399;
+}
+
+/* Agent run limits carry a fourth column: what the runtime really applies after merging with the ceiling */
+.flow-head.agent-head,
+.flow-row.agent-row {
+  grid-template-columns: 1.2fr 72px 1fr 72px;
+}
+
+.flow-eff {
+  font-size: 13px;
+  color: #606266;
 }
 
 .flow-row + .flow-row {

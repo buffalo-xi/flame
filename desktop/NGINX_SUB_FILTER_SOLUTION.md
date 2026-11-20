@@ -1,30 +1,39 @@
-# Nginx sub_filter完整解决方案
+# nginx sub_filter: serving an SPA under a sub-path
 
-## 问题分析
+[����](NGINX_SUB_FILTER_SOLUTION.zh.md) | English
 
-script标签的`src`被正确替换，但link标签的`href`没有被替换�?
-## 解决方案
+> Scope: this note was written while mounting a console under a `/large/` prefix on another host (`D:/proj/x-fw/...`). The
+> prefix and the disk paths are that deployment's, not flame's �� substitute your own. It is kept because the problem it solves
+> is generic: `index.html` references `/assets/...`, and if the app is mounted under a sub-path those references have to move
+> too. If your console is served from the domain root, you do not need sub_filter at all �� see
+> [DEPLOYMENT.md](DEPLOYMENT.md).
 
-### 方案1：添加完整的sub_filter_types配置
+## Problem
+
+`script` tags get their `src` rewritten, but `link` tags do not get their `href` rewritten.
+
+## Solutions
+
+### 1. Add a complete `sub_filter_types`
 
 ```nginx
 server {
     listen 80;
     server_name your-domain.com;
 
-    # large应用
+    # the app
     location /large/ {
         alias /path/to/frontend/large/dist/;
         index index.html;
 
-        # 替换资源路径
+        # rewrite the asset paths
         sub_filter '/assets/' '/large/assets/';
         sub_filter_once off;
 
-        # 添加更多类型处理
+        # handle more types
         sub_filter_types text/html text/css application/javascript application/json;
 
-        # SPA路由支持
+        # SPA routing
         try_files $uri $uri/ /large/index.html;
     }
 
@@ -36,7 +45,7 @@ server {
 }
 ```
 
-### 方案2：使用多个sub_filter规则
+### 2. Use several `sub_filter` rules
 
 ```nginx
 server {
@@ -47,7 +56,7 @@ server {
         alias /path/to/frontend/large/dist/;
         index index.html;
 
-        # 替换所有可能的路径
+        # rewrite every possible path
         sub_filter '/assets/' '/large/assets/';
         sub_filter_once off;
         sub_filter_types *;
@@ -63,7 +72,8 @@ server {
 }
 ```
 
-### 方案3：使用正则表达式sub_filter（Nginx 1.9.4+�?
+### 3. Anchor the match (nginx 1.9.4+ syntax with a literal prefix)
+
 ```nginx
 server {
     listen 80;
@@ -73,7 +83,8 @@ server {
         alias /path/to/frontend/large/dist/;
         index index.html;
 
-        # 使用正则表达式替�?        sub_filter 'href="/assets/' 'href="/large/assets/';
+        # anchor on the attribute, so a bare "/assets/" in text is left alone
+        sub_filter 'href="/assets/' 'href="/large/assets/';
         sub_filter 'src="/assets/' 'src="/large/assets/';
         sub_filter_once off;
         sub_filter_types text/html;
@@ -89,11 +100,11 @@ server {
 }
 ```
 
-### 方案4：使用map指令（推荐）
+### 4. Use a `map` (recommended)
 
 ```nginx
 http {
-    # 定义资源路径映射
+    # define the asset path mapping
     map $request_uri $asset_path {
         default /assets/;
         ~^/large/ /large/assets/;
@@ -107,7 +118,7 @@ http {
             alias /path/to/frontend/large/dist/;
             index index.html;
 
-            # 使用变量替换
+            # rewrite through a variable
             sub_filter '/assets/' $asset_path;
             sub_filter_once off;
             sub_filter_types text/html;
@@ -124,23 +135,28 @@ http {
 }
 ```
 
-### 方案5：使用Lua脚本（需要ngx_http_lua_module�?
+### 5. Use Lua (needs `ngx_http_lua_module`)
+
 ```nginx
 location /large/ {
     alias /path/to/frontend/large/dist/;
     index index.html;
 
-    header_filter_by_lua_block {
-        local content = ngx.arg[1]
-        content = ngx.re.gsub(content, "/assets/", "/large/assets/", "jo")
-        ngx.arg[1] = content
+    # The body is produced by a body filter, so the rewrite must happen in body_filter_by_lua_block;
+    # header_filter_by_lua_block runs before the body exists and cannot touch it.
+    body_filter_by_lua_block {
+        local chunk = ngx.arg[1]
+        local eof = ngx.arg[2]
+        if chunk and not eof then
+            ngx.arg[1] = ngx.re.gsub(chunk, "/assets/", "/large/assets/", "jo")
+        end
     }
 
     try_files $uri $uri/ /large/index.html;
 }
 ```
 
-## Windows本地Nginx配置
+## Local nginx on Windows
 
 ```nginx
 events {
@@ -158,21 +174,22 @@ http {
         listen       8080;
         server_name  localhost;
 
-        # large应用
+        # the app
         location /large/ {
             alias   D:/proj/x-fw/frontend/large/dist/;
             index  index.html;
 
-            # 替换资源路径
+            # rewrite the asset paths
             sub_filter '/assets/' '/large/assets/';
             sub_filter_once off;
             sub_filter_types text/html text/css application/javascript;
 
-            # SPA路由支持
+            # SPA routing
             try_files $uri $uri/ /large/index.html;
         }
 
-        # 静态资�?        location /large/assets/ {
+        # static assets
+        location /large/assets/ {
             alias   D:/proj/x-fw/frontend/large/dist/assets/;
             expires  1y;
             add_header Cache-Control "public, immutable";
@@ -181,19 +198,21 @@ http {
 }
 ```
 
-## 验证sub_filter模块
+## Checking the sub_filter module
 
 ```bash
-# 检查nginx是否包含sub_filter模块
+# does this nginx build include sub_filter?
 nginx -V 2>&1 | grep -o ngx_http_sub_module
 
-# 或在Windows�?nginx -V | findstr sub_filter
+# or on Windows
+nginx -V | findstr sub_filter
 ```
 
-如果没有输出，说明nginx编译时没有包含sub_filter模块，需要重新编译nginx或使用预编译版本�?
-## 调试sub_filter
+No output means nginx was compiled without the sub_filter module: recompile it or use a prebuilt package that includes it.
 
-### 1. 启用sub_filter日志
+## Debugging sub_filter
+
+### 1. Turn on the sub_filter log
 
 ```nginx
 error_log /var/log/nginx/error.log debug;
@@ -203,95 +222,115 @@ location /large/ {
     sub_filter_once off;
     sub_filter_types text/html;
 
-    # 添加调试日志
+    # mark the response so you can tell the location was hit
     add_header X-Sub-Filter "enabled";
 }
 ```
 
-### 2. 检查响应头
+### 2. Check the response headers
 
 ```bash
 curl -I http://localhost/large/index.html
 ```
 
-查看是否有`X-Sub-Filter: enabled`头�?
-### 3. 查看替换后的HTML
+Look for `X-Sub-Filter: enabled`.
+
+### 3. Check the rewritten HTML
 
 ```bash
 curl http://localhost/large/index.html | grep -o 'href="[^"]*"'
 ```
 
-应该看到`href="/large/assets/..."`而不是`href="/assets/..."`�?
-## 常见问题
+You should see `href="/large/assets/..."`, not `href="/assets/..."`.
 
-### 1. sub_filter不生�?
-**原因**�?- nginx编译时没有包含sub_filter模块
-- sub_filter_types配置不正�?- 文件类型不在sub_filter_types�?
-**解决**�?```nginx
-# 检查模�?nginx -V | grep sub_filter
+## Common problems
 
-# 添加所有需要的类型
+### 1. sub_filter does nothing
+
+**Causes**
+- nginx was compiled without the sub_filter module
+- `sub_filter_types` is configured incorrectly
+- the file's type is not listed in `sub_filter_types`
+
+**Fix**
+
+```nginx
+# check the module
+nginx -V | grep sub_filter
+
+# list every type you need
 sub_filter_types text/html text/css application/javascript application/json application/xml;
 ```
 
-### 2. 部分替换成功
+### 2. Only part of the content is rewritten
 
-**原因**：sub_filter_once默认为on，只替换第一次出�?
-**解决**�?```nginx
+**Cause**: `sub_filter_once` defaults to `on`, so only the first occurrence is replaced.
+
+**Fix**
+
+```nginx
 sub_filter_once off;
 ```
 
-### 3. 缓存问题
+### 3. Caching
 
-**原因**：浏览器缓存了旧的HTML文件
+**Cause**: the browser cached the old HTML.
 
-**解决**�?```bash
-# 清除浏览器缓�?# 或添加版本号
+**Fix**
+
+```bash
+# clear the browser cache
+# or bump the version in the path
 sub_filter '/assets/' '/large/assets/v1/';
 ```
 
-## 替代方案：使用sed预处�?
-如果nginx的sub_filter不可用，可以在部署前预处理HTML文件�?
+## Alternative: preprocess with sed
+
+If sub_filter is not available, rewrite the HTML before deploying:
+
 ```bash
-# Linux/Mac
+# Linux / macOS
 sed -i 's|/assets/|/large/assets/|g' dist/index.html
 
 # Windows PowerShell
 (Get-Content dist/index.html) -replace '/assets/', '/large/assets/' | Set-Content dist/index.html
 ```
 
-## 完整的生产配�?
+## Full production configuration
+
 ```nginx
 server {
     listen 80;
     server_name your-domain.com;
 
-    # Gzip压缩
+    # gzip
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
 
-    # large应用
+    # the app
     location /large/ {
         alias /var/www/html/large/dist/;
         index index.html;
 
-        # 替换资源路径
+        # rewrite the asset paths
         sub_filter '/assets/' '/large/assets/';
         sub_filter_once off;
         sub_filter_types text/html text/css application/javascript application/json;
 
-        # SPA路由支持
+        # SPA routing
         try_files $uri $uri/ /large/index.html;
     }
 
-    # 静态资�?    location /large/assets/ {
+    # static assets
+    location /large/assets/ {
         alias /var/www/html/large/dist/assets/;
         expires 1y;
         add_header Cache-Control "public, immutable";
         access_log off;
     }
 
-    # 安全�?    add_header X-Frame-Options "SAMEORIGIN" always;
+    # security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
 }
 ```

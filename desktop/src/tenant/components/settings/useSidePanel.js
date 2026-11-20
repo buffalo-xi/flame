@@ -144,6 +144,6 @@ export function provideSidePanel({
 /** 子组件取同一套侧边面板坐标（父组件用 provideSidePanel 提供） */
 export function useSidePanelContext() {
   const ctx = inject(SIDE_PANEL_KEY, null)
-  if (!ctx) throw new Error('useSidePanelContext 必须在 provideSidePanel 的子树中使用')
+  if (!ctx) throw new Error('useSidePanelContext must be used in a subtree of provideSidePanel')
   return ctx
 }

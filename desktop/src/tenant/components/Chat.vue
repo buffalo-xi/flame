@@ -672,7 +672,7 @@ const fetchLatestAgent = async () => {
     }
     return null
   } catch (e) {
-    console.error('获取最近会话失败:', e)
+    console.error('failed to load recent sessions:', e)
     return null
   }
 }
@@ -717,7 +717,7 @@ const createSession = async () => {
     clearAttachments()
     fetchSessions()
   } catch (e) {
-    console.error('新建会话失败:', e)
+    console.error('failed to create the session:', e)
     ElMessage.error(t('chat.createSessionNetError'))
   }
 }
@@ -818,7 +818,7 @@ const deleteSession = (s) => {
       }
       fetchSessions()
     } catch (e) {
-      console.error('删除会话失败:', e)
+      console.error('failed to delete the session:', e)
       ElMessage.error(t('chat.deleteSessionNetError'))
     }
   }).catch(() => {})

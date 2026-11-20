@@ -24,7 +24,7 @@ export const saveAuth = (newToken, newUser) => {
     sessionStorage.setItem(TOKEN_KEY, newToken)
     localStorage.setItem(USER_KEY, JSON.stringify(newUser || {}))
   } catch (err) {
-    console.error('[platform-auth] 保存会话失败:', err)
+    console.error('[platform-auth] failed to save the session:', err)
   }
   // 管理台固定后缀：这个页签是"管理台"，不属于某个具体租户
   setTitle(i18n.global.t('platform.app.consoleTitle'))
@@ -65,7 +65,7 @@ export const clearAuth = () => {
     sessionStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
   } catch (err) {
-    console.error('[platform-auth] 清理会话失败:', err)
+    console.error('[platform-auth] failed to clear the session:', err)
   }
   resetTitle()
 }

@@ -460,6 +460,10 @@
       "flow_id": {
         "label": "Flow ID",
         "hint": "The current flow instance"
+      },
+      "language": {
+        "label": "Output language",
+        "hint": "Output language of this run (for example zh-CN); empty string when the caller did not specify one"
       }
     },
     "nodeFactory": {

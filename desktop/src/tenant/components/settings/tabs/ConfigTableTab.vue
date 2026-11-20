@@ -29,6 +29,7 @@
       <div class="flow-config-hint">
         <slot name="hint" />
       </div>
+      <div v-if="clampNote" class="flow-config-clamp">{{ t('settings.configTable.clampedNote', { detail: clampNote }) }}</div>
     </div>
   </div>
 </template>
@@ -62,6 +63,9 @@ const loading = ref(false)
 const saving = ref(false)
 const systemConfig = ref({})
 const tenantConfig = ref({})
+// Stored values the runtime clamps (agent limits only: that response carries "effective").
+// Computed once per load, so a not-yet-saved edit never produces a warning about a value that was never stored.
+const clampNote = ref('')
 
 const formatValue = (v) => {
   if (v === null || v === undefined || v === '') return t('settings.configTable.unset')
@@ -85,9 +89,25 @@ const fetchConfigs = async () => {
         obj[f.key] = (v === null || v === undefined) ? '' : String(v)
       }
       tenantConfig.value = obj
+
+      // Flow limits have no "effective" key; agent limits do, and there a stored value can be above what runs.
+      const effective = data.data.effective || null
+      if (effective) {
+        const clamped = []
+        for (const f of props.fields) {
+          const stored = tenantRow[f.key]
+          const applied = effective[f.key]
+          if (stored === null || stored === undefined) continue
+          if (applied === null || applied === undefined) continue
+          if (Number(stored) > applied) clamped.push(`${f.label}: ${stored} → ${applied}`)
+        }
+        clampNote.value = clamped.join(' · ')
+      } else {
+        clampNote.value = ''
+      }
     }
   } catch (e) {
-    console.error(`获取${props.title}失败:`, e)
+    console.error(`failed to load ${props.title}:`, e)
   } finally {
     loading.value = false
   }
@@ -285,5 +305,11 @@ const saveConfigs = async () => {
 .flow-config-hint {
   font-size: 12px;
   color: #909399;
+}
+
+/* A stored value the runtime lowers: worth a line of its own, not worth an error style (nothing failed) */
+.flow-config-clamp {
+  font-size: 12px;
+  color: #e6a23c;
 }
 </style>

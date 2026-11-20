@@ -319,6 +319,8 @@
       "colItem": "Setting",
       "colSystemLevel": "System",
       "colTenantValue": "Tenant",
+      "colEffective": "In effect",
+      "colEffectiveHint": "What a run actually uses: tenant value, then the system value, then the built-in default, never above the system value",
       "phFallbackSystemLevel": "Empty = use system value",
       "flowTip": "Empty = fall back to the system value; -1 = unlimited; the tenant value cannot exceed the system value. Applies immediately after saving.",
       "scopeTip": "Affects this tenant only; system values are set by a platform admin.",

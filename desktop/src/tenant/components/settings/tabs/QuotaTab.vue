@@ -131,7 +131,7 @@ async function loadTenantQuota() {
     }
     tqForm.value = form
   } catch (e) {
-    console.error('获取租户配额失败:', e)
+    console.error('failed to load the tenant quota:', e)
   } finally {
     tqLoading.value = false
   }

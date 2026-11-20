@@ -229,10 +229,10 @@ const fetchAgents = async () => {
         agentList.value = data.data.items || []
       }
     } catch (jsonError) {
-      console.error('解析响应 JSON 失败:', jsonError)
+      console.error('failed to parse the response JSON:', jsonError)
     }
   } catch (error) {
-    console.error('获取智能体实例列表失败:', error)
+    console.error('failed to load agent instances:', error)
   } finally {
     isLoading.value = false
   }
@@ -323,7 +323,7 @@ const resetEditForm = () => {
   editForm.value = {
     name: '', description: '',
     status: 1, called_by_ids: [], can_call_ids: [], config: '', endpoints: '',
-    skill_discovery: false, is_supervisor: false
+    skill_discovery: false, is_supervisor: false, default_language: ''
   }
 }
 
@@ -378,13 +378,14 @@ const openEditEditor = async (instance) => {
       config: toJSONField(d.config, '{}'),
       endpoints: toJSONField(d.endpoints, '[]'),
       skill_discovery: !!d.skill_discovery,
-      is_supervisor: !!d.is_supervisor
+      is_supervisor: !!d.is_supervisor,
+      default_language: d.default_language || ''
     }
     fullScreenMode.value = true
     // 文件树 + 入口文件由编辑器自己按 agentId 加载（见 agents/AgentFileEditor.vue）；
     // 调用关系 / 技能绑定 / 工具授权同理，由设置面板懒加载
   } catch (error) {
-    console.error('加载智能体失败:', error)
+    console.error('failed to load the agent:', error)
     ElMessage.error(t('agent.loadFailedRetry'))
   }
 }
@@ -456,7 +457,8 @@ const refreshEditor = async () => {
       config: toJSONField(d.config, '{}'),
       endpoints: toJSONField(d.endpoints, '[]'),
       skill_discovery: !!d.skill_discovery,
-      is_supervisor: !!d.is_supervisor
+      is_supervisor: !!d.is_supervisor,
+      default_language: d.default_language || ''
     }
     editingProtected.value = !!d.protected
     editingSupervisor.value = !!d.is_supervisor
@@ -599,7 +601,7 @@ const handleSaveSettings = async () => {
     settingsVisible.value = false
     fetchAgents()
   } catch (error) {
-    console.error('保存智能体失败:', error)
+    console.error('failed to save the agent:', error)
     ElMessage.error(error.message || t('agent.saveFailed'))
   } finally {
     saving.value = false
@@ -747,7 +749,7 @@ const handleDeleteAgent = (instance) => {
         })
       }
     } catch (error) {
-      console.error('删除智能体失败:', error)
+      console.error('failed to delete the agent:', error)
       ElMessage.error({
         message: t('agent.deleteFailedRetry'),
         duration: 5000,
@@ -802,7 +804,7 @@ const handleSetAgentStatus = async (instance, status) => {
       ElMessage.error({ message: t('agent.updateFailedDetail', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
     }
   } catch (error) {
-    console.error('切换 agent 状态失败:', error)
+    console.error('failed to toggle the agent status:', error)
     ElMessage.error({ message: t('agent.updateFailedRetry'), duration: 5000, offset: 20, showClose: true })
   }
 }

@@ -31,7 +31,7 @@ export const loadBindings = async () => {
       if (d.code === 200) oauthBindings.value = d.data.items || []
     }
   } catch (e) {
-    console.error('获取绑定失败:', e)
+    console.error('failed to load bindings:', e)
   } finally {
     bindingLoading.value = false
   }

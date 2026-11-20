@@ -525,7 +525,7 @@ const wsList = async (p = wsPath.value) => {
       if (Date.now() - wsUsageLoadedAt.value > 5000) loadWsUsage()
     }
   } catch (e) {
-    console.error('列出工作区文件失败:', e)
+    console.error('failed to load workspace files:', e)
   }
 }
 
@@ -1286,7 +1286,7 @@ const loadRecent = async () => {
     const data = await res.json()
     if (data.code === 200 && data.data) recentFiles.value = data.data.files || []
   } catch (err) {
-    console.error('列出最近文件失败:', err)
+    console.error('failed to load recent files:', err)
   } finally {
     recentLoading.value = false
   }

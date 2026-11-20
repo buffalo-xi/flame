@@ -1,51 +1,55 @@
-# 部署说明
+# Deployment
 
-## 构建完成
+[����](DEPLOYMENT.zh.md) | English
 
-large工程已成功构建为生产版本�?
+The admin console is a static bundle: `npm run build` produces `dist/`, and `dist/` is what gets published. Nothing on this
+page is specific to a hosting provider �� pick whichever of the options below matches what you already run.
 
-### 构建输出目录：`dist/`
+> This file used to be a generic Vite deployment template with the build numbers of another project baked in (a 0.46 kB
+> `index.html`, a 64 kB bundle, a docker tag `large-frontend`). The numbers were wrong for this repository and the advice was
+> not about this console at all, so it was rewritten instead of translated. The old text is not kept as a mirror: a stale
+> mirror is worse than no mirror.
 
-### 构建文件�?
-- `dist/index.html` - 主HTML文件 (0.46 kB)
-- `dist/assets/index-DAhXaZjZ.js` - JavaScript文件 (64.31 kB, gzip: 25.74 kB)
-- `dist/assets/index-TUSp1xH4.css` - CSS文件 (2.21 kB, gzip: 0.72 kB)
+## Build
 
-### 构建信息�?
-- 构建时间�?27ms
-- 总大小（gzip）：26.77 kB
-- Vite版本：v6.4.1
-
-## 部署方法
-
-### 方法1：静态文件服务器部署
-
-#### 使用Python快速预览：
 ```bash
-# Python 3
-cd dist
-python -m http.server 8080
-
-# Python 2
-cd dist
-python -m SimpleHTTPServer 8080
+cd desktop
+npm install
+npm run build          # -> dist/
+npm run preview        # serve dist/ locally to check it
 ```
 
-#### 使用Node.js http-server�?
-```bash
-# 安装http-server
-npm install -g http-server
+- `prebuild` runs `check:locales` (`scripts/check-locales.mjs`), which compares the locale bundles key by key; a build fails
+  rather than shipping a language with a missing key.
+- Production builds emit **no sourcemaps** (`build.sourcemap: false` in `vite.config.js`). `dist/` is published as one package,
+  so a `.map` file would ship the source with it.
+- Assets under `dist/assets/` carry a content hash, which is what makes the long `Cache-Control` in the example below safe.
+  `index.html` must not be cached: it is the only file that knows the current hashes.
 
-# 启动服务�?
-cd dist
-http-server -p 8080
+## Runtime configuration
+
+The frontend resolves its API base in this order: `window.APP_CONFIG.apiBase`, then `VITE_API_BASE`, then the default `/nexus`.
+
+Two ways to use that:
+
+- **Build-time**: set `VITE_API_BASE` before `npm run build` (e.g. in `.env.production`) and rebuild per environment;
+- **Runtime**: ship the same `dist/` everywhere and inject `window.APP_CONFIG` from a small `config.js` next to `index.html`.
+  One artifact, many environments �� no rebuild, no per-environment pipeline.
+
+```html
+<!-- index.html, before the bundle -->
+<script>window.APP_CONFIG = { apiBase: 'https://api.example.com/nexus' }</script>
 ```
 
-#### 使用Nginx部署�?
+## Static hosting
+
+Any server that can serve files and fall back to `index.html` works. `try_files` matters: the console uses history routing, so
+a deep link such as `/platform/tenants` must return `index.html`, not 404.
+
 ```nginx
 server {
     listen 80;
-    server_name your-domain.com;
+    server_name admin.example.com;
     root /path/to/dist;
     index index.html;
 
@@ -53,48 +57,30 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+    # Hashed assets: safe to cache for a year
+    location /assets/ {
         expires 1y;
         add_header Cache-Control "public, immutable";
+    }
+
+    # Never cache the entry document
+    location = /index.html {
+        add_header Cache-Control "no-store";
     }
 }
 ```
 
-### 方法2：部署到CDN
+If the API is served from the same origin, proxy the API prefix instead of relying on CORS:
 
-将`dist/`目录下的所有文件上传到CDN�?
-- 上传到阿里云OSS、腾讯云COS、AWS S3�?
-- 配置CDN加�?
-- 设置缓存策略
-
-### 方法3：部署到云平�?
-
-#### Vercel�?
-```bash
-# 安装Vercel CLI
-npm i -g vercel
-
-# 部署
-vercel --prod
+```nginx
+location /nexus/ {
+    proxy_pass http://nexus-backend:27006/nexus/;
+    proxy_set_header Host $host;
+}
 ```
 
-#### Netlify�?
-```bash
-# 安装Netlify CLI
-npm i -g netlify-cli
+## Container
 
-# 部署
-netlify deploy --prod --dir=dist
-```
-
-#### GitHub Pages�?
-1. 将项目推送到GitHub
-2. 在仓库设置中启用GitHub Pages
-3. 选择`dist`目录作为发布�?
-
-### 方法4：Docker部署
-
-创建`Dockerfile`�?
 ```dockerfile
 FROM nginx:alpine
 COPY dist /usr/share/nginx/html
@@ -103,64 +89,17 @@ EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 ```
 
-构建和运行：
 ```bash
-docker build -t large-frontend .
-docker run -p 80:80 large-frontend
+docker build -t flame-desktop .
+docker run -p 8080:80 flame-desktop
 ```
 
-## 部署检查清�?
+## Checklist
 
-- [ ] 构建文件完整性检�?
-- [ ] 静态资源路径正确�?
-- [ ] 环境变量配置（如需要）
-- [ ] HTTPS证书配置
-- [ ] CDN缓存策略设置
-- [ ] 性能优化（gzip、压缩）
-- [ ] SEO优化（meta标签、sitemap�?
-- [ ] 监控和日志配�?
-
-## 性能优化建议
-
-1. **启用Gzip压缩**：已启用，文件大小减少约60%
-2. **CDN加�?*：建议使用CDN加速静态资�?
-3. **缓存策略**：设置合理的缓存时间
-4. **图片优化**：使用WebP格式，适当压缩
-5. **代码分割**：Vite已自动进行代码分�?
-
-## 常见问题
-
-### 1. 白屏问题
-- 检查控制台错误
-- 确认静态资源路径正�?
-- 检查服务器配置
-
-### 2. 路由问题
-- 配置服务器支持SPA路由
-- 使用`try_files`指令
-
-### 3. 跨域问题
-- 配置CORS策略
-- 使用代理服务�?
-
-## 生产环境配置
-
-如需配置生产环境变量，创建`.env.production`文件�?
-
-```env
-VITE_API_BASE_URL=https://api.example.com
-VITE_APP_TITLE=Large Frontend
-```
-
-重新构建�?
-```bash
-npm run build
-```
-
-## 监控和分�?
-
-建议集成以下工具�?
-- Google Analytics - 用户行为分析
-- Sentry - 错误监控
-- Lighthouse - 性能分析
-- Web Vitals - 核心指标监控
+- [ ] `npm run build` passed (which means `check:locales` passed)
+- [ ] `dist/` contains no `*.map`
+- [ ] the API base is reachable from the browser (same origin proxy, or CORS configured)
+- [ ] `try_files` / history fallback is in place, deep links work
+- [ ] `index.html` is served with `no-store`, hashed assets with a long cache
+- [ ] HTTPS terminates in front of it (the console talks to the API from the browser, so mixed content blocks it)
+- [ ] gzip or brotli enabled for `.js` / `.css`

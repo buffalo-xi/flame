@@ -659,7 +659,7 @@ const wouldCreateCycle = (source, target, currentEdges) => {
 const onConnect = (params) => {
   // 禁止同一个节点的两个 handle 相连
   if (params.source === params.target) {
-    console.log('不能连接同一个节点的两个 handle')
+    console.log('cannot connect two handles of the same node')
     return
   }
 
@@ -669,13 +669,13 @@ const onConnect = (params) => {
 
   // 禁止 source 类型和 source 类型相连
   if (sourceHandleType === 'source' && targetHandleType === 'source') {
-    console.log('不能将 source handle 连接到另一个 source handle')
+    console.log('cannot connect a source handle to another source handle')
     return
   }
 
   // 禁止 target 类型和 target 类型相连
   if (sourceHandleType === 'target' && targetHandleType === 'target') {
-    console.log('不能将 target handle 连接到另一个 target handle')
+    console.log('cannot connect a target handle to another target handle')
     return
   }
 
@@ -691,13 +691,13 @@ const onConnect = (params) => {
   const sourceNode = nodes.value.find(n => n.id === sourceId)
   const targetNode = nodes.value.find(n => n.id === targetId)
   if (sourceNode && targetNode && sourceNode.parentNode !== targetNode.parentNode) {
-    console.log('parentNode 不同，不允许连接')
+    console.log('different parentNode: connection not allowed')
     return
   }
 
   // 检测是否会形成环（从 source 出发经过 target 能否回到 source）
   if (wouldCreateCycle(sourceId, targetId, edges.value)) {
-    console.log('不能形成环，禁止连接')
+    console.log('would form a cycle: connection not allowed')
     return
   }
   
@@ -943,7 +943,7 @@ const handleCanvasClick = (event) => {
           if (node) {
             // 检查节点类型是否在 groupNodeTypes 中
             if (groupNodeTypes.has(node.type)) {
-              console.log('点击到了分组节点:', node.type)
+              console.log('clicked a group node:', node.type)
               // 计算鼠标相对于分组节点左上角的位置
               const nodeRect = nodeElement.getBoundingClientRect()
               const relativeX = event.clientX - nodeRect.left
@@ -951,7 +951,7 @@ const handleCanvasClick = (event) => {
               
               // 如果相对高度小于50，使用50
               const adjustedY = relativeY < 55 ? 55 : relativeY
-              console.log('鼠标相对于分组节点的位置 - X:', relativeX, 'Y:', adjustedY, '(原始Y:', relativeY, ')')
+              console.log('pointer relative to the group node - X:', relativeX, 'Y:', adjustedY, '(raw Y:', relativeY, ')')
               createChildNode(node.id, currentNodeType.value, relativeX, adjustedY)              
               isAddingNode.value = false
               currentNodeType.value = null
@@ -959,7 +959,7 @@ const handleCanvasClick = (event) => {
             }
             // 检查节点是否有 parentNode
             if (node.parentNode) {
-              console.log('点击到了子节点，其父节点为:', node.parentNode)
+              console.log('clicked a child node, its parent is:', node.parentNode)
               const parentNode = nodes.value.find(n => n.id === node.parentNode)
               if (parentNode) {
                 // 获取父节点的DOM元素
@@ -972,7 +972,7 @@ const handleCanvasClick = (event) => {
                   
                   // 如果相对高度小于50，使用50
                   const adjustedY = relativeY < 55 ? 55 : relativeY                  
-                  console.log('鼠标相对于父节点的位置 - X:', relativeX, 'Y:', adjustedY, '(原始Y:', relativeY, ')')
+                  console.log('pointer relative to the parent node - X:', relativeX, 'Y:', adjustedY, '(raw Y:', relativeY, ')')
                   createChildNode(parentNode.id, currentNodeType.value, relativeX, adjustedY)                                
                 }
               }

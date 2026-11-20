@@ -181,6 +181,7 @@
       "saveFailed": "Failed to save",
       "saveFailedDetail": "Failed to save: {msg}",
       "saveFailedRetry": "Failed to save, please try again later",
+      "clampedNote": "Saved, but the runtime applies a lower value: {detail}",
       "saved": "{title} saved"
     },
     "globalVars": {

@@ -181,6 +181,7 @@
       "saveFailed": "保存失败",
       "saveFailedDetail": "保存失败: {msg}",
       "saveFailedRetry": "保存失败，请稍后重试",
+      "clampedNote": "已保存但运行时被压低（实际生效）：{detail}",
       "saved": "{title}保存成功"
     },
     "globalVars": {

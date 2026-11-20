@@ -54,7 +54,7 @@ export const loadUsers = async () => {
       if (data.data.defaults) userQuotaDefaults.value = data.data.defaults
     }
   } catch (e) {
-    console.error('获取用户列表失败:', e)
+    console.error('failed to load the user list:', e)
   } finally {
     usersLoading.value = false
   }

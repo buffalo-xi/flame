@@ -460,6 +460,10 @@
       "flow_id": {
         "label": "流程 ID",
         "hint": "当前流程实例"
+      },
+      "language": {
+        "label": "输出语言",
+        "hint": "本次运行的输出语言（如 zh-CN）；调用方未指定时为空串"
       }
     },
     "nodeFactory": {

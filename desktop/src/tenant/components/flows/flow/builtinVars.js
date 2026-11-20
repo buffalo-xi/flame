@@ -13,5 +13,8 @@ export const BUILTIN_VARS = [
   { key: 'run_id', type: 'string' },
   { key: 'user_id', type: 'string' },
   { key: 'schema', type: 'string' },
-  { key: 'flow_id', type: 'string' }
+  { key: 'flow_id', type: 'string' },
+  // Output language of this run (BCP-47, e.g. zh-CN): a caller-pinned value or the calling agent's resolved language.
+  // Empty string when nobody specified one - like session_id, it is a fact about the run, not a setting.
+  { key: 'language', type: 'string' }
 ]

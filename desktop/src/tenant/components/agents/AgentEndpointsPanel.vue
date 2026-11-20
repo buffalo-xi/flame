@@ -248,7 +248,7 @@ const fetchEndpoints = async () => {
       notifyChanged()
     }
   } catch (error) {
-    console.error('获取端点列表失败:', error)
+    console.error('failed to load endpoints:', error)
   } finally {
     loading.value = false
   }
@@ -314,7 +314,7 @@ const submitForm = async () => {
       ElMessage.error({ message: t('endpoint.createFailedDetail', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
     }
   } catch (error) {
-    console.error('创建端点失败:', error)
+    console.error('failed to create the endpoint:', error)
     ElMessage.error({ message: t('endpoint.createFailedRetry'), duration: 5000, offset: 20, showClose: true })
   } finally {
     submitting.value = false
@@ -350,7 +350,7 @@ const toggleEndpoint = async (ep, exposed) => {
       ElMessage.error({ message: t('endpoint.updateFailedDetail', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
     }
   } catch (error) {
-    console.error('切换端点状态失败:', error)
+    console.error('failed to toggle the endpoint:', error)
     ElMessage.error({ message: t('endpoint.updateFailedRetry'), duration: 5000, offset: 20, showClose: true })
   }
 }
@@ -388,7 +388,7 @@ const deleteEndpoint = (ep) => {
         ElMessage.error({ message: t('endpoint.deleteFailedDetail', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
       }
     } catch (error) {
-      console.error('删除端点失败:', error)
+      console.error('failed to delete the endpoint:', error)
       ElMessage.error({ message: t('endpoint.deleteFailedRetry'), duration: 5000, offset: 20, showClose: true })
     }
   }).catch(() => {})
@@ -424,7 +424,7 @@ const exposeAll = async () => {
     await fetchEndpoints()
     notifyChanged(true)
   } catch (error) {
-    console.error('全部对外开放失败:', error)
+    console.error('failed to expose all endpoints:', error)
     ElMessage.error({ message: t('endpoint.exposeFailedRetry'), duration: 5000, offset: 20, showClose: true })
   }
 }
@@ -457,7 +457,7 @@ const retractAll = async () => {
       ElMessage.error({ message: t('endpoint.retractFailedDetail', { msg: formatError(data) }), duration: 5000, offset: 20, showClose: true })
     }
   } catch (error) {
-    console.error('全部收回失败:', error)
+    console.error('failed to retract all endpoints:', error)
     ElMessage.error({ message: t('endpoint.retractFailedRetry'), duration: 5000, offset: 20, showClose: true })
   }
 }

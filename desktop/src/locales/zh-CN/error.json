@@ -243,6 +243,10 @@
       "duplicate_label": "节点名称不能重复：{names}。名称可用于 source_ref / call.target 引用，重名会指错节点，请改名后再保存",
       "description_required": "工作流描述不能为空"
     },
+    "agentconfig": {
+      "invalid_value": "{field} 必须是不小于 1 的整数（本组四项配置不支持 -1 表示不限）",
+      "exceeds_system_limit": "{field} 不能超过系统级值（{limit}）"
+    },
     "common": {
       "internal": "服务内部错误，请稍后重试",
       "invalid_params": "请求参数不合法",

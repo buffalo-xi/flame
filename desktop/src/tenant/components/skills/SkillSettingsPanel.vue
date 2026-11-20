@@ -516,7 +516,7 @@ const loadToolCatalog = async () => {
     const body = await res.json().catch(() => ({}))
     if (body.code === 200) toolCatalog.value = body.data?.groups || []
   } catch (e) {
-    console.error('获取工具目录失败:', e)
+    console.error('failed to load the tool catalog:', e)
   }
 }
 
