@@ -122,6 +122,17 @@ func (a *agentImpl) dispatchCommand(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
+	// The grant gate is part of the contract, so fail with a sentence that says where to fix it. ExecuteTool would refuse just as
+	// well, but "tool X is not granted to agent Y" leaves the user guessing whether the skill or the agent is misconfigured -
+	// and the answer is always the agent: a skill's declaration never grants anything.
+	if a.toolCtx.AllowedTools != nil && !a.toolCtx.AllowedTools[detail.CommandTool] {
+		msg := fmt.Sprintf("command /%s dispatches to %s, but agent %s has not been granted that tool - grant it in the agent's "+
+			"tool configuration, or point the command at a tool the agent already has",
+			detail.Name, detail.CommandTool, a.toolCtx.AgentName)
+		a.SetError(msg)
+		return true, errors.New(msg)
+	}
+
 	// The argument shape is the OpenClaw one, fixed so a target tool can be written against it: the raw sentence the user
 	// typed, the command name as typed, and the skill name.
 	args := map[string]any{

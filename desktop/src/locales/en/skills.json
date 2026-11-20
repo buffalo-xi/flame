@@ -119,7 +119,7 @@
     "dispatchTool": "tool (bypass the model, dispatch straight to a tool)",
     "targetTool": "Target tool",
     "targetToolPlaceholder": "Choose a tool, or type its name",
-    "targetToolHint": "Candidates are this skill's tool dependencies; you can also type a tool name. Empty means not fully configured - the command still runs, but only hands the body to the model",
+    "targetToolHint": "Candidates are this skill's tool dependencies; you can also type a tool name. Empty means not fully configured - the command still runs, but only hands the body to the model. The agent that runs the command must already be granted the tool: declaring a dependency grants nothing",
     "declaredFooter": "{n} declared (changes are written to the list on the right immediately; click Save to submit)",
     "declareHint": "Declare the specific tools below",
     "noMatches": "Nothing matches",

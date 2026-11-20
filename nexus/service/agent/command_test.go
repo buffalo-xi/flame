@@ -165,6 +165,9 @@ func TestDispatchCommandReportsFailure(t *testing.T) {
 	if a.GetError() == "" {
 		t.Fatal("the failure must be recorded, otherwise the entry point reports RUN_FINISHED with no answer")
 	}
+	if !strings.Contains(a.GetError(), "has not been granted") {
+		t.Fatalf("error = %q, want it to say which grant is missing and where to add it", a.GetError())
+	}
 }
 
 // captureCommandTool records the arguments it receives, so the dispatch contract can be asserted.
