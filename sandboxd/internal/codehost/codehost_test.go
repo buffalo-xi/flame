@@ -12,6 +12,24 @@ import (
 
 // ---------- Unit tests (no interpreter required) ----------
 
+// A forked interpreter has to write UTF-8: a script's print / log goes back inside a JSON frame, so a line encoded with
+// the locale code page (cp936 on a Chinese Windows) would arrive at nexus as U+FFFD.
+func TestInterpreterEnvForcesUTF8(t *testing.T) {
+	env := interpreterEnv()
+	for _, want := range []string{"PYTHONUTF8=1", "PYTHONIOENCODING=utf-8"} {
+		found := false
+		for _, kv := range env {
+			if kv == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("interpreterEnv() is missing %s, so a Python script printing Chinese would emit the locale encoding", want)
+		}
+	}
+}
+
 func TestLuaLiteral(t *testing.T) {
 	cases := []struct {
 		name string

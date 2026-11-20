@@ -142,6 +142,7 @@ func (h *Host) execute(req *request) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, req.Command, fname)
+	cmd.Env = interpreterEnv()
 
 	var stdout cappedBuffer
 	stdout.max = maxMsgSize
@@ -175,6 +176,17 @@ func (h *Host) execute(req *request) {
 	}
 
 	h.reply(stdout.Bytes(), waitErr, req.Command, col)
+}
+
+// interpreterEnv is the environment of the forked interpreter.
+//
+// The protocol is UTF-8 end to end: the script source arrives as UTF-8, and its print / log output travels back inside a
+// JSON frame. Python's stdio follows the locale by default - cp936 on a Chinese Windows - so a script's print() would emit
+// GBK and turn into U+FFFD where that frame is encoded, which is exactly the mojibake a user sees in a code node's logs.
+// The other two interpreters write UTF-8 bytes regardless and ignore both variables; under nsjail / docker the locale is
+// UTF-8 already, so setting them there is harmless.
+func interpreterEnv() []string {
+	return append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 }
 
 // reply parses the interpreter's stdout ({"result": X} / {"error": msg} / {}) and replies with a frame.
