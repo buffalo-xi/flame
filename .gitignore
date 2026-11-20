@@ -65,3 +65,7 @@ __pycache__/
 
 # 本机调试用的临时配置（含宿主绝对路径）
 sandboxd/tmp-*.yaml
+
+# IDE-local overrides (machine-specific paths). The shared .claude/settings.json and .vscode/launch.json stay tracked.
+.claude/settings.local.json
+.vscode/settings.json
