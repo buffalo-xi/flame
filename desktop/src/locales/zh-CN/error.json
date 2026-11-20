@@ -102,7 +102,7 @@
       "invalid_name": "技能名不合法（只允许字母、数字与短横线，长度 ≤ 64）",
       "invalid_status": "状态只能是 1（正常）或 3（废弃）",
       "not_invocable": "该技能未开放为用户命令：在技能设置里开启「用户可调用」后再试",
-      "invalid_command": "命令配置不合法：命令分发只支持空值或 tool，且选 tool 时必须填写目标工具",
+      "invalid_command": "命令分发方式只支持空值或 tool",
       "last_version_undeletable": "v{version} 是唯一的版本，不能删除；如需清理历史请先发布一个新版本",
       "rename_failed": "技能已改名，但版本目录迁移失败，请重试或手工搬运",
       "private_no_version": "私有技能没有独立版本号：它的版本就是智能体 {owner} 的版本，请直接对智能体 {owner} 执行该操作"

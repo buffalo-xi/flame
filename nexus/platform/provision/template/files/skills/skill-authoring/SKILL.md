@@ -243,7 +243,7 @@ pick it. Three frontmatter keys control this; they belong to the skill definitio
 |---|---|
 | `user_invocable` | whether `/<name>` appears in the chat window's command menu. Default **off**: a skill stays model-only until someone turns this on |
 | `command_dispatch` | `""` (default) = inject `SKILL.md` and let the model work; `tool` = dispatch the arguments straight to `command_tool`, **bypassing the model** |
-| `command_tool` | the target tool for `command_dispatch: tool` (for example `local:rpc:daily-report`). Required whenever the dispatch mode is `tool` |
+| `command_tool` | the target tool for `command_dispatch: tool` (for example `local:rpc:daily-report`). A `tool` dispatch without a target is an unfinished draft: the command still runs, but only injects the body |
 
 What follows from those three keys:
 

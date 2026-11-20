@@ -143,7 +143,7 @@
         <div class="settings-field">
           <div class="field-label">{{ $t('skill.commandDispatch') }}</div>
           <el-select v-model="form.command_dispatch" size="small" style="width:100%" clearable
-                     :placeholder="$t('skill.dispatchNone')" :disabled="!skillId || readonly" @change="saveProps">
+                     :placeholder="$t('skill.dispatchNone')" :disabled="!skillId || readonly" @change="onDispatchChange">
             <el-option :label="$t('skill.dispatchTool')" value="tool" />
           </el-select>
         </div>
@@ -151,6 +151,7 @@
           <div class="field-label">{{ $t('skill.targetTool') }}</div>
           <el-input v-model="form.command_tool" size="small" :disabled="!skillId || readonly"
                     :placeholder="$t('skill.targetToolPlaceholder')" @blur="saveProps" />
+          <div class="editor-tip">{{ $t('skill.targetToolHint') }}</div>
         </div>
       </template>
     </div>
@@ -314,7 +315,9 @@ const putSkill = async (patch) => {
     description: props.form.description,
     user_invocable: !!props.form.user_invocable,
     command_dispatch: props.form.command_dispatch || '',
-    command_tool: props.form.command_tool || '',
+    // 分发方式不是 tool 时目标工具必须随空值一起提交：那个输入框此时已隐藏，
+    // 残留的旧值用户看不见也清不掉，留着只会让后端把这次保存当成半套配置。
+    command_tool: props.form.command_dispatch === 'tool' ? (props.form.command_tool || '') : '',
     ...patch
   }
   const res = await fetch(adminApi.skills.update(props.skillId), {
@@ -402,6 +405,13 @@ const saveProps = async () => {
   } catch (e) {
     ElMessage.error(e.message || t('agent.saveFailed'))
   }
+}
+
+// 分发方式变化：取消直达时把目标工具一并清掉 —— 输入框随之隐藏，残留值用户看不见也改不了。
+// 切成 tool 时目标工具通常还是空的，后端把它当「未完成的草稿」收下，填完（blur）才真正生效。
+const onDispatchChange = async (value) => {
+  if (value !== 'tool') props.form.command_tool = ''
+  await saveProps()
 }
 
 const loadVisibility = async () => {

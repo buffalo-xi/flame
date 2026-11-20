@@ -448,7 +448,8 @@ const putSkill = async (patch) => {
     description: form.value.description,
     user_invocable: !!form.value.user_invocable,
     command_dispatch: form.value.command_dispatch || '',
-    command_tool: form.value.command_tool || '',
+    // 与设置面板同理：不是 tool 时目标工具必须随空值提交，残留的旧值会变成一套看不见的半配置
+    command_tool: form.value.command_dispatch === 'tool' ? (form.value.command_tool || '') : '',
     ...patch
   }
   const res = await fetch(adminApi.skills.update(editingId.value), {

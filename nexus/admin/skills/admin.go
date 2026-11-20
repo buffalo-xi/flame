@@ -5,7 +5,6 @@ package skills
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -247,26 +246,28 @@ type skillRequest struct {
 	Lang string `json:"lang"`
 }
 
-// validateCommand checks the user-command definition (OpenClaw user-invocable / command-dispatch / command-tool).
+// normalizeCommandInput folds the user-command definition into one of its two valid shapes before it is stored.
 //
-// The dispatch mode is a closed set: today only "" (inject the body and let the model work) and "tool" (dispatch straight to
-// command_tool, bypassing the model) are defined. Validating here matters because the column is free text and three write
-// paths reach it (this handler, asset-pack install, version restore) - a value nobody consumes would sit in the database
-// looking configured while every reader treats it as "not set".
-func validateCommand(dispatch, tool string) error {
-	switch strings.TrimSpace(dispatch) {
+// The dispatch mode is a closed set ("" or "tool"), and the pair is repaired as a pair:
+//   - a target tool without a dispatch mode is not a configuration - the field is hidden in the UI at that point, so a stale
+//     value there is invisible to the user and must not survive the save;
+//   - "tool" with an empty target is an incomplete draft the editor passes through while the user is still filling the form.
+//     It is kept rather than rejected: rejecting it would fail the very click that selects "tool", and the run side simply
+//     does not take over until the target is set (see agentImpl.dispatchCommand).
+//
+// Unknown dispatch values are refused: nothing consumes them, and letting them through would store a setting that looks
+// configured and behaves as "off".
+func normalizeCommandInput(dispatch, tool string) (string, string, error) {
+	dispatch = strings.TrimSpace(dispatch)
+	tool = strings.TrimSpace(tool)
+	switch dispatch {
 	case "":
-		if strings.TrimSpace(tool) != "" {
-			return errors.New("command_tool requires command_dispatch=tool")
-		}
+		return "", "", nil
 	case "tool":
-		if strings.TrimSpace(tool) == "" {
-			return errors.New("command_dispatch=tool requires command_tool (the tool the command dispatches to)")
-		}
+		return "tool", tool, nil
 	default:
-		return fmt.Errorf("unknown command_dispatch %q (only an empty value and \"tool\" are supported)", dispatch)
+		return "", "", fmt.Errorf("unknown command_dispatch %q (only an empty value and \"tool\" are supported)", dispatch)
 	}
-	return nil
 }
 
 // CreateSkill creates a skill.
@@ -345,7 +346,8 @@ func CreateSkill(c *gin.Context) {
 		return
 	}
 
-	if verr := validateCommand(req.CommandDispatch, req.CommandTool); verr != nil {
+	commandDispatch, commandTool, verr := normalizeCommandInput(req.CommandDispatch, req.CommandTool)
+	if verr != nil {
 		xhttp.ErrCode(c, "skill.invalid_command", nil, verr.Error(), "")
 		return
 	}
@@ -364,8 +366,8 @@ func CreateSkill(c *gin.Context) {
 		CreatedBy:       xsql.UUID(info.ID),
 		UpdatedBy:       xsql.UUID(info.ID),
 		UserInvocable:   xsql.Bool(req.UserInvocable),
-		CommandDispatch: xsql.String(req.CommandDispatch),
-		CommandTool:     xsql.String(req.CommandTool),
+		CommandDispatch: xsql.String(commandDispatch),
+		CommandTool:     xsql.String(commandTool),
 	})
 	if err != nil {
 		_ = st.Delete(context.Background(), contentPath(info.Schema, agentName, req.Name))
@@ -452,7 +454,8 @@ func UpdateSkill(c *gin.Context) {
 	}
 	oldPath := contentPath(info.Schema, agentName, s.Name)
 
-	if verr := validateCommand(req.CommandDispatch, req.CommandTool); verr != nil {
+	commandDispatch, commandTool, verr := normalizeCommandInput(req.CommandDispatch, req.CommandTool)
+	if verr != nil {
 		xhttp.ErrCode(c, "skill.invalid_command", nil, verr.Error(), "")
 		return
 	}
@@ -464,8 +467,8 @@ func UpdateSkill(c *gin.Context) {
 	}
 	// Command fields are overwritten wholesale (an empty value clears them, which is how command dispatch is cancelled)
 	s.UserInvocable = xsql.Bool(req.UserInvocable)
-	s.CommandDispatch = xsql.String(req.CommandDispatch)
-	s.CommandTool = xsql.String(req.CommandTool)
+	s.CommandDispatch = xsql.String(commandDispatch)
+	s.CommandTool = xsql.String(commandTool)
 	s.UpdatedBy = xsql.UUID(info.ID)
 
 	if err := skillRepo.Update(info.Schema, s); err != nil {

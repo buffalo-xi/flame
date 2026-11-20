@@ -119,6 +119,7 @@
     "dispatchTool": "tool (bypass the model, dispatch straight to a tool)",
     "targetTool": "Target tool",
     "targetToolPlaceholder": "Tool to dispatch to",
+    "targetToolHint": "Empty means not fully configured: the command still runs, but it only hands the body to the model instead of dispatching to the tool",
     "declaredFooter": "{n} declared (changes are written to the list on the right immediately; click Save to submit)",
     "declareHint": "Declare the specific tools below",
     "noMatches": "Nothing matches",

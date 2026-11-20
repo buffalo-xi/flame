@@ -102,7 +102,7 @@
       "invalid_name": "Invalid skill name (letters, digits and hyphens only, max 64 characters)",
       "invalid_status": "Status must be 1 (active) or 3 (deprecated)",
       "not_invocable": "This skill is not open as a user command. Turn on \"user invocable\" in the skill settings and try again",
-      "invalid_command": "Invalid command settings: the dispatch mode is either empty or \"tool\", and \"tool\" requires a target tool",
+      "invalid_command": "The command dispatch mode is either empty or \"tool\". Other values are not supported",
       "last_version_undeletable": "v{version} is the only version and cannot be deleted. Release a new version before cleaning up history.",
       "rename_failed": "The skill was renamed but the version directory migration failed; retry or move it manually.",
       "private_no_version": "Private skills have no version of their own; their version is agent {owner}'s version, so operate on agent {owner} instead"
