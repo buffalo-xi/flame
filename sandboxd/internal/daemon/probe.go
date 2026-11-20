@@ -263,7 +263,9 @@ func (s *Server) runProbe(ctx context.Context, p probe) (string, error) {
 // sources apart.
 //
 // The line prefixes are English and one of them is a cross-process protocol string: the nexus side parses the
-// `OS: ` line to infer the platform (see sandboxinfo.OS), so changing it means changing both sides.
+// `OS: ` line to infer the platform (see sandboxinfo.OS), so changing it means changing both sides. An older
+// sandboxd wrote that label in Chinese, and nexus still accepts the old spelling - otherwise a nexus upgraded
+// before sandboxd would fail every command with "cannot determine the sandbox OS".
 func (s *Server) probeHost() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "OS: %s/%s\n", runtime.GOOS, runtime.GOARCH)

@@ -201,9 +201,15 @@ func TestStartRefresherRetriesFastUntilFirstSnapshot(t *testing.T) {
 	}
 }
 
-// OS reads the sandbox OS from the `系统:` line of capabilities; untrusted or missing input returns an empty string, leaving the caller (the
+// OS reads the sandbox OS from the `OS:` line of capabilities; untrusted or missing input returns an empty string, leaving the caller (the
 // default shell choice) to pick its own fallback rather than inventing a platform.
 func TestOS(t *testing.T) {
+	// The legacy label lives in the production source as an escape (the copy gate scans bytes), so pin its value here: a typo
+	// would silently drop a sandboxd that is one release behind back to "cannot determine the sandbox OS".
+	if legacyOSLabelPrefix != "系统: " {
+		t.Fatalf("legacyOSLabelPrefix = %q, want the label an older sandboxd writes", legacyOSLabelPrefix)
+	}
+
 	old := Get()
 	oldConfigured := Configured()
 	t.Cleanup(func() {
@@ -223,6 +229,10 @@ func TestOS(t *testing.T) {
 		{"probe failed -> unknown", Environment{Text: "OS: windows/amd64", Error: "boom"}, ""},
 		{"no system line -> unknown", Environment{Text: "Python version: 3.13"}, ""},
 		{"empty -> unknown", Environment{}, ""},
+		// A sandboxd from before the 2026-11 copy cleanup labels the line in Chinese; the shell choice must keep working until
+		// the peer is upgraded (nexus is routinely restarted first).
+		{"legacy label, windows host", Environment{Text: "系统: windows/amd64\npython 解释器: /usr/bin/python3"}, "windows"},
+		{"legacy label, linux os-release", Environment{Text: "系统: Debian GNU/Linux 12"}, "linux"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

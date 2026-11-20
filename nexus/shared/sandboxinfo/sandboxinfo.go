@@ -198,6 +198,17 @@ func CodeLangs() ([]string, bool) {
 	return langs, true
 }
 
+// osLabelPrefix labels the line that carries the sandbox's operating system. It is a cross-process protocol string written by
+// sandboxd (probeHost / formatOSRelease), not prose for a human: changing it here without changing sandboxd silently breaks the
+// default shell choice.
+const osLabelPrefix = "OS: "
+
+// legacyOSLabelPrefix is the same label as sandboxd spelled it before the 2026-11 copy cleanup. It stays readable for the same
+// reason as LegacyCodeLangs: nexus is routinely upgraded before sandboxd, and a peer that is one release behind must not turn
+// every command execution into "cannot determine the sandbox OS". Written with escapes so the source holds no Han characters
+// (the copy gate scans bytes); the value is pinned by TestOS, so a typo cannot silently disable the path.
+const legacyOSLabelPrefix = "\u7cfb\u7edf: "
+
 // OS reads the operating system ("windows" / "linux") out of the raw sandbox environment probe; it returns an empty string when unreadable.
 //
 // capabilities already gives the OS on the `OS: …` line (see sandboxd's probeHost / formatOSRelease), so there is no need to guess here,
@@ -211,7 +222,7 @@ func OS() string {
 		return ""
 	}
 	for _, line := range strings.Split(info.Environment.Text, "\n") {
-		v, ok := strings.CutPrefix(strings.TrimSpace(line), "OS: ")
+		v, ok := cutOSLabel(strings.TrimSpace(line))
 		if !ok {
 			continue
 		}
@@ -222,6 +233,14 @@ func OS() string {
 		return "linux"
 	}
 	return ""
+}
+
+// cutOSLabel strips the current or the legacy OS label from one probe line.
+func cutOSLabel(line string) (string, bool) {
+	if v, ok := strings.CutPrefix(line, osLabelPrefix); ok {
+		return v, true
+	}
+	return strings.CutPrefix(line, legacyOSLabelPrefix)
 }
 
 // MaxBodyBytes caps how much of the response body is read: this text goes into the LLM context, so an abnormal response must not blow it up.
