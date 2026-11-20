@@ -16,27 +16,30 @@ import (
 	"github.com/google/uuid"
 )
 
-// tmpGuestDir worker 可写目录在沙箱内的挂载点，同时充当脚本的 cwd。
+// tmpGuestDir is the in-sandbox mount point of a worker's writable directory, which doubles as the script cwd.
 //
-// 为什么用 /tmp 这个通用路径：bind mount 的目标必须已存在，而 /tmp 在任何
-// rootfs / 镜像里都有；换一个自造路径就得去改每一个 rootfs。
+// Why the generic /tmp: a bind mount target must already exist, and /tmp exists in every rootfs / image;
+// picking a made-up path would mean editing every rootfs.
 const tmpGuestDir = "/tmp"
 
 const (
-	// reapTimeout 回收被丢弃 worker 的最长等待：超时就不等了，绝不拖住归还路径。
+	// reapTimeout is the longest wait for reclaiming a discarded worker: once it elapses we stop waiting and
+	// never hold up the return path.
 	reapTimeout = 5 * time.Second
-	// removeTmpDir 的删除重试（见 removeTmpDir 注释）。
+	// Deletion retries of removeTmpDir (see the comment there).
 	tmpRemoveAttempts   = 3
 	tmpRemoveRetryDelay = 50 * time.Millisecond
 )
 
-// prepareTmpRoot 准备 worker 可写目录的宿主根目录。
+// prepareTmpRoot prepares the host root of the worker writable directories.
 //
-// 启动时把整棵目录清空，于是运行期完全不需要删除单个 worker 的目录：
-//   - 进程被杀时目录可能仍挂在 jail / 容器上，此时 RemoveAll 会 EBUSY；
-//   - 上次异常退出留下的残骸也一并清掉。
+// The whole tree is emptied at startup, so at run time no per-worker directory ever has to be deleted:
+//   - when a process is killed its directory may still be mounted into the jail / container, where RemoveAll
+//     returns EBUSY;
+//   - leftovers from a previous abnormal exit are cleared along the way.
 //
-// 代价是运行期目录只增不减，但池容量有上限，量级可控。
+// The cost is that directories only accumulate during a run, but the pool capacity is bounded, so the volume is
+// controlled.
 func prepareTmpRoot(root string) error {
 	if root == "" {
 		return fmt.Errorf("worker: tmp_dir is not configured")
@@ -50,35 +53,38 @@ func prepareTmpRoot(root string) error {
 	return nil
 }
 
-// Worker 封装单个 worker 进程及其 stdin/stdout 管道。
+// Worker wraps a single worker process and its stdin/stdout pipes.
 type Worker struct {
 	ID     string
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 	proc   sandbox.Process
-	// alive 由 watch 维护（进程退出即置 false）与 Kill 置位，读侧只调 Alive()。
-	// 用原子量是因为「池在借出/归还线程读」与「watch goroutine 写」是并发的。
+	// alive is maintained by watch (set to false when the process exits) and set by Kill; readers only call
+	// Alive(). An atomic is used because "the pool reads on borrow/return" and "the watch goroutine writes" are
+	// concurrent.
 	alive atomic.Bool
-	// exited 在进程真正退出（Wait 返回）时关闭，是「子进程已被回收」的唯一信号。
+	// exited is closed when the process really exits (Wait returns) and is the only signal that "the child has
+	// been reaped".
 	exited chan struct{}
-	// tmpDir 本 worker 独占的可写目录（挂进沙箱充当 /tmp，同时是脚本 cwd）。
-	// 销毁时删除；删除失败留给下次启动的 prepareTmpRoot 兜底。
+	// tmpDir is this worker's exclusive writable directory (mounted into the sandbox as /tmp and serving as the
+	// script cwd). It is deleted on destroy; a failed deletion is left to the next startup's prepareTmpRoot.
 	tmpDir string
 }
 
-// spawnCodehost 在隔离环境内启动一个常驻的 codehost 宿主进程，通过 stdin/stdout
-// 通信。它是三种 mode（none / nsjail / docker）共用的脚本执行器：sandboxd 长驻它，
-// 每次 execute 由它 fork 全新解释器进程。docker 下 codehost 来自镜像内
-// /usr/local/bin/codehost（见 sandboxd/Dockerfile），改代码后必须重建镜像。
+// spawnCodehost starts a resident codehost process inside the isolation environment, talking over
+// stdin/stdout. It is the script executor shared by all three modes (none / nsjail / docker): sandboxd keeps it
+// resident and every execute forks a brand-new interpreter process from it. Under docker codehost comes from
+// /usr/local/bin/codehost inside the image (see sandboxd/Dockerfile), so a code change requires rebuilding the
+// image.
 //
-// 与旧 spawnWorker（L3 热解释器）的差别：
-//   - 启动的是 codehost 二进制（单 argv），而不是「<解释器> <worker 脚本>」；
-//   - 不挂载 workersDir —— codehost 内嵌包装模板，不再需要 worker.lua/py/js；
-//   - 解释器入口（command）在每次 execute 时才随请求下发，由 codehost 去 fork。
+// Differences from the old spawnWorker (L3 hot interpreter):
+//   - it starts the codehost binary (a single argv) instead of "<interpreter> <worker script>";
+//   - it mounts no workersDir — codehost embeds the wrapper templates, so worker.lua/py/js are gone;
+//   - the interpreter entry (command) is sent with each request and forked by codehost at that point.
 //
-// 路径约定同旧 worker：tmpRoot 下新建的独占子目录 → tmpGuestDir（可写 + cwd）。
-// codehost 的 cwd 是 /tmp，它 fork 的解释器继承这个 cwd，脚本写相对路径就落在
-// 本会话独占的 tmpDir 里，随 Worker 销毁一并清掉。
+// Path convention is the same as the old worker: a fresh exclusive subdirectory under tmpRoot is mounted at
+// tmpGuestDir (writable + cwd). codehost's cwd is /tmp, the forked interpreter inherits it, and a script writing
+// a relative path lands in this session's exclusive tmpDir, which is removed together with the Worker.
 func spawnCodehost(sb sandbox.Sandbox, binary, tmpRoot string, limits sandbox.Limits) (*Worker, error) {
 	if sb == nil {
 		return nil, fmt.Errorf("worker: no isolate implementation")
@@ -89,19 +95,19 @@ func spawnCodehost(sb sandbox.Sandbox, binary, tmpRoot string, limits sandbox.Li
 		return nil, fmt.Errorf("worker: abs codehost binary: %w", err)
 	}
 
-	// ⚠️ tmpRoot 必须转绝对：os.MkdirTemp 会原样继承传入的相对路径，而 docker 的
-	// -v 只接受绝对宿主路径（相对路径会被当作 named volume）。nsjail 的 chroot 同样
-	// 只认宿主绝对路径，这里统一转掉。
+	// ⚠️ tmpRoot must be made absolute: os.MkdirTemp inherits a relative path as given, while docker's -v only
+	// accepts an absolute host path (a relative one becomes a named volume). nsjail's chroot also only accepts
+	// absolute host paths, so both are converted here.
 	absTmpRoot, err := filepath.Abs(tmpRoot)
 	if err != nil {
 		return nil, fmt.Errorf("worker: abs tmp dir: %w", err)
 	}
 
-	// 每个 codehost 一个独占的可写目录，避免互相看见对方的临时文件。
+	// One exclusive writable directory per codehost, so they cannot see each other's temporary files.
 	//
-	// ⚠️ chmod 0777 不能省：MkdirTemp 建出来是 0700、属主是 sandboxd，而进程在
-	// nsjail 内是另一个 uid（--user 99999）—— 不放宽的话 fork 出的解释器连一个
-	// 临时文件都写不出来（EACCES）。
+	// ⚠️ chmod 0777 cannot be skipped: MkdirTemp creates it as 0700 owned by sandboxd, while the process inside
+	// nsjail runs as another uid (--user 99999) — without relaxing it the forked interpreter cannot write a
+	// single temporary file (EACCES).
 	tmpDir, err := os.MkdirTemp(absTmpRoot, "codehost-")
 	if err != nil {
 		return nil, fmt.Errorf("worker: create tmp dir under %s: %w", tmpRoot, err)
@@ -113,10 +119,10 @@ func spawnCodehost(sb sandbox.Sandbox, binary, tmpRoot string, limits sandbox.Li
 
 	spec := &sandbox.Spec{
 		Argv: []string{binary},
-		Dir:  tmpGuestDir, // cwd 必须是可写目录
-		// 解释器 stderr（print / traceback）不直出屏幕：它们已通过 stderrCollector
-		// 尾部留存进 done/error 帧的 logs 字段回传（错误另由 handle_code 落 xlog），
-		// 这里丢弃转发即可，避免 sandboxd 终端被脚本输出刷屏。
+		Dir:  tmpGuestDir, // the cwd must be a writable directory
+		// The interpreter's stderr (print / traceback) is not echoed to the terminal: it is kept at the tail by
+		// stderrCollector and returned in the logs field of the done/error frame (handle_code additionally logs
+		// errors), so discarding the forwarded copy is enough to keep sandboxd's terminal free of script output.
 		Stderr: io.Discard,
 		Mounts: []sandbox.Mount{
 			{Host: tmpDir, Guest: tmpGuestDir},
@@ -124,7 +130,7 @@ func spawnCodehost(sb sandbox.Sandbox, binary, tmpRoot string, limits sandbox.Li
 		Limits: limits,
 	}
 
-	// 防御性断言：Dir 必须落在挂载点之下。
+	// Defensive assertion: Dir must sit under a mount point.
 	if err := guardDir(spec.Dir, spec.Mounts); err != nil {
 		_ = os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("worker: internal path error: %w", err)
@@ -146,12 +152,12 @@ func spawnCodehost(sb sandbox.Sandbox, binary, tmpRoot string, limits sandbox.Li
 	}
 	w.alive.Store(true)
 
-	// 退出监视：子进程的回收只由它负责（见 watch），池的热路径据此判断「还能不能用」，
-	// 不必每次借出 / 归还都发一轮 ping。
+	// Exit watch: it alone reaps the child (see watch), and the pool's hot path uses it to decide "is this still
+	// usable" without sending a ping on every borrow / return.
 	go w.watch()
 
-	// 健康检查：发 ping，等 pong，确认 codehost 真正启动成功。
-	// 只在建立连接时做这一次；每次 execute 的热路径上不再探活。
+	// Health check: send ping, wait for pong, confirming codehost really started.
+	// It only happens once while establishing the connection; the per-execute hot path never probes again.
 	if err := w.ping(); err != nil {
 		w.Destroy()
 		return nil, fmt.Errorf("worker: codehost health check: %w", err)
@@ -159,16 +165,18 @@ func spawnCodehost(sb sandbox.Sandbox, binary, tmpRoot string, limits sandbox.Li
 	return w, nil
 }
 
-// resolveCodehostBinary 归一化 codehost 二进制路径。
+// resolveCodehostBinary normalizes the codehost binary path.
 //
-// binary 可能是纯命令名（走 PATH）、容器内路径（/usr/local/bin/codehost）或宿主
-// 路径（相对 / Windows 绝对）。只对「宿主侧」路径做 Abs 转换：
-//   - Unix 绝对路径（/ 开头）是容器内路径，语义属于容器，必须原样透传 ——
-//     filepath.Abs 是平台相关的：在 Windows 上它会把 /usr/local/bin/codehost
-//     转成 d:\usr\...，docker/nsjail 就 exec 不到它了（报 read header: EOF 的根因）；
-//   - 其余含分隔符的路径按 sandboxd 的 cwd 转绝对：none 下 exec 的 cmd.Dir 会被
-//     设成本会话独占的 tmpDir，相对路径会相对 tmpDir 解析而落空（no such file）；
-//   - 纯命令名不动，交给 exec 走 PATH。
+// binary may be a bare command name (resolved through PATH), a container path (/usr/local/bin/codehost) or a host
+// path (relative / Windows absolute). Only "host-side" paths are made absolute:
+//   - a Unix absolute path (leading /) is a container path whose meaning belongs to the container and must be
+//     passed through unchanged — filepath.Abs is platform dependent: on Windows it would turn
+//     /usr/local/bin/codehost into d:\usr\..., and docker/nsjail could not exec it (the root cause of
+//     "read header: EOF");
+//   - any other path containing a separator is made absolute relative to sandboxd's cwd: under none the exec'd
+//     cmd.Dir is set to this session's exclusive tmpDir, so a relative path would resolve against tmpDir and
+//     miss (no such file);
+//   - a bare command name is left alone and resolved through PATH.
 func resolveCodehostBinary(binary string) (string, error) {
 	switch {
 	case strings.HasPrefix(binary, "/"):
@@ -183,24 +191,26 @@ func resolveCodehostBinary(binary string) (string, error) {
 	return binary, nil
 }
 
-// watch 回收子进程并维护存活标志。
+// watch reaps the child process and maintains the liveness flag.
 //
-// 为什么由它独占 Wait：exec.Cmd.Wait 不能被并发 / 重复调用，而 Kill 之后必须有人
-// 回收子进程（否则僵尸态会堆在进程表里）。所以「谁 Wait」只有一个答案 —— 这里；
-// Destroy 只等 exited，不再二次调用 Wait。
+// Why it alone calls Wait: exec.Cmd.Wait must not be called concurrently or twice, and after Kill someone must
+// reap the child (otherwise zombies pile up in the process table). So "who Waits" has exactly one answer — here;
+// Destroy only waits on exited and never calls Wait a second time.
 //
-// 这件事把「探活」从热路径上摘掉了：进程一退出 alive 就是 false，借出 / 归还
-// 只需读这个标志，不必发「ping → 等 pong」的同步往返（lua 是 µs 级调用，那两次
-// 往返的固定开销会盖过脚本本身）。janitor 仍会每 30s 主动 ping 一次兜底。
+// This also removes liveness probing from the hot path: alive goes false as soon as the process exits, so borrow
+// / return only reads the flag instead of a synchronous "ping → wait for pong" round trip (lua is a µs-level
+// call, and the fixed cost of those two round trips would exceed the script itself). The janitor still pings
+// every 30s as a backstop.
 func (w *Worker) watch() {
-	_ = w.proc.Wait() // 进程已退出 / 被杀，返回错误属正常
+	_ = w.proc.Wait() // the process exited / was killed, so an error is normal
 	w.alive.Store(false)
 	close(w.exited)
 }
 
-// ping 发送 ping 并等待 pong，验证 worker 进程存活。
+// ping sends a ping and waits for the pong, verifying the worker process is alive.
 //
-// 只在建立连接时（健康检查）与 janitor 巡检时使用，**不在借出 / 归还的热路径上**。
+// It is only used when establishing the connection (health check) and by the janitor sweep, **never on the
+// borrow / return hot path**.
 func (w *Worker) ping() error {
 	if err := sendMsg(w.stdin, map[string]any{"action": "ping"}); err != nil {
 		return fmt.Errorf("send ping: %w", err)
@@ -231,13 +241,13 @@ func (w *Worker) ping() error {
 	}
 }
 
-// Send 发送消息给 worker（写入 stdin）。
+// Send sends a message to the worker (writing to stdin).
 func (w *Worker) Send(msg map[string]any) error { return sendMsg(w.stdin, msg) }
 
-// Recv 从 worker 接收消息（读取 stdout）。
+// Recv receives a message from the worker (reading stdout).
 func (w *Worker) Recv() (map[string]any, error) { return recvMsg(w.stdout) }
 
-// Kill 强杀 worker 进程并标记不可复用。
+// Kill force-kills the worker process and marks it unusable.
 func (w *Worker) Kill() {
 	if !w.alive.Load() {
 		return
@@ -254,13 +264,14 @@ func (w *Worker) Kill() {
 	}
 }
 
-// Destroy 彻底销毁 worker：强杀 → 回收子进程 → 删除它独占的 tmp 目录。
+// Destroy destroys the worker for good: force kill → reap the child → delete its exclusive tmp directory.
 //
-// 与 Kill 的区别（restart 生命周期下每次会话结束都会走这里，不能省）：
-//   - Kill 只发信号，**不 Wait** —— 隔离实现的 Process.Kill 不回收，被丢弃的 worker
-//     会以僵尸态留在进程表里。L3 下每个请求都丢弃一个 worker，不回收就是按请求泄漏。
-//   - tmp 目录原先只在下次启动时整棵清空；restart 档下必须随 worker 一起删，
-//     否则目录数会随请求量单调增长。
+// The difference from Kill (unskippable now that restart turns over a worker at the end of every session):
+//   - Kill only sends a signal and **does not Wait** — the isolation implementation's Process.Kill does not reap,
+//     so a discarded worker stays in the process table as a zombie. Under L3 every request discards a worker, so
+//     not reaping means a per-request leak.
+//   - The tmp directory used to be cleared wholesale only at the next startup; with restart it must be deleted
+//     together with the worker, otherwise the number of directories grows monotonically with the request volume.
 func (w *Worker) Destroy() {
 	if w == nil {
 		return
@@ -271,9 +282,11 @@ func (w *Worker) Destroy() {
 	w.tmpDir = ""
 }
 
-// reap 等子进程被 watch 回收（Kill 之后通常立刻返回）。
-// 加超时只是防御「信号没送达 / 进程 D 态」这类极端情况，避免卡住归还路径。
-// 这里**不**自己调 Wait：exec.Cmd.Wait 不能并发调用，回收由 watch 独占。
+// reap waits for the child to be reaped by watch (usually immediately after Kill).
+// The timeout only guards against extremes such as "the signal never arrived / the process is in D state", so the
+// return path cannot hang.
+// It deliberately does **not** call Wait itself: exec.Cmd.Wait must not be called concurrently, and reaping is
+// owned by watch.
 func (w *Worker) reap() {
 	if w.proc == nil {
 		return
@@ -281,15 +294,16 @@ func (w *Worker) reap() {
 	select {
 	case <-w.exited:
 	case <-time.After(reapTimeout):
-		// 回收不了也不阻塞调用方：留给进程表兜底，至少不拖垮服务
+		// Being unable to reap must not block the caller: the process table is the backstop, at least the service
+		// does not fall over
 	}
 }
 
-// removeTmpDir 删除 worker 独占目录。
+// removeTmpDir deletes a worker's exclusive directory.
 //
-// 带重试是因为进程刚被杀时，隔离层（nsjail 的 mount namespace / docker 的挂载）
-// 可能还没释放，此刻 RemoveAll 会 EBUSY；retry 后一般就好了。彻底失败也不致命 ——
-// 下次启动的 prepareTmpRoot 会把整棵 tmp_root 清空。
+// The retry exists because right after a process is killed the isolation layer (nsjail's mount namespace /
+// docker's mounts) may not have released it yet, and RemoveAll returns EBUSY at that moment; after a retry it
+// usually works. A total failure is not fatal — the next startup's prepareTmpRoot empties the whole tmp_root.
 func removeTmpDir(dir string) {
 	if dir == "" {
 		return
@@ -303,5 +317,5 @@ func removeTmpDir(dir string) {
 	xlog.Error("sandboxd: remove worker tmp dir %s failed, left for next startup cleanup", dir)
 }
 
-// Alive 返回 worker 是否仍被认为存活（进程退出由 watch 置 false）。
+// Alive reports whether the worker is still considered alive (watch sets it false when the process exits).
 func (w *Worker) Alive() bool { return w.alive.Load() }

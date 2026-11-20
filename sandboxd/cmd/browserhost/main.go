@@ -1,16 +1,16 @@
-// Command browserhost 是 sandboxd 的浏览器宿主：跑在隔离单元内部，替 sandboxd
-// 长驻一个 Chromium，并按「一行一个 JSON」的协议接受操作。
+// Command browserhost is sandboxd's browser host: it runs inside the isolation unit, keeps a Chromium alive on behalf
+// of sandboxd, and accepts operations over a "one JSON object per line" protocol.
 //
-// 它与 sandboxd 的关系和 codehost 一样：sandboxd 负责隔离与调度，它负责
-// 「在同一个隔离单元里持续驱动一个浏览器」。刻意不 import daemon / isolate
-// （那些依赖 gin、docker），保证这个二进制能单独塞进镜像 / rootfs。
+// Its relationship with sandboxd is the same as codehost's: sandboxd handles isolation and scheduling, while this
+// handles "driving one browser continuously inside the same isolation unit". It deliberately does not import daemon /
+// isolate (which pull in gin and docker), so this binary can be dropped into an image / rootfs on its own.
 //
-// 协议（stdin / stdout，一行一个 JSON）：
+// Protocol (stdin / stdout, one JSON object per line):
 //
 //	{"id":1,"op":"open","url":"https://example.com"}
 //	{"id":1,"ok":true,"url":"https://example.com/","title":"Example Domain","snapshot":"..."}
 //
-// stdout 只走协议；日志与 Chrome 自己的输出一律走 stderr。
+// stdout carries only the protocol; logs and Chrome's own output always go to stderr.
 package main
 
 import (

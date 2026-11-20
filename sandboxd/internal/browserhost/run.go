@@ -14,11 +14,11 @@ import (
 	"strings"
 )
 
-// Run 处理 stdin 上的 JSON 行请求，把结果写回 stdout，直到 EOF。
+// Run processes JSON-line requests from stdin and writes the results back to stdout, until EOF.
 //
-// EOF = 上层关掉了 stdin（会话结束 / 进程被 kill 的通道断开）。
-// 这时必须把浏览器一起收掉：Chrome 是本进程的子进程，本进程退出后
-// 它会变成孤儿，一直占着内存直到容器销毁。
+// EOF means the upper layer closed stdin (the session ended / the process was killed and the channel broke).
+// At that point the browser must be torn down as well: Chrome is a child of this process, and once this process
+// exits it would be orphaned and keep holding memory until the container is destroyed.
 func Run(stdin io.Reader, stdout, stderr io.Writer, cfg Config) error {
 	cfg.Logf = func(format string, args ...any) {
 		_, _ = fmt.Fprintf(stderr, "browserhost: "+format+"\n", args...)
@@ -28,13 +28,13 @@ func Run(stdin io.Reader, stdout, stderr io.Writer, cfg Config) error {
 
 	out := &lineWriter{w: bufio.NewWriter(stdout)}
 	sc := bufio.NewScanner(stdin)
-	// 单条命令的理论上限：URL + 输入文本 + 选择器。给到 4MB，
-	// 超过即视为协议错误（而不是悄悄截断成半条命令去执行）。
+	// The theoretical maximum of a single command: URL + typed text + selector. 4MB is allowed; anything beyond
+	// that is treated as a protocol error rather than silently truncated into half a command and executed.
 	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
 
 	for sc.Scan() {
-		// 容错：某些 Windows 工具经管道喂数据时会带 UTF-8 BOM。
-		// 正常路径（sandboxd 转发）不会有，但多剥一次成本为零。
+		// Tolerance: some Windows tools feed data through a pipe with a UTF-8 BOM. The normal path (forwarding by
+		// sandboxd) never has one, but stripping it once more costs nothing.
 		line := bytes.TrimSpace(bytes.TrimPrefix(sc.Bytes(), []byte{0xEF, 0xBB, 0xBF}))
 		if len(line) == 0 {
 			continue
@@ -52,10 +52,11 @@ func Run(stdin io.Reader, stdout, stderr io.Writer, cfg Config) error {
 	return sc.Err()
 }
 
-// SelfTest 自检：只确认「浏览器可执行文件存在且能报版本」，不真的拉起浏览器。
+// SelfTest is the self-check: it only confirms "the browser executable exists and can report a version", it never
+// actually launches the browser.
 //
-// 为什么单独一条：sandboxd 需要在不付「起一个 Chrome」代价的前提下，
-// 如实告诉 nexus「这个镜像里到底有没有浏览器」。
+// Why a separate command: sandboxd needs to tell nexus honestly "does this image contain a browser at all" without
+// paying the cost of starting a Chrome.
 func SelfTest(execPath string) (string, error) {
 	path := execPath
 	if path == "" {
@@ -67,27 +68,28 @@ func SelfTest(execPath string) (string, error) {
 	}
 	base := strings.ToLower(filepath.Base(path))
 
-	// msedge.exe 不认 --version：它会把这当成一次启动，输出一句
-	// 「正在现有的浏览器会话中打开」并可能真的弹个窗口。所以直接不调它，
-	// 只报引擎名 —— 版本号缺失不是「浏览器不可用」，不该让能力探测失败。
+	// msedge.exe does not recognise --version: it treats it as a launch, prints "opening in an existing browser
+	// session" and may really pop a window. So it is not called at all and only the engine name is reported — a
+	// missing version number is not "the browser is unavailable" and must not fail the capability probe.
 	if strings.HasPrefix(base, "msedge") {
 		return "Microsoft Edge (version unknown)", nil
 	}
 
-	// Windows 上一律不 spawn：chrome.exe 同样不认 --version（它把这当成一次启动、
-	// 转交给已有会话，实测输出是 GBK 的「正在现有的浏览器会话中打开。」），而那串
-	// 输出必然被 isPrintableASCII 丢掉、最终仍落到「版本未知」。既然结果固定，
-	// 就不值得为它付一次**不设超时**的进程启动：
-	//   已有会话繁忙时这次转交会长时间阻塞 → 耗光 sandboxd 的 30s 探测超时 →
-	//   探测读到空 stdout → 报 `bad output ""`，而真实原因（阻塞）还看不到。
+	// On Windows nothing is spawned: chrome.exe does not recognise --version either (it treats it as a launch and
+	// hands it to an existing session, and the observed output is a GBK "opening in an existing browser session"),
+	// and that output would be dropped by isPrintableASCII anyway, still ending up at "version unknown". Since the
+	// result is fixed, it is not worth paying for a process start **without any timeout**:
+	//   - when the existing session is busy this hand-off blocks for a long time -> burns sandboxd's 30s probe
+	//     timeout -> the probe reads an empty stdout -> reports `bad output ""`, with the real cause (the block)
+	//     still invisible.
 	if runtime.GOOS == "windows" {
 		return engineLabel(base) + " (version unknown)", nil
 	}
 
 	out, err := exec.Command(path, "--version").Output()
 	if err != nil {
-		// 其他不报版本的构建同理：能探测到可执行文件就已足够，
-		// 版本只是附加信息。
+		// Same for other builds that do not report a version: finding the executable is enough, the version is
+		// only extra information.
 		return engineLabel(base) + " (version unknown)", nil
 	}
 	line := firstLine(out)
@@ -105,9 +107,9 @@ func firstLine(out []byte) string {
 	return strings.TrimSpace(line)
 }
 
-// isPrintableASCII 过滤掉非 ASCII 输出：Windows 上的浏览器错误信息常是
-// GBK 编码的中文（例如 Edge 的「正在现有的浏览器会话中打开」），原样塞进
-// 提示词会变成乱码。
+// isPrintableASCII filters out non-ASCII output: browser error messages on Windows are often Chinese in GBK
+// encoding (for example Edge's "opening in an existing browser session"), and pasting that into the prompt verbatim
+// would turn into mojibake.
 func isPrintableASCII(s string) bool {
 	if s == "" {
 		return false
@@ -133,10 +135,11 @@ func engineLabel(base string) string {
 	}
 }
 
-// DetectExecPath 在沙箱内探测浏览器可执行文件。
+// DetectExecPath discovers the browser executable inside the sandbox.
 //
-// 顺序是刻意的：chromium 优先（docker 镜像里装的就是它，发行版维护、无 EULA），
-// 其次 chrome / google-chrome，最后 Windows 上的 Edge（本机开发时最可能已装）。
+// The order is deliberate: chromium first (it is what the docker image installs, distribution-maintained, no EULA),
+// then chrome / google-chrome, and finally Edge on Windows (the most likely one already installed for local
+// development).
 func DetectExecPath() (string, error) {
 	names := []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"}
 	if runtime.GOOS == "windows" {

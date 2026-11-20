@@ -1,18 +1,18 @@
-// Command codehost 是 sandboxd 的脚本执行宿主：一个跑在隔离单元内部（nsjail / none）
-// 的常驻进程，替 sandboxd 逐次 fork 全新解释器进程（lua / python / node）执行脚本。
+// Command codehost is sandboxd's script execution host: a resident process running inside the isolation unit (nsjail /
+// none) that forks a fresh interpreter process (lua / python / node) on behalf of sandboxd for every script.
 //
-// 与 sandboxd 的关系：sandboxd 负责隔离与调度，codehost 负责「在同一隔离单元里
-// 反复、干净地跑脚本」。它不 import daemon / isolate（那些依赖 gin、docker），
-// 只依赖标准库 —— 保证这个二进制尽量小、可单独塞进 rootfs。
+// Its relationship with sandboxd: sandboxd handles isolation and scheduling, codehost handles "running scripts
+// repeatedly and cleanly inside the same isolation unit". It does not import daemon / isolate (which pull in gin and
+// docker) and depends only on the standard library — keeping this binary small enough to drop into a rootfs on its own.
 //
-// 协议（stdin / stdout，4 字节大端长度前缀 + JSON）：
+// Protocol (stdin / stdout, 4-byte big-endian length prefix + JSON):
 //
 //	sandboxd → codehost: {"action":"execute","lang":"lua","command":"lua","script":"...","inputs":{...},"timeout_ms":5000}
 //	sandboxd → codehost: {"action":"shutdown"}
 //	codehost → sandboxd: {"action":"done","result":X} | {"action":"error","error":"msg"}
 //
-// 脚本的 print / log / console 输出走 stderr（转发给 sandboxd 日志），stdout 只承载
-// 结构化结果。
+// A script's print / log / console output goes to stderr (forwarded to sandboxd's stderr), and stdout carries only the
+// structured result.
 package main
 
 import (

@@ -14,23 +14,23 @@ import (
 	"time"
 )
 
-// taskkillTimeout taskkill 自身的执行上限：杀进程的路径不能变成新的阻塞点。
+// taskkillTimeout caps the taskkill invocation itself: the kill path must not become a new blocking point.
 const taskkillTimeout = 5 * time.Second
 
-// taskkillNotFound taskkill 找不到进程时的退出码。
+// taskkillNotFound is the exit code of taskkill when it cannot find the process.
 //
-// 用退出码而不是输出文案：文案是本地化的（"ERROR: The process ... not found."
-// 在中文 Windows 上完全是另一句话），而这个码不是。
+// An exit code rather than output text: the text is localised ("ERROR: The process ... not found." is a completely
+// different sentence on Chinese Windows), while the code is not.
 //
-// 这条路径是**常态**而不是异常：docker 模式下先删容器，CLI 会因此自己退出，
-// 紧接着的 killTree 就会撞上「进程已经不在了」。
+// This path is the **norm**, not an anomaly: under docker the container is deleted first, the CLI exits because of it,
+// and the killTree that follows immediately runs into "the process is already gone".
 const taskkillNotFound = 128
 
-// setProcessGroup 把子进程放进一个新的进程组。
+// setProcessGroup puts the child process into a new process group.
 //
-// Windows 没有可杀的「进程组」对象（只有控制台进程组，且不可用于杀），
-// 这里的旗标作用是让子进程不接收发给 sandboxd 控制台的 Ctrl+C 之类事件，
-// 真正的整树清理靠 killTree 的 taskkill /T。
+// Windows has no "process group" object that can be killed (only a console process group, which cannot be used for
+// killing); the flag here makes the child stop receiving events such as Ctrl+C sent to sandboxd's console, and the real
+// whole-tree cleanup relies on killTree's taskkill /T.
 func setProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -38,14 +38,15 @@ func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.CreationFlags |= syscall.CREATE_NEW_PROCESS_GROUP
 }
 
-// killTree 用 taskkill /T 杀掉子进程及其全部后代。
+// killTree kills the child process and all its descendants with taskkill /T.
 //
-// 为什么用 taskkill 而不是 Job Object：Job 更严谨（分配即归属，进程无法脱离），
-// 但要引入 golang.org/x/sys 依赖并自己管句柄生命周期 —— 当前收益不抵成本。
-// /T 是按父子关系遍历，对「父进程已退出、后代被重新挂靠」的极端情况覆盖不到，
-// 这是已知的、可接受的缺口（Windows 只是 none 模式的开发环境）。
+// Why taskkill rather than a Job Object: a Job is stricter (assignment is ownership, and a process cannot escape), but
+// it would pull in the golang.org/x/sys dependency and require managing handle lifetimes by hand — the benefit does not
+// justify the cost today. /T walks the parent-child relation, so it cannot cover the extreme case of "the parent
+// already exited and the descendants were re-parented"; that gap is known and acceptable (Windows is only a development
+// environment for the none mode).
 //
-// 返回 os.ErrProcessDone 表示这次执行已经结束（exec.Cmd.Cancel 约定的语义）。
+// Returning os.ErrProcessDone means this execution has already ended (the semantics exec.Cmd.Cancel expects).
 func killTree(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return os.ErrProcessDone
@@ -57,22 +58,22 @@ func killTree(cmd *exec.Cmd) error {
 		return nil
 	}
 
-	// 根进程已经不存在：这次执行结束了 —— 归一成 ErrProcessDone
-	// （exec.Cmd.Cancel 约定的语义），不要报给调用方当失败。
+	// The root process no longer exists: this execution is over — normalise to ErrProcessDone (the semantics
+	// exec.Cmd.Cancel expects) and do not report it to the caller as a failure.
 	var ee *exec.ExitError
 	if errors.As(err, &ee) && ee.ExitCode() == taskkillNotFound {
 		return os.ErrProcessDone
 	}
 
-	// 其它失败：再用 os 自己的判定确认一次「是不是本来就没了」，
-	// 仍无法确认就如实上报 —— 证明不了杀干净时不能假装成功。
+	// Any other failure: use os's own judgement once more to confirm "was it already gone anyway", and if that still
+	// cannot be confirmed, report it honestly — do not pretend success when "killed everything" cannot be proven.
 	if killErr := cmd.Process.Kill(); errors.Is(killErr, os.ErrProcessDone) {
 		return os.ErrProcessDone
 	}
 	return err
 }
 
-// taskkillTree 执行 taskkill /T /F。
+// taskkillTree runs taskkill /T /F.
 func taskkillTree(pid int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), taskkillTimeout)
 	defer cancel()

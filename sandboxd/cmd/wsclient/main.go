@@ -1,7 +1,7 @@
-// Command wsclient 是一个最小的 sandboxd 双工脚本测试客户端：
-// 连 /v1/code，发 open/exec/close，打印 ready 与结果帧。
+// Command wsclient is a minimal duplex script test client for sandboxd: it connects to /v1/code, sends open/exec/close
+// and prints the ready and result frames.
 //
-// 仅用于手工验证脚本端点，不属于正式交付物。
+// For manual verification of the script endpoint only; it is not a deliverable.
 package main
 
 import (

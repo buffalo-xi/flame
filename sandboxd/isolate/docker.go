@@ -13,15 +13,16 @@ import (
 	"flame/tools/sandbox"
 )
 
-// dockerSandbox 通过 docker run 在容器内执行命令（跨平台）。
+// dockerSandbox executes commands inside a container through docker run (cross-platform).
 //
-// 说明：容器与宿主共享内核，隔离强度与 nsjail 同级；优势是镜像生态与跨平台，
-// 代价是每次启动约 300ms–1s。对启动开销敏感的场景优先用 nsjail。
+// Note: a container shares the host kernel, so the isolation strength is on par with nsjail; the advantages are the
+// image ecosystem and cross-platform support, the cost is roughly 300ms–1s per start. Prefer nsjail where startup
+// overhead matters.
 type dockerSandbox struct {
 	opts Options
 }
 
-// NewDocker 创建 docker 隔离实现。opts.Image 必填。
+// NewDocker creates the docker isolation implementation. opts.Image is required.
 func NewDocker(opts Options) sandbox.Sandbox {
 	if opts.Binary == "" {
 		opts.Binary = DockerName
@@ -47,11 +48,11 @@ func (s *dockerSandbox) Start(ctx context.Context, spec *sandbox.Spec) (sandbox.
 	var cancel context.CancelFunc
 	if lim.Timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, lim.Timeout)
-		// cancel 交给 startWithPipes 在进程结束后释放，避免提前杀掉容器
+		// cancel is handed to startWithPipes to release once the process ends, so the container is not killed early
 	}
 
-	// 容器身份由我们命名：这是这次执行唯一可寻址的入口，
-	// 「杀干净」全看它 —— 见下面 kill 的注释。
+	// We name the container ourselves: it is the only addressable handle of this execution, and "kill everything"
+	// depends entirely on it — see the note on kill below.
 	name, err := newExecContainerName()
 	if err != nil {
 		releaseCancel(cancel)
@@ -59,8 +60,8 @@ func (s *dockerSandbox) Start(ctx context.Context, spec *sandbox.Spec) (sandbox.
 	}
 
 	args := []string{"run", "--rm", "-i", "--name", name, "--label", execLabel}
-	// 容器级参数（网络 / 只读 / 用户 / 资源上限 / 挂载 / cwd / env）与长驻单元
-	// 共用同一份构造 —— 单次 run 与复用单元必须在隔离强度上完全一致。
+	// The container-level arguments (network / read-only / user / limits / mounts / cwd / env) share the same builder
+	// as the long-lived unit — a one-shot run and a reused unit must be identical in isolation strength.
 	args = append(args, s.containerArgs(spec, lim)...)
 	args = append(args, s.opts.ExtraArgs...)
 	args = append(args, s.opts.Image)
@@ -68,14 +69,14 @@ func (s *dockerSandbox) Start(ctx context.Context, spec *sandbox.Spec) (sandbox.
 
 	cmd := exec.CommandContext(ctx, s.opts.Binary, args...)
 
-	// 这次执行的收口：先让容器消失，再收掉 CLI 进程。
+	// The cleanup of this execution: make the container disappear first, then collect the CLI process.
 	//
-	// 为什么不能只杀 CLI（cmd.Process.Kill / 进程组都不够）：容器由
-	// dockerd / containerd-shim 托管，CLI 只是一根通往容器的管子 —— 杀它
-	// 等于断管，容器照跑（`docker run -d` 就是「CLI 退出、容器照跑」的活证据；
-	// --sig-proxy 也救不了，SIGKILL 不可捕获、无从转发）。
-	// 容器即 cgroup，成员由内核记账：rm -f 连 setsid 跑掉的进程一起收，
-	// 这是进程组做不到的。
+	// Why killing only the CLI is not enough (neither cmd.Process.Kill nor the process group is):
+	// the container is owned by dockerd / containerd-shim, and the CLI is merely a pipe into it — killing the CLI
+	// breaks the pipe while the container keeps running (`docker run -d` is living proof of "the CLI exited, the
+	// container kept going"; --sig-proxy cannot save it either, SIGKILL is uncatchable and cannot be forwarded). The
+	// container is the cgroup, and its members are accounted for by the kernel: rm -f collects even a process that
+	// escaped with setsid, which a process group cannot do.
 	kill := func() error {
 		rmErr := s.removeContainer(name)
 		cliErr := killTree(cmd)
@@ -90,7 +91,8 @@ func (s *dockerSandbox) Start(ctx context.Context, spec *sandbox.Spec) (sandbox.
 	return startWithPipes(cmd, spec, cancel, kill)
 }
 
-// isEnvKey 判断环境变量名是否合法（字母/下划线开头，仅含字母数字下划线）。
+// isEnvKey reports whether an environment variable name is valid (starts with a letter/underscore, contains only
+// letters, digits and underscores).
 func isEnvKey(k string) bool {
 	if k == "" {
 		return false
@@ -107,14 +109,15 @@ func isEnvKey(k string) bool {
 	return true
 }
 
-// execContainerNamePrefix 一次性（exec 路径）容器的名字前缀。
+// execContainerNamePrefix is the name prefix of one-shot (exec path) containers.
 const execContainerNamePrefix = "sandboxd-exec-"
 
-// newExecContainerName 生成一个唯一的容器名。
+// newExecContainerName generates a unique container name.
 //
-// 为什么用名字而不是 --cidfile：名字在 docker run 的命令行里就生效，容器一起来
-// 就能按名字 rm -f，不需要任何本地文件、也就没有文件的生命周期要管。
-// 名字撞车（理论上只可能来自上次崩溃残留）时 docker 会明确报错，不会静默错杀。
+// Why a name instead of --cidfile: the name takes effect on the docker run command line itself, so the container can
+// be rm -f'ed by name as soon as it is up, with no local file to manage and therefore no file lifetime to worry about.
+// A name collision (theoretically only from leftovers of a previous crash) makes docker report an error explicitly
+// instead of silently killing the wrong container.
 func newExecContainerName() (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -123,10 +126,10 @@ func newExecContainerName() (string, error) {
 	return execContainerNamePrefix + hex.EncodeToString(b[:]), nil
 }
 
-// removeContainer 让容器消失 —— docker 模式下「杀干净」的收口。
+// removeContainer makes the container disappear — the "kill everything" hook under docker.
 //
-// 先按名字查再删：容器可能已经自己退出（--rm 已删），那不是错误，
-// 也不该让调用方看到一条「No such container」。
+// It looks the container up by name before removing it: the container may already have exited on its own (and been
+// removed by --rm), which is not an error and should not surface as a "No such container" to the caller.
 func (s *dockerSandbox) removeContainer(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), containerKillTimeout)
 	defer cancel()

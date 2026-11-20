@@ -9,31 +9,32 @@ import (
 	"strings"
 )
 
-// langTemplate 描述一种语言「怎么把用户脚本包成可独立运行、并能回传结果的完整脚本」。
+// langTemplate describes how a language "wraps a user script into a complete, independently runnable script that can
+// also report its result back".
 //
-// codehost 是语言无关的常驻宿主：一份代码 fork 三种解释器。每次 execute 都按
-// lang 选中模板、把用户脚本与 inputs 织进包装脚本，再写盘交给一个**全新** fork 的
-// 解释器进程执行。包装脚本承担三件事：
-//  1. 把 inputs 注入成脚本可见的 input 变量；
-//  2. 把 print/log/console 这类「人看的输出」重定向到 stderr（stdout 留给协议）；
-//  3. 捕获脚本的「返回值」，以 JSON 写回 stdout（{"result": X} / {"error": msg}）。
+// codehost is a language-agnostic resident host: one body of code forks three interpreters. Every execute selects the
+// template by lang, weaves the user script and the inputs into a wrapper script, writes it to disk and hands it to a
+// **freshly forked** interpreter process. The wrapper script takes on three jobs:
+//  1. inject the inputs as the `input` variable the script sees;
+//  2. redirect print/log/console — "output for humans" — to stderr (stdout is reserved for the protocol);
+//  3. capture the script's "return value" and write it back to stdout as JSON ({"result": X} / {"error": msg}).
 type langTemplate struct {
 	ext   string
 	build func(script string, inputs json.RawMessage) string
 }
 
-// templates 语言 → 包装模板。
+// templates maps a language to its wrapper template.
 var templates = map[string]*langTemplate{
 	"lua":    {ext: ".lua", build: buildLua},
 	"python": {ext: ".py", build: buildPython},
 	"js":     {ext: ".js", build: buildJS},
 }
 
-// normalizeInputs 把缺失 / null 的 inputs 归一成空对象。
+// normalizeInputs normalises missing / null inputs into an empty object.
 //
-// 为什么是 {} 而不是各语言自己的「空」：脚本几乎都假设 input 是张表 / 字典，
-// 传 null 会让 input == nil / None / null，脚本写 input.x 直接炸，而且三种语言
-// 的表现还不一致。空对象是最省心、最一致的缺省。
+// Why {} rather than each language's own "empty": scripts almost always assume input is a table / dict, and passing
+// null makes input == nil / None / null, so `input.x` blows up immediately — and the three languages do not even
+// behave the same way. An empty object is the least surprising, most consistent default.
 func normalizeInputs(inputs json.RawMessage) []byte {
 	if len(inputs) == 0 || string(inputs) == "null" {
 		return []byte("{}")
@@ -43,15 +44,17 @@ func normalizeInputs(inputs json.RawMessage) []byte {
 
 // ---------- Python ----------
 
-// buildPython 生成可独立运行的 Python 脚本。inputs 用 base64 携带（彻底避开
-// 字符串字面量转义问题），用户脚本用 strconv.Quote 包成合法 Python 字符串字面量，
-// 经 compile + exec 执行，返回值走 __return__ 约定。
+// buildPython generates an independently runnable Python script. The inputs are carried in base64 (sidestepping
+// string-literal escaping entirely), and the user script is wrapped by strconv.Quote into a valid Python string
+// literal, executed through compile + exec, with the return value following the __return__ convention.
 //
-// 编译单元的文件名刻意写死成 "<script>"：这样 traceback 里的行号就是**用户脚本自己的
-// 行号**，和编辑器里看到的第 N 行一致。代价是文件名不对应磁盘上的任何文件。
+// The compile unit's filename is deliberately hardcoded to "<script>": that way the line numbers in a traceback are
+// **the line numbers of the user's own script**, matching the Nth line seen in the editor. The cost is that the
+// filename does not correspond to any file on disk.
 //
-// 不要为了「让文件名指向真实文件」而改成把脚本拼进包装脚本、或单独写 main.py 再 import
-// —— 那样行号会加上包装头的偏移（脚本第 3 行变成文件第 23 行），对用户反而更糟。
+// Do not change it to splicing the script into the wrapper, or writing a separate main.py and importing it, just to
+// "make the filename point at a real file" — that would offset every line number by the wrapper header (line 3 of
+// the script becoming line 23 of the file), which is worse for the user.
 func buildPython(script string, inputs json.RawMessage) string {
 	b64 := base64.StdEncoding.EncodeToString(normalizeInputs(inputs))
 	var b strings.Builder
@@ -93,12 +96,13 @@ else:
 
 // ---------- Node.js ----------
 
-// buildJS 生成可独立运行的 Node 脚本。用户脚本以源码原样织进一个 async IIFE 体内，
-// 所以脚本可以直接 return / await。返回值走 JSON.stringify，console 重定向到 stderr。
+// buildJS generates an independently runnable Node script. The user script is woven into an async IIFE body as-is, so
+// it can use return / await directly. The return value goes through JSON.stringify, and console is redirected to
+// stderr.
 //
-// 已知取舍：脚本的**语法错误**会让整份文件在解析期失败（IIFE 根本没机会跑），
-// 错误信息只能靠 stderr 兜底（见 execute 的 fallbackError），不像运行期错误能被
-// .catch 抓住。运行期错误与 Python / Lua 一样有干净的 message。
+// Known trade-off: a **syntax error** in the script makes the whole file fail at parse time (the IIFE never gets a
+// chance to run), so the message can only be recovered from stderr (see the stdout fallback in reply) — unlike a
+// runtime error, which .catch can capture. Runtime errors get a clean message, same as Python / Lua.
 func buildJS(script string, inputs json.RawMessage) string {
 	b64 := base64.StdEncoding.EncodeToString(normalizeInputs(inputs))
 	var b strings.Builder
@@ -154,11 +158,12 @@ const jsTail = `
 
 // ---------- Lua ----------
 
-// buildLua 生成可独立运行的 Lua 脚本。inputs 由 Go 侧翻译成 Lua 表字面量（避开在
-// 模板里塞 JSON 解码器），用户脚本用长括号字符串原样嵌入 load，返回值走第一个返回值。
+// buildLua generates an independently runnable Lua script. The inputs are translated into a Lua table literal on the
+// Go side (avoiding stuffing a JSON decoder into the template), and the user script is embedded as a long-bracket
+// string for load, with the first return value used as the result.
 //
-// 与 Python / Node 不同，Lua 没有标准库 JSON：结果回传需要内嵌一个极简 JSON 编码器
-// （见 luaEncoder），让 codehost 完全自包含、不依赖 /workers 下的 dkjson。
+// Unlike Python / Node, Lua has no standard-library JSON: reporting the result needs a minimal JSON encoder embedded
+// (see luaEncoder), keeping codehost fully self-contained and independent of dkjson under /workers.
 func buildLua(script string, inputs json.RawMessage) string {
 	var v any
 	dec := json.NewDecoder(bytes.NewReader(normalizeInputs(inputs)))
@@ -177,7 +182,7 @@ func buildLua(script string, inputs json.RawMessage) string {
 	return b.String()
 }
 
-// luaEncoder 极简 JSON 编码器（内嵌进包装脚本，保证 Lua 侧自包含）。
+// luaEncoder is a minimal JSON encoder (embedded in the wrapper script, keeping the Lua side self-contained).
 const luaEncoder = `local function _sc_json_quote(_s)
   local _out = {'"'}
   for _i = 1, #_s do
@@ -244,7 +249,7 @@ end
 
 `
 
-// luaExecHead 在 input 字面量之后、用户脚本长括号之前的部分。
+// luaExecHead is the part after the input literal and before the user script's long bracket.
 const luaExecHead = `
 local _env = setmetatable({ input = input }, { __index = _G })
 
@@ -266,7 +271,7 @@ _env.print = _sc_log
 
 local _fn, _lerr = load(`
 
-// luaExecTail 用户脚本长括号之后、到脚本末尾的部分。
+// luaExecTail is the part after the user script's long bracket, up to the end of the script.
 const luaExecTail = `, "=script", "t", _env)
 if not _fn then
   io.stderr:write(tostring(_lerr), "\n")
@@ -289,10 +294,11 @@ else
 end
 `
 
-// luaLiteral 把已解码的 inputs（any）翻译成 Lua 表字面量。
+// luaLiteral translates the decoded inputs (any) into a Lua table literal.
 //
-// 用 JSON 解码结果而不是 json.RawMessage 原文：Lua 没有 JSON 字面量，必须由 Go 侧
-// 生成 Lua 语法。数字经 UseNumber 保留成 json.Number，避免大整数被 float64 吃掉精度。
+// It uses the JSON decoding result rather than the raw json.RawMessage bytes: Lua has no JSON literals, so the Lua
+// syntax must be generated on the Go side. Numbers go through UseNumber and stay json.Number, so large integers are
+// not rounded away by float64.
 func luaLiteral(v any) string {
 	switch x := v.(type) {
 	case nil:
@@ -330,7 +336,7 @@ func luaLiteral(v any) string {
 	}
 }
 
-// luaQuote 生成一个合法的 Lua 双引号字符串字面量（字节级转义，UTF-8 原样透传）。
+// luaQuote produces a valid Lua double-quoted string literal (byte-level escaping, UTF-8 passed through as-is).
 func luaQuote(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
@@ -358,7 +364,7 @@ func luaQuote(s string) string {
 	return b.String()
 }
 
-// pad3 把 0-255 转成 3 位十进制（Lua 的 \ddd 转义）。
+// pad3 turns 0-255 into 3 decimal digits (Lua's \ddd escape).
 func pad3(n int) string {
 	s := strconv.Itoa(n)
 	for len(s) < 3 {
@@ -367,8 +373,8 @@ func pad3(n int) string {
 	return s
 }
 
-// luaLongBracket 把脚本包成长括号字符串（[=[...]=]），动态加 '=' 直到关闭序列
-// 不出现在脚本里，彻底避开转义。
+// luaLongBracket wraps the script into a long-bracket string ([=[...]=]), adding '=' dynamically until the closing
+// sequence does not appear inside the script, sidestepping escaping entirely.
 func luaLongBracket(s string) string {
 	n := 0
 	for {

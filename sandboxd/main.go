@@ -1,9 +1,10 @@
-// Command sandboxd 是独立的沙箱服务：接收执行请求，在配置的隔离方式
-// （none / nsjail / docker）内运行命令与脚本。
+// Command sandboxd is the standalone sandbox service: it accepts execution requests and runs commands and
+// scripts inside the configured isolation mode (none / nsjail / docker).
 //
-// 职责边界：
-//   - nexus 侧不做隔离、不持有池，只提交单工/双工请求；
-//   - 隔离方式、资源上限、进程池与并发额度，全部由本服务配置决定。
+// Responsibility boundary:
+//   - nexus does no isolation and holds no pool, it only submits simplex / duplex requests;
+//   - the isolation mode, resource caps, process pool and concurrency quota are all decided by this
+//     service's configuration.
 package main
 
 import (
@@ -28,7 +29,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "配置文件路径")
+	configPath := flag.String("config", "config.yaml", "path to the configuration file")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -40,19 +41,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 初始化日志（xlog 的 Logger 需先 Init，否则 Info/Error 会 panic）
+	// Initialize logging (xlog's Logger must be Init'ed first, otherwise Info/Error panic).
 	if err := xlog.Init(cfg.LogDir, "sandboxd"); err != nil {
 		fmt.Fprintln(os.Stderr, "sandboxd: init log:", err)
 		os.Exit(1)
 	}
 
-	// 配置期的提醒（目前只有旧键回填）：必须等 xlog 就绪才打得出来。
-	// 这类提醒唯一的用处就是被看见 —— 旧键会一直生效，但下次改配置时应当换成新键。
+	// Config-time warnings (currently only legacy-key backfills): they can only be printed once xlog is ready.
+	// Their only purpose is to be seen — a legacy key keeps working, but should be replaced when the config is
+	// next edited.
 	for _, w := range cfg.Warnings {
 		xlog.Error("sandboxd: %s", w)
 	}
 
-	// 创建隔离实现（会做 nsjail/docker 可执行文件自检）
+	// Create the isolation implementation (which self-checks the nsjail/docker executable).
 	iso, err := isolate.New(cfg.Mode, isolate.Options{
 		Binary:         binaryFor(cfg),
 		Rootfs:         cfg.Nsjail.Rootfs,
@@ -81,26 +83,30 @@ func main() {
 	if cfg.Mode == isolate.NoneName {
 		xlog.Error("sandboxd: mode=none — commands run WITHOUT isolation")
 	}
-	// 网络声明：把生效档位与 mode 一起打进日志。「配置里写的」与「实际生效的」
-	// 必须一眼可见（与 langs 按 mode 解析入口名同一做法）。
+	// Network declaration: log the effective level next to the mode. "What the config says" and "what is
+	// actually in effect" must be visible at a glance (the same approach as resolving the entry name per mode
+	// for langs).
 	xlog.Info("sandboxd: network policy mode=%s policy=%s", cfg.Mode, cfg.EffectiveNetwork())
 
-	// 交互硬闸：脚本执行的实际上限就是它（请求下发的超时只能收紧、不能放宽）。
-	// 不打印的话，nexus 侧把 script.<lang>.timeout 配成 600 这种「配了等于没配」
-	// 的情况只能靠读代码发现。
+	// The interactive hard cap: it is the real ceiling for script execution (a timeout sent with the request
+	// can only tighten it, never relax it).
+	// Without printing it, a case like nexus configuring script.<lang>.timeout=600 ("configured as if it did
+	// nothing") could only be found by reading the code.
 	xlog.Info("sandboxd: script timeout hard cap = %ds (code_max_sec); a request timeout can only lower it",
 		cfg.CodeMaxSec)
 
-	// mode=none 时命令由宿主直接执行，必须能在宿主解析 —— 启动即校验，
-	// 避免等到第一次调用脚本才失败（其他模式下命令在沙箱内部解析，此处跳过）
+	// Under mode=none commands are executed by the host and must resolve there — validate at startup, so the
+	// failure does not surface on the first script call (other modes resolve commands inside the sandbox, so
+	// this check is skipped).
 	if err := checkCommands(cfg); err != nil {
 		xlog.Error("sandboxd: %v", err)
 		fmt.Fprintln(os.Stderr, "sandboxd:", err)
 		os.Exit(1)
 	}
 
-	// 回收上次异常退出遗留的单元：--rm 只保证「容器退出时自动删」，不保证
-	// 「服务退出时容器退出」—— 被强杀时残留的单元会一直占着内存。
+	// Reclaim units left behind by a previous abnormal exit: --rm only guarantees "delete when the container
+	// exits", not "the container exits when the service does" — after a hard kill the leftover units keep
+	// holding memory.
 	if err := cleanOrphans(iso); err != nil {
 		xlog.Error("sandboxd: clean orphan units: %v", err)
 	}
@@ -115,8 +121,8 @@ func main() {
 
 	xlog.Info("sandboxd: listening on %s (mode=%s)", cfg.Listen, cfg.Mode)
 
-	// 这里用 http.Server 而不是 gin 的 Run：Run 在内部自建 server 且阻塞返回，
-	// 外面拿不到句柄，收到信号时没法优雅关闭。
+	// http.Server instead of gin's Run: Run builds its own server internally and blocks, so no handle is
+	// available outside and a graceful shutdown on a signal is impossible.
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: srv.Router()}
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -125,8 +131,8 @@ func main() {
 		}
 	}()
 
-	// 服务注册（可选）：注册到 consul/nacos，供 sandboxg 发现。放在 HTTP 起来之后，
-	// 让 consul 的 /healthz 探活第一次就成功。
+	// Service registration (optional): register with consul/nacos so sandboxg can discover it. Done after
+	// HTTP is up, so consul's /healthz probe succeeds on the first try.
 	var registrar xregistry.Registrar
 	if cfg.Registry.Enabled {
 		rc := registryConfig(cfg)
@@ -140,22 +146,23 @@ func main() {
 			} else {
 				xlog.Info("sandboxd: registered to %s as service %s", rc.Type, rc.ServiceName)
 			}
-			// 保活自愈：定期确认注册状态，被摘除（注册中心断连）或初始失败都自愈。
+			// Self-healing keepalive: periodically confirm the registration state; both an eviction (registry
+			// disconnect) and an initial failure heal themselves.
 			reg.KeepRegistered(ctx, 30*time.Second)
 		}
 	}
 
-	// 优雅关闭 —— L2 的必要配套。
+	// Graceful shutdown — the necessary counterpart of L2.
 	//
-	// L3 的前台进程（docker run --rm -i）会随 stdin 关闭自退，容器跟着消失；
-	// 而 L2 的单元是 docker run -d 的长驻容器，生命周期独立于客户端，
-	// 不显式 Close 就会留下 N 个 sleep infinity，只能等下次启动的
-	// CleanOrphans 兜底 —— 那是崩溃兜底，不该成为常规停机路径。
+	// L3's foreground process (docker run --rm -i) exits when stdin closes and the container goes with it;
+	// L2's units are long-lived docker run -d containers whose lifetime is independent of the client, so
+	// without an explicit Close they leave N `sleep infinity` processes behind and only the next startup's
+	// CleanOrphans saves the day — that is a crash backstop, not a normal shutdown path.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
-	cancel() // 让 KeepRegistered 等后台循环退出
+	cancel() // let background loops such as KeepRegistered exit
 	xlog.Info("sandboxd: signal received, closing units ...")
 	if registrar != nil {
 		_ = registrar.Deregister()
@@ -165,7 +172,7 @@ func main() {
 	xlog.Info("sandboxd: bye")
 }
 
-// binaryFor 按模式取可执行文件路径。
+// binaryFor picks the executable path for the mode.
 func binaryFor(cfg *daemon.Config) string {
 	switch cfg.Mode {
 	case isolate.NsjailName:
@@ -177,7 +184,7 @@ func binaryFor(cfg *daemon.Config) string {
 	}
 }
 
-// extraArgsFor 按模式取逃生参数。
+// extraArgsFor picks the escape-hatch arguments for the mode.
 func extraArgsFor(cfg *daemon.Config) []string {
 	switch cfg.Mode {
 	case isolate.NsjailName:
@@ -189,21 +196,22 @@ func extraArgsFor(cfg *daemon.Config) []string {
 	}
 }
 
-// checkCommands 在 mode=none 下校验各语言的命令可在宿主解析。
+// checkCommands verifies, under mode=none, that every language's command resolves on the host.
 //
-// 原因：mode=none 时命令由宿主直接 exec，PATH 里没有就会在第一次调用时
-// 才失败（错误很难定位）。nsjail/docker 模式下命令在 rootfs/镜像内部解析，
-// 宿主 LookPath 会误报，因此只在 none 下校验。
+// Why: under mode=none the command is exec'd by the host directly, so a missing PATH entry only fails on the
+// first call (a very hard error to attribute). Under nsjail/docker the command resolves inside the
+// rootfs/image, where a host LookPath would produce false alarms — hence the check only runs for none.
 //
-// ⚠️ 校验的必须是 ResolveCommand 的结果（当前 mode 实际要跑的那个命令），
-// 不是通用的 lc.Command —— 否则配了 commands.none 的部署会被误报，
-// 或者压根校验了一个不会执行的命令。
+// ⚠️ It must validate the result of ResolveCommand (the command actually used in the current mode), not the
+// generic lc.Command — otherwise a deployment with commands.none configured is falsely reported, or the check
+// validates a command that never runs.
 func checkCommands(cfg *daemon.Config) error {
 	if cfg.Mode != isolate.NoneName {
 		return nil
 	}
-	// 遍历顶层语言定义而不是 code.pools：语言定义现在同时服务单工与双工，
-	// 而 mode=none 下两类用途都在宿主 exec，所以每个定义的入口名都得能解析。
+	// Iterate the top-level language definitions rather than code.pools: language definitions now serve both
+	// simplex and duplex, and under mode=none both run on the host, so every definition's entry name must
+	// resolve.
 	for lang, def := range cfg.Langs {
 		cmd, err := def.ResolveCommand(cfg.Mode)
 		if err != nil {
@@ -219,14 +227,15 @@ func checkCommands(cfg *daemon.Config) error {
 	return nil
 }
 
-// cleanOrphans 回收隔离实现留下的孤立容器。
+// cleanOrphans reclaims orphan containers left by the isolation implementation.
 //
-// 只有实现了 sandbox.OrphanCleaner 的实现才有这个概念（目前是 docker）：
-// 服务被强杀时复用单元来不及 Close、一次性容器来不及 removeContainer，
-// 而 --rm 不会替我们收拾（它只管容器自己退出）。
+// Only implementations of sandbox.OrphanCleaner have this concept (docker, today): after a hard kill of the
+// service, reused units are not Closed in time and one-shot containers are not removeContainer'ed in time,
+// and --rm does not clean up for us (it only handles the container exiting on its own).
 //
-// 覆盖两类：复用单元 + 一次性 exec 容器（后者带 sandboxd-exec 标签，
-// 是「杀干净」改造之后才可寻址的 —— 此前它连标签都没有，泄漏了没人看得见）。
+// It covers both kinds: reused units and one-shot exec containers (the latter carry the sandboxd-exec label,
+// which only became addressable after the "kill cleanly" rework — before that they had no label at all, and a
+// leak was invisible).
 func cleanOrphans(iso sandbox.Sandbox) error {
 	oc, ok := iso.(sandbox.OrphanCleaner)
 	if !ok {
@@ -242,9 +251,9 @@ func cleanOrphans(iso sandbox.Sandbox) error {
 	return nil
 }
 
-// registryConfig 把 sandboxd 的 registry 配置转成 xregistry 的注册配置。
-// ServiceAddr 必须显式给出 gateway 能连到的地址（listen 可能是 127.0.0.1，跨机
-// 不可达）；ServicePort 缺省从 listen 解析。
+// registryConfig turns sandboxd's registry config into xregistry's registrar config.
+// ServiceAddr must be given explicitly as an address the gateway can reach (listen may be 127.0.0.1, which is
+// unreachable across machines); ServicePort defaults to the one parsed out of listen.
 func registryConfig(cfg *daemon.Config) *xregistry.RegistrarConfig {
 	name := cfg.Registry.ServiceName
 	if name == "" {

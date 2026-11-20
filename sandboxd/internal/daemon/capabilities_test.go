@@ -5,20 +5,21 @@ import (
 	"testing"
 )
 
-// code_langs 的判据必须是「已建池的语言」——它是工作流编辑器与创建工作流的
-// agent 唯一的选语言依据：比实际服务的集合**宽**，就会出现「编辑器里有、跑起来
-// unsupported_lang」；比它**窄**，则白白藏起可用的语言。
+// The criterion for code_langs must be "the languages that actually have a pool" — it is the only basis on which the
+// workflow editor and the agent creating a workflow pick a language. Wider than the set actually served and you get
+// "it is in the editor but unsupported_lang at runtime"; narrower and usable languages are hidden for no reason.
 func TestCodeLangsFollowsPools(t *testing.T) {
 	s := &Server{pools: map[string]*slotPool{"lua": nil, "python": nil}}
-	want := []string{"lua", "python"} // 顺序稳定（字典序），消费方的下拉不必每次重排
+	want := []string{"lua", "python"} // stable order (lexical), so the consumer's dropdown need not re-sort every time
 
 	if got := s.codeLangs(); !reflect.DeepEqual(got, want) {
 		t.Errorf("codeLangs() = %v, want %v", got, want)
 	}
 
-	// 顶层 langs 里有、但没开双工池的语言不该出现（只跑技能脚本的语言就是这种）。
+	// A language present in the top-level langs but without a duplex pool must not appear (a language used only for
+	// skill scripts is exactly that case).
 	s.cfg = &Config{Langs: map[string]LangDef{"ruby": {Command: "ruby"}}}
 	if got := s.codeLangs(); !reflect.DeepEqual(got, want) {
-		t.Errorf("未建池的语言不该出现在 code_langs: %v", got)
+		t.Errorf("a language without a pool must not appear in code_langs: %v", got)
 	}
 }

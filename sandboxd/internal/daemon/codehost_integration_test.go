@@ -15,11 +15,11 @@ import (
 	"flame/sandboxd/isolate"
 )
 
-// 阶段②端到端验证：none 模式下 spawnCodehost 启动真实 codehost 二进制，经 Worker
-// 协议执行真实解释器（python / node）。缺 codehost 二进制或解释器则跳过。
+// Stage-2 end-to-end verification: in none mode spawnCodehost starts the real codehost binary and executes a real
+// interpreter (python / node) over the Worker protocol. It skips when the binary or an interpreter is missing.
 //
-// codehost 二进制定位优先级：SANDBOXD_CODEHOST_BIN → sandboxd/bin/ → PATH。
-// 构建：cd sandboxd && go build -o bin/codehost ./cmd/codehost
+// Lookup order for the codehost binary: SANDBOXD_CODEHOST_BIN → sandboxd/bin/ → PATH.
+// Build: cd sandboxd && go build -o bin/codehost ./cmd/codehost
 
 func findCodehostBinary(t *testing.T) string {
 	t.Helper()
@@ -30,7 +30,7 @@ func findCodehostBinary(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	// 相对 internal/daemon 包 → sandboxd/bin/
+	// relative to the internal/daemon package → sandboxd/bin/
 	if local := filepath.Join("..", "..", "bin", name); fileExists(local) {
 		return local
 	}
@@ -46,8 +46,8 @@ func fileExists(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
-// findLua 定位 lua 解释器：PATH 常见名 → 本机 none 模式固定路径
-// （sandboxd/config.yaml 的 langs.lua.commands.none）。
+// findLua locates the lua interpreter: the common names on PATH → the fixed local path of the none mode
+// (langs.lua.commands.none in sandboxd/config.yaml).
 func findLua() string {
 	for _, name := range []string{"lua", "lua55", "lua5.5", "lua5.4", "lua5.3"} {
 		if p, err := exec.LookPath(name); err == nil {
@@ -60,7 +60,7 @@ func findLua() string {
 	return ""
 }
 
-// TestCodehostIntegration：spawn + 单次 execute 的结果 / 超时路径。
+// TestCodehostIntegration: the result and timeout paths of spawn + a single execute.
 func TestCodehostIntegration(t *testing.T) {
 	bin := findCodehostBinary(t)
 	iso := isolate.NewNone()
@@ -143,7 +143,7 @@ func TestCodehostIntegration(t *testing.T) {
 	}
 }
 
-// TestCodehostReuse：同一个 codehost 常驻复用，连续多次 execute 各 fork 全新解释器。
+// TestCodehostReuse: one resident codehost is reused, and every execute forks a brand-new interpreter.
 func TestCodehostReuse(t *testing.T) {
 	bin := findCodehostBinary(t)
 	python, err := exec.LookPath("python")

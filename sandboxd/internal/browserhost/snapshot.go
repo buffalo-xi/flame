@@ -10,10 +10,11 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 )
 
-// interactiveRoles 会被分配 ref 的角色。
+// interactiveRoles are the roles that get a ref assigned.
 //
-// 只有「能操作的东西」才值得一个 ref：给每个文本节点也编号会把快照撑成
-// 一堆无意义的 e17/e18，模型反而更难找目标。纯文本节点照常输出，只是没有 ref。
+// Only "things you can operate" deserve a ref: numbering every text node too would bloat the snapshot with a pile
+// of meaningless e17/e18 and make targets harder for the model to find. Pure text nodes are still emitted, just
+// without a ref.
 var interactiveRoles = map[string]bool{
 	"button":           true,
 	"link":             true,
@@ -34,8 +35,8 @@ var interactiveRoles = map[string]bool{
 	"treeitem":         true,
 }
 
-// skipRoles 这些角色本身没有信息量，只作为结构容器穿透。
-// 键一律小写 —— role 在渲染前已经 ToLower 过。
+// skipRoles are roles that carry no information themselves and are only passed through as structural containers.
+// Keys are always lowercase — role is already lowercased before rendering.
 var skipRoles = map[string]bool{
 	"none":          true,
 	"generic":       true,
@@ -44,7 +45,8 @@ var skipRoles = map[string]bool{
 	"presentation":  true,
 }
 
-// emptyNameRoles 无名时不必单独占一行的结构角色（有名字时照常输出）。
+// emptyNameRoles are structural roles that need no line of their own when nameless (they are still emitted when
+// named).
 var emptyNameRoles = map[string]bool{
 	"paragraph":   true,
 	"group":       true,
@@ -53,13 +55,14 @@ var emptyNameRoles = map[string]bool{
 	"webarea":     true,
 }
 
-// renderAX 把无障碍树渲染成「一行一个节点」的紧凑文本。
+// renderAX renders the accessibility tree into compact "one node per line" text.
 //
-// 返回：文本、ref → backendNodeId 映射、已输出节点数、是否被预算截断。
+// Returns: the text, the ref -> backendNodeId mapping, the number of emitted nodes, and whether a budget truncated
+// it.
 //
-// 为什么用无障碍树而不是 DOM：DOM 里一半节点是布局/框架产物（div 套 div），
-// 给模型看等于让它自己从噪声里找可操作元素；无障碍树天然只保留
-// 「按钮 / 输入框 / 链接 / 文本」这些语义节点，且自带可访问名称。
+// Why the accessibility tree instead of the DOM: half of the DOM is layout / framework output (div inside div),
+// and showing that to the model means letting it hunt for operable elements in the noise; the accessibility tree
+// keeps only the semantic nodes — "button / textbox / link / text" — and already carries the accessible name.
 func renderAX(nodes []*accessibility.Node, maxNodes, maxBytes int) (string, map[string]cdp.BackendNodeID, int, bool) {
 	byID := make(map[accessibility.NodeID]*accessibility.Node, len(nodes))
 	for _, n := range nodes {
@@ -83,20 +86,20 @@ func renderAX(nodes []*accessibility.Node, maxNodes, maxBytes int) (string, map[
 		name := strings.TrimSpace(axString(n.Name))
 		value := strings.TrimSpace(axString(n.Value))
 
-		// 深层节点不再展开：再往下多半是表格单元格 / 列表项细节，
-		// 继续渲染只会把预算花在模型根本不会点的东西上。
+		// Deep nodes are not expanded: anything further down is mostly table cell / list item detail, and
+		// rendering it on would spend the budget on things the model will never click.
 		if depth > 12 {
 			return
 		}
 
 		emit := !n.Ignored && !skipRoles[role] && role != ""
-		// 无名文本 / 无名结构容器（paragraph、group 之类）只是树的分叉点，
-		// 写出来只会把快照撑成一片方括号。
+		// Nameless text / nameless structural containers (paragraph, group and the like) are only branching points
+		// of the tree; writing them out would bloat the snapshot into a wall of brackets.
 		if name == "" && emptyNameRoles[role] {
 			emit = false
 		}
-		// 文本节点与父节点同名时是同一个内容的重复投影（heading → statictext），
-		// 只保留父节点那一行。
+		// A text node with the same name as its parent is a duplicate projection of the same content
+		// (heading -> statictext), so only the parent line is kept.
 		if role == "statictext" && name == parentName {
 			emit = false
 		}
@@ -145,7 +148,8 @@ func renderAX(nodes []*accessibility.Node, maxNodes, maxBytes int) (string, map[
 		}
 	}
 
-	// 根：父节点不在本次结果里的那些（通常是 Document，iframe 文档也会各有一个根）。
+	// Roots: the nodes whose parent is not in this result (usually Document, and an iframe document gets its own
+	// root as well).
 	for _, n := range nodes {
 		if n.ParentID != "" {
 			if _, ok := byID[n.ParentID]; ok {
@@ -162,8 +166,8 @@ func renderAX(nodes []*accessibility.Node, maxNodes, maxBytes int) (string, map[
 	return text, refs, emitted, trunc
 }
 
-// renderStates 把布尔/三态属性拼成 (checked, disabled) 这样的尾巴。
-// 只输出 true 的状态与三态的 mixed —— 未勾选写出来只是噪声。
+// renderStates joins the boolean / tri-state properties into a tail like (checked, disabled).
+// Only true states and the tri-state mixed are emitted — writing out "not checked" is just noise.
 func renderStates(n *accessibility.Node) string {
 	var out []string
 	for _, p := range n.Properties {
@@ -188,8 +192,8 @@ func renderStates(n *accessibility.Node) string {
 	return " (" + strings.Join(out, ", ") + ")"
 }
 
-// axString 取 AXValue 的字符串形态。底层是原始 JSON（jsontext.Value），
-// 类型可能是字符串、数字、布尔或三态的 "mixed"/"false"。
+// axString takes the string form of an AXValue. Underneath it is raw JSON (jsontext.Value), and the type may be a
+// string, a number, a boolean or the tri-state "mixed"/"false".
 func axString(v *accessibility.Value) string {
 	if v == nil || len(v.Value) == 0 {
 		return ""

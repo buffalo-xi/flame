@@ -5,11 +5,11 @@ import (
 	"time"
 )
 
-// codeDeadline 的不变量：调用方下发的超时**只能收紧**交互上限，不能放宽。
+// The invariant of codeDeadline: a caller-supplied timeout can only **tighten** the interaction cap, never relax it.
 //
-// 这条不变量就是踩过的坑：nexus 侧把 script.<lang>.timeout 配成 600，以为能给脚本
-// 10 分钟，实际被这里的 120s 削掉 —— 而当时这段逻辑既没有测试、也没有日志，
-// 只能靠读代码才能发现「配了等于没配」。
+// That invariant is a bug we already hit: the nexus side configured script.<lang>.timeout to 600, believing scripts
+// could get 10 minutes, while it was in fact shaved down to 120s here — and at the time this logic had neither a test
+// nor a log line, so "configured but ineffective" could only be found by reading the code.
 func TestScriptDeadline(t *testing.T) {
 	const maxSec = 120
 
@@ -18,16 +18,16 @@ func TestScriptDeadline(t *testing.T) {
 		req  time.Duration
 		want time.Duration
 	}{
-		// 没有下发超时（0 或负）：用硬闸兜底。
-		{"未下发 → 硬闸", 0, maxSec * time.Second},
-		{"负值（视为未设置）→ 硬闸", -3 * time.Second, maxSec * time.Second},
-		// 下发值更小：收紧，这是唯一能改变实际上限的方向。
-		{"下发 5s → 5s", 5 * time.Second, 5 * time.Second},
-		{"下发 119s → 119s", 119 * time.Second, 119 * time.Second},
-		// 下发值更大：**不放宽**（600 是历史配置里真实出现过的值）。
-		{"下发 600s → 仍是硬闸", 600 * time.Second, maxSec * time.Second},
-		// 相等：不制造歧义。
-		{"下发 120s → 120s", 120 * time.Second, maxSec * time.Second},
+		// No timeout supplied (zero or negative): the hard gate is the backstop.
+		{"not supplied → hard gate", 0, maxSec * time.Second},
+		{"negative (treated as unset) → hard gate", -3 * time.Second, maxSec * time.Second},
+		// A smaller value supplied: tightened, the only direction that can change the actual cap.
+		{"5s supplied → 5s", 5 * time.Second, 5 * time.Second},
+		{"119s supplied → 119s", 119 * time.Second, 119 * time.Second},
+		// A larger value supplied: **not** relaxed (600 really appeared in historical configs).
+		{"600s supplied → still the hard gate", 600 * time.Second, maxSec * time.Second},
+		// Equal: no ambiguity introduced.
+		{"120s supplied → 120s", 120 * time.Second, maxSec * time.Second},
 	}
 
 	for _, tc := range cases {
@@ -39,14 +39,14 @@ func TestScriptDeadline(t *testing.T) {
 	}
 }
 
-// 硬闸本身随配置走：改 code_max_sec 必须立刻改变实际上限，
-// 否则「调大硬闸」这个动作就是无效的。
+// The hard gate itself follows the config: changing code_max_sec must change the actual cap immediately, otherwise
+// "raise the hard gate" is a no-op.
 func TestScriptDeadlineFollowsConfig(t *testing.T) {
-	// 同一个下发值，硬闸不同 → 结果不同。
+	// Same supplied value, different hard gate → different result.
 	if got := codeDeadline(300*time.Second, 600); got != 300*time.Second {
-		t.Errorf("硬闸 600s 时下发 300s 应为 300s, got %v", got)
+		t.Errorf("with a 600s hard gate, 300s supplied should yield 300s, got %v", got)
 	}
 	if got := codeDeadline(300*time.Second, 120); got != 120*time.Second {
-		t.Errorf("硬闸 120s 时下发 300s 应为 120s, got %v", got)
+		t.Errorf("with a 120s hard gate, 300s supplied should yield 120s, got %v", got)
 	}
 }

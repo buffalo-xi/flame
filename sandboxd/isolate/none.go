@@ -7,17 +7,17 @@ import (
 	"flame/tools/sandbox"
 )
 
-// noneSandbox 直通实现：不做任何隔离，等价于直接 exec.Command。
+// noneSandbox is the passthrough implementation: it does no isolation at all and amounts to a plain exec.Command.
 //
-// 由于没有隔离，argv/dir 中的「沙箱内路径」会按 Mounts 翻译回宿主路径后再执行，
-// 这样调用方只需写一套路径。
+// Because there is no isolation, the "in-sandbox paths" in argv/dir are translated back into host paths according to
+// Mounts before execution, so callers only ever write one set of paths.
 //
-// 资源上限：Limits 里只有 Timeout 是真的（ctx 兜得住），MemoryMB / CPUCount / MaxPIDs /
-// MaxFileMB 在这一档全部无从施加 —— 没有 cgroup / namespace / Job Object 可用。
-// 这是「宿主直通」的定义，不是漏实现；启动时会在 sandboxd 侧打一条日志说明。
+// Resource caps: only Timeout in Limits is real (ctx can enforce it); MemoryMB / CPUCount / MaxPIDs / MaxFileMB cannot
+// be applied at all in this tier — there is no cgroup / namespace / Job Object available. That is the definition of
+// "host passthrough", not a missing implementation; sandboxd logs a note about it at startup.
 type noneSandbox struct{}
 
-// NewNone 创建直通隔离实现（仅用于开发/调试）。
+// NewNone creates the passthrough isolation implementation (for development / debugging only).
 func NewNone() sandbox.Sandbox { return &noneSandbox{} }
 
 func (s *noneSandbox) Name() string { return NoneName }
@@ -27,13 +27,14 @@ func (s *noneSandbox) Start(ctx context.Context, spec *sandbox.Spec) (sandbox.Pr
 		return nil, errEmptyArgv
 	}
 
-	// 超时：仅当指定时包一层；cancel 由 startWithPipes 挂到进程上，等结束再释放
+	// Timeout: wrapped only when specified; startWithPipes attaches cancel to the process and releases it once it
+	// ends.
 	var cancel context.CancelFunc
 	if spec.Limits.Timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, spec.Limits.Timeout)
 	}
 
-	// 把「沙箱内路径」翻译回宿主路径
+	// Translate the "in-sandbox paths" back into host paths
 	argv := TranslateArgv(spec.Mounts, spec.Argv)
 	dir := TranslateToHost(spec.Mounts, spec.Dir)
 
@@ -43,7 +44,7 @@ func (s *noneSandbox) Start(ctx context.Context, spec *sandbox.Spec) (sandbox.Pr
 		cmd.Env = spec.Env
 	}
 
-	// kill 传 nil：用默认收口（进程组）。none 没有 cgroup / namespace，
-	// 这是它唯一的手段 —— 因此它的保证只是「组内干净」，不是「杀掉全部后代」。
+	// kill nil means the default approach (the process group). none has no cgroup / namespace, so that is its only
+	// means — therefore its guarantee is only "clean inside the group", not "every descendant killed".
 	return startWithPipes(cmd, spec, cancel, nil)
 }

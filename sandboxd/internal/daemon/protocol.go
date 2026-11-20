@@ -8,12 +8,12 @@ import (
 	"io"
 )
 
-// worker 进程 stdio 上的帧格式：4 字节大端长度前缀 + JSON。
-// 与各语言 worker 脚本（worker.lua / worker.py / worker.js）的约定一致。
+// The frame format on a worker process's stdio: a 4-byte big-endian length prefix followed by JSON.
+// It matches the convention of the per-language worker scripts (worker.lua / worker.py / worker.js).
 
 const maxMsgSize = 10 * 1024 * 1024 // 10MB
 
-// sendMsg 发送消息：4字节大端长度前缀 + JSON
+// sendMsg writes one message: a 4-byte big-endian length prefix followed by JSON.
 func sendMsg(w io.Writer, msg map[string]any) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -32,8 +32,8 @@ func sendMsg(w io.Writer, msg map[string]any) error {
 	return nil
 }
 
-// recvMsg 接收消息：4字节大端长度前缀 + JSON
-// 使用 json.Number 保持数字精度
+// recvMsg reads one message: a 4-byte big-endian length prefix followed by JSON.
+// json.Number is used to keep numeric precision.
 func recvMsg(r io.Reader) (map[string]any, error) {
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(r, header); err != nil {

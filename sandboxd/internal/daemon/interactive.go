@@ -10,27 +10,30 @@ import (
 	"flame/tools/sandbox"
 )
 
-// interactiveJanitorInterval 空闲回收巡检间隔。
+// interactiveJanitorInterval is the sweep interval of idle reclamation.
 const interactiveJanitorInterval = time.Minute
 
-// errInteractiveEmptyArgv 长交互进程首次创建时缺少 argv。
+// errInteractiveEmptyArgv is returned when a long-lived interactive process is created without argv.
 var errInteractiveEmptyArgv = errors.New("interactive: empty argv")
 
-// BrowserToolID 浏览器工具在长交互注册表里的 tool_id。
+// BrowserToolID is the tool_id of the browser tool in the long-lived interactive registry.
 //
-// 它与 "shell" 平级：同一个 session 的 tools map 里各占一个条目，
-// 共享同一个隔离单元（docker）与同一套空闲回收 / kill / 粘性路由。
+// It is a peer of "shell": each occupies one entry in a session's tools map, and they share the same isolation unit
+// (docker) and the same idle reclamation / kill / sticky routing.
 const BrowserToolID = "browser"
 
-// writerSwitch 可切换目标的写入器。
+// writerSwitch is a writer whose target can be switched.
 //
-// 长交互进程是持久的，而 stdout/stderr 都要跟随「当前这次调用」的连接回传，
-// 所以每次调用开始时把目标切到当前连接的通道，调用结束复位为空。
+// A long-lived interactive process is persistent, while stdout/stderr must be sent back over the connection of "the
+// current call", so at the start of every call the target is switched to that connection's channel and reset to nil
+// when the call ends.
 //
-// 两个设计点：
-//   - 切换与进程写入之间的竞态，最坏是写到旧连接（已关闭）而丢一次输出，不杀进程；
-//   - Write 永远返回成功：目标写失败（客户端断开）不该拆掉这条持久输出路径 ——
-//     否则 stdout 广播 goroutine（io.Copy）会因一次写错而退出，进程就没输出了。
+// Two design points:
+//   - a race between switching and the process writing at worst writes to the old (closed) connection and loses one
+//     batch of output; it does not kill the process;
+//   - Write always reports success: a failed write to the target (the client disconnected) must not tear down this
+//     persistent output path — otherwise the stdout broadcast goroutine (io.Copy) would exit on one write error and
+//     the process would have no output at all.
 type writerSwitch struct {
 	mu sync.Mutex
 	w  io.Writer
@@ -49,47 +52,48 @@ func (s *writerSwitch) Write(p []byte) (int, error) {
 	if w == nil {
 		return len(p), nil
 	}
-	_, _ = w.Write(p) // 吞掉写错误：断开只丢这次输出，不杀输出路径
+	_, _ = w.Write(p) // the write error is swallowed: a disconnect only loses this batch, it does not kill the output path
 	return len(p), nil
 }
 
-// toolProc 一个长交互进程的句柄。
+// toolProc is the handle of one long-lived interactive process.
 //
-// mu 做并发串行化：同一进程只有一根 stdin，同一时刻只服务一次调用。
-// 锁与进程生死解耦：unlock 只是「本次调用结束」，不杀进程。
+// mu serialises concurrency: one process has a single stdin and serves one call at a time. The lock is decoupled from
+// the process lifetime: unlocking only means "this call is over", it does not kill the process.
 type toolProc struct {
 	proc       sandbox.Process
 	stdin      io.WriteCloser
-	stdoutOut  *writerSwitch // stdout 广播出口：目标 = 当前连接
-	stderr     *writerSwitch // stderr 出口（spec.Stderr），目标 = 当前连接
+	stdoutOut  *writerSwitch // stdout broadcast sink: target = the current connection
+	stderr     *writerSwitch // stderr sink (spec.Stderr), target = the current connection
 	lastActive time.Time
 	mu         sync.Mutex
 }
 
-// sessionSandbox 一个 session 的逻辑沙箱。
+// sessionSandbox is the logical sandbox of one session.
 //
-// 三种 mode 统一成同一结构，差异收敛到 unit：
-//   - docker：unit 是容器（Acquire），所有 tool 进程 docker exec 进去，共享容器挂载；
-//   - nsjail/none：unit 为 nil，每个 tool 进程独立 Start。
+// The three modes are unified into this one structure and the differences collapse into unit:
+//   - docker: unit is the container (Acquire), every tool process is docker exec'd into it and shares the container
+//     mounts;
+//   - nsjail/none: unit is nil and every tool process is Started independently.
 type sessionSandbox struct {
 	mounts    []sandbox.Mount
 	unit      sandbox.Unit
 	tools     map[string]*toolProc
-	dir       string // 进程工作目录（沙箱内路径，仅首次创建生效）
-	ephemeral bool   // 无 session 的临时进程：空闲回收用短超时（run 结束即该销毁）
+	dir       string // process working directory (an in-sandbox path, only effective on first creation)
+	ephemeral bool   // a temporary process without a session: reclaimed with the short timeout (it should die when the run ends)
 	mu        sync.Mutex
 }
 
-// interactiveRegistry 长交互注册表（非池，有归属）。
+// interactiveRegistry is the long-lived interactive registry (not a pool; entries have an owner).
 //
-// 与 slotPool 的本质区别：对象「有归属、不可互换」，不能借还复用，
-// 语义是「查得到就用、查不到就建、超时/结束就删」。
+// The essential difference from slotPool: objects "have an owner and are not interchangeable", so they cannot be lent
+// out and reused; the semantics are "use it if it is there, create it if it is not, delete it on timeout / end".
 type interactiveRegistry struct {
 	exec                 sandbox.Sandbox
-	reusable             sandbox.Reusable // 非 nil 时走单元复用（docker）
-	idleTimeout          time.Duration    // 持久进程（有 session）的空闲兜底
-	ephemeralIdleTimeout time.Duration    // 临时进程（无 session）的短兜底
-	janitorInterval      time.Duration    // 巡检间隔：决定空闲回收的延迟上界
+	reusable             sandbox.Reusable // non-nil enables unit reuse (docker)
+	idleTimeout          time.Duration    // idle backstop of persistent processes (with a session)
+	ephemeralIdleTimeout time.Duration    // short backstop of temporary processes (without a session)
+	janitorInterval      time.Duration    // sweep interval: decides the upper bound of the reclaim delay
 
 	mu       sync.Mutex
 	sessions map[string]*sessionSandbox
@@ -98,8 +102,8 @@ type interactiveRegistry struct {
 	closeOnce sync.Once
 }
 
-// newInteractiveRegistry 创建注册表。ephemeralIdleTimeout 可选：不给则与 idleTimeout 相同
-// （保持旧测试的调用方式不变）。
+// newInteractiveRegistry creates the registry. ephemeralIdleTimeout is optional: when omitted it equals idleTimeout
+// (which keeps the call style of the older tests unchanged).
 func newInteractiveRegistry(exec sandbox.Sandbox, idleTimeout time.Duration, ephemeralIdleTimeout ...time.Duration) *interactiveRegistry {
 	eph := idleTimeout
 	if len(ephemeralIdleTimeout) > 0 && ephemeralIdleTimeout[0] > 0 {
@@ -108,12 +112,13 @@ func newInteractiveRegistry(exec sandbox.Sandbox, idleTimeout time.Duration, eph
 	return newInteractiveRegistryWithJanitor(exec, idleTimeout, eph, 0)
 }
 
-// newInteractiveRegistryWithJanitor 同 newInteractiveRegistry，但显式指定巡检间隔
-// （0 = 默认 1 分钟）。
+// newInteractiveRegistryWithJanitor is newInteractiveRegistry with an explicit sweep interval (0 = the default 1
+// minute).
 //
-// 为什么把巡检间隔也做成参数：空闲回收的真实时刻落在 (idle, idle+janitor] 之间，
-// 而 gateway 的粘性 TTL 必须覆盖这个上界（sticky_ttl > idle + 2×janitor）。间隔
-// 硬编码会让那个不等式在网关侧算不出来，所以它要能从配置进来、并随 capabilities 上报。
+// Why the sweep interval is a parameter as well: the real reclaim time falls in (idle, idle+janitor], and the gateway's
+// sticky TTL must cover that upper bound (sticky_ttl > idle + 2×janitor). A hardcoded interval would make that
+// inequality impossible to compute on the gateway side, so it must come from the config and be reported through
+// capabilities.
 func newInteractiveRegistryWithJanitor(exec sandbox.Sandbox, idleTimeout, ephemeralIdleTimeout, janitorInterval time.Duration) *interactiveRegistry {
 	eph := ephemeralIdleTimeout
 	if eph <= 0 {
@@ -137,12 +142,12 @@ func newInteractiveRegistryWithJanitor(exec sandbox.Sandbox, idleTimeout, epheme
 	return r
 }
 
-// acquire 懒建并返回 tool 进程，返回时进程已被锁住（tp.mu），
-// 调用方在本次调用结束后必须 unlock 释放。
-// acquireOpts acquire 的可选参数（首次创建 session 时生效）。
+// acquire lazily creates and returns the tool process; on return the process is locked (tp.mu) and the caller must
+// unlock it when this call ends.
+// acquireOpts holds the optional arguments of acquire (effective when the session is first created).
 type acquireOpts struct {
-	dir       string // 进程工作目录（沙箱内路径）
-	ephemeral bool   // 无 session 的临时进程：用短空闲超时兜底
+	dir       string // process working directory (an in-sandbox path)
+	ephemeral bool   // a temporary process without a session: backstopped by the short idle timeout
 }
 
 func (r *interactiveRegistry) acquire(sessionID string, mounts []sandbox.Mount, toolID string, argv []string, lim sandbox.Limits, opt ...acquireOpts) (*toolProc, error) {
@@ -169,8 +174,9 @@ func (r *interactiveRegistry) acquire(sessionID string, mounts []sandbox.Mount, 
 		}
 		sb.tools[toolID] = tp
 	}
-	// lastActive 必须在 sb.mu 内刷新：janitor 的 reapIdleTools 也持 sb.mu，
-	// 否则存在「刷新前被 janitor TryLock 抢到并按旧值回收」的窗口，把已 kill 的进程交给调用方。
+	// lastActive must be refreshed inside sb.mu: the janitor's reapIdleTools holds sb.mu too, otherwise there is a
+	// window where "the janitor wins the TryLock before the refresh and reaps by the stale value", handing an
+	// already killed process to the caller.
 	tp.lastActive = time.Now()
 	sb.mu.Unlock()
 
@@ -178,16 +184,18 @@ func (r *interactiveRegistry) acquire(sessionID string, mounts []sandbox.Mount, 
 	return tp, nil
 }
 
-// spawn 在 sessionSandbox 内懒建一个 tool 进程，并起两个常驻 goroutine：
-//   - stdout 广播：唯一读 stdout 的读端，把输出写到 stdoutOut（目标 = 当前连接）；
-//   - 收尸：Wait() 会启动 stderr 复制 goroutine（spec.Stderr 非 *os.File 时）、
-//     reap 进程、释放 cancel，并在进程自退时把它从注册表移除（下次调用重建）。
+// spawn lazily creates one tool process inside the sessionSandbox and starts two resident goroutines:
+//   - stdout broadcast: the single reader of stdout, writing the output to stdoutOut (target = the current
+//     connection);
+//   - reaping: Wait() starts the stderr copy goroutine (when spec.Stderr is not *os.File), reaps the process,
+//     releases cancel, and removes it from the registry when the process exits on its own (recreated on the next
+//     call).
 func (sb *sessionSandbox) spawn(r *interactiveRegistry, sessionID, toolID string, argv []string, lim sandbox.Limits) (*toolProc, error) {
 	if len(argv) == 0 {
 		return nil, errInteractiveEmptyArgv
 	}
 
-	// docker：懒建容器（unit）。建第一个进程时 Acquire，删最后一个时 Close。
+	// docker: the container (unit) is created lazily. Acquire on the first process, Close on the last.
 	if r.reusable != nil && sb.unit == nil {
 		unit, err := r.reusable.Acquire(context.Background(), &sandbox.Spec{Mounts: sb.mounts, Limits: lim})
 		if err != nil {
@@ -226,15 +234,16 @@ func (sb *sessionSandbox) spawn(r *interactiveRegistry, sessionID, toolID string
 		lastActive: time.Now(),
 	}
 
-	// stdout 广播：每个进程只有一个读 stdout 的 goroutine。不能每个连接各起一个
-	// io.Copy 直接读 proc.Stdout() —— 持久进程的 stdout 一直开着，断连后旧读端卡死，
-	// 下个连接会并发读同一根管道，把输出撕裂。这里统一读、按当前连接分流。
+	// stdout broadcast: every process gets exactly one goroutine reading stdout. Starting one io.Copy per connection
+	// reading proc.Stdout() directly is not an option — a persistent process keeps its stdout open, the old reader
+	// blocks after a disconnect, and the next connection would read the same pipe concurrently and tear the output
+	// apart. Here it is read once and dispatched to the current connection.
 	go func() {
 		_, _ = io.Copy(tp.stdoutOut, proc.Stdout())
 	}()
 
-	// 收尸：Wait 做三件事——启动 stderr 复制（不 Wait 的话 stderr 永远到不了客户端）、
-	// reap 进程、释放 cancel。返回即进程退出，从注册表移除。
+	// Reaping: Wait does three things — starts the stderr copy (without Wait, stderr would never reach the client),
+	// reaps the process, and releases cancel. Returning means the process exited, so it is removed from the registry.
 	go func() {
 		_ = proc.Wait()
 		r.removeTool(sessionID, toolID)
@@ -243,16 +252,17 @@ func (sb *sessionSandbox) spawn(r *interactiveRegistry, sessionID, toolID string
 	return tp, nil
 }
 
-// unlock 释放进程锁（本次调用结束，进程保留）。
+// unlock releases the process lock (this call is over, the process stays).
 func (tp *toolProc) unlock() {
 	tp.mu.Unlock()
 }
 
-// removeTool 移除并回收一个 tool 进程（进程退出或显式删除时），
-// 返回该 session 是否已无任何 tool。
+// removeTool removes and reclaims a tool process (when it exits or is explicitly deleted) and reports whether the
+// session no longer has any tool.
 //
-// 返回值是「粘性绑定该不该解」的判据：一个 session 可以有多个长交互工具，
-// 杀掉其中一个不代表会话作废。session 不存在也算空（幂等 kill 的语义）。
+// The return value is the criterion for "should the sticky binding be dropped": a session can have several
+// long-lived interactive tools, and killing one of them does not invalidate the session. A missing session also
+// counts as empty (the semantics of an idempotent kill).
 func (r *interactiveRegistry) removeTool(sessionID, toolID string) bool {
 	r.mu.Lock()
 	sb := r.sessions[sessionID]
@@ -278,7 +288,7 @@ func (r *interactiveRegistry) removeTool(sessionID, toolID string) bool {
 	return empty
 }
 
-// release 销毁整个 session 的沙箱。
+// release destroys the whole session's sandbox.
 func (r *interactiveRegistry) release(sessionID string) {
 	r.mu.Lock()
 	sb := r.sessions[sessionID]
@@ -291,7 +301,7 @@ func (r *interactiveRegistry) release(sessionID string) {
 	}
 }
 
-// destroy 销毁 sessionSandbox：kill 所有进程，docker 下 Close 单元。
+// destroy tears down the sessionSandbox: kill every process and, under docker, Close the unit.
 func (sb *sessionSandbox) destroy() {
 	sb.mu.Lock()
 	tools := sb.tools
@@ -308,7 +318,7 @@ func (sb *sessionSandbox) destroy() {
 	}
 }
 
-// startJanitor 空闲回收巡检（间隔见 janitorInterval，缺省 1 分钟）。
+// startJanitor runs the idle reclamation sweep (the interval is janitorInterval, 1 minute by default).
 func (r *interactiveRegistry) startJanitor() {
 	go func() {
 		t := time.NewTicker(r.janitorInterval)
@@ -324,7 +334,8 @@ func (r *interactiveRegistry) startJanitor() {
 	}()
 }
 
-// reapIdle 回收空闲超时的 tool 进程，以及因此变空的 session。
+// reapIdle reclaims tool processes that exceeded their idle timeout, along with the sessions that become empty
+// because of it.
 func (r *interactiveRegistry) reapIdle() {
 	now := time.Now()
 
@@ -336,7 +347,8 @@ func (r *interactiveRegistry) reapIdle() {
 	r.mu.Unlock()
 
 	for sid, sb := range sessions {
-		// 临时进程（无 session）用短超时：run 结束就尽快回收；持久进程用长超时。
+		// A temporary process (without a session) uses the short timeout: reclaim it as soon as the run ends; a
+		// persistent process uses the long one.
 		timeout := r.idleTimeout
 		if sb.ephemeral {
 			timeout = r.ephemeralIdleTimeout
@@ -352,14 +364,14 @@ func (r *interactiveRegistry) reapIdle() {
 	}
 }
 
-// reapIdleTools 回收空闲超时的 tool 进程，返回 session 是否已空。
-// 正在服务调用的进程（TryLock 失败）跳过，不回收。
+// reapIdleTools reclaims tool processes that exceeded their idle timeout and reports whether the session is now empty.
+// A process currently serving a call (TryLock fails) is skipped and not reclaimed.
 func (sb *sessionSandbox) reapIdleTools(now time.Time, timeout time.Duration) bool {
 	var idle []*toolProc
 	sb.mu.Lock()
 	for id, tp := range sb.tools {
 		if !tp.mu.TryLock() {
-			continue // 正在服务调用，跳过
+			continue // currently serving a call, skip
 		}
 		if now.Sub(tp.lastActive) > timeout {
 			delete(sb.tools, id)
@@ -376,7 +388,7 @@ func (sb *sessionSandbox) reapIdleTools(now time.Time, timeout time.Duration) bo
 	return empty
 }
 
-// Close 关闭注册表：停止 janitor 并销毁所有 session。
+// Close shuts the registry down: it stops the janitor and destroys every session.
 func (r *interactiveRegistry) Close() {
 	r.closeOnce.Do(func() {
 		close(r.closed)
@@ -393,13 +405,14 @@ func (r *interactiveRegistry) Close() {
 	})
 }
 
-// stats 返回当前 session 数、tool 进程总数、活跃进程数（/metrics 负载快照用）。
+// stats returns the number of sessions, the total number of tool processes and the number of active processes (used
+// for the /metrics load snapshot).
 //
-// 只读快照：锁顺序与 reapIdle 一致 —— r.mu 只用来拷贝 session 引用、随即释放，
-// 再逐个 sb.mu 读 tools，避免 r.mu 与 sb.mu 嵌套持有。
+// A read-only snapshot: the lock order matches reapIdle — r.mu is only used to copy the session references and
+// released immediately, then each sb.mu is taken to read tools, so r.mu and sb.mu are never held nested.
 //
-// 「活跃」= tp.mu 被持有（正服务一次调用，TryLock 探测）。空闲长交互进程不烧
-// CPU，gateway 应只用活跃数计重、把空闲进程排除出负载。
+// "Active" = tp.mu is held (currently serving one call, probed with TryLock). An idle long-lived interactive process
+// burns no CPU, so the gateway should weight load by the active count only and keep idle processes out of it.
 func (r *interactiveRegistry) stats() (sessions, processes, active int) {
 	r.mu.Lock()
 	sbs := make([]*sessionSandbox, 0, len(r.sessions))
@@ -414,7 +427,7 @@ func (r *interactiveRegistry) stats() (sessions, processes, active int) {
 		for _, tp := range sb.tools {
 			processes++
 			if !tp.mu.TryLock() {
-				active++ // TryLock 失败 = tp.mu 被持有 = 正在服务调用
+				active++ // TryLock failing = tp.mu is held = serving a call
 			} else {
 				tp.mu.Unlock()
 			}

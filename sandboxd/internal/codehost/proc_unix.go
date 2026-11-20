@@ -9,11 +9,11 @@ import (
 	"syscall"
 )
 
-// setProcessGroup 让解释器进程自成一个进程组（pgid = pid）。
+// setProcessGroup puts the interpreter process into its own process group (pgid = pid).
 //
-// 与 sandboxd/isolate 的 sysproc_unix.go 同款收口：kill 只能杀单 pid，而脚本可能
-// fork 后代，放进独立进程组后对整组发一次信号即可覆盖整棵树。代价是子进程不再收到
-// 发给 codehost 的信号（本就不该穿透）。
+// The same approach as sysproc_unix.go in sandboxd/isolate: kill can only target a single pid, while a script may fork
+// descendants, so putting it in a separate process group lets one signal to the whole group cover the entire tree. The
+// cost is that the child no longer receives signals sent to codehost (which should not reach it anyway).
 func setProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -21,17 +21,17 @@ func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
-// killTree 杀掉解释器所在进程组的全部成员（SIGKILL，不留优雅退出窗口）。
+// killTree kills every member of the interpreter's process group (SIGKILL, leaving no window for a graceful exit).
 //
-// 返回 os.ErrProcessDone 表示「进程已经结束」—— 这是 exec.Cmd.Cancel 约定的语义。
+// Returning os.ErrProcessDone means "the process is already gone" — that is the semantics exec.Cmd.Cancel expects.
 func killTree(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return os.ErrProcessDone
 	}
 	pid := cmd.Process.Pid
 
-	// 先对整组下手，再对 pid 补一次 —— 子进程可能还没来得及 setpgid（组还不存在），
-	// 此时组杀会 ESRCH。
+	// Hit the whole group first, then the pid once more — the child may not have had time to setpgid yet (the group
+	// does not exist then), in which case the group kill returns ESRCH.
 	groupErr := syscall.Kill(-pid, syscall.SIGKILL)
 	selfErr := syscall.Kill(pid, syscall.SIGKILL)
 

@@ -1,7 +1,7 @@
-// Command iwclient 是 /v1/interactive 长交互端点的手工冒烟客户端：
-// 两次连接喂命令，验证进程跨连接存活、状态保留。
+// Command iwclient is a hand-run smoke client for the /v1/interactive long-lived interactive endpoint: it feeds
+// commands over two connections to verify that the process survives across connections and keeps its state.
 //
-// 仅用于手工验证，不属于正式交付物。
+// For manual verification only; it is not a deliverable.
 package main
 
 import (
@@ -37,8 +37,8 @@ func main() {
 	os.Exit(1)
 }
 
-// run 做一次连接：open → 喂命令 → 读 stdout → 断开。
-// argv 非空表示首次创建（带 argv + mounts）；nil 表示复用（只带 session_id + tool_id）。
+// run performs one connection: open → feed the command → read stdout → disconnect.
+// A non-nil argv means first creation (with argv + mounts); nil means reuse (only session_id + tool_id).
 func run(sessionID, toolID string, argv []string, mounts []map[string]any, input string) string {
 	c, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
@@ -84,7 +84,7 @@ func run(sessionID, toolID string, argv []string, mounts []map[string]any, input
 		}
 	}
 
-	// 读输出直到超时（进程长驻，输出流不会自然结束）
+	// Read the output until the deadline (the process is long-lived, so the output stream never ends by itself)
 	out := ""
 	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for {

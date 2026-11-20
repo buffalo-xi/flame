@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// 随包发布的 sandboxd/config.yaml 必须能加载。
+// The config.yaml shipped with the package must load.
 func TestShippedConfigLoads(t *testing.T) {
 	cfg, err := LoadConfig(filepath.Join("..", "..", "config.yaml"))
 	if err != nil {
@@ -21,21 +21,23 @@ func TestShippedConfigLoads(t *testing.T) {
 	if got := lua.Idle; got != (PoolConfig{Initial: 2, Max: 16}) {
 		t.Errorf("lua idle = %+v, want {2 16}", got)
 	}
-	// 取槽等待：段级缺省一处，语言级不再逐条重复（重复值 = 零信息量）。
-	// 15 秒是「python / js 单次脚本可能被回调拉到几十秒」这条事实推出来的（见 config.yaml 注释）。
+	// Slot-wait time: one default at the section level, not repeated per language (a repeated value carries no
+	// information). 15s follows from the fact that "a single python / js script can be pulled to tens of seconds by
+	// a callback" (see the comment in config.yaml).
 	if cfg.Code.AcquireTimeoutSec != 15 {
 		t.Errorf("code.acquire_timeout_sec = %d, want 15", cfg.Code.AcquireTimeoutSec)
 	}
 	if lua.AcquireTimeoutSec != 15 {
-		t.Errorf("lua 未继承 script 段的取槽等待缺省：%d", lua.AcquireTimeoutSec)
+		t.Errorf("lua did not inherit the slot-wait default of the script section: %d", lua.AcquireTimeoutSec)
 	}
-	// 随包配置一律是新键，不该有任何回填告警。
+	// The shipped config uses only new keys, so there should not be any backfill warning.
 	if len(cfg.Warnings) != 0 {
-		t.Errorf("随包配置不该产生告警：%v", cfg.Warnings)
+		t.Errorf("the shipped config must not produce warnings: %v", cfg.Warnings)
 	}
 }
 
-// 交互明细策略：缺省 slow（生产安全），off 一律不记，slow 按阈值（含等于），all 全记。
+// Interactive detail policy: slow by default (safe in production), off records nothing, slow uses the threshold
+// (inclusive), all records everything.
 func TestScriptLogEnabled(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("listen: \"127.0.0.1:0\"\n"), 0o644); err != nil {
@@ -46,10 +48,10 @@ func TestScriptLogEnabled(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	if def.CodeLog != CodeLogSlow {
-		t.Errorf("缺省 code_log = %q, want %q", def.CodeLog, CodeLogSlow)
+		t.Errorf("default code_log = %q, want %q", def.CodeLog, CodeLogSlow)
 	}
 	if def.CodeLogSlowMS != 200 {
-		t.Errorf("缺省 code_log_slow_ms = %d, want 200", def.CodeLogSlowMS)
+		t.Errorf("default code_log_slow_ms = %d, want 200", def.CodeLogSlowMS)
 	}
 
 	cases := []struct {
@@ -59,12 +61,12 @@ func TestScriptLogEnabled(t *testing.T) {
 		durMS  int
 		want   bool
 	}{
-		{"off 不记短会话", CodeLogOff, 200, 1, false},
-		{"off 也不记长会话", CodeLogOff, 200, 9999, false},
-		{"slow 阈值之下不记", CodeLogSlow, 200, 199, false},
-		{"slow 阈值之上记", CodeLogSlow, 200, 201, true},
-		{"slow 等于阈值要记（含等于语义）", CodeLogSlow, 200, 200, true},
-		{"all 一律记", CodeLogAll, 200, 0, true},
+		{"off does not record a short session", CodeLogOff, 200, 1, false},
+		{"off does not record a long session either", CodeLogOff, 200, 9999, false},
+		{"slow below the threshold does not record", CodeLogSlow, 200, 199, false},
+		{"slow above the threshold records", CodeLogSlow, 200, 201, true},
+		{"slow equal to the threshold records (inclusive)", CodeLogSlow, 200, 200, true},
+		{"all always records", CodeLogAll, 200, 0, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,7 +78,7 @@ func TestScriptLogEnabled(t *testing.T) {
 	}
 }
 
-// 拼错的 script_log 必须在启动时失败，而不是静默退回缺省。
+// A misspelled script_log must fail at startup instead of silently falling back to the default.
 func TestScriptLogValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("script_log: always\n"), 0o644); err != nil {
@@ -87,8 +89,9 @@ func TestScriptLogValidation(t *testing.T) {
 	}
 }
 
-// 旧键必须回填而不是静默回落缺省 —— 这是改名最危险的那条路径：
-// 旧值一旦被 applyDefaults 补掉的缺省盖住，配过 off / all 的人只会发现日志行为莫名变了。
+// Legacy keys must be backfilled rather than silently falling back to the default — that is the most dangerous path
+// of a rename: once the old value is covered by a default filled in by applyDefaults, whoever configured off / all
+// would only notice the log behaviour changing for no reason.
 func TestLegacyKeysBackfill(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := "session_log: off\n" +
@@ -105,33 +108,34 @@ func TestLegacyKeysBackfill(t *testing.T) {
 	}
 
 	if cfg.CodeLog != CodeLogOff {
-		t.Errorf("旧键 session_log 未生效：code_log = %q, want %q", cfg.CodeLog, CodeLogOff)
+		t.Errorf("old key session_log did not take effect: code_log = %q, want %q", cfg.CodeLog, CodeLogOff)
 	}
 	if cfg.CodeLogSlowMS != 50 {
-		t.Errorf("旧键 session_log_slow_ms 未生效：code_log_slow_ms = %d, want 50", cfg.CodeLogSlowMS)
+		t.Errorf("old key session_log_slow_ms did not take effect: code_log_slow_ms = %d, want 50", cfg.CodeLogSlowMS)
 	}
 	if cfg.CodeMaxSec != 300 {
-		t.Errorf("旧键 session_idle_sec 未生效：code_max_sec = %d, want 300", cfg.CodeMaxSec)
+		t.Errorf("old key session_idle_sec did not take effect: code_max_sec = %d, want 300", cfg.CodeMaxSec)
 	}
 	if got := cfg.Code.Pools["lua"].MaxConcurrent; got != 3 {
-		t.Errorf("旧段 session 未生效：code.pools.lua.max_concurrent = %d, want 3", got)
+		t.Errorf("old section session did not take effect: code.pools.lua.max_concurrent = %d, want 3", got)
 	}
 
-	// 五个旧键各响一声，一个都不能漏（漏掉的那个就是将来莫名其妙失效的那个）。
-	// 5 = session_log / session_idle_sec / session_log_slow_ms / session 段
-	//     + 段内那次 langs → pools（session.langs 是两级更旧的写法，要跨两级搬两次）。
+	// One warning per old key, none may be missed (the missed one is the one that mysteriously stops working later).
+	// 5 = session_log / session_idle_sec / session_log_slow_ms / the session section
+	//     + the in-section langs → pools (session.langs is the two-levels-older form, so it is moved twice).
 	if len(cfg.Warnings) != 5 {
-		t.Errorf("回填告警 %d 条，want 5：%v", len(cfg.Warnings), cfg.Warnings)
+		t.Errorf("got %d backfill warnings, want 5: %v", len(cfg.Warnings), cfg.Warnings)
 	}
 	for _, key := range []string{"session_log", "session_idle_sec", "session_log_slow_ms", "session", "code.langs"} {
 		if !warnsAbout(cfg.Warnings, key) {
-			t.Errorf("告警里没有提到旧键 %q：%v", key, cfg.Warnings)
+			t.Errorf("the warnings do not mention old key %q: %v", key, cfg.Warnings)
 		}
 	}
 }
 
-// interact → code 是上一轮更名的旧键（比 session 新一层）：也必须回填 + 告警。
-// 它和 session 走的是同一套回填机制，但要多验证一层「interact 段」也能整段搬过来。
+// interact → code is the previous rename layer (one newer than session): it must be backfilled and warned about as
+// well. It goes through the same backfill machinery as session, but needs the extra check that "the whole interact
+// section" can be moved over too.
 func TestInteractLegacyBackfill(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := "interact_log: all\n" +
@@ -148,36 +152,37 @@ func TestInteractLegacyBackfill(t *testing.T) {
 	}
 
 	if cfg.CodeLog != CodeLogAll {
-		t.Errorf("旧键 interact_log 未生效：code_log = %q, want %q", cfg.CodeLog, CodeLogAll)
+		t.Errorf("old key interact_log did not take effect: code_log = %q, want %q", cfg.CodeLog, CodeLogAll)
 	}
 	if cfg.CodeMaxSec != 240 {
-		t.Errorf("旧键 interact_max_sec 未生效：code_max_sec = %d, want 240", cfg.CodeMaxSec)
+		t.Errorf("old key interact_max_sec did not take effect: code_max_sec = %d, want 240", cfg.CodeMaxSec)
 	}
 	if cfg.CodeLogSlowMS != 80 {
-		t.Errorf("旧键 interact_log_slow_ms 未生效：code_log_slow_ms = %d, want 80", cfg.CodeLogSlowMS)
+		t.Errorf("old key interact_log_slow_ms did not take effect: code_log_slow_ms = %d, want 80", cfg.CodeLogSlowMS)
 	}
 	if got := cfg.Code.Pools["lua"].MaxConcurrent; got != 3 {
-		t.Errorf("旧段 interact 未生效：code.pools.lua.max_concurrent = %d, want 3", got)
+		t.Errorf("old section interact did not take effect: code.pools.lua.max_concurrent = %d, want 3", got)
 	}
 	if cfg.Code.AcquireTimeoutSec != 7 {
-		t.Errorf("旧段 interact.acquire_timeout_sec 未生效：%d, want 7", cfg.Code.AcquireTimeoutSec)
+		t.Errorf("old section interact.acquire_timeout_sec did not take effect: %d, want 7", cfg.Code.AcquireTimeoutSec)
 	}
 
-	// 4 = interact_log / interact_max_sec / interact_log_slow_ms / interact 段。
+	// 4 = interact_log / interact_max_sec / interact_log_slow_ms / the interact section.
 	if len(cfg.Warnings) != 4 {
-		t.Errorf("回填告警 %d 条，want 4：%v", len(cfg.Warnings), cfg.Warnings)
+		t.Errorf("got %d backfill warnings, want 4: %v", len(cfg.Warnings), cfg.Warnings)
 	}
 	for _, key := range []string{"interact_log", "interact_max_sec", "interact_log_slow_ms", "interact"} {
 		if !warnsAbout(cfg.Warnings, key) {
-			t.Errorf("告警里没有提到旧键 %q：%v", key, cfg.Warnings)
+			t.Errorf("the warnings do not mention old key %q: %v", key, cfg.Warnings)
 		}
 	}
 }
 
-// script → code（2026-10）是第三层回填，也是**第一优先级**。
+// script → code (2026-10) is the third backfill layer and the **highest priority**.
 //
-// 它离当前最近，必须排在 interact / session 之前判断：否则同时写 script 段与
-// session 段时，更旧的键会先把新段占掉，较新的 script 反被当成「旧键被忽略」。
+// It is closest to the present and must be judged before interact / session: otherwise, with both a script and a
+// session section written, the older key would take the new section first and the newer script would be treated as
+// "the ignored old key".
 func TestScriptToCodeLegacyBackfill(t *testing.T) {
 	body := "script_log: all\n" +
 		"script_max_sec: 240\n" +
@@ -190,36 +195,37 @@ func TestScriptToCodeLegacyBackfill(t *testing.T) {
 	}
 
 	if cfg.CodeLog != CodeLogAll {
-		t.Errorf("旧键 script_log 未生效：%q, want %q", cfg.CodeLog, CodeLogAll)
+		t.Errorf("old key script_log did not take effect: %q, want %q", cfg.CodeLog, CodeLogAll)
 	}
 	if cfg.CodeMaxSec != 240 {
-		t.Errorf("旧键 script_max_sec 未生效：%d, want 240", cfg.CodeMaxSec)
+		t.Errorf("old key script_max_sec did not take effect: %d, want 240", cfg.CodeMaxSec)
 	}
 	if cfg.CodeLogSlowMS != 80 {
-		t.Errorf("旧键 script_log_slow_ms 未生效：%d, want 80", cfg.CodeLogSlowMS)
+		t.Errorf("old key script_log_slow_ms did not take effect: %d, want 80", cfg.CodeLogSlowMS)
 	}
 	if got := cfg.Code.Pools["lua"].MaxConcurrent; got != 3 {
-		t.Errorf("旧段 script 未生效：code.pools.lua.max_concurrent = %d, want 3", got)
+		t.Errorf("old section script did not take effect: code.pools.lua.max_concurrent = %d, want 3", got)
 	}
 	if cfg.Code.AcquireTimeoutSec != 7 {
-		t.Errorf("旧段 script.acquire_timeout_sec 未生效：%d, want 7", cfg.Code.AcquireTimeoutSec)
+		t.Errorf("old section script.acquire_timeout_sec did not take effect: %d, want 7", cfg.Code.AcquireTimeoutSec)
 	}
 
-	// 4 = script_log / script_max_sec / script_log_slow_ms / script 段。
+	// 4 = script_log / script_max_sec / script_log_slow_ms / the script section.
 	if len(cfg.Warnings) != 4 {
-		t.Errorf("回填告警 %d 条，want 4：%v", len(cfg.Warnings), cfg.Warnings)
+		t.Errorf("got %d backfill warnings, want 4: %v", len(cfg.Warnings), cfg.Warnings)
 	}
 	for _, key := range []string{"script_log", "script_max_sec", "script_log_slow_ms"} {
 		if !warnsAbout(cfg.Warnings, key) {
-			t.Errorf("告警里没有提到旧键 %q：%v", key, cfg.Warnings)
+			t.Errorf("the warnings do not mention old key %q: %v", key, cfg.Warnings)
 		}
 	}
-	if !warnsAbout(cfg.Warnings, "配置键 script 已更名为 code") {
-		t.Errorf("告警里没有提到旧段 script：%v", cfg.Warnings)
+	if !warnsAbout(cfg.Warnings, "config key script was renamed to code") {
+		t.Errorf("the warnings do not mention the old section script: %v", cfg.Warnings)
 	}
 }
 
-// 三层同时出现时，较新的那层必须赢（script > session），且旧层要明确告警被忽略。
+// When all three layers appear, the newer one must win (script > session), and the old layer must be warned as
+// ignored.
 func TestScriptLegacyBeatsSession(t *testing.T) {
 	body := "langs:\n  lua:\n    command: lua\n" +
 		"script:\n  pools:\n    lua:\n      max_concurrent: 5\n" +
@@ -229,15 +235,15 @@ func TestScriptLegacyBeatsSession(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	if got := cfg.Code.Pools["lua"].MaxConcurrent; got != 5 {
-		t.Errorf("max_concurrent = %d, want 5（script 比 session 新，应赢）", got)
+		t.Errorf("max_concurrent = %d, want 5 (script is newer than session and must win)", got)
 	}
-	if !warnsAbout(cfg.Warnings, "session 被忽略") {
-		t.Errorf("want 一条「session 被忽略」的告警，got %v", cfg.Warnings)
+	if !warnsAbout(cfg.Warnings, "session is ignored") {
+		t.Errorf("want a \"session is ignored\" warning, got %v", cfg.Warnings)
 	}
 }
 
-// 新旧都写时以新键为准，且必须明确告警旧键被忽略 —— 不能静默二选一，
-// 否则旧键会给人一种「还在生效」的错觉。
+// When both are written the new key wins, and the ignored old key must be warned about explicitly — do not choose
+// silently, otherwise the old key gives the illusion of "still in effect".
 func TestLegacyKeysNewWins(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := "code_log: all\nsession_log: off\n"
@@ -249,14 +255,15 @@ func TestLegacyKeysNewWins(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	if cfg.CodeLog != CodeLogAll {
-		t.Errorf("code_log = %q, want %q（新键优先）", cfg.CodeLog, CodeLogAll)
+		t.Errorf("code_log = %q, want %q (the new key wins)", cfg.CodeLog, CodeLogAll)
 	}
 	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "session_log") {
-		t.Errorf("want 一条关于 session_log 被忽略的告警，got %v", cfg.Warnings)
+		t.Errorf("want one warning about session_log being ignored, got %v", cfg.Warnings)
 	}
 }
 
-// 只写新键时不该有任何告警：回填的判据是「新键空 + 旧键有」，不能误伤正常配置。
+// With only new keys there must be no warning: the backfill criterion is "new key empty + old key present" and must
+// not catch a normal config.
 func TestNoWarningsWithoutLegacyKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := "code_log: off\ncode_max_sec: 60\n"
@@ -268,14 +275,14 @@ func TestNoWarningsWithoutLegacyKeys(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	if len(cfg.Warnings) != 0 {
-		t.Errorf("新键配置不该产生告警，got %v", cfg.Warnings)
+		t.Errorf("a new-key config must not produce warnings, got %v", cfg.Warnings)
 	}
 	if cfg.CodeLog != CodeLogOff || cfg.CodeMaxSec != 60 {
-		t.Errorf("新键未生效：script_log=%q script_max_sec=%d", cfg.CodeLog, cfg.CodeMaxSec)
+		t.Errorf("new keys did not take effect: code_log=%q code_max_sec=%d", cfg.CodeLog, cfg.CodeMaxSec)
 	}
 }
 
-// warnsAbout 判断告警里是否提到过某个旧键。
+// warnsAbout reports whether some warning mentions an old key.
 func warnsAbout(warnings []string, key string) bool {
 	for _, w := range warnings {
 		if strings.Contains(w, key) {
@@ -285,8 +292,8 @@ func warnsAbout(warnings []string, key string) bool {
 	return false
 }
 
-// 按 mode 取解释器入口名：commands 命中优先，否则回退通用 command；
-// 两者都没有必须报错（退化成空命令会在池预热时才暴露）。
+// Resolving the interpreter entry per mode: a commands hit wins, otherwise it falls back to the general command; when
+// neither exists it must report an error (degrading to an empty command only surfaces at pool prewarming).
 func TestResolveCommand(t *testing.T) {
 	lang := LangDef{
 		Command: "lua",
@@ -298,7 +305,7 @@ func TestResolveCommand(t *testing.T) {
 	for mode, want := range map[string]string{
 		"none":   "d:/tools/lua5.4/lua54.exe",
 		"nsjail": "lua5.4",
-		"docker": "lua", // commands 未配 docker → 回退通用缺省
+		"docker": "lua", // docker is not configured in commands -> fall back to the general default
 	} {
 		got, err := lang.ResolveCommand(mode)
 		if err != nil {
@@ -310,18 +317,19 @@ func TestResolveCommand(t *testing.T) {
 		}
 	}
 
-	// 只配 commands、没有通用缺省：未覆盖的 mode 必须报错
+	// Only commands configured, no general default: an uncovered mode must report an error
 	only := LangDef{CommandByMode: map[string]string{"docker": "lua"}}
 	if _, err := only.ResolveCommand("nsjail"); err == nil {
 		t.Error("want error when mode neither overridden nor fallback, got nil")
 	}
-	// 完全没配也必须报错
+	// Nothing configured at all must report an error too
 	if _, err := (LangDef{}).ResolveCommand("docker"); err == nil {
 		t.Error("want error for empty lang def, got nil")
 	}
 }
 
-// commands 的键必须是已知 mode：拼错要启动即失败，否则覆盖静默失效。
+// The keys of commands must be known modes: a typo must fail at startup, otherwise the override silently does
+// nothing.
 func TestCommandsUnknownModeValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := "langs:\n  lua:\n    command: lua\n    commands:\n      dockerr: lua\n"
@@ -333,7 +341,8 @@ func TestCommandsUnknownModeValidation(t *testing.T) {
 	}
 }
 
-// 双工策略必须挂在顶层已定义的语言上：否则装配时取不到解释器入口。
+// A duplex policy must hang off a language defined at the top level: otherwise assembly cannot find the interpreter
+// entry.
 func TestCodeLangRequiresTopLevelDef(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := "code:\n  pools:\n    lua:\n      max_concurrent: 3\n"
@@ -345,7 +354,8 @@ func TestCodeLangRequiresTopLevelDef(t *testing.T) {
 	}
 }
 
-// Languages() 把两段合并成运行期配置：入口名按当前 mode 解析，策略字段原样带上。
+// Languages() merges the two sections into the runtime config: the entry name is resolved for the current mode and
+// the policy fields are carried over as-is.
 func TestLanguagesMerge(t *testing.T) {
 	cfg := &Config{
 		Mode: "docker",
@@ -362,19 +372,19 @@ func TestLanguagesMerge(t *testing.T) {
 	}
 	lua, ok := langs["lua"]
 	if !ok {
-		t.Fatalf("Languages() 缺少 lua: %+v", langs)
+		t.Fatalf("Languages() is missing lua: %+v", langs)
 	}
 	if lua.Command != "lua" {
-		t.Errorf("Command = %q, want %q（docker 下应回退通用缺省）", lua.Command, "lua")
+		t.Errorf("Command = %q, want %q (docker must fall back to the general default)", lua.Command, "lua")
 	}
 	if lua.MaxConcurrent != 3 {
-		t.Errorf("策略字段未带过来: max_concurrent=%d", lua.MaxConcurrent)
+		t.Errorf("the policy field was not carried over: max_concurrent=%d", lua.MaxConcurrent)
 	}
 	if lua.Idle != (PoolConfig{Initial: 2, Max: 16}) {
-		t.Errorf("idle 未带过来: %+v", lua.Idle)
+		t.Errorf("idle was not carried over: %+v", lua.Idle)
 	}
 
-	// 取不到入口名必须在合并阶段就报错（而不是等池预热）
+	// An unresolvable entry name must fail at merge time (rather than waiting for pool prewarming)
 	bad := &Config{
 		Mode:  "docker",
 		Langs: map[string]LangDef{"lua": {CommandByMode: map[string]string{"none": "lua54.exe"}}},
@@ -385,8 +395,8 @@ func TestLanguagesMerge(t *testing.T) {
 	}
 }
 
-// 随包配置里 python 用 commands 显式区分各 mode（此前只写在注释里），
-// 且当前 mode 下每个语言都能解析出非空命令。
+// The shipped config sets python's commands explicitly per mode (previously only written in a comment), and every
+// language resolves to a non-empty command under the current mode.
 func TestShippedConfigResolvesCommands(t *testing.T) {
 	cfg, err := LoadConfig(filepath.Join("..", "..", "config.yaml"))
 	if err != nil {
@@ -411,27 +421,28 @@ func TestShippedConfigResolvesCommands(t *testing.T) {
 		}
 	}
 	if got, rerr := py.ResolveCommand("none"); rerr != nil || got == "" {
-		t.Errorf("python mode none = %q, %v（本机调试路径必须有值）", got, rerr)
+		t.Errorf("python mode none = %q, %v (the local debugging path must have a value)", got, rerr)
 	}
 
-	// 当前 mode（docker）下双工列出的每个语言都必须能合并出非空入口名
+	// Under the current mode (docker) every language listed for duplex must merge into a non-empty entry name
 	langs, merr := cfg.Languages()
 	if merr != nil {
 		t.Fatalf("Languages(): %v", merr)
 	}
 	if len(langs) != len(cfg.Code.Pools) {
-		t.Errorf("合并后 %d 个语言，script.pools 有 %d 个", len(langs), len(cfg.Code.Pools))
+		t.Errorf("merged %d languages, script.pools has %d", len(langs), len(cfg.Code.Pools))
 	}
 	for name, lang := range langs {
 		if lang.Command == "" {
-			t.Errorf("lang %q: 合并后入口名为空", name)
+			t.Errorf("lang %q: the entry name is empty after merging", name)
 		}
 	}
 }
 
-// 定位类字段支持 ${VAR}：换机器不必改配置，用环境变量覆盖即可。
-// 引用了未设置的变量必须报错 —— 展开成空串会被 ResolveCommand 当成「没配」，
-// 静默回退到通用缺省，覆盖没生效却毫无迹象。
+// Locating fields support ${VAR}: switching machines needs no config edit, an environment variable override is
+// enough. Referencing an unset variable must report an error — expanded into an empty string it would be taken as
+// "not configured" by ResolveCommand, silently falling back to the general default, so the override does not take
+// effect with no trace.
 func TestConfigExpandsEnv(t *testing.T) {
 	t.Setenv("FLAME_TEST_PY", "C:/opt/python/python.exe")
 	t.Setenv("FLAME_TEST_HOST", "D:/opt/host/codehost.exe")
@@ -465,14 +476,14 @@ codehost:
 		t.Errorf("codehost.binaries.none = %q", got)
 	}
 
-	// 未设置的变量：expandEnv 在 validate 之前就跑，所以这里不必给完整配置
+	// An unset variable: expandEnv runs before validate, so a complete config is not needed here
 	_, err = loadYAML(t, "mode: none\nlangs:\n  python:\n    commands:\n      none: \"${FLAME_TEST_UNSET_XYZ}\"\n")
-	if err == nil || !strings.Contains(err.Error(), "环境变量未设置") {
-		t.Errorf("引用未设置的变量应当报错，got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "is not set") {
+		t.Errorf("referencing an unset variable should report an error, got %v", err)
 	}
 }
 
-// loadYAML 把一段配置写进临时文件并加载（返回错误以便用例自行断言）。
+// loadYAML writes a config snippet to a temp file and loads it (returning the error so the case can assert on it).
 func loadYAML(t *testing.T, body string) (*Config, error) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -482,22 +493,22 @@ func loadYAML(t *testing.T, body string) (*Config, error) {
 	return LoadConfig(path)
 }
 
-// luaPool 拼一份「顶层 langs + script.pools.lua 片段」的最小配置。
+// luaPool assembles a minimal config of "top-level langs + a script.pools.lua fragment".
 func luaPool(langBody string) string {
 	return "langs:\n  lua:\n    command: lua\ncode:\n  pools:\n    lua:\n" + langBody
 }
 
-// idle 的两个值都尊重零值：显式 0 不会被缺省盖掉
-// （曾经的 applyDefaults 会把 initial: 0 悄悄改成 1）。
+// Both idle values respect the zero value: an explicit 0 is not covered by a default (applyDefaults used to turn
+// initial: 0 into 1 without a word).
 func TestIdleZeroIsPreserved(t *testing.T) {
 	cases := []struct {
 		name string
 		idle string
 		want PoolConfig
 	}{
-		{"不预热但留驻", "      idle:\n        initial: 0\n        max: 8\n", PoolConfig{Initial: 0, Max: 8}},
-		{"不预热也不留驻", "      idle:\n        initial: 0\n        max: 0\n", PoolConfig{}},
-		{"只写 max", "      idle:\n        max: 8\n", PoolConfig{Initial: 0, Max: 8}},
+		{"no prewarming but kept resident", "      idle:\n        initial: 0\n        max: 8\n", PoolConfig{Initial: 0, Max: 8}},
+		{"no prewarming, nothing resident", "      idle:\n        initial: 0\n        max: 0\n", PoolConfig{}},
+		{"only max written", "      idle:\n        max: 8\n", PoolConfig{Initial: 0, Max: 8}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -509,23 +520,24 @@ func TestIdleZeroIsPreserved(t *testing.T) {
 				t.Errorf("idle = %+v, want %+v", got, tc.want)
 			}
 			if len(cfg.Warnings) != 0 {
-				t.Errorf("新键配置不该有告警：%v", cfg.Warnings)
+				t.Errorf("a new-key config must not have warnings: %v", cfg.Warnings)
 			}
 		})
 	}
 }
 
-// max 缺省跟随 initial（不是固定 4）：只写 initial 不会被改成别的值，
-// 也不需要区分「没写 max」与「写 max: 0」（两者都是 0、都表示不留驻）。
+// The max default follows initial (rather than a fixed 4): writing only initial does not change it into another
+// value, and there is no need to tell "max not written" apart from "max: 0" (both are 0 and both mean nothing is
+// kept resident).
 func TestIdleMaxDefaultsToInitial(t *testing.T) {
 	cases := []struct {
 		name string
 		idle string
 		want PoolConfig
 	}{
-		{"整段省略", "", PoolConfig{}},
-		{"只写 initial", "      idle:\n        initial: 2\n", PoolConfig{Initial: 2, Max: 2}},
-		{"initial 大于 4", "      idle:\n        initial: 8\n", PoolConfig{Initial: 8, Max: 8}},
+		{"whole section omitted", "", PoolConfig{}},
+		{"only initial written", "      idle:\n        initial: 2\n", PoolConfig{Initial: 2, Max: 2}},
+		{"initial greater than 4", "      idle:\n        initial: 8\n", PoolConfig{Initial: 8, Max: 8}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -540,8 +552,9 @@ func TestIdleMaxDefaultsToInitial(t *testing.T) {
 	}
 }
 
-// initial > max 必须启动即失败：否则 refiller 会把空闲对象补到 initial 却推不进
-// 容量为 max 的池，每秒「起一个、杀一个」空转（L2 下是每秒建一个容器再销毁）。
+// initial > max must fail at startup: otherwise the refiller would top idle objects up to initial but cannot push
+// them into a pool with capacity max, spinning "start one, kill one" every second (at L2, a container created and
+// destroyed every second).
 func TestIdleInitialGreaterThanMaxRejected(t *testing.T) {
 	body := luaPool("      idle:\n        initial: 8\n        max: 4\n")
 	if _, err := loadYAML(t, body); err == nil {
@@ -549,13 +562,15 @@ func TestIdleInitialGreaterThanMaxRejected(t *testing.T) {
 	}
 }
 
-// 语言级旧键：pools.<lang>.pool → pools.<lang>.idle。
+// Language-level old key: pools.<lang>.pool → pools.<lang>.idle.
 //
-// 旧语义里 enabled 是总开关，所以翻译必须忠实：
-//   - enabled 不是 true（含没写）→ 旧的行为是"不启用空闲池"，initial/max 一律被忽略；
-//   - enabled: true → 按旧缺省补全（initial 1 / max 4），initial > max 时复现旧的钳制。
+// Under the old semantics enabled was the master switch, so the translation must be faithful:
+//   - enabled is not true (including unwritten) → the old behaviour was "idle pool not enabled", initial/max were
+//     ignored;
+//   - enabled: true → filled from the old defaults (initial 1 / max 4), with initial > max reproducing the old
+//     clamp.
 //
-// 每一档都要出声，尤其"配了数值却被忽略"的那一档。
+// Every tier must speak up, especially "numbers configured but ignored".
 func TestIdleLegacyPoolBackfill(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -564,16 +579,16 @@ func TestIdleLegacyPoolBackfill(t *testing.T) {
 		wantWarns int
 		mention   string
 	}{
-		{"enabled: true + 数值 → 数值原样",
+		{"enabled: true with numbers → numbers as-is",
 			"        enabled: true\n        initial: 2\n        max: 16\n", PoolConfig{Initial: 2, Max: 16}, 2, "enabled"},
-		{"enabled: true 无数值 → 旧缺省 {1,4}",
+		{"enabled: true without numbers → the old default {1,4}",
 			"        enabled: true\n", PoolConfig{Initial: 1, Max: 4}, 2, "enabled"},
-		{"enabled: true 且 initial > max → 复现旧钳制",
+		{"enabled: true with initial > max → the old clamp reproduced",
 			"        enabled: true\n        initial: 5\n", PoolConfig{Initial: 4, Max: 4}, 2, "enabled"},
-		{"enabled: false → 不预热不留驻",
-			"        enabled: false\n        initial: 2\n", PoolConfig{}, 3, "不启用空闲池"},
-		{"没写 enabled（旧语义同样是不启用）",
-			"        initial: 2\n        max: 16\n", PoolConfig{}, 2, "不启用空闲池"},
+		{"enabled: false → no prewarming, nothing resident",
+			"        enabled: false\n        initial: 2\n", PoolConfig{}, 3, "did not enable the idle pool"},
+		{"enabled unwritten (the old semantics also did not enable it)",
+			"        initial: 2\n        max: 16\n", PoolConfig{}, 2, "did not enable the idle pool"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -585,19 +600,19 @@ func TestIdleLegacyPoolBackfill(t *testing.T) {
 				t.Errorf("idle = %+v, want %+v", got, tc.want)
 			}
 			if len(cfg.Warnings) != tc.wantWarns {
-				t.Errorf("告警 %d 条，want %d：%v", len(cfg.Warnings), tc.wantWarns, cfg.Warnings)
+				t.Errorf("got %d warnings, want %d: %v", len(cfg.Warnings), tc.wantWarns, cfg.Warnings)
 			}
 			if !warnsAbout(cfg.Warnings, "code.pools.lua.pool") {
-				t.Errorf("告警里应指出是哪个旧键：%v", cfg.Warnings)
+				t.Errorf("the warnings should say which old key it was: %v", cfg.Warnings)
 			}
 			if !warnsAbout(cfg.Warnings, tc.mention) {
-				t.Errorf("告警里应提到 %q：%v", tc.mention, cfg.Warnings)
+				t.Errorf("the warnings should mention %q: %v", tc.mention, cfg.Warnings)
 			}
 		})
 	}
 }
 
-// 段内旧键：code.langs → code.pools（key 的交叉约束照旧生效）。
+// In-section old key: code.langs → code.pools (the key cross-constraint still applies).
 func TestCodeLangsLegacyBackfill(t *testing.T) {
 	body := "langs:\n  lua:\n    command: lua\n" +
 		"code:\n  langs:\n    lua:\n      max_concurrent: 3\n      idle:\n        initial: 2\n        max: 8\n"
@@ -607,7 +622,7 @@ func TestCodeLangsLegacyBackfill(t *testing.T) {
 	}
 	lua, ok := cfg.Code.Pools["lua"]
 	if !ok {
-		t.Fatalf("旧段 langs 未搬到 pools：%+v", cfg.Code)
+		t.Fatalf("the old section langs was not moved to pools: %+v", cfg.Code)
 	}
 	if lua.MaxConcurrent != 3 {
 		t.Errorf("max_concurrent = %d, want 3", lua.MaxConcurrent)
@@ -616,11 +631,11 @@ func TestCodeLangsLegacyBackfill(t *testing.T) {
 		t.Errorf("idle = %+v, want {2 8}", lua.Idle)
 	}
 	if len(cfg.Warnings) != 1 || !warnsAbout(cfg.Warnings, "code.langs") {
-		t.Errorf("want 一条 code.langs → code.pools 的告警，got %v", cfg.Warnings)
+		t.Errorf("want one code.langs → code.pools warning, got %v", cfg.Warnings)
 	}
 }
 
-// idle 里还写着 enabled：键已移除，出声但不影响用户写的数值。
+// enabled is still written inside idle: the key was removed, so speak up but leave the user's numbers alone.
 func TestEnabledInsideIdleWarns(t *testing.T) {
 	body := luaPool("      idle:\n        enabled: true\n        initial: 0\n        max: 4\n")
 	cfg, err := loadYAML(t, body)
@@ -628,14 +643,14 @@ func TestEnabledInsideIdleWarns(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	if got := cfg.Code.Pools["lua"].Idle; got.Initial != 0 || got.Max != 4 {
-		t.Errorf("idle = %+v, want {0 4}（enabled 不该改写数值）", got)
+		t.Errorf("idle = %+v, want {0 4} (enabled must not rewrite the numbers)", got)
 	}
 	if len(cfg.Warnings) != 1 || !warnsAbout(cfg.Warnings, "enabled") {
-		t.Errorf("want 一条关于 enabled 的告警，got %v", cfg.Warnings)
+		t.Errorf("want one warning about enabled, got %v", cfg.Warnings)
 	}
 }
 
-// 顶层 acquire_timeout_sec（旧）→ script.acquire_timeout_sec（新），并逐语言继承。
+// Top-level acquire_timeout_sec (old) → script.acquire_timeout_sec (new), inherited per language.
 func TestAcquireTimeoutLegacyBackfill(t *testing.T) {
 	cfg, err := loadYAML(t, "acquire_timeout_sec: 7\n"+luaPool(""))
 	if err != nil {
@@ -645,14 +660,14 @@ func TestAcquireTimeoutLegacyBackfill(t *testing.T) {
 		t.Errorf("code.acquire_timeout_sec = %d, want 7", got)
 	}
 	if got := cfg.Code.Pools["lua"].AcquireTimeoutSec; got != 7 {
-		t.Errorf("语言级未继承段级缺省：%d, want 7", got)
+		t.Errorf("the language level did not inherit the section default: %d, want 7", got)
 	}
 	if len(cfg.Warnings) != 1 || !warnsAbout(cfg.Warnings, "code.acquire_timeout_sec") {
-		t.Errorf("want 一条「更名到 code.acquire_timeout_sec」的告警，got %v", cfg.Warnings)
+		t.Errorf("want one \"renamed to code.acquire_timeout_sec\" warning, got %v", cfg.Warnings)
 	}
 }
 
-// 新旧同写：以 code 段里的为准，并明确告警旧键被忽略。
+// Both written: the one in the code section wins, with an explicit warning that the old key is ignored.
 func TestAcquireTimeoutNewWins(t *testing.T) {
 	body := "acquire_timeout_sec: 7\nlangs:\n  lua:\n    command: lua\n" +
 		"code:\n  acquire_timeout_sec: 3\n  pools:\n    lua:\n"
@@ -661,19 +676,20 @@ func TestAcquireTimeoutNewWins(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	if got := cfg.Code.AcquireTimeoutSec; got != 3 {
-		t.Errorf("code.acquire_timeout_sec = %d, want 3（新键优先）", got)
+		t.Errorf("code.acquire_timeout_sec = %d, want 3 (the new key wins)", got)
 	}
 	if got := cfg.Code.Pools["lua"].AcquireTimeoutSec; got != 3 {
-		t.Errorf("语言级 = %d, want 3", got)
+		t.Errorf("language level = %d, want 3", got)
 	}
-	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "被忽略") {
-		t.Errorf("want 一条「旧键被忽略」的告警，got %v", cfg.Warnings)
+	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "is ignored") {
+		t.Errorf("want one \"old key is ignored\" warning, got %v", cfg.Warnings)
 	}
 }
 
-// 顺序回归守卫：顶层的 acquire_timeout_sec 是**旧键**，回填不能提前把「code 段非空」
-// 这件事写进去 —— 否则「session: {langs: ...} + acquire_timeout_sec」的配置会被
-// isZero 判成"新段已写"，整个 session 段被丢弃（症状：该语言双工全 unsupported_lang）。
+// Ordering regression guard: the top-level acquire_timeout_sec is an **old key**, and the backfill must not write
+// "the code section is non-empty" ahead of time — otherwise a config of "session: {langs: ...} +
+// acquire_timeout_sec" would be judged by isZero as "the new section is written" and the whole session section would
+// be dropped (symptom: every duplex call for that language gets unsupported_lang).
 func TestAcquireTimeoutLegacyDoesNotBlockSessionSection(t *testing.T) {
 	body := "acquire_timeout_sec: 7\nlangs:\n  lua:\n    command: lua\n" +
 		"session:\n  langs:\n    lua:\n      max_concurrent: 3\n"
@@ -683,22 +699,22 @@ func TestAcquireTimeoutLegacyDoesNotBlockSessionSection(t *testing.T) {
 	}
 	lua, ok := cfg.Code.Pools["lua"]
 	if !ok {
-		t.Fatalf("session 段被丢弃了（acquire_timeout_sec 不该参与 isZero 判定）：%+v", cfg.Code)
+		t.Fatalf("the session section was dropped (acquire_timeout_sec must not take part in the isZero check): %+v", cfg.Code)
 	}
 	if lua.MaxConcurrent != 3 {
-		t.Errorf("session.langs 未生效：max_concurrent = %d, want 3", lua.MaxConcurrent)
+		t.Errorf("session.langs did not take effect: max_concurrent = %d, want 3", lua.MaxConcurrent)
 	}
 	if cfg.Code.AcquireTimeoutSec != 7 {
-		t.Errorf("acquire_timeout_sec 未回填：%d, want 7", cfg.Code.AcquireTimeoutSec)
+		t.Errorf("acquire_timeout_sec was not backfilled: %d, want 7", cfg.Code.AcquireTimeoutSec)
 	}
-	// 三条：session → script、code.langs → code.pools、
-	//       acquire_timeout_sec → script.acquire_timeout_sec。
+	// Three: session → script, code.langs → code.pools,
+	//        acquire_timeout_sec → code.acquire_timeout_sec.
 	if len(cfg.Warnings) != 3 {
-		t.Errorf("回填告警 %d 条，want 3：%v", len(cfg.Warnings), cfg.Warnings)
+		t.Errorf("got %d backfill warnings, want 3: %v", len(cfg.Warnings), cfg.Warnings)
 	}
 }
 
-// 语言级覆盖优先于 script 段的缺省；没写的语言继承缺省。
+// A language-level override beats the script section default; a language without one inherits the default.
 func TestAcquireTimeoutLanguageOverride(t *testing.T) {
 	body := "langs:\n  lua:\n    command: lua\n  js:\n    command: node\n" +
 		"code:\n  acquire_timeout_sec: 7\n  pools:\n    lua:\n      acquire_timeout_sec: 2\n    js:\n"
@@ -707,14 +723,15 @@ func TestAcquireTimeoutLanguageOverride(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	if got := cfg.Code.Pools["lua"].AcquireTimeoutSec; got != 2 {
-		t.Errorf("lua 的覆盖值 = %d, want 2", got)
+		t.Errorf("lua's override = %d, want 2", got)
 	}
 	if got := cfg.Code.Pools["js"].AcquireTimeoutSec; got != 7 {
-		t.Errorf("js 该继承段级缺省 = %d, want 7", got)
+		t.Errorf("js should inherit the section default = %d, want 7", got)
 	}
 }
 
-// 新旧同写：以新键为准，并明确告警旧键被忽略（不猜谁更可信）。
+// Both written: the new key wins, with an explicit warning that the old key is ignored (do not guess which one is
+// more trustworthy).
 func TestIdleNewWinsOverPool(t *testing.T) {
 	body := luaPool("      idle:\n        initial: 1\n        max: 4\n      pool:\n        initial: 9\n        max: 9\n")
 	cfg, err := loadYAML(t, body)
@@ -722,9 +739,9 @@ func TestIdleNewWinsOverPool(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	if got := cfg.Code.Pools["lua"].Idle; got != (PoolConfig{Initial: 1, Max: 4}) {
-		t.Errorf("idle = %+v, want {1 4}（新键优先）", got)
+		t.Errorf("idle = %+v, want {1 4} (the new key wins)", got)
 	}
-	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "被忽略") {
-		t.Errorf("want 一条「旧键被忽略」的告警，got %v", cfg.Warnings)
+	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "is ignored") {
+		t.Errorf("want one \"old key is ignored\" warning, got %v", cfg.Warnings)
 	}
 }

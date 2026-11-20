@@ -14,181 +14,205 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 交互明细日志策略（code_log 配置项）。
+// Interactive detail logging policy (the code_log option).
 //
-// 明细的内容是「某次调用走了哪个容器、是否复用、花了多久、容器有没有被丢弃」——
-// 容器身份只在 sandboxd 侧存在（nexus 拿不到），script 是两边对账的 join key。
+// The detail records are "which container a call went through, whether it was reused, how long it took, whether the
+// container was dropped" — the container identity only exists on the sandboxd side (nexus cannot see it), and the
+// script is the join key both sides reconcile on.
 const (
-	// CodeLogOff 不记交互明细。异常会话（不可归还）不受此开关限制，仍会记录。
+	// CodeLogOff records no interactive detail. Abnormal sessions (not returnable) are not covered by this switch
+	// and are still recorded.
 	CodeLogOff = "off"
-	// CodeLogSlow 只记耗时 >= code_log_slow_ms 的会话（缺省，生产建议）。
+	// CodeLogSlow records only sessions taking >= code_log_slow_ms (the default, recommended in production).
 	CodeLogSlow = "slow"
-	// CodeLogAll 每次会话都记（排障用）。
+	// CodeLogAll records every session (for troubleshooting).
 	//
-	// ⚠️ lua 是 µs 级高频调用（循环条件 / 分支条件 / binding transform），
-	// 常态开 all 会把日志写成噪声，只适合短期排障。
+	// ⚠️ lua is a microsecond-level high-frequency call (loop conditions / branch conditions / binding transforms),
+	// so leaving all on in normal operation turns the log into noise; it is only suitable for short troubleshooting.
 	CodeLogAll = "all"
 )
 
-// 网络声明档位（顶层 network）。
+// Network declaration tiers (top-level network).
 //
-// ⚠️ 这不是开关，而是**对「启动方式」的断言**：沙箱能否联网由隔离实现的启动参数
-// 决定（docker.network / nsjail.disable_network / mode 本身），这里只是把它如实说出来，
-// 好让 nexus 转达给 agent。启动时会校验「断言与事实一致」，对不上就拒绝启动 ——
-// 对 agent 撒谎比配错更糟：它会按错误的前提去写脚本（以为断网却写 pip install，
-// 或以为能联网却把外发失败归因成代码 bug）。
+// ⚠️ This is not a switch but an **assertion about how the unit is started**: whether the sandbox can reach the
+// network is decided by the isolation implementation's startup arguments (docker.network / nsjail.disable_network /
+// the mode itself), and this only states it truthfully so that nexus can pass it on to the agent. Startup validates
+// that "the assertion matches the fact" and refuses to start when it does not — lying to the agent is worse than
+// misconfiguring it: it would write scripts on a wrong premise (writing pip install while believing the network is
+// off, or blaming egress failures on a code bug while believing it is on).
 const (
-	// NetworkOff 沙箱内不能联网（部署级硬闸：请求要出网也拒绝）。
+	// NetworkOff means no network inside the sandbox (a deployment-level hard gate: a request asking for egress is
+	// rejected as well).
 	NetworkOff = "off"
-	// NetworkOn 沙箱内能联网（不看请求，一律出网）。
+	// NetworkOn means the sandbox has network access (requests are not consulted; always egress).
 	NetworkOn = "on"
-	// NetworkOnRequest 按请求裁决：缺省断网，单工请求带 egress 才出网。
+	// NetworkOnRequest decides per request: off by default, egress only when a simplex request carries egress.
 	//
-	// 只对 /v1/exec 有意义 —— 它是唯一「每次新建进程」的通道，网络参数能在
-	// 每次启动时决定。双工（script / interactive）复用建好的隔离单元，网络在
-	// 建单元时就写死了，所以它们只认 off / on，传 on-request 会在校验时报错。
+	// It only means anything for /v1/exec — it is the only channel that "creates a new process each time", so the
+	// network can be decided at every start. Duplex channels (script / interactive) reuse a unit that is already
+	// built, and the network is fixed when the unit is created, so they only accept off / on; passing on-request
+	// fails validation.
 	NetworkOnRequest = "on-request"
 )
 
-// Config sandboxd 配置。
+// Config is the sandboxd configuration.
 //
-// 这里是「沙箱资源策略」的唯一来源：隔离方式、资源上限、进程池与并发额度。
-// nexus 侧不下发这些，只给出语言名与（可选的）超时。
+// This is the single source of truth for "sandbox resource policy": isolation mode, resource caps, process pools
+// and concurrency budgets. nexus does not send any of it, it only supplies language names and (optionally) a
+// timeout.
 type Config struct {
 	Listen string `yaml:"listen"`
-	// Token 与 nexus 侧的 sandbox.token 一致；留空表示不校验（仅限内网）。
+	// Token must match sandbox.token on the nexus side; empty means no checking (internal network only).
 	Token string `yaml:"token"`
-	// LogDir 日志目录。
+	// LogDir is the log directory.
 	LogDir string `yaml:"log_dir"`
-	// CodeLog 交互明细日志策略：off / slow / all（见 CodeLogXxx）。
+	// CodeLog is the interactive detail logging policy: off / slow / all (see CodeLogXxx).
 	//
-	// 为什么需要它：明细是「一次调用走了哪」的唯一线索，但高频调用下全量记录
-	// 只会把日志淹掉，所以缺省只记慢的，异常始终记录。
+	// Why it is needed: the detail records are the only clue to "where a call went", but under high-frequency
+	// calls recording everything would only drown the log, so by default only slow ones are recorded and abnormal
+	// ones are always recorded.
 	CodeLog string `yaml:"code_log"`
-	// CodeLogSlowMS slow 策略下的阈值（毫秒）。
+	// CodeLogSlowMS is the threshold of the slow policy, in milliseconds.
 	CodeLogSlowMS int `yaml:"code_log_slow_ms"`
 
-	// Mode 隔离方式：none / nsjail / docker。只在这里决定。
+	// Mode is the isolation mode: none / nsjail / docker. Decided here only.
 	Mode string `yaml:"mode"`
 
-	// Network 网络策略：沙箱内进程能否访问外网（off / on-request / on，见 NetworkXxx）。
+	// Network is the network policy: whether processes inside the sandbox can reach the outside (off / on-request /
+	// on, see NetworkXxx).
 	//
-	// 它描述的是**上限**，不是事实：最终这一次能不能联网，是「部署上限 × 租户许可 ×
-	// 请求意图」三者 AND 的结果（前两者在 nexus 侧，后者随 /v1/exec 请求下发）。
+	// It describes the **ceiling**, not the fact: whether this particular call has network access is the AND of
+	// "deployment ceiling × tenant permission × request intent" (the first two live on the nexus side, the last is
+	// sent with the /v1/exec request).
 	//
-	// 刻意有三态，而不是布尔：布尔无法同时表达「能不能出网」与「听不听请求」。
-	//   off         谁都不能出网（请求要 on 也拒绝）
-	//   on-request  缺省断网，请求显式要才出网（唯一能让 exec 按请求裁决的档）
-	//   on          一律出网，不看请求
+	// Three states on purpose rather than a boolean: a boolean cannot express "can it reach the network" and
+	// "does it listen to requests" at the same time.
+	//   off          nobody gets egress (a request asking for on is rejected)
+	//   on-request   off by default, egress only when the request explicitly asks (the only tier that lets exec
+	//                decide per request)
+	//   on           always egress, requests are ignored
 	//
-	// ⚠️ 只作用于 /v1/exec（含技能脚本）。/v1/code 是托管代码片段通道、跨租户共享、
-	// 且 Frame 里没有租户身份，出网只能全平台生效且无法按租户回退 —— 所以那条通道
-	// 恒断网，不提供配置项（见 EffectiveCodeNetwork；mode=none 除外，宿主拦不住）。
+	// ⚠️ It only applies to /v1/exec (including skill scripts). /v1/code is the managed snippet channel, shared
+	// across tenants, and the Frame carries no tenant identity, so egress there could only be switched on for the
+	// whole platform with no per-tenant fallback — that channel is therefore always offline and has no option (see
+	// EffectiveCodeNetwork; mode=none excepted, where the host cannot cut it off).
 	//
-	// 零值是 off：安全项必须落在安全那一侧，漏写即全禁。
+	// The zero value is off: a security setting must land on the safe side, so omitting it disables everything.
 	Network string `yaml:"network"`
-	// Networks 按隔离方式覆盖 Network（key: none / nsjail / docker）。
+	// Networks overrides Network per isolation mode (key: none / nsjail / docker).
 	//
-	// 为什么需要：none 是宿主进程，断网根本做不到 —— 想在本机调试就得如实写
-	// networks.none: on。声明 off 而当前 mode 实现不了，启动直接失败（见 validateNetwork）。
+	// Why it is needed: none is a host process and cutting the network off is simply impossible — debugging locally
+	// requires writing networks.none: on honestly. Declaring off where the current mode cannot implement it fails
+	// startup (see validateNetwork).
 	//
-	// ⚠️ 值类型必须是 string：yaml.v3 只在解到 bool 时才启用 YAML 1.1 的 on/off 语义，
-	// 解到 string 就是字符串。若换成 map[string]any，on 会静默变成 true。
+	// ⚠️ The value type must be string: yaml.v3 only enables the YAML 1.1 on/off semantics when decoding into a
+	// bool, so decoding into a string keeps it a string. With map[string]any, on would silently become true.
 	Networks map[string]string `yaml:"networks"`
 
-	// Probe 沙箱能力探测（见 ProbeConfig）。
+	// Probe is the sandbox capability probe (see ProbeConfig).
 	Probe ProbeConfig `yaml:"probe"`
-	// Codehost codehost 宿主二进制的定位（none / nsjail / docker 通用）。
+	// Codehost locates the codehost host binary (shared by none / nsjail / docker).
 	//
-	// codehost 是替代 worker.lua/py/js 的常驻宿主：sandboxd 在隔离单元里长驻它，
-	// 每次 execute 由它 fork 全新解释器。二进制路径按 mode 解析（none 用宿主路径，
-	// nsjail 用 rootfs 内路径），与 langs.<lang> 的 command/commands 同款机制。
+	// codehost is the long-lived host replacing worker.lua/py/js: sandboxd keeps it alive inside the isolation unit
+	// and every execute forks a fresh interpreter from it. The binary path is resolved per mode (the host path under
+	// none, the rootfs path under nsjail), the same mechanism as langs.<lang> command/commands.
 	Codehost CodehostConfig `yaml:"codehost"`
 
-	// Browser 浏览器宿主（browserhost）的定位与策略。
+	// Browser locates the browser host (browserhost) and carries its policy.
 	//
-	// 浏览器与 shell 是同一类东西：session 级常驻进程。所以它复用
-	// /v1/interactive 这条通道（tool_id="browser"），不新增任何 HTTP 路由；
-	// 本段只描述「镜像 / rootfs 里那个 browserhost 在哪、能不能有头」。
+	// The browser is the same kind of thing as a shell: a session-level long-lived process. So it reuses the
+	// /v1/interactive channel (tool_id="browser") and adds no HTTP route; this section only describes "where the
+	// browserhost in the image / rootfs is, and whether headed is possible".
 	Browser BrowserConfig `yaml:"browser"`
-	// TmpDir worker 可写目录的宿主根目录：每个 worker 在其下建一个独占子目录，
-	// 挂进沙箱充当 /tmp（同时是脚本的 cwd）。
+	// TmpDir is the host root of the worker writable directories: every worker creates an exclusive subdirectory
+	// under it, which is mounted into the sandbox as /tmp (and is the script's cwd at the same time).
 	//
-	// 启动时会把这棵目录整棵清空，运行期不做单个删除 —— 见 prepareTmpRoot。
+	// Startup empties this whole tree; nothing is deleted individually at runtime — see prepareTmpRoot.
 	TmpDir string `yaml:"tmp_dir"`
-	// AllowedMountRoots 允许挂载的宿主目录根列表：请求里的 Mounts[].Host
-	// 必须落在其中之一之下。空列表表示不校验（启动时打警告）。
+	// AllowedMountRoots is the list of allowed host directory roots: a request's Mounts[].Host must fall under one
+	// of them. An empty list means no checking (a warning is logged at startup).
 	//
-	// 这是「策略」而非「领域」：sandboxd 不关心调用方的工作区长什么样，
-	// 也不解析它的业务路径，只负责确保被要求挂载的路径落在被授权的范围内。
-	// 多个调用方各自加一项即可。
+	// This is "policy", not "domain": sandboxd does not care what the caller's workspace looks like and does not
+	// parse its business paths, it only ensures the paths it is asked to mount fall inside the authorised range.
+	// Every caller just adds its own entry.
 	AllowedMountRoots []string `yaml:"allowed_mount_roots"`
 
 	Nsjail NsjailConfig `yaml:"nsjail"`
 	Docker DockerConfig `yaml:"docker"`
 
-	// Limits 全局硬上限：所有请求的最终值都会被 clamp 到它。
+	// Limits is the global hard cap: every request's final value is clamped to it.
 	Limits LimitsConfig `yaml:"limits"`
 
-	// Langs 语言定义：解释器入口名的真相，exec（命令 / 技能脚本）与
-	// script（工作流脚本）共用。
+	// Langs holds the language definitions: the truth about interpreter entry names, shared by exec (commands /
+	// skill scripts) and script (workflow scripts).
 	//
-	// 为什么与 script 同级、而不放在 script 里面：「沙箱里有什么解释器、叫什么名字」
-	// 是语言本身的事实，与用途无关；script 只承载「脚本执行特有的池与并发策略」。
-	// 放错层级的后果是 exec 没法复用同一份定义 —— nexus 侧只好自己硬编码一份
-	// （原 service/agent/tools/skillrun.go 的 interpreterByExt），两边一旦漂移
-	// 就会出现「flow 能跑、技能跑不了」，且「镜像里叫什么」这个知识只有本服务有。
+	// Why it sits at the top level instead of inside script: "which interpreters the sandbox has and what they are
+	// called" is a fact about the language itself and has nothing to do with the use case; script only carries "the
+	// pool and concurrency policy specific to script execution". Putting it on the wrong level meant exec could not
+	// reuse the same definition — the nexus side had to hardcode one of its own (the former
+	// service/agent/tools/skillrun.go interpreterByExt), and once the two drifted, "the flow runs but the skill does
+	// not" appeared, while "what it is called in the image" is knowledge only this service has.
 	Langs map[string]LangDef `yaml:"langs"`
 
-	// Exec exec（命令执行）用途默认值。exec 永不入池。
+	// Exec holds the defaults for the exec (command execution) use case. exec is never pooled.
 	Exec UseConfig `yaml:"exec"`
-	// Code code（工作流代码片段，/v1/code）用途默认值，以及各语言的池与并发策略。
+	// Code holds the defaults for the code (workflow snippet, /v1/code) use case, plus each language's pool and
+	// concurrency policy.
 	Code CodeConfig `yaml:"code"`
 
-	// CodeMaxSec 一次交互的**总时长**上限（秒），兜底防止连接挂死长期占用 worker。
+	// CodeMaxSec is the cap on the **total duration** of one interaction (seconds), a backstop that keeps a hung
+	// connection from holding a worker for a long time.
 	//
-	// ⚠️ 旧名依次是 session_idle_sec → script_max_sec，前两个名字里的 idle / script
-	// 都有误导性：它不是「空闲多久就回收」——计时从 open 帧起算、全程不复位
-	// （见 codeDeadline）。它是 code 通道的实际硬闸：调用方下发的超时只能收紧它，
-	// 配得比它大等于没配（调用方 下发的超时尤其要注意）。
+	// ⚠️ The old names were session_idle_sec → script_max_sec in turn; the idle / script in both names was
+	// misleading: this is not "reclaim after being idle" — the clock starts at the open frame and never resets (see
+	// codeDeadline). It is the real hard gate of the code channel: a caller-supplied timeout can only tighten it,
+	// and configuring it larger is the same as not configuring it (a caller-supplied timeout especially).
 	CodeMaxSec int `yaml:"code_max_sec"`
 
-	// InteractiveIdleSec 长交互进程的空闲回收上限（秒）。
+	// InteractiveIdleSec is the idle reclaim cap of long-lived interactive processes (seconds).
 	//
-	// 长交互进程（/v1/interactive）归 session 持有、跨连接存活；空闲超过这个时长
-	// （从最近一次调用起算）会被后台 janitor 回收 —— kill 进程、释放容器。它是
-	// session 级常驻进程的生命周期兜底，与 code_max_sec（单次交互的硬闸）是两回事。
+	// Long-lived interactive processes (/v1/interactive) are held by the session and outlive the connection; being
+	// idle longer than this (counted from the most recent call) makes the background janitor reclaim them — kill
+	// the process, release the container. This is the lifetime backstop of session-level long-lived processes and is
+	// a different thing from code_max_sec (the hard gate of a single interaction).
 	InteractiveIdleSec int `yaml:"interactive_idle_sec"`
 
-	// InteractiveEphemeralIdleSec 无 session 的临时交互进程的短空闲回收上限（秒）。
+	// InteractiveEphemeralIdleSec is the short idle reclaim cap of temporary interactive processes without a
+	// session (seconds).
 	//
-	// 无 session 的调用（一次性 run）没有跨 run 持久的需求：run 内多次调用靠
-	// 「间隔远小于该超时」复用进程，run 结束时 nexus 会主动 kill（快路径），
-	// 异常漏发（nexus 崩溃等）时由这个短超时兜底回收。缺省 120。
+	// A call without a session (a one-shot run) has no need to persist across runs: repeated calls inside a run
+	// reuse the process by "the gap being far smaller than this timeout", and at the end of the run nexus kills it
+	// proactively (the fast path). When that notification is lost (a nexus crash and the like), this short timeout
+	// is the backstop. Default 120.
 	InteractiveEphemeralIdleSec int `yaml:"interactive_ephemeral_idle_sec"`
 
-	// InteractiveJanitorSec 长交互注册表的巡检间隔（秒），缺省 60。
+	// InteractiveJanitorSec is the sweep interval of the long-lived interactive registry (seconds), default 60.
 	//
-	// 它本身不是超时，而是「超时的分辨率」：进程要等到 idle 之后的下一次巡检才被
-	// 回收，所以实际回收时刻落在 (idle, idle+janitor] 之间。gateway 的粘性 TTL
-	// 必须覆盖这个上界：sticky_ttl > idle + 2×janitor。
+	// It is not a timeout itself but the "resolution of the timeout": a process is reclaimed on the first sweep
+	// after it went idle, so the actual reclaim time falls in (idle, idle+janitor]. The gateway's sticky TTL must
+	// cover that upper bound: sticky_ttl > idle + 2×janitor.
 	//
-	// 做成可配并随 /v1/capabilities 上报，是为了让那个不等式在网关侧**可计算**
-	// —— 两个值分别在两个进程的配置文件里，网关自己不持有 idle。
+	// It is configurable and reported through /v1/capabilities so that the inequality is **computable** on the
+	// gateway side — the two values live in two different processes' config files, and the gateway does not hold
+	// idle itself.
 	InteractiveJanitorSec int `yaml:"interactive_janitor_sec"`
 
-	// Registry 服务注册（可选）：把本服务注册到 consul/nacos，供 sandboxg 发现。
-	// 默认不启用（保持 sandboxd 零外部依赖的现状，单实例直连不需要注册）。
+	// Registry is the optional service registration: register this service with consul/nacos for sandboxg to
+	// discover. Disabled by default (keeping sandboxd free of external dependencies; a single instance connected
+	// directly needs no registration).
 	Registry RegistryConfig `yaml:"registry"`
 
-	// 以下是改名前的旧键：只用于回填 + 告警，不再出现在文档与 config.yaml 里。
+	// The following are the pre-rename keys: used only for backfill + warning, no longer present in the docs or
+	// config.yaml.
 	//
-	// 为什么保留字段而不是直接删：线上配置是编译期外的东西，字段一删，旧值会被
-	// applyDefaults 静默补成缺省 —— 而缺省恰好「看起来正常」（code_log 缺省就是
-	// slow），配过 off / all 的人只会发现日志行为莫名变了。见 applyLegacyKeys。
+	// Why keep the fields instead of deleting them: the live config lives outside the build, and once a field is
+	// gone the old value is silently filled with the default by applyDefaults — and the default happens to "look
+	// normal" (code_log defaults to slow), so whoever configured off / all would only notice the log behaviour
+	// changing for no reason. See applyLegacyKeys.
 	//
-	// 改名链有三层：session（最旧）→ interact（旧）→ script（较新）→ code（当前）。
-	// 回填从新到旧依次判断，多层都写时以更「新」的那层为准并明确告警旧层被忽略。
+	// The rename chain has three layers: session (oldest) → interact (old) → script (newer) → code (current). The
+	// backfill is judged from new to old, and when several layers are written the "newer" one wins with an explicit
+	// warning that the old one is ignored.
 	LegacyScript            CodeConfig `yaml:"script"`
 	LegacyScriptLog         string     `yaml:"script_log"`
 	LegacyScriptLogSlowMS   int        `yaml:"script_log_slow_ms"`
@@ -201,35 +225,39 @@ type Config struct {
 	LegacySessionLog        string     `yaml:"session_log"`
 	LegacySessionLogSlowMS  int        `yaml:"session_log_slow_ms"`
 	LegacySessionMaxSec     int        `yaml:"session_idle_sec"`
-	// LegacyAcquireTimeoutSec 顶层 acquire_timeout_sec（→ code.acquire_timeout_sec）。
-	// 它只服务 code 通道，原先放顶层与 exec 配置混在一起，现已归位到 code 段。
+	// LegacyAcquireTimeoutSec is the top-level acquire_timeout_sec (→ code.acquire_timeout_sec). It only serves the
+	// code channel and used to sit at the top level mixed with the exec config; it now belongs to the code section.
 	LegacyAcquireTimeoutSec int `yaml:"acquire_timeout_sec"`
 
-	// Warnings 解析期的提醒（目前只有旧键回填），由调用方打印。不参与 YAML 解析。
+	// Warnings holds parse-time notices (currently only legacy-key backfill), printed by the caller. Not part of
+	// YAML decoding.
 	Warnings []string `yaml:"-"`
 }
 
-// RegistryConfig 服务注册配置（把本服务注册到注册中心，供 gateway 发现）。
+// RegistryConfig is the service registration config (register this service with a registry for the gateway to
+// discover).
 //
-// 为什么可选、默认关闭：sandboxd 单实例直连时不需要注册（nexus 直接连它），
-// 只有上 sandboxg 多实例时才有发现需求。默认关闭保住「sandboxd 零外部依赖」。
+// Why optional and off by default: a single sandboxd connected directly needs no registration (nexus connects to it
+// directly); only multiple sandboxg instances create a discovery need. Off by default keeps "sandboxd has no
+// external dependencies".
 type RegistryConfig struct {
 	Enabled bool `yaml:"enabled"`
-	// Type 注册中心类型：consul | nacos。
+	// Type is the registry type: consul | nacos.
 	Type string `yaml:"type"`
-	// Address 注册中心地址（如 localhost:8500）。
+	// Address is the registry address (for example localhost:8500).
 	Address string `yaml:"address"`
-	// ServiceName 服务名（默认 sandboxd）。
+	// ServiceName is the service name (sandboxd by default).
 	ServiceName string `yaml:"service_name"`
-	// ServiceAddr 对外可达地址（gateway 连这个，跨机写内网 IP，本机写 127.0.0.1）。
+	// ServiceAddr is the externally reachable address (the gateway connects to this; use the intranet IP across
+	// machines, 127.0.0.1 locally).
 	ServiceAddr string `yaml:"service_addr"`
-	// ServicePort 对外端口（默认取 listen 的端口）。
+	// ServicePort is the external port (the port of listen by default).
 	ServicePort int `yaml:"service_port"`
-	// HealthCheckPath 健康检查路径（默认 /healthz）。
+	// HealthCheckPath is the health check path (/healthz by default).
 	HealthCheckPath string `yaml:"health_check_path"`
 }
 
-// LimitsConfig 资源上限（0 值表示不额外限制）。
+// LimitsConfig holds resource caps (the zero value means no extra limit).
 type LimitsConfig struct {
 	MemoryMB       int   `yaml:"memory_mb"`
 	CPUCount       int   `yaml:"cpu_count"`
@@ -239,19 +267,19 @@ type LimitsConfig struct {
 	MaxOutputBytes int64 `yaml:"max_output_bytes"`
 }
 
-// NsjailConfig nsjail 隔离参数（Linux）。
+// NsjailConfig holds the nsjail isolation parameters (Linux).
 type NsjailConfig struct {
 	Binary         string   `yaml:"binary"`
 	Rootfs         string   `yaml:"rootfs"`
 	UID            int      `yaml:"uid"`
 	GID            int      `yaml:"gid"`
 	DisableNetwork bool     `yaml:"disable_network"`
-	ReadOnlyRootfs bool     `yaml:"read_only_rootfs"` // 只读；nsjail chroot 默认即 R/O，置 false 才加 --rw
+	ReadOnlyRootfs bool     `yaml:"read_only_rootfs"` // read-only; an nsjail chroot is R/O by default, false adds --rw
 	CgroupVersion  string   `yaml:"cgroup_version"`   // v1 / v2 / auto
 	ExtraArgs      []string `yaml:"extra_args"`
 }
 
-// DockerConfig docker 隔离参数。
+// DockerConfig holds the docker isolation parameters.
 type DockerConfig struct {
 	Binary    string   `yaml:"binary"`
 	Image     string   `yaml:"image"`
@@ -261,193 +289,205 @@ type DockerConfig struct {
 	ExtraArgs []string `yaml:"extra_args"`
 }
 
-// ProbeConfig 沙箱能力探测。
+// ProbeConfig configures the sandbox capability probe.
 //
-// 启动时在沙箱内跑一组独立探针（见 probe.go），结果经 /v1/capabilities 交给 nexus
-// 注入给 agent。为什么是探测而不是声明：沙箱里有什么（OS / 语言 / 模块）是**事实**，
-// 声明会漂移 —— 改了 Dockerfile 装了新包却忘了改配置，agent 就会按错误的环境写脚本。
+// At startup a set of independent probes runs inside the sandbox (see probe.go), and the result is handed to nexus
+// through /v1/capabilities for injection into the agent. Why probe instead of declare: what is inside the sandbox
+// (OS / languages / modules) is a **fact**, and declarations drift — installing a new package in the Dockerfile
+// while forgetting the config makes the agent write scripts against a wrong environment.
 type ProbeConfig struct {
-	// TimeoutSec 探测整体超时（秒）。探针并发跑，串行最坏会叠加。
+	// TimeoutSec is the overall probe timeout (seconds). The probes run concurrently; serially the worst case
+	// would add up.
 	TimeoutSec int `yaml:"timeout_sec"`
-	// MaxOutputBytes 单条探针的输出上限（结果会进入 LLM 上下文，必须设限）。
+	// MaxOutputBytes is the output cap of a single probe (the result enters the LLM context, so it must be capped).
 	MaxOutputBytes int64 `yaml:"max_output_bytes"`
 }
 
-// UseConfig 用途级默认值。
+// UseConfig holds per-use-case defaults.
 type UseConfig struct {
 	Limits LimitsConfig `yaml:"limits"`
 }
 
-// CodeConfig script（工作流脚本）用途配置。
+// CodeConfig is the configuration of the code (workflow snippet) use case.
 type CodeConfig struct {
 	Limits LimitsConfig `yaml:"limits"`
-	// AcquireTimeoutSec 取槽位等待上限（秒），本段的**缺省**（未写时 15，见 applyDefaults）：
-	// 超出返回「繁忙」，绝不无限阻塞（binding transform 是嵌套调用，无限阻塞会自我死锁）。
-	// 这段等待不计入任何超时预算（它发生在 ready 帧之前），只是额外尾延迟。
+	// AcquireTimeoutSec is the cap on waiting for a slot (seconds), the **default** of this section (15 when
+	// unset, see applyDefaults): beyond it the request gets "busy" rather than blocking forever (binding transforms
+	// are nested calls, and blocking forever would deadlock on itself). This wait is not part of any timeout budget
+	// (it happens before the ready frame), it is only extra tail latency.
 	//
-	// 为什么在 script 段里：这是 script 专属概念 —— exec 永不池化、根本没有"取槽"
-	// 这回事。各语言可用 code.pools.<lang>.acquire_timeout_sec 覆盖它。
+	// Why it lives in the script section: this is a script-specific concept — exec is never pooled, so "acquiring a
+	// slot" does not exist there at all. Each language can override it with code.pools.<lang>.acquire_timeout_sec.
 	AcquireTimeoutSec int `yaml:"acquire_timeout_sec"`
-	// Pools script 的语言池策略：key 为语言名（lua / python / js），
-	// 必须在顶层 langs 里有同名定义（解释器入口在那里）。
+	// Pools holds the script language pool policy: keyed by language name (lua / python / js), which must have a
+	// definition of the same name in the top-level langs (the interpreter entry is there).
 	//
-	// 一个语言条目在 = 该语言启用空闲池并对外服务；不要就把它**整条**注释掉 ——
-	// 该语言的 script 请求会收到 unsupported_lang，而不是「悄悄变慢」。
-	// 刻意没有「只关空闲池、语言照跑」那一档：它的唯一后果是每次现场冷启动
-	// （300ms~1s）的静默性能悬崖。
+	// A language entry being present = that language enables the idle pool and serves requests; to drop it, comment
+	// out the **whole** entry — script requests for that language then get unsupported_lang instead of "silently
+	// getting slower". There is deliberately no "disable the idle pool but keep the language" tier: its only
+	// consequence is a silent performance cliff of a cold start (300ms~1s) on every call.
 	Pools map[string]CodeLang `yaml:"pools"`
-	// LegacyLangs 改名前的旧键 code.langs（→ code.pools）：只用于回填 + 告警。
+	// LegacyLangs is the pre-rename key code.langs (→ code.pools): used only for backfill + warning.
 	LegacyLangs map[string]CodeLang `yaml:"langs"`
 }
 
-// isZero 判断配置段是否「一个字都没写」：旧键回填要区分「旧段有内容」与「空段」。
+// isZero reports whether the config section is "completely unwritten": the legacy backfill must tell "the old
+// section has content" apart from "an empty section".
 //
-// ⚠️ 必须算上 LegacyLangs：更旧的段 session: {langs: ...} 的内容落在它上面，
-// 只看 Pools 会把「有内容的旧段」判成「一个字都没写」→ 段级回填被跳过 → 静默失效。
+// ⚠️ LegacyLangs must be counted: the content of the even older `session: {langs: ...}` lands on it, and looking at
+// Pools alone would judge "an old section with content" as "completely unwritten" → the section-level backfill is
+// skipped → it silently does nothing.
 func (s CodeConfig) isZero() bool {
 	return s.Limits == (LimitsConfig{}) && s.AcquireTimeoutSec == 0 &&
 		len(s.Pools) == 0 && len(s.LegacyLangs) == 0
 }
 
-// LangDef 语言的解释器定义（顶层 langs.<lang>）。
+// LangDef is a language's interpreter definition (top-level langs.<lang>).
 //
-// 只描述「这个语言在沙箱里怎么被起起来」，不含任何用途 / 池策略 —— 所以 exec 与
-// script 都能用它。按 mode 覆盖的机制见 CommandByMode。
+// It only describes "how this language is started inside the sandbox" and carries no use-case / pool policy — which
+// is why both exec and script can use it. The per-mode override mechanism is described at CommandByMode.
 type LangDef struct {
-	// Command 解释器入口名（通用缺省，见 CommandByMode）。
+	// Command is the interpreter entry name (the general default, see CommandByMode).
 	Command string `yaml:"command"`
-	// CommandByMode 按隔离方式覆盖 Command（可选，key 为 mode：none / nsjail / docker）。
+	// CommandByMode overrides Command per isolation mode (optional, keyed by mode: none / nsjail / docker).
 	//
-	// 为什么需要它：command 是「当前 mode 下的可执行入口名」，而三种 mode 的解析
-	// 位置完全不同 —— docker 解析镜像内 PATH、nsjail 解析 chroot 内 rootfs、none 直接
-	// 在宿主 exec。同一个名字在三种环境里未必都存在（镜像里是 Dockerfile `ln` 出来的
-	// lua，rootfs 里可能只有 lua5.4，Windows 宿主上是带版本号的文件名）。
-	// 以前这些差异只能写成注释，于是「配置里写的」与「实际生效的」是两回事；
-	// 显式建模后由 ResolveCommand 按当前 mode 取值，注释不再承担配置职责。
+	// Why it is needed: command is "the executable entry name under the current mode", and the three modes resolve
+	// it in completely different places — docker resolves the in-image PATH, nsjail resolves the rootfs inside the
+	// chroot, none execs on the host. The same name does not necessarily exist in all three environments (the image
+	// has whatever lua the Dockerfile `ln`ed, a rootfs may only have lua5.4, and a Windows host has a
+	// version-suffixed filename). These differences used to live in comments only, so "what the config said" and
+	// "what actually took effect" were two different things; now it is modelled explicitly and ResolveCommand picks
+	// the value for the current mode, so comments no longer carry configuration duties.
 	CommandByMode map[string]string `yaml:"commands"`
 }
 
-// CodehostConfig codehost 宿主二进制的定位（顶层 codehost 段）。
+// CodehostConfig locates the codehost host binary (top-level codehost section).
 //
-// 与 LangDef 同构：binary 是通用缺省，binaries 按 mode 覆盖。codehost 三种
-// mode 都跑 —— none 是宿主可解析的路径，nsjail / docker 是 rootfs / 镜像内的路径。
+// Isomorphic to LangDef: binary is the general default and binaries overrides it per mode. codehost runs under all
+// three modes — the path under none is host-resolvable, under nsjail / docker it is inside the rootfs / image.
 type CodehostConfig struct {
-	// Binary 通用缺省（如 "codehost"，取 PATH 解析）。
+	// Binary is the general default (for example "codehost", resolved through PATH).
 	Binary string `yaml:"binary"`
-	// Binaries 按隔离方式覆盖 Binary（key: none / nsjail / docker）。
+	// Binaries overrides Binary per isolation mode (key: none / nsjail / docker).
 	Binaries map[string]string `yaml:"binaries"`
 }
 
-// BrowserConfig 浏览器宿主配置（顶层 browser 段）。
+// BrowserConfig is the browser host config (top-level browser section).
 //
-// 刻意没有「引擎选择」：驱动层固定 CDP（Chromium 家族）。换内核不是改一个字段
-// 就能完成的事（Firefox 已移除 CDP，WebKit 只有 Playwright 的定制构建），
-// 留着那么多档只会让人以为切过去就能用。
+// There is deliberately no "engine selection": the driver layer is fixed on CDP (the Chromium family). Switching
+// engines is not something one field can do (Firefox removed CDP, and WebKit only exists as Playwright's custom
+// build), and offering so many tiers would only make people believe switching over just works.
 type BrowserConfig struct {
-	// Enabled 是否对外提供浏览器工具。缺省 false：浏览器能出网、能读页面，
-	// 属于「开了就该知情」的能力，不该靠漏写配置默认获得。
+	// Enabled says whether the browser tool is offered. Default false: a browser can reach the network and read
+	// pages, which is a capability that "you should know about when you turn it on", not something obtained by
+	// omitting the config.
 	Enabled bool `yaml:"enabled"`
 
-	// Binary 通用缺省（如 "browserhost"，取 PATH 解析）。
+	// Binary is the general default (for example "browserhost", resolved through PATH).
 	Binary string `yaml:"binary"`
-	// Binaries 按隔离方式覆盖 Binary（key: none / nsjail / docker）。
+	// Binaries overrides Binary per isolation mode (key: none / nsjail / docker).
 	Binaries map[string]string `yaml:"binaries"`
 
-	// ExecPath 浏览器可执行文件（**沙箱内**路径）。空 = 由 browserhost 自动探测
-	// （chromium / chrome / 宿主上的 Edge）。
+	// ExecPath is the browser executable (**an in-sandbox** path). Empty = discovered by browserhost itself
+	// (chromium / chrome / Edge on the host).
 	//
-	// 注意它和 binaries 是同一个性质：这是「隔离单元里看得见的路径」，
-	// none 下是宿主路径，docker 下是镜像内路径 —— 一个字符串不可能同时成立，
-	// 所以真正的取值按 mode 走 ExecPaths。
+	// Note that it has the same nature as binaries: it is "a path visible inside the isolation unit", a host path
+	// under none and an in-image path under docker — one string cannot hold for both, so the effective value goes
+	// through ExecPaths per mode.
 	ExecPath string `yaml:"exec_path"`
-	// ExecPaths 按隔离方式覆盖 ExecPath（key: none / nsjail / docker）。
-	// 典型用法：docker 写镜像里的 /usr/bin/chromium，none 写宿主上的 Chrome 绝对路径。
+	// ExecPaths overrides ExecPath per isolation mode (key: none / nsjail / docker). Typical use: docker writes
+	// /usr/bin/chromium from the image, none writes the absolute path of Chrome on the host.
 	ExecPaths map[string]string `yaml:"exec_paths"`
 
-	// Headed 缺省显示方式：false = 无头（生产建议）。
+	// Headed is the default display mode: false = headless (recommended in production).
 	//
-	// 用「headed」而不是「headless」是为了让零值就是安全值 —— bool 的零值是 false，
-	// 写成 headless 的话「没写」与「显式关掉」无法区分。
+	// It is spelled "headed" rather than "headless" so that the zero value is the safe value — the zero value of a
+	// bool is false, and with "headless" there would be no way to tell "unset" from "explicitly off".
 	Headed bool `yaml:"headed"`
-	// AllowHeaded 是否允许请求方按会话指定有头。有头需要真实显示环境，
-	// 目前只支持 mode=none（sandboxd 跑在有桌面的机器上）。
+	// AllowHeaded says whether a caller may request headed per session. Headed needs a real display environment and
+	// is currently only supported with mode=none (sandboxd running on a machine with a desktop).
 	AllowHeaded bool `yaml:"allow_headed"`
-	// AllowHeadedModes 按隔离方式覆盖 AllowHeaded（key: none / nsjail / docker）。
-	// 命中当前 mode 用这里的值，未命中回退 AllowHeaded —— 与 exec_paths 同款规则。
+	// AllowHeadedModes overrides AllowHeaded per isolation mode (key: none / nsjail / docker). The value here is
+	// used when the current mode has an entry, otherwise it falls back to AllowHeaded — the same rule as
+	// exec_paths.
 	AllowHeadedModes map[string]bool `yaml:"allow_headed_modes"`
 
-	// ProfileDir Chrome 的 user-data-dir（沙箱内路径）。
+	// ProfileDir is Chrome's user-data-dir (an in-sandbox path).
 	//
-	// 空 = 按 mode 取缺省：docker → /tmp/browser（容器带 --tmpfs /tmp，profile
-	// 随容器销毁，不落进只读 rootfs、也不污染工作区）；none / nsjail → 临时目录，
-	// 浏览器退出即删。
+	// Empty = a per-mode default: docker → /tmp/browser (the container has --tmpfs /tmp, so the profile dies with
+	// the container, never lands in the read-only rootfs and never pollutes the workspace); none / nsjail → a temp
+	// directory removed when the browser exits.
 	ProfileDir string `yaml:"profile_dir"`
-	// ProfileDirs 按隔离方式覆盖 ProfileDir（key: none / nsjail / docker）。
+	// ProfileDirs overrides ProfileDir per isolation mode (key: none / nsjail / docker).
 	ProfileDirs map[string]string `yaml:"profile_dirs"`
-	// DownloadsDir 下载目录（沙箱内路径）。空 = <cwd>/downloads（即工作区）。
+	// DownloadsDir is the download directory (an in-sandbox path). Empty = <cwd>/downloads (that is, the
+	// workspace).
 	DownloadsDir string `yaml:"downloads_dir"`
-	// DownloadsDirs 按隔离方式覆盖 DownloadsDir（key: none / nsjail / docker）。
+	// DownloadsDirs overrides DownloadsDir per isolation mode (key: none / nsjail / docker).
 	//
-	// 与 exec_path 同理：这是沙箱内路径，一旦写成绝对路径就只对某个 mode 成立
-	// （/workspace 在 none 下会变成宿主根盘的 C:\workspace）。默认值是相对 cwd 的，
-	// 天然跨 mode，所以多数部署不用配它。
+	// Same reasoning as exec_path: this is an in-sandbox path, and an absolute one only holds for one mode
+	// (/workspace under none becomes C:\workspace on the host root disk). The default is relative to cwd and
+	// therefore cross-mode by nature, so most deployments do not need to configure it.
 	DownloadsDirs map[string]string `yaml:"downloads_dirs"`
 
-	// Limits 浏览器进程的资源上限（缺省值 + 全局 clamp）。
+	// Limits is the resource cap of the browser process (defaults + global clamp).
 	//
-	// 为什么单独一段：Chrome 的进程树 + 渲染缓存与 shell 不是一个量级，
-	// 拿 exec 的 512MB 去套它会在打开第二个标签时被 OOM 杀掉。
+	// Why a separate section: Chrome's process tree plus rendering cache is a different order of magnitude from a
+	// shell, and applying exec's 512MB to it gets it OOM-killed when the second tab opens.
 	Limits LimitsConfig `yaml:"limits"`
 }
 
-// CodeLang script 特有的语言策略（code.pools.<lang>）：只放「池与并发」，
-// 不含解释器入口 —— 那是顶层 langs 的事。
+// CodeLang is a script-specific language policy (code.pools.<lang>): pool and concurrency only, no interpreter
+// entry — that belongs to the top-level langs.
 //
-// 这个条目存在本身 = 该语言启用空闲池并对外服务（见 CodeConfig.Pools）。
+// The existence of this entry is itself the signal = that language enables the idle pool and serves requests (see
+// CodeConfig.Pools).
 type CodeLang struct {
-	// 这里刻意**没有** timeout 字段。
+	// There is deliberately **no** timeout field here.
 	//
-	// 脚本超时由调用方（nexus）逐次在 open 帧里下发，本服务只用一个全局硬闸去
-	// clamp（code_max_sec，见 codeDeadline）。曾经有过一个 timeout 字段，
-	// 但它既没有消费点、也永远轮不到生效（nexus 每次都下发 ≥30s），
-	// 只会让人以为「语言级缺省超时」在这里配 —— 已删除。
-	// MaxConcurrent 并发会话上限（含嵌套调用）。
-	// 必须 >= 2：binding transform 等场景是嵌套调用，会同时占用两个会话。
+	// The script timeout is sent by the caller (nexus) in the open frame on every call, and this service only clamps
+	// it with one global hard gate (code_max_sec, see codeDeadline). A timeout field used to exist, but it had no
+	// consumer and could never take effect (nexus always sends >= 30s), it only made people believe a
+	// "language-level default timeout" was configured here — it has been removed.
+	// MaxConcurrent is the cap on concurrent sessions (nested calls included).
+	// It must be >= 2: scenarios like binding transforms are nested calls and occupy two sessions at once.
 	MaxConcurrent int `yaml:"max_concurrent"`
-	// AcquireTimeoutSec 取槽位等待上限（秒），0 表示沿用 code.acquire_timeout_sec。
+	// AcquireTimeoutSec caps waiting for a slot (seconds); 0 means it inherits code.acquire_timeout_sec.
 	//
-	// 留这一层是因为各语言的 max_concurrent 差得多（32 / 16 / 8）：lua 是 µs 级高频
-	// 调用，等待越久越容易拖住工作流，值得单独配短一点。
+	// This level exists because max_concurrent differs a lot between languages (32 / 16 / 8): lua is a
+	// microsecond-level high-frequency call, and the longer it waits the more it holds up the workflow, so it is
+	// worth configuring a shorter one for it.
 	AcquireTimeoutSec int `yaml:"acquire_timeout_sec"`
-	// Idle 空闲池参数；缺省 {0, 0}（不预热、不留驻）。
+	// Idle holds the idle pool parameters; default {0, 0} (no prewarming, nothing kept resident).
 	Idle PoolConfig `yaml:"idle"`
-	// LegacyPool 改名前的子段 code.pools.<lang>.pool（→ .idle）：只用于回填 + 告警。
+	// LegacyPool is the pre-rename sub-section code.pools.<lang>.pool (→ .idle): used only for backfill + warning.
 	LegacyPool PoolConfig `yaml:"pool"`
 }
 
-// LangConfig 某语言在运行期的完整配置：入口名（已按 mode 解析）+ script 池策略。
+// LangConfig is a language's complete configuration at runtime: the entry name (already resolved for the mode) plus
+// the script pool policy.
 //
-// 由 Config.Languages() 合并顶层 langs（LangDef）与 code.pools（CodeLang）得到，
-// 供池使用；它不是 YAML 解析目标，故不带 yaml tag。
+// It is produced by Config.Languages() by merging the top-level langs (LangDef) with code.pools (CodeLang) for the
+// pool to use; it is not a YAML decoding target, hence no yaml tags.
 //
-// 字段刻意平铺而不是嵌入 CodeLang：Go 1.25 的语言版本不允许在结构体字面量里
-// 使用「提升字段」（promoted field），平铺才能让 LangConfig{MaxConcurrent: ...}
-// 这类构造写法继续可用（池的测试大量这么写）。
+// The fields are deliberately flat instead of embedding CodeLang: the language version of Go 1.25 does not allow
+// promoted fields in struct literals, and flat fields keep constructions like LangConfig{MaxConcurrent: ...} working
+// (the pool tests write a lot of those).
 type LangConfig struct {
 	Command string
 
-	// 无超时字段：脚本超时由请求下发，服务端只有 code_max_sec 这个全局硬闸
-	// （见 codeDeadline）。
+	// No timeout field: the script timeout is sent with the request, and the server only has code_max_sec as a
+	// global hard gate (see codeDeadline).
 	MaxConcurrent     int
 	AcquireTimeoutSec int
 	Idle              PoolConfig
 }
 
-// ResolveCommand 取当前 mode 下该语言的解释器入口名：commands[mode] 优先，
-// 其次通用缺省 command。
+// ResolveCommand returns the interpreter entry name of the language under the current mode: commands[mode] first,
+// then the general default command.
 //
-// 取不到就报错，而不是退化成空命令 —— 空命令要到池预热时才以
-// 「refill ... failed: recv pong: EOF」的面目暴露，排查成本极高。
+// It reports an error when nothing can be resolved instead of degrading to an empty command — an empty command only
+// surfaces at pool prewarm time as "refill ... failed: recv pong: EOF", which is extremely expensive to diagnose.
 func (l LangDef) ResolveCommand(mode string) (string, error) {
 	if cmd, ok := l.CommandByMode[mode]; ok && cmd != "" {
 		return cmd, nil
@@ -466,28 +506,31 @@ func (l LangDef) ResolveCommand(mode string) (string, error) {
 	return "", fmt.Errorf("command is not configured for mode %q (commands has: %v)", mode, modes)
 }
 
-// PoolConfig 单语言的空闲池参数（code.pools.<lang>.idle）。
+// PoolConfig holds the idle pool parameters of one language (code.pools.<lang>.idle).
 //
-// 开关不在这个段里 —— 是「整个语言条目在不在」（见 CodeConfig.Pools）：
-// 条目在 = 该语言启用空闲池；不要就整条注释掉。
+// The switch is not inside this section — it is "whether the whole language entry is there" (see CodeConfig.Pools):
+// the entry being present = that language enables the idle pool; to drop it, comment out the whole entry.
 //
-// 段内两个值都尊重零值：省略即 0，0 是合法语义（不预热 / 不留驻）。
-// 刻意没有 enabled 布尔 —— 「写了 initial: 2 又说不要池」这种自相矛盾状态不该存在。
+// Both values in the section respect the zero value: omitting gives 0, and 0 is a legitimate meaning (no prewarming
+// / nothing kept resident). There is deliberately no enabled boolean — a self-contradictory state like "wrote
+// initial: 2 but says no pool" should not exist.
 //
-// 判「段里有没有东西」用 == PoolConfig{} 即可（零值含下面的指针，仍然可比）。
+// "Is there anything in the section" can be judged with == PoolConfig{} (the zero value contains the pointer below
+// and is still comparable).
 type PoolConfig struct {
-	// Initial 保底空闲 worker 数：启动时预热，运行期由 refiller 维持。
-	// 0 = 不预热（借出时现场启动，归还后仍会入池复用，除非 Max 也是 0）。
+	// Initial is the guaranteed number of idle workers: prewarmed at startup and maintained by the refiller at
+	// runtime. 0 = no prewarming (started on lend, still returned to the pool and reused after being given back,
+	// unless Max is 0 too).
 	Initial int `yaml:"initial"`
-	// Max 空闲池容量上限（借出中的 worker 不占这个额度）。缺省 = Initial。
-	// 0 = 不留驻（归还即销毁）。
+	// Max is the idle pool capacity (workers that are lent out do not count against it). Default = Initial.
+	// 0 = nothing kept resident (destroyed on return).
 	Max int `yaml:"max"`
-	// LegacyEnabled 改名/改语义前存在的 enabled 布尔：只用于翻译成 Initial/Max
-	// 并出声告警，不参与任何运行期判断（见 legacyIdle）。
+	// LegacyEnabled is the enabled boolean that existed before the rename / semantic change: used only to translate
+	// into Initial/Max with an audible warning, and not consulted by any runtime decision (see legacyIdle).
 	LegacyEnabled *bool `yaml:"enabled"`
 }
 
-// ToSandbox 转成 sandbox.Limits。
+// ToSandbox converts into sandbox.Limits.
 func (l LimitsConfig) ToSandbox() sandbox.Limits {
 	out := sandbox.Limits{
 		MemoryMB:       l.MemoryMB,
@@ -502,33 +545,34 @@ func (l LimitsConfig) ToSandbox() sandbox.Limits {
 	return out
 }
 
-// expandEnv 展开配置里「定位类」字段的 ${VAR} / $VAR。
+// expandEnv expands ${VAR} / $VAR in the "locating" fields of the config.
 //
-// 为什么需要：解释器入口、宿主二进制、rootfs / 镜像、挂载根这些在不同机器上完全不同。
-// 写死绝对路径的后果是「换台机器就起不来」，而且会把某个人的本机路径随包发出去。
-// 有了环境变量，「同一份 config.yaml + 不同环境」才成立。
+// Why it is needed: interpreter entries, host binaries, rootfs / images and mount roots are completely different on
+// different machines. Hardcoding absolute paths means "it does not start on another machine", and it ships someone's
+// local paths with the package. With environment variables, "the same config.yaml + different environments" works.
 //
-// 为什么只展开这些字段、不对整份 YAML 做全局替换：token / 密码里出现 $ 是合法的，
-// 全局展开会把它们悄悄改掉，而且改完还看不出来。
+// Why only these fields and not a global replacement over the whole YAML: a $ inside a token / password is legal,
+// and a global expansion would change it silently, with no way to tell afterwards.
 //
-// 为什么引用未设置的变量要报错：展开成空串之后，ResolveCommand / ResolveCodehostBinary
-// 会把它当成「没配」并静默回退到通用缺省 —— 覆盖没生效却毫无迹象，正是最难查的那类。
+// Why referencing an unset variable is an error: expanded into an empty string, ResolveCommand /
+// ResolveCodehostBinary would treat it as "not configured" and silently fall back to the general default — an
+// override that did not take effect with no trace at all, exactly the hardest kind to find.
 func (c *Config) expandEnv() error {
 	var firstErr error
 
-	// set 展开单个字段；一旦出错就记下第一个，后面的不再覆盖它。
+	// set expands a single field; on error the first one is kept and later ones do not overwrite it.
 	set := func(where string, p *string) {
 		if firstErr != nil || p == nil || *p == "" {
 			return
 		}
 		out := os.ExpandEnv(*p)
 		if out == "" {
-			firstErr = fmt.Errorf("%s: %q 引用的环境变量未设置", where, *p)
+			firstErr = fmt.Errorf("%s: %q references an environment variable that is not set", where, *p)
 			return
 		}
 		*p = out
 	}
-	// setMap 展开一份「按 mode 覆盖」的表（key 是 mode，值同样不能展开成空）。
+	// setMap expands a "per-mode override" table (the key is the mode; the value must not expand to empty either).
 	setMap := func(prefix string, m map[string]string) {
 		for k, v := range m {
 			out := v
@@ -566,7 +610,7 @@ func (c *Config) expandEnv() error {
 	return firstErr
 }
 
-// LoadConfig 读取并补全默认值。
+// LoadConfig reads the config and fills in the defaults.
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -576,13 +620,13 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("sandboxd: parse config %s: %w", path, err)
 	}
-	// 环境变量展开紧跟解析：早于 applyDefaults，缺省值不参与展开（它们本来也不含 $）；
-	// 早于 applyLegacyKeys，旧键回填出来的值也就不必再走一遍。
+	// Environment expansion follows decoding immediately: before applyDefaults, so defaults do not participate (they
+	// contain no $ anyway); and before applyLegacyKeys, so backfilled values do not have to go through it again.
 	if err := c.expandEnv(); err != nil {
 		return nil, fmt.Errorf("sandboxd: config %s: %w", path, err)
 	}
-	// 回填必须早于 applyDefaults：后者会把空值补成缺省，一补就再也分不出
-	// 「用户没写」与「用户写的是旧键」了。
+	// The backfill must come before applyDefaults: the latter fills empty values with defaults, and once filled there
+	// is no way to tell "the user did not write it" from "the user wrote the old key".
 	c.applyLegacyKeys()
 	c.applyDefaults()
 	if err := c.validate(); err != nil {
@@ -591,7 +635,7 @@ func LoadConfig(path string) (*Config, error) {
 	return &c, nil
 }
 
-// validate 校验取值，避免拼错的策略被静默当成缺省值。
+// validate checks the values so that a misspelled policy is not silently taken as a default.
 func (c *Config) validate() error {
 	if err := c.validateNetwork(); err != nil {
 		return err
@@ -612,8 +656,8 @@ func (c *Config) validate() error {
 			c.CodeLog, CodeLogOff, CodeLogSlow, CodeLogAll)
 	}
 	for name, def := range c.Langs {
-		// commands 的键必须是已知 mode：拼错（如 dockerr）会让 ResolveCommand
-		// 静默回退到通用 command，等于覆盖没生效却看不出来。
+		// The keys of commands must be known modes: a typo (dockerr) makes ResolveCommand fall back to the general
+		// command silently, which means the override did not take effect with no sign of it.
 		for m := range def.CommandByMode {
 			switch m {
 			case isolate.NoneName, isolate.NsjailName, isolate.DockerName:
@@ -631,9 +675,9 @@ func (c *Config) validate() error {
 				m, isolate.NoneName, isolate.NsjailName, isolate.DockerName)
 		}
 	}
-	// 与 commands / codehost.binaries 同理：拼错的 mode 会让覆盖静默不生效，
-	// 而这里的后果更隐蔽 —— 退回到通用路径后，浏览器在另一个 mode 下指向一个
-	// 不存在的文件，直到第一次 open 才炸。
+	// Same reasoning as commands / codehost.binaries: a misspelled mode makes the override silently ineffective, and
+	// here the consequence is subtler — after falling back to the general path, the browser points at a file that
+	// does not exist under the other mode, and it only blows up on the first open.
 	for key, modes := range map[string]map[string]string{
 		"browser.binaries":       c.Browser.Binaries,
 		"browser.exec_paths":     c.Browser.ExecPaths,
@@ -649,7 +693,8 @@ func (c *Config) validate() error {
 			}
 		}
 	}
-	// 有头的覆盖表同理：拼错的 mode 会让覆盖静默不生效，本机有头调试莫名变成无头。
+	// Same for the headed override table: a misspelled mode makes the override silently ineffective, and local
+	// headed debugging mysteriously turns headless.
 	for mode := range c.Browser.AllowHeadedModes {
 		switch mode {
 		case isolate.NoneName, isolate.NsjailName, isolate.DockerName:
@@ -659,30 +704,33 @@ func (c *Config) validate() error {
 		}
 	}
 	for name, lang := range c.Code.Pools {
-		// 双工策略必须挂在已定义的语言上：否则装配时取不到解释器入口。
+		// A duplex policy must hang off a defined language: otherwise assembly cannot find the interpreter entry.
 		if _, ok := c.Langs[name]; !ok {
 			return fmt.Errorf("code.pools.%s: no matching definition in top-level langs", name)
 		}
-		// 保底空闲数不能大于池容量：refiller 会把空闲对象补到 initial，
-		// 而容量只有 max 时每次推送都落进 default 分支销毁并返回 ——
-		// 结果就是每秒「起一个、杀一个」空转（L2 更贵：每秒建一个容器再销毁）。
+		// The guaranteed idle count cannot exceed the pool capacity: the refiller tops the idle objects up to
+		// initial, but with a capacity of only max every push hits the default branch, is destroyed and returned —
+		// the result is a "start one, kill one" spin every second (worse at L2: a container created and destroyed
+		// every second).
 		if lang.Idle.Initial > lang.Idle.Max {
 			return fmt.Errorf("code.pools.%s.idle: initial %d > max %d — "+
-				"refiller 会把空闲对象补到 initial，但池容量只有 max，结果是每秒「起一个、杀一个」空转；"+
-				"请把 max 提到 >= initial（如 max: %d），或把 initial 降到 <= max",
+				"the refiller tops idle objects up to initial but the pool capacity is only max, so it spins "+
+				"starting and killing one object every second; "+
+				"raise max to >= initial (for example max: %d), or lower initial to <= max",
 				name, lang.Idle.Initial, lang.Idle.Max, lang.Idle.Initial)
 		}
 	}
 	return nil
 }
 
-// EffectiveNetwork 当前 mode 下 /v1/exec 生效的网络策略：networks[mode] 优先，否则顶层 network。
+// EffectiveNetwork is the network policy in effect for /v1/exec under the current mode: networks[mode] first,
+// otherwise the top-level network.
 //
-// 它只是**上限** —— 这一次到底出不出网，还要过租户许可与请求标志（阶段 2 在
-// handleExec 里裁决）。capabilities 上报的就是这个值，不是某次调用的事实。
+// It is only the **ceiling** — whether this particular call egresses still has to pass the tenant permission and the
+// request flag (stage 2 decides in handleExec). capabilities reports this value, not the fact of one call.
 //
-// 两层都有缺省（applyDefaults 把 network 补成 off），因此总能取到值 —— 与
-// ResolveCommand「取不到就报错」的情形不同，这里不存在「取不到」。
+// Both layers have defaults (applyDefaults fills network with off), so a value is always available — unlike
+// ResolveCommand's "report an error when nothing resolves", "nothing resolves" cannot happen here.
 func (c *Config) EffectiveNetwork() string {
 	if v, ok := c.Networks[c.Mode]; ok && v != "" {
 		return v
@@ -690,22 +738,24 @@ func (c *Config) EffectiveNetwork() string {
 	return c.Network
 }
 
-// EffectiveCodeNetwork /v1/code 的网络策略：恒为 off，不可配。
+// EffectiveCodeNetwork is the network policy of /v1/code: always off, not configurable.
 //
-// 为什么硬编码，而不是加一个 network_script 配置项：
-//   - 脚本池按语言全局创建（slotPool），跨租户共享，且 wire.Frame 里没有租户身份 ——
-//     sandboxd 根本无从按租户裁决，配成 on 只能「全平台一起开」；
-//   - 一旦打开，某个租户的脚本失控（外发数据 / 挖矿 / 当代理）时无法只关它，
-//     只能全平台回退，把所有租户的流程一起打掉；
-//   - 工作流的出网需求由 http / rpc / mcp 节点承担，那里才有域名白名单、凭据、
-//     限流与审计 —— 沙箱层永远做不到这些。
+// Why hardcoded instead of adding a network_script option:
+//   - the script pool is created globally per language (slotPool), shared across tenants, and wire.Frame carries no
+//     tenant identity — sandboxd simply has no way to decide per tenant, and configuring on could only switch it on
+//     for the whole platform;
+//   - once opened, a runaway tenant script (exfiltrating data / mining / acting as a proxy) could not be shut down
+//     for that tenant alone, only rolled back platform-wide, taking every tenant's workflows down with it;
+//   - the workflow's egress needs are served by the http / rpc / mcp nodes, and that is where the domain allowlist,
+//     credentials, rate limiting and auditing live — the sandbox layer can never do those.
 //
-// 保留这个函数（而不是在 handler 里散落字面量 "off"），是为了让按通道上报有一个
-// 单一来源，将来真要改也只有一个地方。
+// The function is kept (rather than scattering the literal "off" through the handlers) so that the per-channel
+// report has a single source, and a future change has exactly one place to go.
 //
-// ⚠️ mode=none 是例外：脚本跑在宿主进程上，没有隔离单元也就没有"断网"这回事，
-// 实际行为就是能出网。这里必须如实报 on —— 报 off 就是让 agent 按错误前提写脚本
-// （以为连不上而不敢写，或反过来把外发失败当代码 bug）。
+// ⚠️ mode=none is the exception: scripts run on the host process, so there is no isolation unit and no such thing as
+// "no network" — the actual behaviour is that it can egress. It must be reported honestly as on here; reporting off
+// would make the agent write scripts on a wrong premise (afraid to write because it believes there is no network, or
+// blaming egress failures on a code bug).
 func (c *Config) EffectiveCodeNetwork() string {
 	if c.Mode == isolate.NoneName {
 		return NetworkOn
@@ -713,14 +763,16 @@ func (c *Config) EffectiveCodeNetwork() string {
 	return NetworkOff
 }
 
-// validateNetwork 校验网络声明的取值，以及它与「启动方式」是否一致。
+// validateNetwork checks the values of the network declaration and whether they agree with "how the unit is
+// started".
 //
-// 判据只有一条：**声明必须与事实相符** —— off 要真禁得住，on 要真放得开。
-// 校验完全在配置内部完成（比对 docker.network / nsjail.disable_network / mode），
-// 不需要任何运行期探测。
+// There is only one criterion: **the declaration must match the fact** — off must really hold, on must really be
+// open. The check is done entirely inside the config (comparing docker.network / nsjail.disable_network / mode); it
+// needs no runtime probing.
 //
-// 盲区：docker.extra_args / nsjail.extra_args 是逃生口，塞一个 --network host 就能
-// 推翻声明，而程序无从校验 —— 用了逃生口就别指望这里兜住，那属于部署方自觉。
+// Blind spot: docker.extra_args / nsjail.extra_args are escape hatches, and stuffing in a --network host overturns
+// the declaration with no way for the program to check — if you use the escape hatch, do not count on this catching
+// it; that is on the deployer.
 func (c *Config) validateNetwork() error {
 	if !validNetworkPolicy(c.Network) {
 		return fmt.Errorf("network: unknown policy %q (want %q, %q or %q)",
@@ -749,20 +801,21 @@ func (c *Config) validateNetwork() error {
 	}
 }
 
-// validNetworkPolicy 三态取值是否合法。
+// validNetworkPolicy reports whether a three-state value is legal.
 func validNetworkPolicy(v string) bool {
 	return v == NetworkOff || v == NetworkOnRequest || v == NetworkOn
 }
 
-// validateNetworkOnRequest 声明「按请求裁决」时，当前 mode 必须**真的切得动**。
+// validateNetworkOnRequest: when declaring "decide per request", the current mode must **really be able to switch**.
 //
-// 判据比 off / on 更严：不是「某一态能到达」，而是「两态都能到达」。
-//   - docker：--network none 与 --network <mode> 都得可用，所以 docker.network
-//     不能空、也不能是 none —— 否则请求要出网时无网可给。
-//   - nsjail：断网靠 clone_newnet（默认开）+ 运行时加 --iface_no_lo；出网必须
-//     --disable_clone_newnet（共享宿主 netns）。后者只能写在 extra_args 里，
-//     程序无法校验，所以这里只告警 —— 部署方自己保证。
-//   - none：宿主进程与外部网络同源，断不了；egress=false 的请求在运行期会被拒绝。
+// The criterion is stricter than for off / on: not "one state is reachable" but "both states are reachable".
+//   - docker: both --network none and --network <mode> must be usable, so docker.network must not be empty and must
+//     not be none — otherwise an egress request has no network to be given.
+//   - nsjail: cutting the network relies on clone_newnet (on by default) plus --iface_no_lo at runtime; egress needs
+//     --disable_clone_newnet (sharing the host netns). The latter can only be written in extra_args and the program
+//     cannot check it, so this only warns — the deployer is responsible.
+//   - none: a host process shares the outside network and cannot be cut off; egress=false requests are rejected at
+//     runtime.
 func (c *Config) validateNetworkOnRequest() error {
 	switch c.Mode {
 	case isolate.DockerName:
@@ -782,11 +835,11 @@ func (c *Config) validateNetworkOnRequest() error {
 	return nil
 }
 
-// validateNetworkOff 声明「不能联网」时，当前 mode 必须真能断网。
+// validateNetworkOff: when declaring "no network", the current mode must really be able to cut it off.
 func (c *Config) validateNetworkOff() error {
 	switch c.Mode {
 	case isolate.DockerName:
-		// docker 的断网是 containerArgs 内置的（network: none，空值也补成 none）。
+		// docker's network cutoff is built into containerArgs (network: none; an empty value is filled with none).
 		if n := c.Docker.Network; n != "" && n != "none" {
 			return fmt.Errorf("network: %q but docker.network is %q — containers would still reach the network; "+
 				"set docker.network: none, or declare network: %q", NetworkOff, n, NetworkOn)
@@ -797,18 +850,20 @@ func (c *Config) validateNetworkOff() error {
 				"set nsjail.disable_network: true, or declare network: %q", NetworkOff, NetworkOn)
 		}
 	default:
-		// none：命令由宿主直接执行，与外部网络同源，没有任何手段可断。
+		// none: commands are executed directly by the host, sharing the outside network, with no means to cut it
+		// off.
 		return fmt.Errorf("network: %q cannot be enforced with mode %q — commands run on the host and cannot be cut off from the network; "+
 			"to run locally, declare it honestly with networks.none: %q", NetworkOff, c.Mode, NetworkOn)
 	}
 	return nil
 }
 
-// validateNetworkOn 声明「能联网」时，当前 mode 必须真的放得开。
+// validateNetworkOn: when declaring "network available", the current mode must really be open.
 func (c *Config) validateNetworkOn() error {
 	switch c.Mode {
 	case isolate.DockerName:
-		// ⚠️ 空值会被 NewDocker 补成 none —— 声明 on 却没给网络模式，等于自相矛盾。
+		// ⚠️ An empty value is filled with none by NewDocker — declaring on without giving a network mode is
+		// self-contradictory.
 		n := c.Docker.Network
 		if n == "" {
 			n = "(unset → none)"
@@ -824,15 +879,15 @@ func (c *Config) validateNetworkOn() error {
 				"set nsjail.disable_network: false, or declare network: %q", NetworkOn, NetworkOff)
 		}
 	default:
-		// none：宿主进程必然能联网，声明 on 属实。
+		// none: a host process necessarily has network access, so declaring on is truthful.
 	}
 	return nil
 }
 
-// CodeLogEnabled 判断一次耗时 dur 的会话是否要记明细。
+// CodeLogEnabled decides whether a session lasting dur should have its detail recorded.
 //
-// 「容器不可归还」的异常会话不走这里 —— 调用方在收尾时强制记录，
-// 那是排障时最需要的一类线索，不该被 off 关掉。
+// Abnormal "container not returnable" sessions do not go through here — the caller force-records them at wrap-up,
+// because that is the most needed kind of clue in troubleshooting and must not be switched off by off.
 func (c *Config) CodeLogEnabled(dur time.Duration) bool {
 	switch c.CodeLog {
 	case CodeLogOff:
@@ -844,19 +899,22 @@ func (c *Config) CodeLogEnabled(dur time.Duration) bool {
 	}
 }
 
-// applyLegacyKeys 把改名前的旧键回填到新键上，并记录告警。
+// applyLegacyKeys backfills the pre-rename keys onto the new ones and records warnings.
 //
-// ⚠️ 必须在 applyDefaults 之前调用：applyDefaults 会把空值补成缺省，一旦先跑，
-// 新键已非空 → 回填判为「新键已写」→ 旧值被丢弃，而且静默 —— code_log 的
-// 缺省恰好是 slow，配过 off / all 的人只会发现日志行为莫名变了。
+// ⚠️ It must be called before applyDefaults: applyDefaults fills empty values with defaults, and once it has run the
+// new key is non-empty → the backfill judges "the new key is written" → the old value is dropped, silently — and
+// code_log's default happens to be slow, so whoever configured off / all would only notice the log behaviour
+// changing for no reason.
 //
-// 判据只有「新键空 + 旧键有」这一条。两个都写时以新键为准并明确告警旧键被忽略：
-// 不猜「谁更可信」，否则旧键会给人一种「还在生效」的错觉。
+// The only criterion is "new key empty + old key present". When both are written the new key wins with an explicit
+// warning that the old key is ignored: do not guess "which one is more trustworthy", otherwise the old key would
+// give the illusion of "still in effect".
 //
-// 三层从新到旧依次判断：script（2026-10 的旧键）→ interact → session。
+// The three layers are judged from new to old: script (the 2026-10 old key) → interact → session.
 func (c *Config) applyLegacyKeys() {
-	// 第零层：script → code（2026-10 更名；script 曾是当时的新键，现在成了旧键）。
-	// 必须排在最前：它离当前最近，优先级最高 —— 后两层只在新键仍为空时才填。
+	// Layer zero: script → code (renamed in 2026-10; script was the new key at the time and is now an old one). It
+	// must come first: it is closest to the present and has the highest priority — the two later layers only fill
+	// when the new key is still empty.
 	if c.LegacyScriptMaxSec != 0 {
 		if c.CodeMaxSec == 0 {
 			c.CodeMaxSec = c.LegacyScriptMaxSec
@@ -890,7 +948,7 @@ func (c *Config) applyLegacyKeys() {
 		}
 	}
 
-	// 第一层：interact → code（interact 是上一轮的旧键）。
+	// Layer one: interact → code (interact was the previous round's old key).
 	if c.LegacyInteractMaxSec != 0 {
 		if c.CodeMaxSec == 0 {
 			c.CodeMaxSec = c.LegacyInteractMaxSec
@@ -924,7 +982,7 @@ func (c *Config) applyLegacyKeys() {
 		}
 	}
 
-	// 第二层：session → code（session 是最早的旧键）。
+	// Layer two: session → code (session is the oldest old key).
 	if c.LegacySessionMaxSec != 0 {
 		if c.CodeMaxSec == 0 {
 			c.CodeMaxSec = c.LegacySessionMaxSec
@@ -959,17 +1017,18 @@ func (c *Config) applyLegacyKeys() {
 	}
 	c.applyLegacyAcquireTimeout()
 
-	// ⚠️ 必须排在段级回填之后：更旧的 session: {langs: ...} 刚被搬到 c.Code 上，
-	// 段内回填才知道该把哪份 langs 搬到 pools。
+	// ⚠️ It must come after the section-level backfill: the older session: {langs: ...} has just been moved onto
+	// c.Code, and only then does the in-section backfill know which langs to move to pools.
 	c.applyCodeLegacyKeys()
 }
 
-// applyLegacyAcquireTimeout 把顶层的 acquire_timeout_sec（旧）搬到 script 段里。
+// applyLegacyAcquireTimeout moves the top-level acquire_timeout_sec (old) into the script section.
 //
-// ⚠️ 必须排在 session 段映射**之后**。它自己是旧键，不能把"script 段非空"这件事
-// 提前写进去 —— 否则「session: {langs: ...} + 顶层 acquire_timeout_sec」的配置会被
-// isZero 判成"新段已写"，整个 session 段被丢弃（症状：双工语言全 unsupported_lang），
-// 而这恰恰是旧代码不会发生的事（那时它有独立的顶层字段，不参与 isZero）。
+// ⚠️ It must come **after** the session section mapping. It is itself an old key and must not write "the script
+// section is non-empty" ahead of time — otherwise a config of "session: {langs: ...} + top-level
+// acquire_timeout_sec" would be judged by isZero as "the new section is written", and the whole session section
+// would be dropped (symptom: every duplex language gets unsupported_lang), which is exactly what the old code did
+// not do (it had an independent top-level field then and did not take part in isZero).
 func (c *Config) applyLegacyAcquireTimeout() {
 	if c.LegacyAcquireTimeoutSec == 0 {
 		return
@@ -982,8 +1041,8 @@ func (c *Config) applyLegacyAcquireTimeout() {
 	c.warnLegacyIgnored("acquire_timeout_sec", "code.acquire_timeout_sec")
 }
 
-// applyCodeLegacyKeys 段内（code.langs → code.pools）与语言级
-// （<lang>.pool → <lang>.idle，含已移除的 enabled 的翻译）的旧键回填。
+// applyCodeLegacyKeys backfills the in-section (code.langs → code.pools) and language-level
+// (<lang>.pool → <lang>.idle, including the translation of the removed enabled) old keys.
 func (c *Config) applyCodeLegacyKeys() {
 	switch {
 	case len(c.Code.Pools) == 0 && len(c.Code.LegacyLangs) > 0:
@@ -994,88 +1053,92 @@ func (c *Config) applyCodeLegacyKeys() {
 	}
 
 	for name, lang := range c.Code.Pools {
-		// 生效的那一份里的 enabled 检测字段：翻译会把旧段整体丢掉（含指针），
-		// 所以要在翻译之前把它捞出来单独看。旧段被忽略时不看旧段 —— 那是噪声。
+		// The enabled detection field of the effective copy: the translation drops the whole old section (pointer
+		// included), so it must be fished out before translating. When the old section is ignored it is not looked
+		// at — that would be noise.
 		enabled := lang.Idle.LegacyEnabled
 		switch {
 		case lang.Idle == (PoolConfig{}) && lang.LegacyPool != (PoolConfig{}):
 			enabled = lang.LegacyPool.LegacyEnabled
 			lang.Idle = legacyIdle(lang.LegacyPool)
 			c.warnLegacy("code.pools."+name+".pool", "code.pools."+name+".idle")
-			// 落成 {0,0} = 旧语义的"不启用空闲池"，而用户写的 initial/max 被丢掉了 ——
-			// 必须说清楚，否则那些数字看起来"配了却没生效"。
+			// Landing as {0,0} = the old semantics of "idle pool not enabled", while the initial/max the user wrote
+			// are dropped — that must be stated, otherwise those numbers look like "configured but not taking
+			// effect".
 			if lang.Idle == (PoolConfig{}) {
 				c.warnAbout("code.pools."+name+".pool",
-					"旧语义下这个段不启用空闲池（enabled 不是 true，initial/max 都会被忽略），"+
-						"已落成 idle: {initial: 0, max: 0}；要启用请写 idle.initial（例如 initial: 1）")
+					"under the old semantics this section did not enable the idle pool (enabled was not true, so "+
+						"initial/max were ignored); it has been resolved to idle: {initial: 0, max: 0}; to enable "+
+						"it write idle.initial (for example initial: 1)")
 			}
 		case lang.LegacyPool != (PoolConfig{}):
 			c.warnLegacyIgnored("code.pools."+name+".pool", "code.pools."+name+".idle")
 		}
-		// enabled 不是「更名」而是「被 initial/max 取代」，所以文案单列一条。
+		// enabled was not "renamed" but "replaced by initial/max", so its message is a separate one.
 		if enabled != nil {
 			c.warnRemoved("code.pools."+name+".idle.enabled",
-				"空闲池的开关是整个语言条目：要关掉就把该语言整条注释掉"+
-					"（那会让它的 code 请求收到 unsupported_lang），不要只删 idle 段")
+				"the idle pool switch is the whole language entry: to turn it off, comment out the entire entry "+
+					"(that makes its code requests get unsupported_lang), do not just delete the idle section")
 		}
 		c.Code.Pools[name] = lang
 	}
 }
 
-// legacyIdle 把旧的 pool 段按**旧语义**翻译成新的 idle 段。
+// legacyIdle translates the old pool section into the new idle section under the **old semantics**.
 //
-// 旧语义里 enabled 是总开关，所以三档：
+// Under the old semantics enabled was the master switch, so there are three cases:
 //
-//	enabled 不是 true（包括没写）  → {0, 0}  不预热、不留驻（initial/max 一律被忽略）
-//	enabled: true，有数值         → 数值原样（initial 大于 max 时复现旧的"钳到 max"）
-//	enabled: true，无数值         → {1, 4}   复现旧缺省
+//	enabled is not true (including unwritten)  → {0, 0}  no prewarming, nothing resident (initial/max ignored)
+//	enabled: true, with numbers                 → the numbers as-is (initial > max reproduces the old clamp to max)
+//	enabled: true, without numbers              → {1, 4}  reproduces the old default
 //
-// 返回 {0,0} 的两种情况都会由调用方额外出声，避免用户以为"配了却没生效"。
+// Both cases returning {0,0} are additionally announced by the caller, so the user does not believe "configured but
+// not taking effect".
 //
-// ⚠️ L2（docker）下旧 enabled: false 的容器**仍然复用**（旧 newUnitPool 的
-// size<=0→4 兜底不受 enabled 控制），而 {0,0} 是不复用 —— 这个方向是"更省资源"，
-// 但若想保住容器复用，写 idle: {initial: 0, max: 4}。
+// ⚠️ At L2 (docker) containers of the old enabled: false were **still reused** (the old newUnitPool's size<=0→4
+// fallback was not controlled by enabled), while {0,0} does not reuse — that direction is "cheaper on resources",
+// but to keep container reuse write idle: {initial: 0, max: 4}.
 func legacyIdle(old PoolConfig) PoolConfig {
 	if old.LegacyEnabled == nil || !*old.LegacyEnabled {
 		return PoolConfig{Initial: 0, Max: 0}
 	}
 	in, mx := old.Initial, old.Max
 	if in <= 0 {
-		in = 1 // 旧缺省
+		in = 1 // the old default
 	}
 	if mx <= 0 {
-		mx = 4 // 旧缺省
+		mx = 4 // the old default
 	}
 	if in > mx {
-		in = mx // 旧 applyDefaults 会把 initial 钳到 max
+		in = mx // the old applyDefaults clamped initial to max
 	}
 	return PoolConfig{Initial: in, Max: mx}
 }
 
-// warnLegacy 记录「旧键生效」的提醒。
+// warnLegacy records the "old key took effect" notice.
 func (c *Config) warnLegacy(oldKey, newKey string) {
 	c.Warnings = append(c.Warnings, fmt.Sprintf(
-		"配置键 %s 已更名为 %s：本次按旧键生效，请更新配置（旧键后续版本移除）", oldKey, newKey))
+		"config key %s was renamed to %s: this run uses the old key, please update the config (the old key is removed in a later release)", oldKey, newKey))
 }
 
-// warnLegacyIgnored 记录「新旧都写了、旧键被忽略」的提醒。
+// warnLegacyIgnored records the "both were written, the old key is ignored" notice.
 func (c *Config) warnLegacyIgnored(oldKey, newKey string) {
 	c.Warnings = append(c.Warnings, fmt.Sprintf(
-		"配置同时写了 %s 与 %s：以新键为准，旧键 %s 被忽略", oldKey, newKey, oldKey))
+		"config sets both %s and %s: the new key wins, old key %s is ignored", oldKey, newKey, oldKey))
 }
 
-// warnRemoved 记录「旧键已被移除、且不是简单更名」的提醒（需要给出替代写法）。
+// warnRemoved records the "the old key was removed and it is not a plain rename" notice (a replacement is needed).
 func (c *Config) warnRemoved(oldKey, hint string) {
 	c.Warnings = append(c.Warnings, fmt.Sprintf(
-		"配置键 %s 已移除：%s", oldKey, hint))
+		"config key %s was removed: %s", oldKey, hint))
 }
 
-// warnAbout 记录一条与某个键相关的说明（既不是更名，也不是键被移除）。
+// warnAbout records a remark about a key (neither a rename nor a removal).
 func (c *Config) warnAbout(key, msg string) {
-	c.Warnings = append(c.Warnings, fmt.Sprintf("配置键 %s：%s", key, msg))
+	c.Warnings = append(c.Warnings, fmt.Sprintf("config key %s: %s", key, msg))
 }
 
-// applyDefaults 补全缺省值。
+// applyDefaults fills in the default values.
 func (c *Config) applyDefaults() {
 	if c.Listen == "" {
 		c.Listen = ":27081"
@@ -1092,13 +1155,14 @@ func (c *Config) applyDefaults() {
 	if c.Mode == "" {
 		c.Mode = "none"
 	}
-	// 网络声明。安全项落在安全那一侧：漏写 network 就是全禁。
+	// The network declaration. A security setting lands on the safe side: omitting network disables everything.
 	//
-	// 但 mode=none 是个例外，必须区分「没表态」与「显式声明」：
-	// 宿主进程与外部网络同源，断网根本做不到 —— 把「没表态」当成「不能联网」会让
-	// 最小配置（只写 mode: none）直接起不来。所以没表态时按事实把 networks.none
-	// 补成 on（这是代码级事实，不是替用户做策略选择）；一旦显式声明过，就原样保留，
-	// 交给 validateNetwork 判断是否自洽（声明 off 而 none 做不到 → 启动失败）。
+	// But mode=none is an exception and "no statement" must be told apart from "explicit declaration": a host
+	// process shares the outside network and cutting it off is simply impossible — treating "no statement" as "no
+	// network" would make the minimal config (only mode: none) fail to start. So without a statement, networks.none
+	// is filled with on according to the fact (that is a code-level fact, not making a policy choice for the user);
+	// once explicitly declared it is kept as-is and handed to validateNetwork to judge consistency (declaring off
+	// where none cannot do it → startup fails).
 	explicitNetwork := c.Network != ""
 	if !explicitNetwork {
 		c.Network = NetworkOff
@@ -1118,35 +1182,36 @@ func (c *Config) applyDefaults() {
 		c.Probe.MaxOutputBytes = 8192
 	}
 	if c.Codehost.Binary == "" {
-		// 缺省 "codehost"（取 PATH 解析）；none 下 PATH 没有时用 binaries.none 指到宿主路径。
+		// Default "codehost" (resolved through PATH); when PATH lacks it under none, point binaries.none at the host
+		// path.
 		c.Codehost.Binary = "codehost"
 	}
 	if c.Browser.Binary == "" {
 		c.Browser.Binary = "browserhost"
 	}
-	// 注意：browser.profile_dir 的 docker 缺省（/tmp/browser）**故意放在
-	// ResolveBrowserProfileDir 里**，不在这里回填。回填进字段会让它变成
-	// 「通用值」，切 mode 时把 docker 的路径带到 none 上。
+	// Note: the docker default of browser.profile_dir (/tmp/browser) is **deliberately kept in
+	// ResolveBrowserProfileDir** and not filled here. Filling it into the field would turn it into a "general value"
+	// and drag the docker path onto none when the mode changes.
 	if c.TmpDir == "" {
 		c.TmpDir = "run/tmp"
 	}
 	if c.Code.AcquireTimeoutSec <= 0 {
-		// 15 而不是 5：python / js 的并发额度只有 16 / 8，单次脚本可能被回调拉到
-		// 几十秒，突发时 5s 的等待会把排在后面的请求全部推成「繁忙」。
-		// 这段等待不占任何超时预算（见 handle_code.go），只是额外尾延迟。
+		// 15 rather than 5: python / js only have concurrency budgets of 16 / 8, a single script can be pulled to
+		// tens of seconds by callbacks, and a 5s wait would push everything queued behind it into "busy" during a
+		// burst. This wait does not consume any timeout budget (see handle_code.go), it is only extra tail latency.
 		c.Code.AcquireTimeoutSec = 15
 	}
 	if c.CodeMaxSec <= 0 {
 		c.CodeMaxSec = 120
 	}
 	if c.InteractiveIdleSec <= 0 {
-		c.InteractiveIdleSec = 1800 // 30 分钟：跨连接常驻进程的空闲回收兜底
+		c.InteractiveIdleSec = 1800 // 30 minutes: the idle reclaim backstop of cross-connection resident processes
 	}
 	if c.InteractiveEphemeralIdleSec <= 0 {
-		c.InteractiveEphemeralIdleSec = 120 // 2 分钟：无 session 临时进程的短兜底
+		c.InteractiveEphemeralIdleSec = 120 // 2 minutes: the short backstop of temporary processes without a session
 	}
 	if c.InteractiveJanitorSec <= 0 {
-		c.InteractiveJanitorSec = 60 // 1 分钟：空闲回收的巡检分辨率
+		c.InteractiveJanitorSec = 60 // 1 minute: the sweep resolution of idle reclamation
 	}
 	if c.Nsjail.CgroupVersion == "" {
 		c.Nsjail.CgroupVersion = isolate.CgroupAuto
@@ -1156,15 +1221,17 @@ func (c *Config) applyDefaults() {
 		if lang.MaxConcurrent <= 0 {
 			lang.MaxConcurrent = 8
 		}
-		// 语言级覆盖：0/缺省 → 取 script 段的缺省。
+		// Language-level override: 0/default → take the default of the script section.
 		if lang.AcquireTimeoutSec <= 0 {
 			lang.AcquireTimeoutSec = c.Code.AcquireTimeoutSec
 		}
-		// 池随语言条目存在而存在 —— 这里只补 idle 的缺省，不判断「要不要池」。
+		// The pool exists as long as the language entry does — this only fills the idle defaults and does not decide
+		// "whether a pool is wanted".
 		//
-		// Max 跟随 Initial（而不是固定 4）：既保住「显式 initial 不被改写」，
-		// 也不需要区分「没写 max」与「写 max: 0」（两者都是 0、都表示不留驻）。
-		// 两个值都取 0 时就是「不预热/不留驻」，refiller 与归还路径自然空转。
+		// Max follows Initial (rather than a fixed 4): it keeps "an explicit initial is not rewritten" and needs no
+		// distinction between "max not written" and "max: 0" (both are 0 and both mean nothing is kept resident).
+		// When both are 0 it is "no prewarming / nothing resident", and the refiller and the return path idle
+		// naturally.
 		if lang.Idle.Max == 0 {
 			lang.Idle.Max = lang.Idle.Initial
 		}
@@ -1172,24 +1239,26 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// ExecLimits 计算单工请求的最终上限：
+// ExecLimits computes the final cap of a simplex request:
 //
-//	用途默认 → 请求覆盖（非零字段）→ 全局 clamp
+//	use-case default → request override (non-zero fields) → global clamp
 func (c *Config) ExecLimits(req sandbox.Limits) sandbox.Limits {
 	return Clamp(sandbox.MergeLimits(c.Exec.Limits.ToSandbox(), req), c.Limits.ToSandbox())
 }
 
-// ScriptLimits 计算双工请求的最终上限（同上）。
+// ScriptLimits computes the final cap of a duplex request (as above).
 func (c *Config) ScriptLimits(req sandbox.Limits) sandbox.Limits {
 	return Clamp(sandbox.MergeLimits(c.Code.Limits.ToSandbox(), req), c.Limits.ToSandbox())
 }
 
-// Languages 合并「顶层语言定义」与「双工策略」，产出运行期配置（入口名按当前 mode 解析）。
+// Languages merges "the top-level language definitions" with "the duplex policy" into the runtime configuration (the
+// entry name resolved for the current mode).
 //
-// 只产出 code.pools 里列出的语言 —— 它们才是本服务要池化并服务的双工语言；
-// 顶层 langs 里多出来的定义（例如只给单工脚本用的语言）不出现在这里，
-// 而 pools 里缺席的语言会对调用方报 unsupported_lang（这就是「整条注释掉」的效果）。
-// 任何一处取不到入口名，都在启动阶段就失败（而不是等池预热）。
+// It only produces the languages listed in code.pools — those are the duplex languages this service pools and
+// serves; extra definitions in the top-level langs (for example a language only used by simplex scripts) do not
+// appear here, and a language missing from pools reports unsupported_lang to the caller (that is the effect of
+// "commenting out the whole entry"). Any entry name that cannot be resolved fails at startup (rather than waiting
+// for pool prewarming).
 func (c *Config) Languages() (map[string]LangConfig, error) {
 	out := make(map[string]LangConfig, len(c.Code.Pools))
 	for name, sl := range c.Code.Pools {
@@ -1211,14 +1280,15 @@ func (c *Config) Languages() (map[string]LangConfig, error) {
 	return out, nil
 }
 
-// ErrUnsupportedLang 请求的语言在顶层 langs 里没有定义。
-// 用哨兵错误是为了让调用方能把它映射成协议错误码（unsupported_lang）。
+// ErrUnsupportedLang means the requested language has no definition in the top-level langs.
+// A sentinel error is used so the caller can map it onto a protocol code (unsupported_lang).
 var ErrUnsupportedLang = errors.New("unsupported language")
 
-// ResolveLangCommand 取某语言在当前 mode 下的解释器入口名（单工用）。
+// ResolveLangCommand returns the interpreter entry name of a language under the current mode (for simplex use).
 //
-// 与 Languages() 的区别：那条只服务 code.pools 列出的双工语言；这条面向顶层
-// langs 的全部定义 —— 单工用到的语言（例如只跑技能脚本的）不一定要开双工池。
+// The difference from Languages(): that one only serves the duplex languages listed in code.pools; this one covers
+// every definition in the top-level langs — a language used only for simplex work (for example running skill
+// scripts) does not have to enable a duplex pool.
 func (c *Config) ResolveLangCommand(lang string) (string, error) {
 	def, ok := c.Langs[lang]
 	if !ok {
@@ -1227,9 +1297,10 @@ func (c *Config) ResolveLangCommand(lang string) (string, error) {
 	return def.ResolveCommand(c.Mode)
 }
 
-// ResolveCodehostBinary 取当前 mode 下 codehost 二进制的入口名：binaries[mode] 优先，
-// 其次通用缺省 binary。与 ResolveCommand 同款「取不到就报错」—— L3 起 codehost 是
-// 脚本执行的前提，静默退化成空只会让第一次调用脚本时才以「start: exec: no command」爆炸。
+// ResolveCodehostBinary returns the entry name of the codehost binary under the current mode: binaries[mode] first,
+// then the general default binary. Same "report an error when nothing resolves" as ResolveCommand — since L3
+// codehost is a prerequisite for script execution, and degrading to empty silently only blows up at the first script
+// call as "start: exec: no command".
 func (c *Config) ResolveCodehostBinary(mode string) (string, error) {
 	if b, ok := c.Codehost.Binaries[mode]; ok && b != "" {
 		return b, nil
@@ -1240,10 +1311,10 @@ func (c *Config) ResolveCodehostBinary(mode string) (string, error) {
 	return "", fmt.Errorf("codehost binary not configured (set codehost.binary, or codehost.binaries.%s)", mode)
 }
 
-// ResolveBrowserBinary 取当前 mode 下 browserhost 二进制的入口名：
-// binaries[mode] 优先，其次通用缺省 binary。与 ResolveCodehostBinary 同款
-// 「取不到就报错」—— 静默退化成空会让第一次调用浏览器时才以
-// 「start: exec: no command」爆炸，而那时模型已经把页面操作计划好了。
+// ResolveBrowserBinary returns the entry name of the browserhost binary under the current mode: binaries[mode]
+// first, then the general default binary. Same "report an error when nothing resolves" as ResolveCodehostBinary —
+// degrading to empty silently only blows up at the first browser call as "start: exec: no command", by which time
+// the model has already planned the page operations.
 func (c *Config) ResolveBrowserBinary(mode string) (string, error) {
 	if b, ok := c.Browser.Binaries[mode]; ok && b != "" {
 		return b, nil
@@ -1254,18 +1325,18 @@ func (c *Config) ResolveBrowserBinary(mode string) (string, error) {
 	return "", fmt.Errorf("browserhost binary not configured (set browser.binary, or browser.binaries.%s)", mode)
 }
 
-// BrowserLimits 计算浏览器进程的最终上限：
+// BrowserLimits computes the final cap of the browser process:
 //
-//	browser.limits → 请求覆盖（非零字段）→ 全局 clamp
+//	browser.limits → request override (non-zero fields) → global clamp
 func (c *Config) BrowserLimits(req sandbox.Limits) sandbox.Limits {
 	return Clamp(sandbox.MergeLimits(c.Browser.Limits.ToSandbox(), req), c.Limits.ToSandbox())
 }
 
-// ResolveBrowserExecPath 取当前 mode 下的浏览器可执行文件路径。
+// ResolveBrowserExecPath returns the browser executable path under the current mode.
 //
-// 回退顺序与 langs 的 command/commands 一致：exec_paths[mode] → exec_path → 空。
-// 空不是错误：browserhost 会在沙箱内自动探测（docker 的 chromium、宿主的 Chrome/Edge），
-// 这也正是「没配就别猜」的默认值。
+// The fallback order matches command/commands in langs: exec_paths[mode] → exec_path → empty.
+// Empty is not an error: browserhost discovers it inside the sandbox (chromium under docker, Chrome/Edge on the
+// host), which is exactly the "do not guess when it is not configured" default.
 func (c *Config) ResolveBrowserExecPath(mode string) string {
 	if p, ok := c.Browser.ExecPaths[mode]; ok && p != "" {
 		return p
@@ -1273,10 +1344,10 @@ func (c *Config) ResolveBrowserExecPath(mode string) string {
 	return c.Browser.ExecPath
 }
 
-// ResolveBrowserProfileDir 取当前 mode 下的 Chrome profile 目录。
+// ResolveBrowserProfileDir returns the Chrome profile directory under the current mode.
 //
-// 顺序：profile_dirs[mode] → profile_dir → mode 缺省（docker 用 /tmp/browser）→ 空。
-// 空不是错误：browserhost 会建一个临时目录并在退出时删掉。
+// Order: profile_dirs[mode] → profile_dir → mode default (docker uses /tmp/browser) → empty.
+// Empty is not an error: browserhost creates a temp directory and removes it on exit.
 func (c *Config) ResolveBrowserProfileDir(mode string) string {
 	if p, ok := c.Browser.ProfileDirs[mode]; ok && p != "" {
 		return p
@@ -1285,14 +1356,15 @@ func (c *Config) ResolveBrowserProfileDir(mode string) string {
 		return c.Browser.ProfileDir
 	}
 	if mode == isolate.DockerName {
-		// 只读 rootfs 下唯一随容器销毁的可写位置（见 containerArgs 的 --tmpfs /tmp）。
+		// The only writable location that dies with the container under a read-only rootfs (see --tmpfs /tmp in
+		// containerArgs).
 		return "/tmp/browser"
 	}
 	return ""
 }
 
-// ResolveBrowserDownloadsDir 取当前 mode 下的下载目录。
-// 顺序：downloads_dirs[mode] → downloads_dir → 空（browserhost 用 <cwd>/downloads）。
+// ResolveBrowserDownloadsDir returns the download directory under the current mode.
+// Order: downloads_dirs[mode] → downloads_dir → empty (browserhost uses <cwd>/downloads).
 func (c *Config) ResolveBrowserDownloadsDir(mode string) string {
 	if p, ok := c.Browser.DownloadsDirs[mode]; ok && p != "" {
 		return p
@@ -1300,8 +1372,8 @@ func (c *Config) ResolveBrowserDownloadsDir(mode string) string {
 	return c.Browser.DownloadsDir
 }
 
-// AllowHeadedFor 取 mode 下允许有头的实际值：allow_headed_modes[mode] 优先，
-// 未命中回退 allow_headed。
+// AllowHeadedFor returns the effective "headed allowed" value for a mode: allow_headed_modes[mode] first, falling
+// back to allow_headed when there is no entry.
 func (c *Config) AllowHeadedFor(mode string) bool {
 	if v, ok := c.Browser.AllowHeadedModes[mode]; ok {
 		return v
@@ -1309,10 +1381,10 @@ func (c *Config) AllowHeadedFor(mode string) bool {
 	return c.Browser.AllowHeaded
 }
 
-// BrowserArgv 组装 browserhost 的命令行。
+// BrowserArgv assembles the browserhost command line.
 //
-// 为什么由 sandboxd 组装而不是 nexus 传：沙箱内的路径（镜像里 browserhost 叫什么、
-// profile 放哪）只有本服务知道，与 langs / codehost 的同一条理由。
+// Why sandboxd assembles it instead of nexus passing it: only this service knows the in-sandbox paths (what
+// browserhost is called in the image, where the profile goes), the same reasoning as langs / codehost.
 func (c *Config) BrowserArgv(mode string) ([]string, error) {
 	bin, err := c.ResolveBrowserBinary(mode)
 	if err != nil {
@@ -1337,14 +1409,14 @@ func (c *Config) BrowserArgv(mode string) ([]string, error) {
 	return argv, nil
 }
 
-// validateBrowser 校验浏览器配置与当前隔离方式是否自洽。
+// validateBrowser checks whether the browser config is consistent with the current isolation mode.
 //
-// 判据与 validateNetwork 相同：**声明必须与事实一致**。
-//   - nsjail 的 rootfs 里没有 Chromium 所需的整套运行时（/proc、/dev/shm、
-//     字体、user namespace），本版本不支持；开着就直接拒绝启动，而不是等到
-//     模型点开页面才失败。
-//   - 有头需要真实显示环境，目前只有 mode=none（sandboxd 跑在有桌面的机器上）
-//     成立；docker / nsjail 里传 headed 只会得到一个看不见的窗口。
+// The criterion is the same as validateNetwork: **the declaration must match the fact**.
+//   - the nsjail rootfs does not have the whole runtime Chromium needs (/proc, /dev/shm, fonts, user namespace), so
+//     this version does not support it; enabling it refuses startup outright instead of failing when the model opens
+//     a page.
+//   - headed needs a real display environment, which currently only holds for mode=none (sandboxd running on a
+//     machine with a desktop); passing headed under docker / nsjail only yields an invisible window.
 func (c *Config) validateBrowser() error {
 	if !c.Browser.Enabled {
 		return nil
@@ -1367,7 +1439,7 @@ func (c *Config) validateBrowser() error {
 	return err
 }
 
-// Clamp 把 v 限制在 ceiling 之内（ceiling 中为 0 的维度表示不限制）。
+// Clamp limits v to ceiling (a 0 dimension in ceiling means no limit).
 func Clamp(v, ceiling sandbox.Limits) sandbox.Limits {
 	out := v
 	if ceiling.MemoryMB > 0 && (out.MemoryMB <= 0 || out.MemoryMB > ceiling.MemoryMB) {

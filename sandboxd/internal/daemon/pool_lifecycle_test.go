@@ -13,7 +13,7 @@ import (
 	"flame/tools/xlog"
 )
 
-// TestMain 初始化日志：xlog 未 Init 时 Info/Error 会 panic（池的 refiller 会打日志）。
+// TestMain initialises logging: without xlog.Init, Info/Error panic (the pool's refiller logs).
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "sandboxd-test-log")
 	if err != nil {
@@ -27,13 +27,14 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// 这些测试不碰真实 codehost / 解释器：用一个假隔离实现（只实现 codehost 的 ping/pong
-// 协议），验证池的归还/补量策略本身 —— 干净 worker 归还复用，脏 worker 销毁 + 补量。
+// These tests touch neither a real codehost nor a real interpreter: a fake isolation implementation (which only speaks
+// codehost's ping/pong protocol) pins down the return/refill policy itself — a clean worker is returned and reused, a
+// dirty worker is destroyed and refilled.
 //
-// lifecycle（reuse / restart）分档已删除：解释器进程每次都新建，没有跨请求残留，
-// 归还策略只剩一档（见 slotPool.Release）。
+// The lifecycle tiers (reuse / restart) have been removed: the interpreter process is created fresh every time, so
+// nothing survives across requests and the return policy has a single tier left (see slotPool.Release).
 
-// fakeIsolate 记录启动次数，并按帧协议回应 ping。
+// fakeIsolate counts starts and answers pings according to the frame protocol.
 type fakeIsolate struct {
 	mu      sync.Mutex
 	started int
@@ -52,8 +53,8 @@ func (f *fakeIsolate) Start(ctx context.Context, spec *sandbox.Spec) (sandbox.Pr
 	f.started++
 	f.mu.Unlock()
 
-	reqR, reqW := io.Pipe()  // 池写 reqW（= 进程 stdin），我们读 reqR
-	outR, outW := io.Pipe()  // 池读 outR（= 进程 stdout），我们写 outW
+	reqR, reqW := io.Pipe() // the pool writes to reqW (= process stdin), we read reqR
+	outR, outW := io.Pipe() // the pool reads outR (= process stdout), we write outW
 
 	p := &fakeProcess{stdin: reqW, stdout: outR, exited: make(chan struct{})}
 	go func() {
@@ -112,7 +113,7 @@ func newTestPool(t *testing.T, initial int) (*slotPool, *fakeIsolate) {
 	return p, iso
 }
 
-// waitIdle 等空闲池补到 want（refiller 是异步的）。
+// waitIdle waits for the idle pool to be refilled to want (the refiller is asynchronous).
 func waitIdle(t *testing.T, p *slotPool, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -125,8 +126,9 @@ func waitIdle(t *testing.T, p *slotPool, want int) {
 	t.Fatalf("idle pool did not reach %d (got %d)", want, len(p.idle))
 }
 
-// 干净 worker（协议层正常走完）归还后复用同一实例，且不触发补量；脏 worker（执行中断 /
-// 超时 / 协议错误）一律销毁，由 refiller 补回 idle.initial。
+// A clean worker (the protocol exchange completed normally) is returned and the same instance is reused, with no
+// refill triggered; a dirty worker (interrupted execution / timeout / protocol error) is always destroyed and the
+// refiller restores idle.initial.
 func TestPoolReturnsCleanWorker(t *testing.T) {
 	p, iso := newTestPool(t, 1)
 	waitIdle(t, p, 1)
@@ -136,7 +138,7 @@ func TestPoolReturnsCleanWorker(t *testing.T) {
 		t.Fatalf("acquire: %v", err)
 	}
 	if !reused {
-		t.Fatalf("预热过的池应当复用空闲 worker")
+		t.Fatalf("a prewarmed pool should reuse an idle worker")
 	}
 	id := w.ID
 	before := iso.startCount()
@@ -149,26 +151,27 @@ func TestPoolReturnsCleanWorker(t *testing.T) {
 		t.Fatalf("acquire: %v", err)
 	}
 	if w2.ID != id {
-		t.Errorf("干净 worker 应归还同一个实例：got %s want %s", w2.ID, id)
+		t.Errorf("a clean worker should be returned as the same instance: got %s want %s", w2.ID, id)
 	}
 	if got := iso.startCount(); got != before {
-		t.Errorf("归还干净 worker 不应有额外启动：%d → %d", before, got)
+		t.Errorf("returning a clean worker must not start anything extra: %d → %d", before, got)
 	}
 
-	// 脏 worker 一律销毁
+	// A dirty worker is always destroyed
 	tmpDir := w2.tmpDir
 	p.Release(w2, false)
 	if _, err := os.Stat(tmpDir); !os.IsNotExist(err) {
-		t.Errorf("脏 worker 的 tmp 目录应被删除，实际 stat err=%v", err)
+		t.Errorf("a dirty worker's tmp dir should be removed, actual stat err=%v", err)
 	}
 	if fp, ok := w2.proc.(*fakeProcess); !ok || !fp.killed.Load() {
-		t.Errorf("脏 worker 应杀进程")
+		t.Errorf("a dirty worker should have its process killed")
 	}
-	waitIdle(t, p, 1) // 销毁后补回，避免池被抽干
+	waitIdle(t, p, 1) // refilled after destruction, so the pool is not drained
 }
 
-// idle = {0, 0}（不预热、不留驻）：借出时现场起，归还即销毁 ——
-// 池只在请求路径上按需起进程，且 refiller 不该每秒补量（那会是"起一个杀一个"的回归）。
+// idle = {0, 0} (no prewarming, nothing resident): created on lend, destroyed on return — the pool only starts
+// processes on demand along the request path, and the refiller must not top it up every second (that would be a
+// regression to "start one, kill one").
 func TestPoolIdleZeroDiscardsWorker(t *testing.T) {
 	iso := &fakeIsolate{}
 	p := newSlotPool("lua", LangConfig{
@@ -184,27 +187,27 @@ func TestPoolIdleZeroDiscardsWorker(t *testing.T) {
 		t.Fatalf("acquire: %v", err)
 	}
 	if reused {
-		t.Errorf("initial=0 时首次 borrow 不该命中空闲池")
+		t.Errorf("with initial=0 the first borrow must not hit the idle pool")
 	}
 	if n := len(p.idle); n != 0 {
-		t.Errorf("容量为 0 的池里不该有对象，got %d", n)
+		t.Errorf("a pool with capacity 0 must not hold objects, got %d", n)
 	}
 
 	tmpDir := w.tmpDir
-	p.Release(w, true) // worker 干净 —— 但容量 0，仍必须销毁
+	p.Release(w, true) // the worker is clean — but capacity is 0, so it must still be destroyed
 	if _, err := os.Stat(tmpDir); !os.IsNotExist(err) {
-		t.Errorf("max=0 时归还应销毁 worker（tmp 目录该消失），实际 stat err=%v", err)
+		t.Errorf("with max=0 a return must destroy the worker (its tmp dir should be gone), actual stat err=%v", err)
 	}
 	if fp, ok := w.proc.(*fakeProcess); !ok || !fp.killed.Load() {
-		t.Errorf("max=0 时归还应杀进程")
+		t.Errorf("with max=0 a return should kill the process")
 	}
 	if n := len(p.idle); n != 0 {
-		t.Errorf("归还后池里仍不该有对象，got %d", n)
+		t.Errorf("the pool must still hold nothing after the return, got %d", n)
 	}
 
-	// refiller 在 initial=0 时第一件事就是 return：不该有任何补量启动。
+	// With initial=0 the refiller returns immediately: it must not start anything at all.
 	time.Sleep(50 * time.Millisecond)
 	if got := iso.startCount(); got != 1 {
-		t.Errorf("initial=0 不该触发补量：启动次数 = %d, want 1", got)
+		t.Errorf("initial=0 must not trigger a refill: starts = %d, want 1", got)
 	}
 }

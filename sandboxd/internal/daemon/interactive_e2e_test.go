@@ -14,25 +14,28 @@ import (
 	"flame/tools/sandbox"
 )
 
-// 长交互端点的端到端验收：真 sandboxd 服务 + 真 WebSocket + 真 docker。
+// End-to-end acceptance of the long-lived interactive endpoint: a real sandboxd service + a real WebSocket + a real
+// docker.
 //
-// 验证 docker 模式下的核心语义：
-//   - 首次 open 懒建容器（sandboxd=1 复用单元），进程 docker exec 进去；
-//   - 客户端断开不杀进程、不销毁容器；
-//   - 再次 open 复用同一容器（容器数不增加），且进程状态跨连接保留；
-//   - FrameKill 杀进程并把变空的 session 的容器一并销毁。
+// The core semantics of docker mode verified here:
+//   - the first open lazily creates the container (a sandboxd=1 reusable unit) and the process is docker exec'd into it;
+//   - a client disconnect neither kills the process nor destroys the container;
+//   - a second open reuses the same container (the container count does not grow) and process state survives across
+//     connections;
+//   - FrameKill kills the process and destroys the container of the session that becomes empty.
 //
-// 需要本机跑着 sandboxd（缺省 127.0.0.1:27081，可用 SANDBOXD_TEST_INTERACTIVE_URL 覆盖）
-// 与可用的 docker（SANDBOXD_TEST_DOCKER），否则跳过。
-// 复用单元的容器标签刻意硬编码 sandboxd=1（不引用 isolate 包常量），
-// 与 exec_e2e_test.go 的 sandboxd-exec=1 同理 —— 端到端测的是对外约定。
+// It needs a sandboxd running locally (127.0.0.1:27081 by default, overridable with SANDBOXD_TEST_INTERACTIVE_URL) and a
+// usable docker (SANDBOXD_TEST_DOCKER), and skips otherwise.
+// The reusable unit's container label is deliberately hardcoded to sandboxd=1 (not referencing the isolate package
+// constant), for the same reason as sandboxd-exec=1 in exec_e2e_test.go — the end-to-end tests exercise the external
+// contract.
 
 const (
 	defaultInteractiveURL = "ws://127.0.0.1:27081/v1/interactive"
 	interactiveUnitLabel  = "sandboxd=1"
 )
 
-// interactiveE2E 一次端到端验收需要的环境。
+// interactiveE2E is the environment one end-to-end acceptance run needs.
 type interactiveE2E struct {
 	url  string
 	bin  string
@@ -73,7 +76,8 @@ func interactiveE2EForTest(t *testing.T) interactiveE2E {
 	return interactiveE2E{url: url, bin: bin, base: base}
 }
 
-// openInteractive 打开一次长交互连接，等到 ready 帧。argv 非空表示首次创建（带 Spec）。
+// openInteractive opens one long-lived interactive connection and waits for the ready frame. A non-nil argv means first
+// creation (with a Spec).
 func openInteractive(t *testing.T, url, sessionID, toolID string, argv []string) *sandbox.Conn {
 	t.Helper()
 	conn, err := sandbox.Dial(context.Background(), url, "")
@@ -95,12 +99,13 @@ func openInteractive(t *testing.T, url, sessionID, toolID string, argv []string)
 	}
 	if rf.Type != sandbox.FrameReady {
 		_ = conn.Close()
-		t.Fatalf("期望 ready 帧，实收 %q（%s）", rf.Type, rf.Message)
+		t.Fatalf("want a ready frame, got %q (%s)", rf.Type, rf.Message)
 	}
 	return conn
 }
 
-// readStdoutUntil 读 ChanStdout 帧，直到累积内容包含 want（进程长驻，stdout 不会自然结束）。
+// readStdoutUntil reads ChanStdout frames until the accumulated content contains want (the process is long-lived, so
+// stdout never ends by itself).
 func readStdoutUntil(conn *sandbox.Conn, want string, limit time.Duration) error {
 	type result struct{ err error }
 	ch := make(chan result, 1)
@@ -132,11 +137,11 @@ func readStdoutUntil(conn *sandbox.Conn, want string, limit time.Duration) error
 	case r := <-ch:
 		return r.err
 	case <-time.After(limit):
-		return fmt.Errorf("等 stdout 包含 %q 超时（%s）", want, limit)
+		return fmt.Errorf("timed out waiting for stdout to contain %q (%s)", want, limit)
 	}
 }
 
-// interactiveContainerNames 当前带复用单元标签（sandboxd=1）的容器名集合。
+// interactiveContainerNames is the set of container names currently carrying the reusable unit label (sandboxd=1).
 func interactiveContainerNames(t *testing.T, bin string) map[string]struct{} {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -165,7 +170,7 @@ func waitInteractiveContainer(t *testing.T, bin string, before map[string]struct
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatal("这次调用没有留下可观测的复用单元容器")
+	t.Fatal("this call left no observable reusable unit container behind")
 	return ""
 }
 
@@ -186,7 +191,7 @@ func waitInteractiveContainersGone(t *testing.T, bin string, names []string) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("容器 %v 在 %s 内没有消失", left, containerWait)
+	t.Fatalf("containers %v did not disappear within %s", left, containerWait)
 }
 
 func dockerRemove(t *testing.T, bin, name string) {
@@ -196,14 +201,14 @@ func dockerRemove(t *testing.T, bin, name string) {
 	_ = exec.CommandContext(ctx, bin, "rm", "-f", name).Run()
 }
 
-// 断连不杀进程、复用同一容器、进程状态跨连接保留。
+// A disconnect does not kill the process, the same container is reused, and process state survives across connections.
 func TestInteractiveE2EReusesProcessAcrossConnections(t *testing.T) {
 	e := interactiveE2EForTest(t)
 	before := interactiveContainerNames(t, e.bin)
 	sid := "e2e-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	const tool = "shell"
 
-	// 首次：带 argv 创建进程，喂命令，验证 stdout 回传
+	// First connection: create the process with argv, feed commands, verify the stdout comes back
 	c1 := openInteractive(t, e.url, sid, tool, []string{"/bin/sh"})
 	if err := c1.SendData(sandbox.ChanStdin, []byte("export FOO=interactive-bar\n")); err != nil {
 		t.Fatalf("send export: %v", err)
@@ -214,13 +219,13 @@ func TestInteractiveE2EReusesProcessAcrossConnections(t *testing.T) {
 	if err := readStdoutUntil(c1, "alive-e2e", containerWait); err != nil {
 		t.Fatalf("first echo: %v", err)
 	}
-	_ = c1.Close() // 断连，进程保留
+	_ = c1.Close() // disconnect; the process stays
 
-	// 容器应已出现且断连后仍在
+	// The container should have appeared and must survive the disconnect
 	name := waitInteractiveContainer(t, e.bin, before)
 	t.Cleanup(func() { dockerRemove(t, e.bin, name) })
 
-	// 再次：不带 argv，复用同一进程，读回上一次 export 的变量
+	// Second connection: no argv, reuse the same process, read back the variable exported earlier
 	c2 := openInteractive(t, e.url, sid, tool, nil)
 	if err := c2.SendData(sandbox.ChanStdin, []byte("echo $FOO\n")); err != nil {
 		t.Fatalf("send readback: %v", err)
@@ -230,17 +235,17 @@ func TestInteractiveE2EReusesProcessAcrossConnections(t *testing.T) {
 	}
 	_ = c2.Close()
 
-	// 复用不新增容器
+	// Reuse does not create another container
 	now := interactiveContainerNames(t, e.bin)
 	if _, ok := now[name]; !ok {
-		t.Errorf("复用后容器 %s 应仍在", name)
+		t.Errorf("container %s should still exist after reuse", name)
 	}
 	if len(now) != len(before)+1 {
-		t.Errorf("复用不该新增容器：before=%d now=%d", len(before), len(now))
+		t.Errorf("reuse must not create another container: before=%d now=%d", len(before), len(now))
 	}
 }
 
-// FrameKill 杀进程，并把变空的 session 的容器一并销毁。
+// FrameKill kills the process and destroys the container of the session that becomes empty.
 func TestInteractiveE2EKillDestroysContainer(t *testing.T) {
 	e := interactiveE2EForTest(t)
 	before := interactiveContainerNames(t, e.bin)

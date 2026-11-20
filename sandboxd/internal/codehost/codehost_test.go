@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// ---------- 单元测试（不依赖解释器） ----------
+// ---------- Unit tests (no interpreter required) ----------
 
 func TestLuaLiteral(t *testing.T) {
 	cases := []struct {
@@ -38,7 +38,7 @@ func TestLuaLiteral(t *testing.T) {
 }
 
 func TestLuaLongBracket(t *testing.T) {
-	// 脚本里带 ]] 时必须自动加 '='，避免提前闭合。
+	// When the script itself contains ]], '=' must be added automatically to avoid closing it early.
 	got := luaLongBracket("x = ']]'")
 	if !strings.Contains(got, "[=[x = ']]']=]") {
 		t.Fatalf("unexpected long bracket: %q", got)
@@ -49,7 +49,7 @@ func TestLuaLongBracket(t *testing.T) {
 	}
 }
 
-// ---------- 端到端（依赖解释器，缺失则跳过） ----------
+// ---------- End to end (needs an interpreter, skipped when missing) ----------
 
 func TestEndToEnd(t *testing.T) {
 	python, _ := exec.LookPath("python")
@@ -77,7 +77,7 @@ func TestEndToEnd(t *testing.T) {
 			if !strings.Contains(errBuf, "hello") {
 				t.Fatalf("stderr should contain print output, got %q", errBuf)
 			}
-			// 新行为：print 也进入 done 帧的 logs 字段（回传给 nexus）
+			// New behaviour: print output also goes into the logs field of the done frame (returned to nexus)
 			if logs, _ := msg["logs"].(string); !strings.Contains(logs, "hello") {
 				t.Fatalf("done.logs should contain print output, got %q", logs)
 			}
@@ -88,7 +88,8 @@ func TestEndToEnd(t *testing.T) {
 			if action != "error" || !strings.Contains(msg["error"].(string), "boom") {
 				t.Fatalf("action=%s msg=%v", action, msg)
 			}
-			// 新行为：error 帧的 logs 带完整 traceback，error 字段仍是干净消息
+			// New behaviour: the error frame's logs carry the full traceback, while the error field stays a clean
+			// message
 			if logs, _ := msg["logs"].(string); !strings.Contains(logs, "Traceback") {
 				t.Fatalf("error.logs should contain traceback, got %q", logs)
 			}
@@ -176,7 +177,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 }
 
-// ---------- 辅助 ----------
+// ---------- Helpers ----------
 
 func frame(v any) []byte {
 	data, _ := json.Marshal(v)
@@ -185,14 +186,14 @@ func frame(v any) []byte {
 	return append(h, data...)
 }
 
-// runScript 跑一次 execute 并返回 (action, msg)。
+// runScript runs one execute and returns (action, msg).
 func runScript(t *testing.T, lang, command, script string, inputs any, timeoutMS int64) (string, map[string]any) {
 	t.Helper()
 	_, msg, _ := runScriptFull(t, lang, command, script, inputs, timeoutMS)
 	return msg["action"].(string), msg
 }
 
-// runScriptFull 跑一次 execute，返回 (action, msg, stderr)。
+// runScriptFull runs one execute and returns (action, msg, stderr).
 func runScriptFull(t *testing.T, lang, command, script string, inputs any, timeoutMS int64) (string, map[string]any, string) {
 	t.Helper()
 	var in bytes.Buffer
@@ -235,7 +236,7 @@ func readFrame(t *testing.T, r *bytes.Buffer) map[string]any {
 	return m
 }
 
-// numResult 把 result 归一成字符串（readFrame 用了 UseNumber，数字就是 json.Number）。
+// numResult normalises result into a string (readFrame uses UseNumber, so numbers are json.Number).
 func numResult(msg map[string]any) string {
 	if v, ok := msg["result"].(json.Number); ok {
 		return v.String()
@@ -243,8 +244,8 @@ func numResult(msg map[string]any) string {
 	return ""
 }
 
-// findLua 定位 lua 解释器：PATH 常见名 → 本机 none 模式固定路径
-// （sandboxd/config.yaml 的 langs.lua.commands.none）。
+// findLua locates the lua interpreter: the common names on PATH → the fixed local path of the none mode
+// (langs.lua.commands.none in sandboxd/config.yaml).
 func findLua() string {
 	for _, name := range []string{"lua", "lua55", "lua5.5", "lua5.4", "lua5.3"} {
 		if p, err := exec.LookPath(name); err == nil {

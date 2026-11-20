@@ -16,66 +16,68 @@ var (
 	errPoolBusy   = errors.New("sandbox busy")
 )
 
-// slotPool 单语言的 worker 槽位池 + 并发闸。
+// slotPool is the per-language worker slot pool plus the concurrency gate.
 //
-// 设计要点：
-//   - sem 是并发闸（容量 = max_concurrent）。超出时等待 acquire 超时后报「繁忙」，
-//     绝不无限阻塞 —— binding transform 等场景是嵌套调用，无限阻塞会自我死锁。
-//   - 池化对象是常驻的 codehost 宿主（跑在隔离单元内）：复用隔离单元、每次
-//     execute 由 codehost fork 全新解释器 —— 复用隔离单元、解释器进程级干净，
-//     天然零残留。
-//   - 归还策略只有一档：「一次 execute 已完成」的干净 worker 归还复用，半截状态
-//     （中断 / 超时 / 协议错误）销毁。解释器进程本来就每次新建，没有跨请求残留。
-//   - refiller 维持 idle.initial 个空闲对象：没有它，池子会被抽干，预热就白做了。
-//     idle.initial 为 0 时它是空转的。
+// Design points:
+//   - sem is the concurrency gate (capacity = max_concurrent). Past it, acquire waits for the timeout and then
+//     reports "busy"; it never blocks indefinitely — binding transforms and the like are nested calls, where an
+//     unbounded wait would deadlock against itself.
+//   - The pooled object is the resident codehost host (running inside an isolation unit): the unit is reused and
+//     codehost forks a brand-new interpreter per execute — process-level cleanliness with naturally zero
+//     residue.
+//   - The return policy has a single tier: a clean worker ("one execute completed") goes back for reuse, a
+//     half-finished one (interrupted / timed out / protocol error) is destroyed. The interpreter process is new
+//     every time anyway, so nothing leaks across requests.
+//   - The refiller keeps idle.initial idle objects: without it the pool drains and the warm-up was pointless. It
+//     idles when idle.initial is 0.
 type slotPool struct {
-	lang             string
-	cfg              LangConfig
-	isolate          sandbox.Sandbox
-	codehostBinary string // 常驻 codehost 宿主的二进制入口
-	tmpRoot          string         // 可写目录的宿主根：每个 worker 在其下建独占子目录
-	limits           sandbox.Limits // 启动 worker 时使用的资源上限（来自 script.limits 并 clamp）
+	lang           string
+	cfg            LangConfig
+	isolate        sandbox.Sandbox
+	codehostBinary string         // binary entry of the resident codehost host
+	tmpRoot        string         // host root of the writable directories: each worker gets an exclusive subdirectory
+	limits         sandbox.Limits // resource caps used when starting a worker (from script.limits, clamped)
 
 	idle      chan *Worker
 	sem       chan struct{}
-	kick      chan struct{} // refiller 的即时补量信号（容量 1，多余信号合并）
+	kick      chan struct{} // immediate refill signal for the refiller (capacity 1, extra signals merge)
 	closed    chan struct{}
 	closeOnce sync.Once
 }
 
-// refillInterval refiller 的兜底巡检间隔：即时补量走 kick，这个只负责自愈
-// （worker 自己死掉、或补量失败后的重试）。
+// refillInterval is the refiller's backstop sweep interval: immediate refills go through kick, this only heals
+// (a worker dying on its own, or a retry after a failed refill).
 const refillInterval = time.Second
 
-// newSlotPool 创建单语言槽位池。
+// newSlotPool creates a per-language slot pool.
 //
-// 池随语言条目存在而存在（code.pools.<lang> 在 = 这个池就在）；
-// 「不预热 / 不留驻」由 idle 的数值表达（都取 0 时池自然空转）。
+// The pool exists as long as the language entry does (code.pools.<lang> present = this pool present); "no warm-up
+// / not resident" is expressed by the idle numbers (both 0 keeps the pool idling by itself).
 func newSlotPool(lang string, cfg LangConfig, iso sandbox.Sandbox, codehostBinary, tmpRoot string, limits sandbox.Limits) *slotPool {
 	p := &slotPool{
-		lang:             lang,
-		cfg:              cfg,
-		isolate:          iso,
+		lang:           lang,
+		cfg:            cfg,
+		isolate:        iso,
 		codehostBinary: codehostBinary,
-		tmpRoot:          tmpRoot,
-		limits:           limits,
-		sem:              make(chan struct{}, cfg.MaxConcurrent),
-		kick:             make(chan struct{}, 1),
-		closed:           make(chan struct{}),
-		idle:             make(chan *Worker, cfg.Idle.Max),
+		tmpRoot:        tmpRoot,
+		limits:         limits,
+		sem:            make(chan struct{}, cfg.MaxConcurrent),
+		kick:           make(chan struct{}, 1),
+		closed:         make(chan struct{}),
+		idle:           make(chan *Worker, cfg.Idle.Max),
 	}
 
-	// 池随语言条目存在而存在：refiller / janitor 无条件启动。
-	// idle.initial 为 0 时 refill 开头就 return（空转），janitor 也只面对一个空池。
+	// The pool exists as long as the language entry does: refiller / janitor start unconditionally.
+	// With idle.initial = 0, refill returns at the top (idling) and the janitor only faces an empty pool.
 	p.startRefiller()
 	p.startJanitor()
 	return p
 }
 
-// startRefiller 维持 idle.initial 个空闲对象：启动预热 + 运行期补量。
+// startRefiller keeps idle.initial idle objects: warm-up at startup plus refills during the run.
 //
-// 每次归还一个「半截状态」的 worker 都会销毁它，没有补量的话池子会被抽干，
-// 之后每个请求都退化成「现场 spawn」（也就是预热失去意义）。
+// Every return of a "half-finished" worker destroys it, and without refilling the pool would drain, after which
+// every request degrades to "spawn on the spot" (which is exactly what the warm-up was for).
 func (p *slotPool) startRefiller() {
 	go func() {
 		p.refill()
@@ -95,14 +97,14 @@ func (p *slotPool) startRefiller() {
 	}()
 }
 
-// idleWhat 空闲计量的名字（只用于日志）。
+// idleWhat is the name of the idleness metric (log only).
 func (p *slotPool) idleWhat() string { return "idle" }
 
-// idleCount 空闲对象数。
+// idleCount is the number of idle objects.
 func (p *slotPool) idleCount() int { return len(p.idle) }
 
-// refill 把空闲对象补到 idle.initial（同步创建：本函数只在 refiller
-// goroutine 里跑，冷启动开销不落在任何请求路径上）。
+// refill tops the idle objects up to idle.initial (created synchronously: this function only runs in the refiller
+// goroutine, so the cold-start cost never lands on a request path).
 func (p *slotPool) refill() {
 	target := p.cfg.Idle.Initial
 	if target <= 0 {
@@ -121,7 +123,7 @@ func (p *slotPool) refill() {
 		w, err := spawnCodehost(p.isolate, p.codehostBinary, p.tmpRoot, p.limits)
 		if err != nil {
 			xlog.Error("sandboxd: refill %s codehost failed: %v", p.lang, err)
-			return // 起不来就别死循环，等下一次 kick / 巡检
+			return // do not spin on a failure, wait for the next kick / sweep
 		}
 		select {
 		case p.idle <- w:
@@ -129,13 +131,13 @@ func (p *slotPool) refill() {
 			w.Destroy()
 			return
 		default:
-			w.Destroy() // 池满（并发归还竞争），丢弃
+			w.Destroy() // the pool is full (concurrent returns), discard
 			return
 		}
 	}
 }
 
-// kickRefill 通知 refiller 尽快补量（非阻塞：信号有意义时就够了）。
+// kickRefill asks the refiller to top up as soon as possible (non-blocking: a meaningful signal is enough).
 func (p *slotPool) kickRefill() {
 	select {
 	case p.kick <- struct{}{}:
@@ -143,9 +145,9 @@ func (p *slotPool) kickRefill() {
 	}
 }
 
-// startJanitor 定期清理死掉的空闲 worker。
+// startJanitor periodically clears dead idle workers.
 //
-// 它只负责「清」，补量交给 refiller（两者都收敛到同一个 idle 池）。
+// It only "clears"; refilling belongs to the refiller (both converge on the same idle pool).
 func (p *slotPool) startJanitor() {
 	go func() {
 		t := time.NewTicker(30 * time.Second)
@@ -161,10 +163,10 @@ func (p *slotPool) startJanitor() {
 	}()
 }
 
-// dropDeadIdle 逐个探活空闲 worker，死的丢弃，活的放回。
+// dropDeadIdle probes the idle workers one by one, discards the dead and puts the live ones back.
 //
-// 这是唯一还会主动 ping 的地方（30s 一次，不在请求路径上）：它要发现的是
-// 「进程还在、但已经不再应答」这种 watch 看不出来的假死（例如 codehost 卡死）。
+// This is the only place that still pings actively (once every 30s, off the request path): what it has to find is
+// a "process alive but no longer answering" fake death that watch cannot see (codehost wedged, for instance).
 func (p *slotPool) dropDeadIdle() {
 	var keep []*Worker
 loop:
@@ -187,16 +189,17 @@ loop:
 			w.Destroy()
 		}
 	}
-	p.kickRefill() // 丢掉几个就补几个（restart 档下空闲池里也可能自然死掉）
+	p.kickRefill() // refill as many as were dropped (with restart, idle pool members may die on their own too)
 }
 
-// Acquire 借出一个 worker；reused 表示是否复用了空闲池中的实例。
+// Acquire lends out one worker; reused reports whether an instance from the idle pool was reused.
 func (p *slotPool) Acquire(ctx context.Context) (*Worker, bool, error) {
-	// 1) 并发闸（带超时，不无限阻塞）
+	// 1) The concurrency gate (with a timeout, never an unbounded block)
 	wait := time.Duration(p.cfg.AcquireTimeoutSec) * time.Second
 	if wait <= 0 {
-		// 兜底：配置层（applyDefaults）总会补上缺省（15s），这里只为「配置缺省被删掉」
-		// 这种不可能在生产出现的路径保底 —— 取值与 config.go 的缺省保持一致，别再留第二个数。
+		// Fallback: the config layer (applyDefaults) always fills in the default (15s); this only covers the
+		// impossible-in-production path of "the default was deleted" — the value matches config.go so there is no
+		// second copy of the number.
 		wait = 15 * time.Second
 	}
 	timer := time.NewTimer(wait)
@@ -209,14 +212,14 @@ func (p *slotPool) Acquire(ctx context.Context) (*Worker, bool, error) {
 	case <-p.closed:
 		return nil, false, errPoolClosed
 	case <-timer.C:
-		return nil, false, fmt.Errorf("%w: %s 并发已达上限 %d", errPoolBusy, p.lang, p.cfg.MaxConcurrent)
+		return nil, false, fmt.Errorf("%w: %s concurrency already at the limit of %d", errPoolBusy, p.lang, p.cfg.MaxConcurrent)
 	}
 
-	// 2) 优先复用空闲 worker。
-	//    这里不发 ping：一次探活是「写帧 + 等 pong」的同步往返，而 lua 是 µs 级的
-	//    高频调用（循环条件 / 分支条件 / binding transform），这点固定开销会盖过
-	//    脚本本身。存活性由 Worker.watch 维护（进程退出立即置 alive=false），
-	//    janitor 每 30s 再主动 ping 一次兜底。
+	// 2) Prefer reusing an idle worker.
+	//    No ping here: one liveness probe is a synchronous "write a frame + wait for pong" round trip, while lua is
+	//    a µs-level high-frequency call (loop conditions / branch conditions / binding transforms), and that fixed
+	//    cost would exceed the script itself. Liveness is maintained by Worker.watch (alive goes false as soon as
+	//    the process exits), with the janitor pinging every 30s as a backstop.
 	if p.idle != nil {
 	loop:
 		for {
@@ -233,7 +236,7 @@ func (p *slotPool) Acquire(ctx context.Context) (*Worker, bool, error) {
 		}
 	}
 
-	// 3) 现场启动
+	// 3) Spawn on the spot
 	w, err := spawnCodehost(p.isolate, p.codehostBinary, p.tmpRoot, p.limits)
 	if err != nil {
 		<-p.sem
@@ -242,14 +245,17 @@ func (p *slotPool) Acquire(ctx context.Context) (*Worker, bool, error) {
 	return w, false, nil
 }
 
-// Release 归还 worker。
+// Release returns a worker.
 //
-// 只有一档：reusable 为 false（执行中断、超时、协议错误、连接异常）时销毁 ——
-// 状态不明的 worker 绝不复用；干净且进程仍在（watch 标记的 alive）才放回空闲池。
-// 归还同样不发 ping：进程若已退出，watch 早已置 alive=false，这里直接销毁。
-// 解释器进程本来就每次新建，没有跨请求残留，所以不再有 lifecycle（reuse / restart）分档。
+// A single tier: reusable == false (an interrupted, timed-out, protocol-error or abnormal-connection execution)
+// destroys it — a worker in an unknown state is never reused; only a clean one whose process is still alive (alive
+// as marked by watch) goes back to the idle pool.
+// The return does not ping either: if the process had exited, watch would already have set alive to false and it is
+// destroyed right here.
+// The interpreter process is new every time anyway, so nothing leaks across requests and the lifecycle tiering
+// (reuse / restart) is gone.
 func (p *slotPool) Release(w *Worker, reusable bool) {
-	<-p.sem // 先释放并发额度
+	<-p.sem // release the concurrency quota first
 
 	if w == nil {
 		return
@@ -273,16 +279,16 @@ func (p *slotPool) Release(w *Worker, reusable bool) {
 	case <-p.closed:
 		w.Destroy()
 	default:
-		w.Destroy() // 池已满
+		w.Destroy() // the pool is full
 	}
 }
 
-// destroyWorker 彻底销毁一个 worker。
+// destroyWorker destroys a worker for good.
 func (p *slotPool) destroyWorker(w *Worker) {
 	w.Destroy()
 }
 
-// Close 关闭池子并销毁全部空闲 worker（借出中的会在 Release 时销毁）。
+// Close closes the pool and destroys every idle worker (borrowed ones are destroyed on Release).
 func (p *slotPool) Close() {
 	p.closeOnce.Do(func() {
 		close(p.closed)

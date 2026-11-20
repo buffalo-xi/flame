@@ -8,21 +8,23 @@ import (
 	"testing"
 	"time"
 
-	"flame/tools/sandbox"
 	"flame/tools/code"
+	"flame/tools/sandbox"
 )
 
-// 双工端点的端到端验收：真 sandboxd 服务 + 真 WebSocket + 真解释器（none 模式）。
+// End-to-end acceptance of the duplex endpoint: a real sandboxd service + a real WebSocket + a real interpreter
+// (none mode).
 //
-// 验证的对象是本次 logs 改造的对外约定：脚本的 print 输出（成功路径）与
-// traceback（失败路径）都要经 /v1/code 的 Frame.Logs 回到客户端。
+// What is verified is the external contract of this round's logs rework: a script's print output (success path) and its
+// traceback (failure path) must both come back to the client through /v1/code's Frame.Logs.
 //
-// 需要本机跑着 sandboxd（缺省 127.0.0.1:27081，可用 SANDBOXD_TEST_CODE_URL 覆盖），
-// 否则跳过。语言用 python（sandboxd 按配置解析入口名，客户端只传语言名）。
+// It needs a sandboxd running locally (127.0.0.1:27081 by default, overridable with SANDBOXD_TEST_CODE_URL) and skips
+// otherwise. The language is python (sandboxd resolves the entry name from the config; the client only sends the
+// language name).
 
 const defaultCodeURL = "ws://127.0.0.1:27081/v1/code"
 
-// codeE2EForTest 探测 sandboxd 可达性：/healthz 不通就跳过。
+// codeE2EForTest probes sandboxd's reachability: skip when /healthz is unreachable.
 func codeE2EForTest(t *testing.T) string {
 	t.Helper()
 
@@ -49,7 +51,7 @@ func codeE2EForTest(t *testing.T) string {
 	return url
 }
 
-// TestScriptE2ELogsPassthrough 端到端验证 Frame.Logs 透传。
+// TestScriptE2ELogsPassthrough verifies Frame.Logs passthrough end to end.
 func TestScriptE2ELogsPassthrough(t *testing.T) {
 	url := codeE2EForTest(t)
 	c := code.NewClient(url, "", sandbox.Limits{})

@@ -20,49 +20,50 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// 默认视口。固定尺寸是刻意的：让模型不必猜「页面到底有多宽」，
-// 也让截图与快照在不同会话间可比。
+// Default viewport. The fixed size is deliberate: the model does not have to guess "how wide is the page really",
+// and screenshots and snapshots stay comparable across sessions.
 const (
 	defaultWidth  = 1280
 	defaultHeight = 800
 
 	defaultOpTimeout = 30 * time.Second
-	// tabInitTimeout 新标签页（含首次拉起浏览器）的上限。它作用在子 context 上，
-	// 超时只废掉这个标签页、不杀浏览器（chromedp 的首次 Run 会把超时当成整个
-	// 浏览器生命周期的尽头，所以这里刻意不与 tab 的 ctx 共用）。
+	// tabInitTimeout caps creating a new tab (including the very first browser launch). It applies to a child
+	// context, so a timeout only kills that tab and not the browser (chromedp treats a timeout on the first Run
+	// as the end of the whole browser lifetime, which is why it is deliberately not shared with the tab's ctx).
 	tabInitTimeout = 30 * time.Second
 
 	defaultMaxNodes = 400
 	defaultMaxBytes = 8192
-	// 动作后附带的小快照：省掉一轮 snapshot，但别把 token 打爆。
+	// The small snapshot attached after an action: it saves a snapshot round trip without blowing up the tokens.
 	actionMaxNodes = 120
 	actionMaxBytes = 3000
 )
 
-// Config browserhost 的启动参数（由 sandboxd 按 mode 解析后经 argv 传入）。
+// Config holds browserhost's startup arguments (resolved by sandboxd per mode and passed in through argv).
 type Config struct {
-	// ExecPath 浏览器可执行文件；空 = 自动探测（chromium / chrome / msedge）。
+	// ExecPath is the browser executable; empty = auto-discover (chromium / chrome / msedge).
 	ExecPath string
-	// ProfileDir Chrome 的 user-data-dir；空 = 临时目录，退出即删。
+	// ProfileDir is Chrome's user-data-dir; empty = a temp directory, removed on exit.
 	//
-	// docker 下由 sandboxd 指到 /tmp（容器带 --tmpfs /tmp），随容器销毁；
-	// none 下留空即可 —— 宿主 /tmp 里的临时目录在 Close 时清掉。
+	// Under docker sandboxd points it at /tmp (the container has --tmpfs /tmp) and it dies with the container;
+	// under none it can stay empty — the temp directory under the host /tmp is removed on Close.
 	ProfileDir string
-	// DownloadsDir 下载目录；空 = <cwd>/downloads（即工作区）。
+	// DownloadsDir is the download directory; empty = <cwd>/downloads (that is, the workspace).
 	DownloadsDir string
-	// AllowHeaded 是否允许 headed=true。策略归 sandboxd（配置 + mode 校验），
-	// 这里只做执行层的最后一道闸 —— 上层可以不传，但传了就必须守住。
+	// AllowHeaded says whether headed=true is allowed. The policy belongs to sandboxd (config + mode validation);
+	// this is only the last gate at the execution layer — callers may omit it, but once it is set it must hold.
 	AllowHeaded bool
-	// DefaultHeaded 未显式请求时的缺省显示方式。
+	// DefaultHeaded is the display mode when headed is not explicitly requested.
 	DefaultHeaded bool
-	// Logf 日志出口（stderr）。nil 时丢弃。
+	// Logf is the log sink (stderr). Dropped when nil.
 	Logf func(format string, args ...any)
 }
 
-// Host 一个浏览器实例 + 它的标签页。
+// Host is one browser instance plus its tabs.
 //
-// 生命周期：第一次 open 时拉起浏览器；进程退出（stdin EOF）时整体销毁。
-// 进程被杀时 Chrome 是它的子进程，会随进程树一起收掉（见 sandboxd 的杀干净约定）。
+// Lifetime: the browser is launched on the first open; everything is torn down when the process exits (stdin
+// EOF). When the process is killed, Chrome is its child and goes down with the process tree (see sandboxd's
+// kill-everything convention).
 type Host struct {
 	cfg  Config
 	logf func(string, ...any)
@@ -75,12 +76,13 @@ type Host struct {
 	tabs   map[target.ID]*tab
 	active *tab
 
-	// refs 当前快照里的元素引用表。每次 snapshot 重建 —— 导航后旧 ref 必须失效，
-	// 否则模型会拿一个「上一次页面里的 e4」去点新页面，点到完全不相干的东西。
+	// refs is the element reference table of the current snapshot. It is rebuilt on every snapshot — after a
+	// navigation an old ref must become invalid, otherwise the model would use "e4 from the previous page" to
+	// click something on the new one and hit a completely unrelated element.
 	refs   map[string]cdp.BackendNodeID
 	refSeq int
 
-	mu sync.Mutex // 串行化一次操作（协议本身是单线程的，这里防未来的并发入口）
+	mu sync.Mutex // serialises one operation (the protocol itself is single-threaded; this guards future entry points)
 }
 
 type tab struct {
@@ -89,7 +91,7 @@ type tab struct {
 	id     target.ID
 }
 
-// New 创建宿主（不启动浏览器）。
+// New creates the host (it does not start the browser).
 func New(cfg Config) *Host {
 	logf := cfg.Logf
 	if logf == nil {
@@ -98,7 +100,7 @@ func New(cfg Config) *Host {
 	return &Host{cfg: cfg, logf: logf, tabs: map[target.ID]*tab{}}
 }
 
-// Handle 处理一次请求。
+// Handle processes one request.
 func (h *Host) Handle(req Request) Response {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -154,10 +156,10 @@ func (h *Host) dispatch(req Request) (*Response, error) {
 }
 
 // ---------------------------------------------------------------------------
-// 生命周期
+// Lifetime
 // ---------------------------------------------------------------------------
 
-// start 首次拉起浏览器。headed 只在这里有意义 —— Chrome 不能在运行中切换。
+// start launches the browser for the first time. headed only matters here — Chrome cannot switch at runtime.
 func (h *Host) start(headed bool) error {
 	if h.started {
 		return nil
@@ -171,21 +173,21 @@ func (h *Host) start(headed bool) error {
 	opts := []chromedp.ExecAllocatorOption{
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
-		chromedp.NoSandbox, // 容器本身就是隔离边界；inside docker userns 通常不可用
+		chromedp.NoSandbox, // the container is the isolation boundary; inside docker the userns is usually unavailable
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("hide-scrollbars", true),
 		chromedp.Flag("disable-extensions", true),
 		chromedp.Flag("disable-background-networking", true),
 		chromedp.Flag("disable-sync", true),
-		// CDP 启动的 Chrome 会把 navigator.webdriver 置为 true，很多站点据此
-		// 直接丢一张验证码。这不是「绕过验证」，只是别让浏览器自报「我是自动化」——
-		// 真正的验证仍然由站点决定。
+		// Chrome started through CDP sets navigator.webdriver to true, and many sites simply drop a captcha based
+		// on that. This is not "bypassing verification", it only stops the browser from advertising "I am
+		// automation" — the actual check is still up to the site.
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("disable-download-notification", true),
-		// 缓存上限：docker 下 profile 落在 --tmpfs /tmp（计进内存上限），
-		// 不设限会被一个大站点的资源撑爆 cgroup。
-		// 值必须是字符串：chromedp 的 flagArgs 只认 string / bool。
+		// Cache cap: under docker the profile lands in --tmpfs /tmp (which counts against the memory limit), so an
+		// uncapped cache would let one heavy site blow up the cgroup.
+		// The value must be a string: chromedp's flagArgs only understands string / bool.
 		chromedp.Flag("disk-cache-size", "33554432"),
 		chromedp.WindowSize(defaultWidth, defaultHeight),
 	}
@@ -204,11 +206,11 @@ func (h *Host) start(headed bool) error {
 		opts = append(opts, chromedp.UserDataDir(dir))
 	}
 	if !headed {
-		// 新 headless（Chrome 112+）：旧 headless 的字体与视口行为差异很大。
+		// The new headless mode (Chrome 112+): the old headless differs a lot in fonts and viewport behaviour.
 		opts = append(opts, chromedp.Flag("headless", "new"))
-		// 静音只给无头：无头没有音频输出路径，留着这条是为了免得 Chrome 反复刷
-		// 音频后端错误。有头（只能在 mode=none 下开启）必须能出声 —— 这条以前
-		// 是无条件下发的，导致有头窗口也是哑的。
+		// Muting is for headless only: headless has no audio output path, and the flag is kept to stop Chrome from
+		// repeatedly logging audio backend errors. Headed (only possible under mode=none) must be audible — this
+		// used to be passed unconditionally, which left the headed window mute as well.
 		opts = append(opts, chromedp.Flag("mute-audio", true))
 	}
 
@@ -225,7 +227,7 @@ func (h *Host) start(headed bool) error {
 	return nil
 }
 
-// newTab 建一个标签页并设为当前。existing 非空时附着到已有 target。
+// newTab creates a tab and makes it current. A non-empty existing attaches to an existing target.
 func (h *Host) newTab(existing target.ID) (*tab, error) {
 	var opts []chromedp.ContextOption
 	if existing != "" {
@@ -233,12 +235,12 @@ func (h *Host) newTab(existing target.ID) (*tab, error) {
 	}
 	ctx, cancel := chromedp.NewContext(h.allocCtx, opts...)
 
-	// 第一次 Run 触发「拉浏览器 / 建标签页」。
+	// The first Run triggers "launch the browser / create the tab".
 	//
-	// ⚠️ 必须直接用 tab ctx：chromedp 把浏览器的生命周期绑在**首次 Run 的
-	// context** 上，给它套一层 WithTimeout 再 cancel，会把整个浏览器一起关掉
-	// （表现为后续每个操作都是 context canceled）。要限时只能用外部看门狗 ——
-	// 超时意味着浏览器真的起不来，那时连浏览器一起杀掉正是我们想要的。
+	// ⚠️ The tab ctx must be used directly: chromedp binds the browser's lifetime to the context of the **first
+	// Run**, so wrapping it in WithTimeout and cancelling it shuts the whole browser down (every later operation
+	// then reports context canceled). Timing must be enforced by an external watchdog instead — a timeout means
+	// the browser really cannot start, and killing it along with the tab is exactly what we want then.
 	watchdog := time.AfterFunc(tabInitTimeout, cancel)
 	_, err := chromedp.Run(ctx, chromedp.Title())
 	watchdog.Stop()
@@ -254,7 +256,7 @@ func (h *Host) newTab(existing target.ID) (*tab, error) {
 	return t, nil
 }
 
-// setupDownloads 把下载目录指到工作区（默认 <cwd>/downloads）。
+// setupDownloads points the download directory at the workspace (default <cwd>/downloads).
 func (h *Host) setupDownloads() {
 	dir := h.cfg.DownloadsDir
 	if dir == "" {
@@ -277,7 +279,7 @@ func (h *Host) setupDownloads() {
 	}
 }
 
-// Close 销毁浏览器与所有标签页。
+// Close tears down the browser and every tab.
 func (h *Host) Close() {
 	for _, t := range h.tabs {
 		t.cancel()
@@ -295,7 +297,7 @@ func (h *Host) Close() {
 }
 
 // ---------------------------------------------------------------------------
-// 操作
+// Operations
 // ---------------------------------------------------------------------------
 
 func (h *Host) open(req Request) (*Response, error) {
@@ -448,12 +450,13 @@ func (h *Host) typeText(req Request) (*Response, error) {
 	ctx, cancel := h.opCtx(req)
 	defer cancel()
 
-	// focus + select：不直接改 value —— React/Vue 的受控组件感知不到直接赋值。
+	// focus + select rather than assigning value directly: React/Vue controlled components do not notice a plain
+	// assignment.
 	if err := callOnNode(ctx, backend, `function(){ this.focus(); if (this.select) this.select(); return true; }`); err != nil {
 		return nil, fail("type_failed", "%v", err)
 	}
 	if req.Text != "" {
-		// Input.insertText 走的是「像输入法一样插入」，能触发 input 事件。
+		// Input.insertText inserts "the way an IME does", so it does fire input events.
 		if _, err := chromedp.Call(ctx, input.InsertText, input.InsertTextParams{Text: req.Text}); err != nil {
 			return nil, fail("type_failed", "%v", err)
 		}
@@ -572,7 +575,8 @@ func (h *Host) screenshot(req Request) (*Response, error) {
 	if rel == "" {
 		rel = filepath.Join("browser", fmt.Sprintf("shot-%d.png", time.Now().UnixNano()))
 	}
-	// 只接受相对路径：截图落在工作区，不让浏览器往宿主任意位置写文件。
+	// Relative paths only: screenshots land in the workspace, so the browser cannot write files anywhere it likes
+	// on the host.
 	if filepath.IsAbs(rel) || strings.Contains(rel, "..") {
 		return nil, fail("bad_request", "screenshot path must be relative and inside the workspace")
 	}
@@ -648,8 +652,9 @@ func (h *Host) switchTab(req Request) (*Response, error) {
 	return h.snapshot(req, actionMaxNodes, actionMaxBytes)
 }
 
-// afterAction 动作后的收尾：小快照 + 页面信息。省掉模型额外一轮 snapshot，
-// 但预算压得比显式 snapshot 小 —— 连续点击时 token 会很快堆起来。
+// afterAction is the wrap-up after an action: a small snapshot plus page info. It saves the model an extra
+// snapshot round trip, but with a smaller budget than an explicit snapshot — clicking repeatedly would pile the
+// tokens up fast.
 func (h *Host) afterAction(ctx context.Context, req Request) (*Response, error) {
 	resp := &Response{Changed: true}
 	if err := h.fillSnapshot(ctx, resp, actionMaxNodes, actionMaxBytes); err != nil {
@@ -662,7 +667,7 @@ func (h *Host) afterAction(ctx context.Context, req Request) (*Response, error) 
 func (h *Host) fillSnapshot(ctx context.Context, resp *Response, maxNodes, maxBytes int) error {
 	res, err := chromedp.Call(ctx, accessibility.GetFullAXTree, accessibility.GetFullAXTreeParams{})
 	if err != nil {
-		// 快照失败不该把「点击已经成功」这件事变成整体失败。
+		// A failed snapshot must not turn "the click already succeeded" into an overall failure.
 		h.logf("post-action snapshot: %v", err)
 		return nil
 	}
@@ -683,7 +688,7 @@ func (h *Host) fillPageInfo(ctx context.Context, resp *Response, req Request) {
 }
 
 // ---------------------------------------------------------------------------
-// 工具方法
+// Helpers
 // ---------------------------------------------------------------------------
 
 func (h *Host) requireTab() error {
@@ -713,10 +718,11 @@ func (h *Host) ref(ref string) (cdp.BackendNodeID, error) {
 	return id, nil
 }
 
-// callOnNode 在 DOM 节点上执行一段 JS。
+// callOnNode runs a piece of JS on a DOM node.
 //
-// 用 el.click() 而不是按坐标派发鼠标事件：坐标点击在滚动容器、固定定位、
-// 被遮挡的元素上全会点错，而 DOM 点击与「用户真的点了它」在业务语义上等价。
+// It uses el.click() rather than dispatching mouse events at coordinates: coordinate clicks go wrong in scroll
+// containers, with fixed positioning and on covered elements, while a DOM click is semantically equivalent to
+// "the user really clicked it".
 func callOnNode(ctx context.Context, backend cdp.BackendNodeID, fn string) error {
 	res, err := chromedp.Call(ctx, dom.ResolveNode, dom.ResolveNodeParams{BackendNodeID: backend})
 	if err != nil {
@@ -738,7 +744,7 @@ func callOnNode(ctx context.Context, backend cdp.BackendNodeID, fn string) error
 	return nil
 }
 
-// keySpec 常用按键的 code / windowsVirtualKeyCode。
+// keySpec is the code / windowsVirtualKeyCode of a common key.
 type keySpec struct {
 	code string
 	vk   int64
@@ -778,7 +784,8 @@ func keyParams(key string, typ input.DispatchKeyEventType) input.DispatchKeyEven
 		return p
 	}
 	if len(key) == 1 {
-		// 单字符：用 code 与 vk 的常规约定（大写字母 / 数字 / 符号的常见情形）。
+		// Single character: follow the usual code and vk conventions (the common case of an uppercase letter /
+		// digit / symbol).
 		r := []rune(strings.ToUpper(key))[0]
 		p.Code = "Key" + string(r)
 		p.WindowsVirtualKeyCode = int64(r)

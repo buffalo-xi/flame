@@ -13,15 +13,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// handleExec 单工端点：一条连接 = 一个进程，跑到退出为止。
+// handleExec is the simplex endpoint: one connection = one process, running until it exits.
 //
-// ⚠️ 「单工」在这里指**不池化**（每次新建、跑完即弃、无回调通道），
-// 不是「单向」也不是「短命」：线上协议是完整双向流 —— stdin 可续写、可半关闭，
-// stdout / stderr 分流回传，还支持 kill 帧。同时它**没有**双工那样的内建硬超时
-// （对比 codeDeadline）：超时只来自 limits.timeout_sec（用途默认 → 请求覆盖 →
-// 全局 clamp，0 = 不限时）。长驻的交互式命令直接走这条路径即可，不必新增端点。
+// ⚠️ "Simplex" here means **not pooled** (created per call, discarded once done, no callback channel), not
+// "one-directional" and not "short-lived": the wire protocol is a full duplex stream — stdin can be written
+// incrementally and half-closed, stdout / stderr are forwarded on separate channels, and kill frames are
+// supported. It does however **not** have the built-in hard timeout of the duplex path (compare codeDeadline):
+// the only timeout comes from limits.timeout_sec (usage default → request override → global clamp, 0 = no limit).
+// A long-lived interactive command can use this path directly; no new endpoint is needed.
 //
-// 为什么不入池：池化它需要「重置进程状态」，成本比直接启动还高，且没有复用收益。
+// Why it is not pooled: pooling it would require "resetting process state", which costs more than starting it
+// from scratch, with no reuse benefit.
 func (s *Server) handleExec(c *gin.Context) {
 	ws, err := s.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -30,11 +32,11 @@ func (s *Server) handleExec(c *gin.Context) {
 	wc := sandbox.NewConn(ws)
 	defer func() { _ = ws.Close() }()
 
-	// /metrics 负载计数：一次 exec 连接 = 一个 in-flight。
+	// /metrics load counting: one exec connection = one in-flight.
 	s.execInFlight.Add(1)
 	defer s.execInFlight.Add(-1)
 
-	// 1) open（单工：携带完整 Spec）
+	// 1) open (simplex: carries the complete Spec)
 	f, _, rerr := wc.Recv()
 	if rerr != nil {
 		return
@@ -46,8 +48,10 @@ func (s *Server) handleExec(c *gin.Context) {
 
 	spec := f.Spec.Spec()
 
-	// 解析启动意图：语言路径（解释器由本服务按当前 mode 解析）或直传路径（调用方给全 argv）。
-	// 失败在起进程之前就返回，避免把错误拼出来的命令交给隔离层。
+	// Resolve the start intent: either a language path (the interpreter is resolved by this service for the current
+	// mode) or a direct path (the caller provides the whole argv).
+	// A failure returns before the process is started, so a badly assembled command never reaches the isolation
+	// layer.
 	argv, aerr := buildExecArgv(f.Lang, spec.Argv, spec.Script, spec.Args, s.cfg.ResolveLangCommand)
 	if aerr != nil {
 		code := "bad_request"
@@ -64,11 +68,12 @@ func (s *Server) handleExec(c *gin.Context) {
 		return
 	}
 
-	// Dir 同样必须落在某个挂载点之下。
+	// Dir must also fall under some mount point.
 	//
-	// none 没有 rootfs/镜像作为边界：TranslateToHost 匹配不到挂载点时会原样
-	// 返回输入，于是宿主绝对路径会被直接当成工作目录。nsjail/docker 下
-	// rootfs / 镜像本身就是边界，容器内的 /tmp 之类是合法的，因此只对 none 强制。
+	// none has no rootfs/image as a boundary: when TranslateToHost matches no mount point it returns the input
+	// unchanged, so a host absolute path would be taken as the working directory directly. Under nsjail/docker the
+	// rootfs / image itself is the boundary and an in-container /tmp is legitimate, so this is enforced for none
+	// only.
 	if s.cfg.Mode == isolate.NoneName {
 		if derr := guardDir(spec.Dir, spec.Mounts); derr != nil {
 			xlog.Error("sandboxd: rejected dir: %v", derr)
@@ -77,8 +82,9 @@ func (s *Server) handleExec(c *gin.Context) {
 		}
 	}
 
-	// 网络裁决必须先于起进程：裁决不过就直接回错误帧，不要落到 isolate 再失败
-	// （那时容器/进程已经建了一半，错误也更难解释）。
+	// The network decision must come before starting the process: when it is refused, answer with an error frame
+	// straight away instead of letting isolate fail later (by then the container/process is half built, and the
+	// error is harder to explain).
 	if nerr := s.resolveExecNetwork(spec); nerr != nil {
 		xlog.Error("sandboxd: rejected egress: %v", nerr)
 		_ = wc.SendFrame(&sandbox.Frame{
@@ -88,7 +94,7 @@ func (s *Server) handleExec(c *gin.Context) {
 	}
 
 	spec.Limits = s.cfg.ExecLimits(spec.Limits)
-	// stderr 走独立通道回传，而不是写到 sandboxd 的 stderr
+	// stderr goes back on its own channel instead of being written to sandboxd's stderr
 	spec.Stderr = &wsWriter{c: wc, ch: sandbox.ChanStderr}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,17 +110,17 @@ func (s *Server) handleExec(c *gin.Context) {
 		return
 	}
 
-	// 2) 客户端 → 进程 stdin（含半关闭与强杀）
+	// 2) client → process stdin (including half-close and force kill)
 	//
-	// clientGone 是「这条连接已经没人要了」的信号：读循环是唯一能察觉客户端
-	// 断开的地方，所以由它关闭这个 channel 来通知下面的转发收尾。
+	// clientGone signals "nobody wants this connection anymore": the read loop is the only place that can notice
+	// the client disconnecting, so it closes this channel to tell the forwarding below to wind down.
 	clientGone := make(chan struct{})
 	go func() {
 		defer close(clientGone)
 		for {
 			cf, data, rerr := wc.Recv()
 			if rerr != nil {
-				_ = proc.Kill() // 客户端断开：连带杀掉整棵进程树（docker 下是容器）
+				_ = proc.Kill() // client disconnected: kill the whole process tree along with it (the container under docker)
 				return
 			}
 			if data != nil {
@@ -135,25 +141,26 @@ func (s *Server) handleExec(c *gin.Context) {
 		}
 	}()
 
-	// 3) 进程 stdout → 客户端
+	// 3) process stdout → client
 	//
-	// 转发必须放在独立 goroutine 里，让主 goroutine 保持「可中断的等待」——
-	// 否则客户端一断开、而管道又被攥住时，这次转发会永久卡住（见下面的说明）。
+	// The forwarding must live in its own goroutine so the main goroutine can keep "a wait that can be interrupted"
+	// — otherwise, once the client disconnects while the pipe is still held, this forwarding would hang forever (see
+	// below).
 	copyDone := make(chan struct{})
 	go func() {
 		defer close(copyDone)
 		_, _ = io.Copy(&wsWriter{c: wc, ch: sandbox.ChanStdout}, proc.Stdout())
 	}()
 
-	// 4) 等这次转发收尾。
+	// 4) Wait for this forwarding to wind down.
 	//
-	// 正常路径是 stdout EOF —— 但「stdout EOF」并不等于「进程退出」：stdout 是被
-	// 整棵进程树继承的 fd，只要还有一个孙进程（或容器里的残留进程）攥着它，
-	// EOF 就永远不来。
+	// The normal path is stdout EOF — but "stdout EOF" is not the same as "the process exited": stdout is an fd
+	// inherited by the whole process tree, so as long as one grandchild (or a leftover process in the container)
+	// still holds it, EOF never arrives.
 	//
-	// 客户端此时若已断开，这段输出已经没有去处：先杀干净，再强制释放管道把上面的
-	// io.Copy 解开。否则这个 handler 会带着一个 goroutine 和一个 fd 永久卡住 ——
-	// 「进程杀了但连接收不了尾」同样是没杀干净。
+	// If the client has disconnected by then this output has nowhere to go: kill everything first, then force the
+	// pipe shut to unblock the io.Copy above. Otherwise this handler stays stuck forever with a goroutine and an fd
+	// — "the process was killed but the connection never finished" is not killed cleanly either.
 	select {
 	case <-copyDone:
 	case <-clientGone:
@@ -166,57 +173,61 @@ func (s *Server) handleExec(c *gin.Context) {
 	_ = wc.SendFrame(&sandbox.Frame{Type: sandbox.FrameExit, Code: exitCode(werr)})
 }
 
-// resolveExecNetwork 把请求的网络意图按部署上限裁决，回写成明确的布尔。
+// resolveExecNetwork decides the request's network intent against the deployment ceiling and writes it back as an
+// explicit boolean.
 //
-// 这是「部署上限 × 请求意图」这一层；租户许可在 nexus 侧已经算过 —— 它没许可就不会
-// 传 egress=true。裁决结果写回 spec.Egress，isolate 只照着执行，不再判断策略。
+// This is the "deployment ceiling × request intent" layer; the tenant grant has already been evaluated on the nexus
+// side — without a grant it never sends egress=true. The verdict is written back into spec.Egress and isolate only
+// executes it, never judging policy again.
 //
-// nil 为什么保留成 nil：nil 表示「调用方没表态」（老 nexus、或非 exec 通道），按部署
-// 默认走；显式 false 才表示「这次一定要断网」。二者在 on-request 下都断网，但在
-// mode=none 下待遇不同 —— 见下面的分支。
+// Why nil stays nil: nil means "the caller expressed no opinion" (an older nexus, or a non-exec channel) and the
+// deployment default applies; only an explicit false means "this one definitely must be offline". Both are offline
+// under on-request, but they are treated differently under mode=none — see the branch below.
 func (s *Server) resolveExecNetwork(spec *sandbox.Spec) error {
 	want := spec.Egress != nil && *spec.Egress
 
 	switch s.cfg.EffectiveNetwork() {
 	case NetworkOff:
 		if want {
-			return errors.New("network=off: 本部署不提供出网，请求里的 egress 无法满足")
+			return errors.New("network=off: this deployment provides no egress, so the request's egress cannot be honoured")
 		}
-		// 清成 nil：这一档的事实由配置决定（none / --iface_no_lo），
-		// 不让请求里的 false 参与 —— 两者结论相同，但只有一个来源。
+		// Clear it to nil: in this tier the fact is decided by the configuration (none / --iface_no_lo), and the
+		// request's false must not take part — same conclusion, but a single source.
 		spec.Egress = nil
 
 	case NetworkOn:
-		// 一律出网：忽略请求的 egress —— 这一档的控制权在部署方，不在调用方。
+		// Always online: the request's egress is ignored — the control in this tier belongs to the deployment, not
+		// the caller.
 		//
-		// 必须显式清成 nil：留着 false 会让 isolate 起成 --network none，
-		// 「on 忽略请求」就变成了「on 听请求」，语义正好相反。
+		// It must be explicitly cleared to nil: keeping false would make isolate start with --network none, turning
+		// "on ignores the request" into "on obeys the request" — the exact opposite semantics.
 		spec.Egress = nil
 
 	case NetworkOnRequest:
 		if !want && s.cfg.Mode == isolate.NoneName {
-			// 宿主进程与外部网络同源，断不了。请求明确要断网时只能拒绝：
-			// 静默按出网跑就是撒谎（agent 会以为数据没出机器）。
-			return errors.New("mode=none 无法提供断网执行（宿主进程拦不住网络）；" +
-				"要么改用 docker / nsjail，要么把 network 声明为 on")
+			// The host process shares the network with the outside world and cannot be cut off. When the request
+			// explicitly asks for offline execution the only option is to refuse: silently running online would be a
+			// lie (the agent would believe the data never left the machine).
+			return errors.New("mode=none cannot provide offline execution (a host process cannot be blocked from the network); " +
+				"either switch to docker / nsjail or declare network as on")
 		}
 		egress := want
 		spec.Egress = &egress
 
 	default:
-		return fmt.Errorf("network: 未知策略 %q", s.cfg.EffectiveNetwork())
+		return fmt.Errorf("network: unknown policy %q", s.cfg.EffectiveNetwork())
 	}
 	return nil
 }
 
-// buildExecArgv 把单工请求解析成最终命令行。
+// buildExecArgv resolves a simplex request into the final command line.
 //
-// 两条路径，互斥：
-//   - 语言路径（lang 非空）：argv = [解释器, 脚本, 参数...]，解释器由 resolve 按当前
-//     mode 解析 —— 「镜像里叫什么」由此只保留 sandboxd 一处认知；
-//   - 直传路径（lang 为空）：argv 由调用方完全决定（shell 命令、自带解释器），一字不改。
+// Two mutually exclusive paths:
+//   - language path (lang non-empty): argv = [interpreter, script, args...], the interpreter being resolved for the
+//     current mode by resolve — so "what it is called inside the image" stays knowledge held only by sandboxd;
+//   - direct path (lang empty): argv is entirely the caller's (shell commands, bundled interpreters), untouched.
 //
-// resolve 以回调注入，便于单测（不必构造 Server / 依赖配置）。
+// resolve is injected as a callback to make unit testing easy (no Server / config dependency needed).
 func buildExecArgv(lang string, argv []string, script string, args []string,
 	resolve func(string) (string, error)) ([]string, error) {
 
@@ -226,7 +237,8 @@ func buildExecArgv(lang string, argv []string, script string, args []string,
 		}
 		return argv, nil
 	}
-	// 同时给 lang 与 argv 会拼出不可预期的命令（如 `lua lua /x.lua`），直接拒绝。
+	// Passing both lang and argv would assemble an unpredictable command (such as `lua lua /x.lua`), so it is
+	// rejected outright.
 	if len(argv) > 0 {
 		return nil, fmt.Errorf("lang %q and argv are mutually exclusive", lang)
 	}

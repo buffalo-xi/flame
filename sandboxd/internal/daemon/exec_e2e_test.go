@@ -13,15 +13,15 @@ import (
 	"flame/tools/sandbox"
 )
 
-// 单工端点的端到端验收：真 sandboxd 服务 + 真 WebSocket + 真 docker。
+// End-to-end acceptance of the simplex endpoint: a real sandboxd service + a real WebSocket + a real docker.
 //
-// 需要本机跑着 sandboxd（缺省 127.0.0.1:27081，可用 SANDBOXD_TEST_EXEC_URL 覆盖）
-// 与可用的 docker（SANDBOXD_TEST_DOCKER），否则跳过。
+// It needs a sandboxd running locally (127.0.0.1:27081 by default, overridable with SANDBOXD_TEST_EXEC_URL) and a usable
+// docker (SANDBOXD_TEST_DOCKER), and skips otherwise.
 //
-// 断言的对象是**对外约定**：一次执行结束后，它为这次执行创建的容器必须消失 ——
-// 容器怎么命名、打什么标签见 nexus/docs/sandbox-design.md §9.6。
-// 这里刻意硬编码标签而不引用 isolate 包的常量：端到端测的是约定，
-// 不该跟着实现内部的常量名一起改。
+// What is asserted is the **external contract**: once an execution ends, the container created for it must be gone. How
+// containers are named and labelled is documented in nexus/docs/sandbox-design.md §9.6. The label is deliberately
+// hardcoded here rather than referencing the isolate package constant: an end-to-end test checks the contract and
+// should not change whenever an internal constant is renamed.
 
 const (
 	defaultExecURL     = "ws://127.0.0.1:27081/v1/exec"
@@ -29,14 +29,14 @@ const (
 	containerWait      = 20 * time.Second
 )
 
-// execE2E 一次端到端验收需要的环境。
+// execE2E is the environment one end-to-end acceptance run needs.
 type execE2E struct {
 	url  string
-	bin  string // docker 可执行文件
-	base string // HTTP 基地址（/healthz 用）
+	bin  string // docker executable
+	base string // HTTP base address (for /healthz)
 }
 
-// execE2EForTest 探测环境：服务不可达或没有 docker 就跳过。
+// execE2EForTest probes the environment: skip when the service is unreachable or docker is missing.
 func execE2EForTest(t *testing.T) execE2E {
 	t.Helper()
 
@@ -71,9 +71,11 @@ func execE2EForTest(t *testing.T) execE2E {
 	return execE2E{url: url, bin: bin, base: base}
 }
 
-// TestExecE2EDisconnectKillsContainer 客户端断链之后，这次执行的容器必须消失。
+// TestExecE2EDisconnectKillsContainer: after the client drops the connection, the container of this execution must be
+// gone.
 //
-// 这正是 nexus 侧超时 / 进程消失时的形态：不发任何帧，直接断。
+// That is exactly the shape of a timeout / vanished process on the nexus side: it sends no frame at all, it just
+// disconnects.
 func TestExecE2EDisconnectKillsContainer(t *testing.T) {
 	e := execE2EForTest(t)
 	before := execContainerNames(t, e.bin)
@@ -81,23 +83,24 @@ func TestExecE2EDisconnectKillsContainer(t *testing.T) {
 	spec := &sandbox.Spec{Argv: []string{"/bin/sh", "-c", "sleep 300 & sleep 300"}}
 	conn := openExec(t, e, spec)
 
-	// 先确认容器真的起来了，否则后面的断言可能只是在测「它压根没跑」。
-	// 后台 sleep 攥着 stdout、前台 sleep 撑住 shell —— 一棵进程树。
+	// Confirm the container is really up first, otherwise the later assertion may only be testing "it never ran".
+	// The background sleep holds stdout while the foreground sleep keeps the shell alive — a process tree.
 	appeared := waitNewContainer(t, e.bin, before)
 
-	// 断链：直接关掉 WS，不发送任何帧。
+	// Disconnect: close the WS outright, without sending any frame.
 	if err := conn.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 
-	// 核心断言：容器（连同里面那棵进程树）必须被收掉。
+	// The core assertion: the container (and the process tree inside it) must be collected.
 	waitContainersGone(t, e.bin, []string{appeared})
 
-	// 服务不能被这次断链拖住。
+	// The service must not be held up by this disconnect.
 	assertHealthy(t, e.base)
 }
 
-// TestExecE2EFrameKillKillsContainer 显式 kill 帧同样要收干净（连接还活着的那条路）。
+// TestExecE2EFrameKillKillsContainer: an explicit kill frame must clean up just as thoroughly (the path where the
+// connection is still alive).
 func TestExecE2EFrameKillKillsContainer(t *testing.T) {
 	e := execE2EForTest(t)
 	before := execContainerNames(t, e.bin)
@@ -114,10 +117,11 @@ func TestExecE2EFrameKillKillsContainer(t *testing.T) {
 	waitContainersGone(t, e.bin, []string{appeared})
 }
 
-// TestExecE2ENormalExit 正常跑完的命令：输出与退出码要对，且不留下容器。
+// TestExecE2ENormalExit: a command that runs to completion — the output and the exit code must be right, and no
+// container may be left behind.
 //
-// 容器可能跑得比 docker ps 还快（--rm 已经删了），所以这里不做「必须看见容器」
-// 的断言，只断言「没有多出来的容器」—— 这个判据与快慢无关。
+// The container may be faster than docker ps (already deleted by --rm), so there is no "the container must be visible"
+// assertion here, only "no extra container appeared" — a criterion independent of timing.
 func TestExecE2ENormalExit(t *testing.T) {
 	e := execE2EForTest(t)
 	before := execContainerNames(t, e.bin)
@@ -131,15 +135,15 @@ func TestExecE2ENormalExit(t *testing.T) {
 		t.Fatalf("read exit: %v", err)
 	}
 	if !strings.Contains(out, "e2e-ok") {
-		t.Errorf("stdout = %q，期望包含 e2e-ok", out)
+		t.Errorf("stdout = %q, want it to contain e2e-ok", out)
 	}
 	if code != 0 {
-		t.Errorf("exit code = %d，期望 0", code)
+		t.Errorf("exit code = %d, want 0", code)
 	}
 	assertNoNewContainers(t, e.bin, before)
 }
 
-// openExec 打开一次单工执行，等到 ready 帧。
+// openExec opens one simplex execution and waits for the ready frame.
 func openExec(t *testing.T, e execE2E, spec *sandbox.Spec) *sandbox.Conn {
 	t.Helper()
 	conn, err := sandbox.Dial(context.Background(), e.url, "")
@@ -157,15 +161,15 @@ func openExec(t *testing.T, e execE2E, spec *sandbox.Spec) *sandbox.Conn {
 	}
 	if f.Type != sandbox.FrameReady {
 		_ = conn.Close()
-		t.Fatalf("期望 ready 帧，实收 %q（%s）", f.Type, f.Message)
+		t.Fatalf("want a ready frame, got %q (%s)", f.Type, f.Message)
 	}
 	return conn
 }
 
-// readExit 读到 exit 帧为止，收集 stdout 与退出码。
+// readExit reads until the exit frame, collecting stdout and the exit code.
 //
-// 读取放在 goroutine 里并加超时：Recv 没有读超时，一旦服务端不发 exit 帧，
-// 测试必须能失败退出而不是挂死。
+// The read happens in a goroutine with a timeout: Recv has no read deadline, so once the server fails to send an exit
+// frame the test must be able to fail rather than hang.
 func readExit(conn *sandbox.Conn, limit time.Duration) (string, int, error) {
 	type result struct {
 		out  string
@@ -201,11 +205,11 @@ func readExit(conn *sandbox.Conn, limit time.Duration) (string, int, error) {
 	case r := <-ch:
 		return r.out, r.code, r.err
 	case <-time.After(limit):
-		return "", 0, fmt.Errorf("等待 exit 帧超时（%s）", limit)
+		return "", 0, fmt.Errorf("timed out waiting for the exit frame (%s)", limit)
 	}
 }
 
-// execContainerNames 当前带 exec 标签的容器名集合。
+// execContainerNames is the set of container names currently carrying the exec label.
 func execContainerNames(t *testing.T, bin string) map[string]struct{} {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -223,7 +227,7 @@ func execContainerNames(t *testing.T, bin string) map[string]struct{} {
 	return set
 }
 
-// waitNewContainer 等一个「上次没见过的」容器出现，返回它的名字。
+// waitNewContainer waits for a container "not seen before" to appear and returns its name.
 func waitNewContainer(t *testing.T, bin string, before map[string]struct{}) string {
 	t.Helper()
 	deadline := time.Now().Add(containerWait)
@@ -235,11 +239,11 @@ func waitNewContainer(t *testing.T, bin string, before map[string]struct{}) stri
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatal("这次执行没有留下可观测的容器：容器没起来，或起来后又瞬间消失")
+	t.Fatal("this execution left no observable container: either it never started, or it vanished right after")
 	return ""
 }
 
-// waitContainersGone 等这批容器全部消失。
+// waitContainersGone waits until all of these containers are gone.
 func waitContainersGone(t *testing.T, bin string, names []string) {
 	t.Helper()
 	deadline := time.Now().Add(containerWait)
@@ -257,20 +261,20 @@ func waitContainersGone(t *testing.T, bin string, names []string) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("容器 %v 在 %s 内没有消失 —— 这次执行没有收干净", left, containerWait)
+	t.Fatalf("containers %v did not disappear within %s — this execution was not cleaned up", left, containerWait)
 }
 
-// assertNoNewContainers 确认没有多出容器（与速度无关的判据）。
+// assertNoNewContainers confirms no extra container appeared (a timing-independent criterion).
 func assertNoNewContainers(t *testing.T, bin string, before map[string]struct{}) {
 	t.Helper()
 	for name := range execContainerNames(t, bin) {
 		if _, existed := before[name]; !existed {
-			t.Errorf("多出了容器 %s —— 这次执行没有收干净", name)
+			t.Errorf("an extra container %s appeared — this execution was not cleaned up", name)
 		}
 	}
 }
 
-// assertHealthy 服务没被这次连接拖住 / 拖死。
+// assertHealthy: the service was not held up or killed by this connection.
 func assertHealthy(t *testing.T, base string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -278,7 +282,7 @@ func assertHealthy(t *testing.T, base string) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/healthz", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("断链之后服务不再响应 /healthz: %v", err)
+		t.Fatalf("the service stopped answering /healthz after the disconnect: %v", err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

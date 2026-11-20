@@ -1,20 +1,21 @@
-# sandboxd —— 独立沙箱服务配置
+# sandboxd — standalone sandbox service configuration
 #
-# 这里是「沙箱资源策略」的唯一来源：隔离方式、资源上限、进程池与并发额度。
-# nexus 侧不下发这些，只给出语言名与（可选的）超时。
+# This is the single source of truth for "sandbox resource policy": isolation mode, resource caps, process pools and
+# concurrency budgets. The nexus side does not send any of it; it only supplies language names and (optionally) a
+# timeout.
 
-# ⚠️ 显式绑定 127.0.0.1，不要用 ":8080"：
-#    Windows 上 IPv4 的 8080 常被系统服务占用（本例是 iphlpsvc 的端口代理），
-#    而 ":8080" 只能抢到 IPv6，发往 127.0.0.1 的连接会落到对方 →
-#    客户端表现为「TCP 连上但 HTTP 握手超时」。
+# ⚠️ Bind 127.0.0.1 explicitly; do not use ":8080":
+#    On Windows, IPv4 port 8080 is often taken by a system service (in this case iphlpsvc's port proxy), while
+#    ":8080" can only grab the IPv6 one, so connections to 127.0.0.1 land on the other service →
+#    the client sees "TCP connects but the HTTP handshake times out".
 listen: "127.0.0.1:27081"
-# token 需与 nexus 的 sandbox.token 一致；留空表示不校验（仅限内网）
+# token must match nexus's sandbox.token; empty means no checking (internal network only)
 token: ""
 
 # ---------------------------------------------------------------------------
-# 服务注册（可选，默认关闭）：把本服务注册到 consul/nacos，供 sandboxg 网关发现。
-# 单实例直连（nexus 直接连 sandboxd）不需要开；只有上 sandboxg 多实例才需要。
-# 注意 service_addr 必须是 gateway 能连到的地址（跨机写内网 IP，别写 127.0.0.1）。
+# Service registration (optional, off by default): register this service with consul/nacos for sandboxg to discover.
+# A single instance connected directly (nexus talks to sandboxd) does not need it; only multiple sandboxg instances do.
+# Note that service_addr must be an address the gateway can reach (the intranet IP across machines, never 127.0.0.1).
 # ---------------------------------------------------------------------------
 registry:
   enabled: true
@@ -22,158 +23,171 @@ registry:
   address: "localhost:8500"
   service_name: "sandboxd"
   service_addr: "127.0.0.1"
-  service_port: 27081        # 缺省取 listen 端口
+  service_port: 27081        # defaults to the listen port
   health_check_path: "/healthz"
-# 日志目录
+# Log directory
 log_dir: logs
 
-# 交互明细日志策略：off / slow / all
+# Interactive detail logging policy: off / slow / all
 #
-#   记录内容形如：
+#   A detail record looks like:
 #     sandboxd: code <id> done lang=lua reused=true dur=3ms reusable=true
-#   —— 「这次调用是否命中池、花了多久、worker 有没有被丢弃」。
-#   worker 身份只在 sandboxd 侧存在（nexus 拿不到），code id 是两边对账的 join key。
+#   — "did this call hit the pool, how long did it take, was the worker dropped".
+#   The worker identity only exists on the sandboxd side (nexus cannot see it), and the code id is the join key both
+#   sides reconcile on.
 #
-#   为什么要开关：lua 是 µs 级高频调用（循环条件 / 分支条件 / binding transform），
-#   每次会话都记会把日志写成噪声。
-#   注意：不可归还的异常会话（中断 / 超时 / 协议错误）**不受此开关限制**，一律记录。
+#   Why a switch: lua is a microsecond-level high-frequency call (loop conditions / branch conditions / binding
+#   transforms), and logging every session turns the log into noise.
+#   Note: abnormal sessions that cannot be returned (interrupted / timed out / protocol error) are **not** covered by
+#   this switch and are always recorded.
 #
-#   off  —— 完全不记正常会话
-#   slow —— 只记耗时 >= code_log_slow_ms 的会话（缺省值，生产建议）
-#   all  —— 每次会话都记（排障用，当前就是排障阶段）
+#   off  — records no normal session at all
+#   slow — records only sessions taking >= code_log_slow_ms (the default, recommended in production)
+#   all  — records every session (for troubleshooting; that is the stage we are at now)
 code_log: all
-# slow 策略下的阈值（毫秒）
+# Threshold of the slow policy (milliseconds)
 code_log_slow_ms: 200
 
-# ⚠️ 本组键旧名有三层：script_log / script_log_slow_ms / script_max_sec / script（顶层段），
-#    interact_log / interact_log_slow_ms / interact_max_sec / interact（顶层段），
-#    以及更早的 session_log / session_log_slow_ms / session_idle_sec / session（顶层段）。
-#    旧名都仍然收，但会在启动时打一条「请更新配置」的告警 —— 见 config.go 的 applyLegacyKeys。
+# ⚠️ Three generations of old names exist for this group: script_log / script_log_slow_ms / script_max_sec / script
+#   (top-level section), interact_log / interact_log_slow_ms / interact_max_sec / interact (top-level section), and the
+#   even older session_log / session_log_slow_ms / session_idle_sec / session (top-level section).
+#   The old names are still accepted, but log a "please update the config" warning at startup — see applyLegacyKeys in
+#   config.go.
 
-# 隔离方式：none / nsjail / docker —— 只在这里决定
+# Isolation mode: none / nsjail / docker — decided here only
 #
-#   none   不做隔离，直接 exec（仅开发调试；启动时会打警告）
-#   nsjail Linux namespace/cgroup 隔离，冷启动 ~10ms（量级估算，待实测），需自备 rootfs
-#   docker 容器隔离，冷启动 300ms~1s（量级估算，待实测），需镜像
+#   none   no isolation, plain exec (development and debugging only; a warning is logged at startup)
+#   nsjail Linux namespace/cgroup isolation, cold start ~10ms (order of magnitude, not measured yet); bring your own
+#          rootfs
+#   docker container isolation, cold start 300ms~1s (order of magnitude, not measured yet); needs an image
 #
-# 当前 mode: none（本机开发调试）。
-# docker 用 sandboxd/Dockerfile 构建的 flame/sandbox:latest（Debian 13，含
-# lua5.4 / python3.13 / node24 与常用 Python 包）；nsjail 需自备 rootfs。
-# 切 mode 时注意：langs.*.command 的通用缺省是「镜像 / rootfs 内的名字」，
-# 切到 none 要用 commands.none 覆盖成宿主路径（已配好）。
+# Current mode: none (local development).
+# docker uses flame/sandbox:latest built from sandboxd/Dockerfile (Debian 13, with lua5.4 / python3.13 / node24 and
+# the common Python packages); nsjail needs a rootfs of its own.
+# When switching modes note: the general default of langs.*.command is "the name inside the image / rootfs"; switching
+# to none requires overriding it through commands.none with the host path (already configured below).
 mode: none
 
 # ---------------------------------------------------------------------------
-# 网络策略：沙箱内进程能否访问外网。
+# Network policy: whether processes inside the sandbox can reach the outside.
 #
-# 这里写的是**上限**，不是某次调用的事实。这一次到底能不能联网，是三层 AND：
-#   部署上限（本文件） × 租户许可（platform.tenant_capabilities 的 net.egress）
-#   × 请求意图（/v1/exec 请求带的 egress 标志）
-# 启动时会校验「声明与启动方式一致」，对不上就拒绝启动 —— 对 agent 撒谎比配错更糟：
-# 它会按错误的前提写脚本（以为断网却写 pip install，或反过来把外发失败当代码 bug）。
+# What is written here is the **ceiling**, not the fact of one call. Whether this particular call has network access is
+# the AND of three layers:
+#   deployment ceiling (this file) × tenant permission (net.egress in platform.tenant_capabilities)
+#   × request intent (the egress flag carried by the /v1/exec request)
+# Startup validates that "the declaration matches how the unit is started" and refuses to start when it does not —
+# lying to the agent is worse than misconfiguring it: it would write scripts on a wrong premise (writing pip install
+# while believing the network is off, or blaming egress failures on a code bug).
 #
-#   off          谁都不能出网（请求要 on 也拒绝）
-#   on-request   缺省断网，请求显式要才出网（生产推荐：唯一能按请求裁决的档）
-#   on           一律出网，不看请求
+#   off          nobody gets egress (a request asking for on is rejected)
+#   on-request   off by default, egress only when the request explicitly asks (recommended in production: the only tier
+#                that adjudicates per request)
+#   on           always egress, requests are ignored
 #
-# ⚠️ 只作用于 /v1/exec（含技能脚本）。/v1/code 是托管代码片段通道、跨租户共享，
-# 且请求帧里没有租户身份 —— 出网只能全平台生效且无法按租户回退，所以恒为 off，
-# 不提供配置项（mode=none 除外：脚本跑在宿主上，拦不住，capabilities 会如实报 on）。
-# 工作流的出网需求请用 http / rpc / mcp 节点（那里才有域名白名单、凭据、限流与审计）。
+# ⚠️ Applies to /v1/exec only (including skill scripts). /v1/code is the managed snippet channel, shared across tenants,
+# and the request frame carries no tenant identity — egress could only be switched on for the whole platform with no
+# per-tenant fallback, so it is always off and has no config option (mode=none excepted: scripts run on the host, cannot
+# be cut off, and capabilities reports on honestly).
+# The workflow's egress needs go through the http / rpc / mcp nodes (that is where the domain allowlist, credentials,
+# rate limiting and auditing live).
 #
-# ⚠️ nsjail 下 on-request 的「出网」分支需要 nsjail.extra_args 里加
-# --disable_clone_newnet（共享宿主网络命名空间）。程序无法校验 extra_args，
-# 启动时只会告警 —— 那是逃生口，用了就得自己保证声明属实。
+# ⚠️ With nsjail, the "egress" branch of on-request needs --disable_clone_newnet in nsjail.extra_args (sharing the host
+# network namespace). The program cannot validate extra_args and only warns at startup — it is an escape hatch, so using
+# it makes you responsible for the declaration being truthful.
 #
-# networks 按隔离方式覆盖（可选）。none 是宿主进程，断网根本做不到 —— 本机调试
-# 必须如实写 networks.none: on，否则启动失败。
+# networks overrides by isolation mode (optional). none is a host process and cutting the network off is simply
+# impossible — local debugging must declare networks.none: on honestly, otherwise startup fails.
 #
-# 盲区：docker.extra_args / nsjail.extra_args 能推翻这里的声明（塞一个 --network host
-# 即可），程序无从校验 —— 用了逃生口请自行保证声明属实。
+# Blind spot: docker.extra_args / nsjail.extra_args can overturn this declaration (stuff in a --network host and you are
+# done) and the program cannot check it — if you use the escape hatch, keep the declaration truthful yourself.
 # ---------------------------------------------------------------------------
 network: on-request
 networks:
-  # 本机调试：宿主进程与外部网络同源，拦不住，如实声明为「一律能出网」。
-  # 生产用 docker / nsjail 时删掉这行，让顶层 on-request 生效。
+  # Local debugging: a host process shares the outside network and cannot be cut off, so declare "always egress"
+  # honestly.
+  # When moving to docker / nsjail in production, delete this line so the top-level on-request takes effect.
   none: on
   # nsjail: off
   # docker: on
 
 # ---------------------------------------------------------------------------
-# 沙箱能力探测：启动时在沙箱内跑一组独立探针（os / python / node / lua ...），
-# 结果经 /v1/capabilities 交给 nexus 注入给 agent。
+# Sandbox capability probe: at startup a set of independent probes (os / python / node / lua ...) runs inside the
+# sandbox, and the result is handed to nexus through /v1/capabilities for injection into the agent.
 #
-# 为什么是探测而不是声明：沙箱里有什么是**事实**，声明会漂移 —— 改了 Dockerfile
-# 装了新包却忘了改配置，agent 就会按错误的环境写脚本。探针的语言入口名取自 langs
-# （按 mode 解析），不在这里重复写一遍。
+# Why probe instead of declare: what is inside the sandbox is a **fact**, and declarations drift — install a new package
+# in the Dockerfile but forget the config, and the agent writes scripts against a wrong environment. The interpreter
+# entry names come from langs (resolved per mode) and are not repeated here.
 #
-# mode=none 时不起沙箱进程，改用 Go 原生探测宿主（GOOS/GOARCH + LookPath）。
+# With mode=none no sandbox process is started: the host is probed natively with Go (GOOS/GOARCH + LookPath).
 # ---------------------------------------------------------------------------
 probe:
-  timeout_sec: 30        # 整体超时：探针并发跑，串行最坏会叠加
-  max_output_bytes: 8192 # 单条探针输出上限（结果会进 LLM 上下文，必须设限）
+  timeout_sec: 30        # overall timeout: probes run concurrently; serially the worst case would add up
+  max_output_bytes: 8192 # output cap of a single probe (the result enters the LLM context, so it must be capped)
 
 # ---------------------------------------------------------------------------
-# 语言定义：解释器入口名的真相，exec（命令 / 技能脚本）与 code（工作流代码片段）共用。
+# Language definitions: the truth about interpreter entry names, shared by exec (commands / skill scripts) and code
+# (workflow snippets).
 #
-# 为什么与 code 同级、而不放进 code：语言是「沙箱里有什么解释器、它叫什么名字」，
-# 与用途无关；code 只承载「脚本执行特有的池与并发策略」（见文件末尾）。放错层级的后果
-# 是 exec 没法复用同一份定义，nexus 侧只好自己硬编码一份，两边漂移就会出现
-# 「flow 能跑、技能跑不了」—— 而「镜像里叫什么」这个知识只有 sandboxd 有。
+# Why it sits next to code rather than inside it: a language is "which interpreters the sandbox has and what they are
+# called", independent of the use case; code only carries "the pool and concurrency policy specific to script
+# execution" (see the end of this file). Putting it on the wrong level meant exec could not reuse the same definition
+# and the nexus side had to hardcode one of its own — once the two drift you get "the flow runs but the skill does not",
+# while "what it is called inside the image" is knowledge only sandboxd has.
 #
-# ⚠️ command 的含义随 mode 变化，三种 mode 的解析位置各不相同：
-#     mode: none    → 宿主可解析的命令（PATH 中的名字，或宿主绝对路径）
-#     mode: nsjail  → chroot（rootfs）内解析（如 lua5.4 / /usr/bin/lua5.4）
-#     mode: docker  → 镜像内解析（本仓库 Dockerfile 建了 lua -> /usr/bin/lua5.4 的软链）
+# ⚠️ The meaning of command changes with the mode; the three modes resolve it in different places:
+#     mode: none    → a command the host can resolve (a name on PATH, or a host absolute path)
+#     mode: nsjail  → resolved inside the chroot (rootfs) (for example lua5.4 / /usr/bin/lua5.4)
+#     mode: docker  → resolved inside the image (this repo's Dockerfile creates the lua -> /usr/bin/lua5.4 symlink)
 #
-#   同一个名字在三种环境里未必都存在，所以支持按 mode 覆盖：
-#     command: lua            # 通用缺省
-#     commands:               # 可选，命中当前 mode 时优先于通用缺省
+#   The same name does not necessarily exist in all three environments, hence the per-mode override:
+#     command: lua            # general default
+#     commands:               # optional; wins over the general default when the current mode matches
 #       docker: lua
 #       nsjail: lua5.4
 #       none: "d:/tools/lua5.4/lua54.exe"
-#   启动时按当前 mode 解析出最终值并打进日志；某个 mode 既没有 commands 项、
-#   通用 command 也解析不到时，启动直接失败（不会静默跳过该语言）。
+#   At startup the final value is resolved for the current mode and logged; when a mode has no commands entry and the
+#   general command does not resolve either, startup fails outright (the language is not silently skipped).
 #
-#   定位类字段（commands / codehost.binaries / browser.* / tmp_dir / log_dir /
-#   allowed_mount_roots / nsjail.rootfs / docker.image）支持 ${VAR} 展开：
-#   换机器时不必改这份文件，用环境变量覆盖即可，例如
+#   The "locating" fields (commands / codehost.binaries / browser.* / tmp_dir / log_dir / allowed_mount_roots /
+#   nsjail.rootfs / docker.image) support ${VAR} expansion: moving to another machine needs no config edit, an
+#   environment variable override is enough, for example
 #       none: "${FLAME_PYTHON}"
-#   ⚠️ 引用的变量没设置会直接启动失败，而不是退化成空串 —— 空串会被当成「没配」
-#   静默回退到通用缺省，覆盖没生效却毫无迹象。
+#   ⚠️ Referencing an unset variable fails startup instead of degrading to an empty string — an empty string is taken as
+#   "not configured" and silently falls back to the general default, so the override does not take effect with no trace.
 # ---------------------------------------------------------------------------
 langs:
   lua:
-    # 通用缺省由镜像保证（Dockerfile: ln -sf /usr/bin/lua5.4 /usr/local/bin/lua）。
-    # ⚠️ 另外两种 mode 下这个名字并不必然存在，届时用 commands 覆盖：
-    #     nsjail: rootfs 里若只有 lua5.4 而没有 lua 软链，就必须写 commands.nsjail: lua5.4
-    #     none:   宿主 PATH 里的 lua（Windows 上通常是带版本号的文件名）
+    # The general default is guaranteed by the image (Dockerfile: ln -sf /usr/bin/lua5.4 /usr/local/bin/lua).
+    # ⚠️ Under the other two modes this name does not necessarily exist; override it with commands then:
+    #     nsjail: if the rootfs only has lua5.4 without the lua symlink, write commands.nsjail: lua5.4
+    #     none:   the lua on the host PATH (on Windows usually a version-suffixed filename)
     command: lua
     commands:
-      none: "d:/tools/lua5.5/lua55.exe"  # 本机调试（按自己的机器改）
+      none: "d:/tools/lua5.5/lua55.exe"  # local debugging (adjust to your machine)
   python:
-    # 三种 mode 下入口名确实不同，所以用 commands 显式区分（而不是写进注释）：
-    # ⚠️ 不要用 WindowsApps 下的 python3.exe —— 那是微软商店别名，
-    #    fork/exec 会报 "The file cannot be accessed by the system"。
-    command: python                       # 通用缺省（当前 == commands.docker）
+    # The entry name really is different under the three modes, so commands distinguishes them explicitly rather than
+    # leaving it to a comment:
+    # ⚠️ Do not use the python3.exe under WindowsApps — that is a Microsoft Store alias and fork/exec reports
+    #    "The file cannot be accessed by the system".
+    command: python                       # general default (currently == commands.docker)
     commands:
-      docker: python                      # 镜像内软链 python -> /usr/bin/python3
-      nsjail: python3                     # rootfs 内只有 python3
-      none: "d:/tools/Python313/python.exe"  # 本机调试（按自己的机器改）
+      docker: python                      # the image symlinks python -> /usr/bin/python3
+      nsjail: python3                     # the rootfs only has python3
+      none: "d:/tools/Python313/python.exe"  # local debugging (adjust to your machine)
 
-  # 本机未安装 node，暂时关闭 js：mode=none 下启动会校验宿主可解析。
-  # 装好 Node（或改用 docker 模式）后取消注释即可恢复。
+  # node is not installed locally, so js is disabled for now: under mode=none startup validates that the host can
+  # resolve it. Install Node (or switch to docker mode) and uncomment to restore it.
   js:
-    # 三种 mode 下都叫 node，无需 commands 覆盖。
+    # It is called node under all three modes, so no commands override is needed.
     command: node
 
-# codehost 宿主二进制的定位（none / nsjail / docker 通用）。
+# Where the codehost host binary lives (shared by none / nsjail / docker).
 #
-# codehost 是替代 worker.lua/py/js 的常驻宿主：sandboxd 在隔离单元里长驻它，
-# 每次 execute 由它 fork 全新解释器（内嵌包装模板）。
+# codehost is the resident host that replaced worker.lua/py/js: sandboxd keeps it alive inside the isolation unit, and
+# every execute forks a brand-new interpreter from it (the wrapper templates are embedded).
 #
-#   binary   通用缺省（"codehost"，取 PATH 解析）；
-#   binaries 按 mode 覆盖 —— none 用宿主路径，nsjail 用 rootfs 内路径，docker 用镜像内路径。
+#   binary   general default ("codehost", resolved through PATH);
+#   binaries per-mode override — none uses the host path, nsjail the rootfs path, docker the in-image path.
 codehost:
   binary: codehost
   binaries:
@@ -182,84 +196,88 @@ codehost:
     docker: /usr/local/bin/codehost
 
 # ---------------------------------------------------------------------------
-# 浏览器（browserhost + 沙箱内的 Chromium）
+# Browser (browserhost + the Chromium inside the sandbox)
 #
-# 浏览器与 shell 是同一类东西：session 级常驻进程。所以它复用
-# /v1/interactive 这条通道（tool_id=browser），**没有新增任何 HTTP 路由**；
-# 本段只描述「镜像 / rootfs 里的 browserhost 在哪、能不能有头」。
+# The browser is the same kind of thing as a shell: a session-level long-lived process. It therefore reuses the
+# /v1/interactive channel (tool_id=browser) and **adds no HTTP route**; this section only describes "where the
+# browserhost in the image / rootfs is, and whether headed is possible".
 #
-# 前提（缺一不可）：
-#   - 镜像 / rootfs 里装了 Chromium（见 Dockerfile）；
-#   - 顶层 network 为 on，docker.network 不能是 none（否则页面打不开）；
-#   - limits 的内存与 pids 要够（Chrome 进程树比 shell 大一个量级）。
+# Preconditions (all required):
+#   - Chromium is installed in the image / rootfs (see the Dockerfile);
+#   - the top-level network is on and docker.network is not none (otherwise pages will not load);
+#   - limits' memory and pids are sufficient (Chrome's process tree is an order of magnitude bigger than a shell's).
 # ---------------------------------------------------------------------------
 browser:
-  # 缺省关闭：浏览器能出网、能读页面内容，属于「开了就该知情」的能力。
+  # Off by default: a browser can reach the network and read page content, a capability "you should know about when you
+  # turn it on".
   enabled: true
   binary: browserhost
   binaries:
     none: "D:/proj/flame/sandboxd/bin/browserhost.exe"
     docker: /usr/local/bin/browserhost
-    # nsjail 不支持（rootfs 缺 /proc、/dev/shm、字体与 userns）：
-    # 开着 browser.enabled 且 mode=nsjail 会直接启动失败。
-  # 浏览器可执行文件（**沙箱内**路径）。空 = browserhost 自己探测
-  # （docker 里的 chromium / 宿主的 Chrome、Edge）。
+    # nsjail is not supported (the rootfs lacks /proc, /dev/shm, fonts and userns):
+    # enabling browser.enabled with mode=nsjail fails startup outright.
+  # The browser executable (**an in-sandbox** path). Empty = browserhost discovers it itself
+  # (chromium inside docker / Chrome or Edge on the host).
   #
-  # 这个路径和 binaries 是同一个性质：none 下是宿主路径、docker 下是镜像内路径，
-  # 一个字符串不可能同时成立 —— 所以真正的取值按 mode 走 exec_paths，
-  # 没写该 mode 时回退到这里（与 langs 的 command/commands 同款规则）。
+  # This path has the same nature as binaries: a host path under none, an in-image path under docker, and one string
+  # cannot hold for both — so the effective value goes through exec_paths per mode and falls back to this line when the
+  # mode has no entry (the same rule as command/commands in langs).
   exec_path: ""
   exec_paths:
     docker: /usr/bin/chromium
     # none: "C:/Program Files/Google/Chrome/Application/chrome.exe"
-    # 留空 = 自动探测；本机同时装了 Chrome 与 Edge 时想指定其中一个，就写在这里。
-  # 缺省显示方式：false = 无头（生产建议）。
+    # Empty = autodetect; when both Chrome and Edge are installed locally and you want one of them, write it here.
+  # Default display mode: false = headless (recommended in production).
   headed: false
-  # 是否允许请求方按会话请求有头（open 传 headed=true）。
-  # 有头需要真实显示环境，只在 mode=none（sandboxd 跑在有桌面的机器上）成立；
-  # 其它 mode 下允许会**启动失败**（validateBrowser 拦下）。
-  # 按 mode 覆盖：命中当前 mode 用这里的值，未命中回退本行 —— 一份配置同时适配
-  # 本机（有桌面）与 docker（无窗口），切 mode 不用改配置。
+  # Whether a caller may request headed per session (open with headed=true).
+  # Headed needs a real display environment and only holds with mode=none (sandboxd running on a machine with a
+  # desktop); allowing it under any other mode is a **startup failure** (validateBrowser stops it).
+  # Overridable per mode: the value here is used when the current mode matches, otherwise this line applies — one
+  # config serves both the local machine (with a desktop) and docker (no window), with no edit when switching modes.
   allow_headed: false
   allow_headed_modes:
     none: true
-  # Chrome 的 user-data-dir（沙箱内路径）。
-  # 空 = 按 mode 取缺省：docker → /tmp/browser（容器带 --tmpfs /tmp，profile
-  # 随容器销毁）；none → 临时目录，浏览器退出即删。
+  # Chrome's user-data-dir (an in-sandbox path).
+  # Empty = per-mode default: docker → /tmp/browser (the container has --tmpfs /tmp, so the profile dies with the
+  # container); none → a temp directory removed when the browser exits.
   profile_dir: ""
   profile_dirs:
-    # docker: /tmp/browser      # 就是缺省值，一般不用写
-  # 下载目录（沙箱内路径）。空 = <cwd>/downloads，即工作区，文件工具能直接读。
-  # 一旦写成绝对路径就只对某个 mode 成立（none 下 /workspace 会变成宿主盘根），
-  # 所以默认留空、按 cwd 相对解析。
+    # docker: /tmp/browser      # that is the default already, so it usually need not be written
+  # Download directory (an in-sandbox path). Empty = <cwd>/downloads, that is the workspace, which the file tools can
+  # read directly.
+  # Once written as an absolute path it only holds for one mode (/workspace under none becomes the host disk root), so
+  # it is left empty by default and resolved relative to cwd.
   downloads_dir: ""
   downloads_dirs:
     # docker: /workspace/downloads
 
-  # 浏览器进程的资源上限（再被全局 limits clamp）。
+  # Resource cap of the browser process (clamped by the global limits afterwards).
   limits:
     memory_mb: 1024
 
-# worker 的可写目录（宿主侧根目录）：每个 worker 在其下建一个独占子目录，
-# 挂进沙箱充当 /tmp，同时充当脚本的 cwd。
+# The worker writable directory (the host-side root): every worker creates an exclusive subdirectory under it, mounts it
+# into the sandbox as /tmp, and it is the script's cwd at the same time.
 #
-# 为什么需要它：隔离单元内只有 tmp_dir 是可写挂载，脚本写相对路径会直接失败；且
-# nsjail 的 chroot 默认只读，脚本的临时文件（Python 的 tempfile 等）也无处可落。
+# Why it is needed: inside the isolation unit only tmp_dir is a writable mount, so a script writing relative paths fails
+# outright; and an nsjail chroot is read-only by default, leaving nowhere for a script's temporary files (Python's
+# tempfile and the like) to land.
 #
-# 启动时会把这棵目录整棵清空，运行期不做单个删除 —— 因此它不是持久数据目录。
-# mode=none 时脚本写的是宿主上的真实路径；隔离模式下只限于挂载点内部。
+# Startup empties this whole tree; nothing is deleted individually at runtime — so it is not a persistent data
+# directory.
+# Under mode=none scripts write real paths on the host; under an isolation mode it is confined to the mount point.
 tmp_dir: run/tmp
 
-# 允许挂载的宿主目录根列表：请求里的 Mounts[].Host 必须落在其中之一之下。
-# 空列表 = 不校验（启动时会打警告，仅建议开发环境）。
+# List of allowed host directory roots: a request's Mounts[].Host must fall under one of them.
+# An empty list means no checking (a warning is logged at startup; recommended for development only).
 #
-# 这是「策略」而非「领域」：sandboxd 不关心调用方的工作区长什么样，
-# 也不解析它的业务路径，只负责确保被要求挂载的路径落在被授权的范围内。
-# 接入新的调用方时，在这里追加一项即可。
+# This is "policy", not "domain": sandboxd does not care what the caller's workspace looks like and does not parse its
+# business paths, it only ensures the paths it is asked to mount fall inside the authorised range.
+# When onboarding a new caller, append one entry here.
 #
-# 条目必须与调用方看到的宿主路径完全一致（共享存储 + 同路径）。
-#   生产（Linux）：/srv/nexus
-#   本机调试：对应 nexus/config.yaml 的 agent.root_dir
+# The entry must be exactly the host path the caller sees (shared storage with identical paths).
+#   production (Linux): /srv/nexus
+#   local debugging: the agent.root_dir of nexus/config.yaml
 allowed_mount_roots:
   - "D:/proj/flame/nexus/data"
 
@@ -269,150 +287,164 @@ nsjail:
   uid: 99999
   gid: 99999
   disable_network: true
-  # rootfs 只读。nsjail 的 chroot 默认就是 R/O，因此 true 不追加任何参数；
-  # 置为 false 才会追加 --rw（可写，一般只在调试时用）。
+  # Read-only rootfs. An nsjail chroot is R/O by default, so true adds no argument; only false adds --rw (writable,
+  # normally for debugging only).
   read_only_rootfs: true
-  # cgroup 版本选择：v1 | v2 | auto（默认 auto）
-  # 内存上限 --cgroup_mem_max 在两种版本下都有效，这里只决定版本选择参数：
-  #   v1   不加参数，走 nsjail 默认（cgroup v1）
-  #   v2   --use_cgroupv2（宿主必须是 v2）
-  #   auto --detect_cgroupv2（有 v2 用 v2，否则 v1；需要较新的 nsjail）
+  # cgroup version selection: v1 | v2 | auto (auto by default)
+  # The memory cap --cgroup_mem_max works under both versions; this only decides the version flag:
+  #   v1   no flag, keep nsjail's default (cgroup v1)
+  #   v2   --use_cgroupv2 (the host must be v2)
+  #   auto --detect_cgroupv2 (use v2 when present, otherwise v1; needs a reasonably recent nsjail)
   cgroup_version: auto
-  # 逃生口：追加到 nsjail 原生命令行末尾。
-  # 例如想显式禁用 /proc 挂载（nsjail 默认就不挂，通常无需设置）：
+  # Escape hatch: appended to the end of nsjail's native command line.
+  # For example, to disable the /proc mount explicitly (nsjail does not mount it by default, so usually unnecessary):
   #   extra_args: ["--disable_proc"]
   extra_args: []
 
 docker:
   binary: docker
-  # 镜像由 sandboxd/Dockerfile 构建：
+  # The image is built from sandboxd/Dockerfile:
   #   docker build -t flame/sandbox:latest -f sandboxd/Dockerfile sandboxd
   #
-  # 契约：lua5.4 / python3.13 / node24 三解释器；Python 依赖
-  #   （openpyxl 3.1.5 / xlrd 2.0.1 / pandas 2.2.3 / numpy 2.2.4）；
-  #   procps（补刀 pkill）+ coreutils（常驻 sleep）；非 root；不设 ENTRYPOINT。
-  # 镜像内实际版本可查：docker run --rm flame/sandbox:latest cat /etc/flame-versions
+  # Contract: the three interpreters lua5.4 / python3.13 / node24; Python dependencies
+  #   (openpyxl 3.1.5 / xlrd 2.0.1 / pandas 2.2.3 / numpy 2.2.4);
+  #   procps (for the pkill follow-up strike) + coreutils (resident sleep); non-root; no ENTRYPOINT.
+  # The actual versions inside the image can be checked: docker run --rm flame/sandbox:latest cat /etc/flame-versions
   #
-  # ⚠️ 加包只能在构建期：容器 --network none 且 rootfs 只读，
-  # 运行期 pip / npm / luarocks 一律不可用；需要新包就改 Dockerfile 再重建镜像。
+  # ⚠️ Packages can only be added at build time: the container runs with --network none and a read-only rootfs, so pip /
+  # npm / luarocks are all unusable at runtime; to get a new package, change the Dockerfile and rebuild the image.
   image: flame/sandbox:latest
-  # ⚠️ 这一项是「出网时用哪个网络」：单工请求带 egress 时容器就用它起。
-  #    顶层 network 是**上限**，不是与这里比对相等 —— 但 on-request 要求它真能给出网络：
-  #    空值或 none 会让「请求出网」无网可切，validateNetwork 直接拒绝启动。
-  #    允许联网时的取值：bridge / host（none 表示彻底无网）。
-  #    bridge：浏览器工具要能访问外网；要彻底断网就把它改回 none 并把顶层 network 改 off。
+  # ⚠️ This is "which network to use when going online": a simplex request carrying egress starts the container with it.
+  #    The top-level network is a **ceiling**, not something compared for equality here — but on-request requires this to
+  #    really provide a network: an empty value or none leaves "the request wants egress" with nothing to switch to, and
+  #    validateNetwork refuses to start.
+  #    Allowed values when egress is permitted: bridge / host (none means no network at all).
+  #    bridge: the browser tool needs to reach the outside world; for a hard cut, set it back to none and switch the
+  #    top-level network to off.
   network: bridge
   read_only: true
   user: "1000:1000"
   extra_args: []
 
-# 全局硬上限：所有请求的最终值都会被 clamp 到它（0 = 该维度不限制）
+# Global hard cap: every request's final value is clamped to it (0 = that dimension is unlimited)
 limits:
   memory_mb: 1024
   cpu_count: 2
-  # Chrome 的进程树（browser / gpu / renderer / utility）常态 20+，
-  # 64 会在多开标签时直接把容器撞死在 pids limit 上。
+  # Chrome's process tree (browser / gpu / renderer / utility) commonly runs to 20+; 64 would kill the container on the
+  # pids limit as soon as a couple of tabs are open.
   max_pids: 256
   max_file_mb: 64
   timeout_sec: 300
   max_output_bytes: 4194304
 
-# 一次脚本执行的**总时长**上限（秒）：兜底防止连接挂死长期占用 worker。
-# 计时从 open 帧起算、全程不复位，覆盖 exec 帧与整段脚本执行
-# （见 handle_code.go 的 codeDeadline）。
-#    这是工作流脚本执行的**实际硬闸**：调用方下发的超时只能收紧它、不能放宽，
-#    所以调用方下发的超时配得比 120 更大等于没配。
-#    （旧名 session_idle_sec，那个 idle 有误导性：它不是「空闲多久才回收」。
-#      旧名仍收，但会打告警。）
-# 调大它之前请先复核各语言的 max_concurrent 与 idle.max：单会话变长会更容易占满池，
-# 后续请求会先撞 code.acquire_timeout_sec（或该语言的覆盖值）返回「繁忙」。
+# Cap on the **total duration** of one script execution (seconds): a backstop that keeps a hung connection from holding a
+# worker for a long time.
+# The clock starts at the open frame and never resets, covering the exec frame and the whole script execution
+# (see codeDeadline in handle_code.go).
+#    This is the **real hard gate** of workflow script execution: a caller-supplied timeout can only tighten it, never
+#    relax it, so configuring the caller-side timeout above 120 is the same as not configuring it.
+#    (The old name was session_idle_sec; that "idle" was misleading — this is not "reclaim after being idle".
+#     The old name is still accepted, but logs a warning.)
+# Before raising it, re-check each language's max_concurrent and idle.max: longer single sessions fill the pool more
+# easily, and later requests will hit code.acquire_timeout_sec (or that language's override) and get "busy".
 code_max_sec: 120
 
 # ---------------------------------------------------------------------------
-# interactive（长交互进程）
+# interactive (long-lived interactive processes)
 #
-# 长交互进程（/v1/interactive）归 session 持有、跨连接存活；空闲超过这个时长
-# （从最近一次调用起算）会被后台回收 —— kill 进程、释放容器。
-# 与 code_max_sec 的区别：那个是「单次交互」的总时长硬闸，这个是「跨调用常驻
-# 进程」的空闲回收兜底。
+# A long-lived interactive process (/v1/interactive) is held by the session and outlives the connection; being idle
+# longer than this (counted from the most recent call) makes the background janitor reclaim it — kill the process,
+# release the container.
+# The difference from code_max_sec: that one is the hard gate of a **single interaction**, this one is the idle backstop
+# of a **cross-call resident process**.
 # ---------------------------------------------------------------------------
 interactive_idle_sec: 1800
 
-# 无 session 的临时交互进程的短空闲兜底（秒）。
+# Short idle backstop of temporary interactive processes without a session (seconds).
 #
-# 无 session 的调用（一次性 run）不跨 run 持久：run 内多次调用靠「间隔远小于该值」
-# 复用进程；run 结束时 nexus 会主动 kill（快路径），这里只在 nexus 崩溃/漏发时兜底回收。
+# A call without a session (a one-shot run) has no need to persist across runs: repeated calls inside a run reuse the
+# process by "the gap being far smaller than this value"; at the end of the run nexus kills it proactively (the fast
+# path), and this only backstops a nexus crash / a lost notification.
 interactive_ephemeral_idle_sec: 120
 
-# 长交互注册表的巡检间隔（秒）：不是超时，是"超时的分辨率"。
+# Sweep interval of the long-lived interactive registry (seconds): not a timeout, but the "resolution of the timeout".
 #
-# 进程要等到 idle 之后的下一次巡检才被回收，所以实际回收时刻落在
-# (interactive_idle_sec, interactive_idle_sec + 本值] 之间。
-# 这个上界决定了 sandboxg 的粘性 TTL 下限：sticky_ttl_sec > idle + 2×janitor_sec。
-# 本值随 /v1/capabilities 的 interactive 段上报，网关据此校验自己的配置。
+# A process is reclaimed on the first sweep after it went idle, so the actual reclaim time falls in
+# (interactive_idle_sec, interactive_idle_sec + this value].
+# That upper bound decides the lower bound of sandboxg's sticky TTL: sticky_ttl_sec > idle + 2×janitor_sec.
+# This value is reported through the interactive section of /v1/capabilities, and the gateway validates its own config
+# against it.
 interactive_janitor_sec: 60
 
-# exec（命令执行）：永远不池化，每次新建进程
+# exec (command execution): never pooled, a new process every time
 exec:
   limits:
     memory_mb: 512
     timeout_sec: 120
 
 # ---------------------------------------------------------------------------
-# code（工作流代码片段）
+# code (workflow snippets)
 #
-# ⚠️ 本段只放「脚本执行特有的池与并发策略」，不含解释器入口 ——
-#   解释器定义在文件上方的顶层 langs 里（语言与用途无关，exec 也要用）。
-#   本段出现的语言名必须在顶层 langs 有同名定义，否则启动即报错。
+# ⚠️ This section only carries "the pool and concurrency policy specific to script execution"; it holds no interpreter
+#   entry — those are defined in the top-level langs above (a language is independent of the use case and exec needs it
+#   too). Every language named here must have a definition of the same name in the top-level langs, otherwise startup
+#   fails.
 #
-# 池的开关只有一个层级：**整个语言条目在不在**（pools.<lang>）。
-#   条目在   = 该语言启用空闲池并对外服务；
-#   不要了就把它**整条**注释掉 —— 该语言的 code 请求会收到 unsupported_lang。
-#   刻意没有「只关空闲池、语言照跑」那一档：它的唯一后果是每次现场冷启动
-#   （docker 下 300ms~1s）的静默性能悬崖，而"不预热 / 不留驻"用 idle 的数值就能表达。
+# The pool switch has exactly one level: **whether the whole language entry is there** (pools.<lang>).
+#   entry present = that language enables the idle pool and serves requests;
+#   to drop it, comment out the **whole** entry — its code requests then get unsupported_lang.
+#   There is deliberately no "disable the idle pool but keep the language" tier: its only consequence is a silent
+#   performance cliff of a cold start on every call (300ms~1s under docker), while "no prewarming / nothing resident" is
+#   already expressible through the idle numbers.
 #
-# idle.initial / idle.max —— 空闲池的两个数（借出中的对象不占这个额度）：
-#   initial 保底空闲数：启动时预热、运行期由 refiller 维持；**0 = 不预热**（合法）。
-#   max     空闲池容量上限：缺省 = initial；0 = 不留驻（归还即销毁）。
-#   两个都省略 = {0, 0}：不预热、不留驻，池只在请求路径上按需起进程。
-#   ⚠️ initial > max 会在启动时报错（那会让 refiller 每秒「起一个、杀一个」空转）。
+# idle.initial / idle.max — the two numbers of the idle pool (objects currently lent out do not count against it):
+#   initial guaranteed idle count: prewarmed at startup, maintained by the refiller at runtime; **0 = no prewarming**
+#           (legal).
+#   max     idle pool capacity: default = initial; 0 = nothing kept resident (destroyed on return).
+#   Both omitted = {0, 0}: no prewarming, nothing resident, the pool only starts processes on demand along the request
+#           path.
+#   ⚠️ initial > max fails at startup (it would leave the refiller spinning "start one, kill one" every second).
 #
-# 生命周期（旧 lifecycle: reuse / restart）已删除：codehost 每次 execute 都 fork
-# 全新解释器进程，跨请求零残留天然成立，不存在「复用热解释器 vs 用完即弃」的选择；
-# 三种隔离方式（none / nsjail / docker）都是「每请求新起解释器、复用常驻 codehost」
-# （容器是否复用由 idle.max 控制）。
-# 因此归还策略只剩一档：干净 worker 复用，半截状态（中断/超时/协议错误）销毁。
+# The lifecycle tier (the old lifecycle: reuse / restart) has been removed: codehost forks a brand-new interpreter
+# process on every execute, so "zero residue across requests" holds by construction and there is no "reuse a warm
+# interpreter vs use it once" choice; all three isolation modes (none / nsjail / docker) are "a fresh interpreter per
+# request, a resident codehost reused" (whether the container is reused is controlled by idle.max).
+# So the return policy has a single tier left: a clean worker is reused, a half-finished one (interrupted / timed out /
+# protocol error) is destroyed.
 #
-# idle.initial 是「保底空闲数」：启动时预热，运行期由 refiller 维持
-# （维持的是空闲的 codehost 宿主进程）。
+# idle.initial is "the guaranteed idle count": prewarmed at startup and maintained by the refiller at runtime (what is
+# maintained is idle codehost host processes).
 # ---------------------------------------------------------------------------
 code:
   limits:
     memory_mb: 512
-  # 取槽位等待上限（秒）：并发额度被占满时最多等这么久，超出返回「繁忙」，
-  # 绝不无限阻塞（binding transform 是嵌套调用，无限阻塞会自我死锁）。
-  # 这是本段的缺省，各语言可用 pools.<lang>.acquire_timeout_sec 覆盖。
+  # Cap on waiting for a slot (seconds): how long to wait at most when the concurrency budget is exhausted; beyond it
+  # the request gets "busy", never an unbounded block (binding transforms are nested calls, and blocking forever would
+  # deadlock on itself).
+  # This is the section default; each language can override it with pools.<lang>.acquire_timeout_sec.
   #
-  # 为什么是 15 而不是更小：python / js 的并发额度只有 16 / 8，单次脚本本身就可能
-  # 跑几十秒（长任务），突发时排在后面的请求等 5s 就被拒 ——
-  # 而「繁忙」的代价是节点失败（没配 on_error.retry 时整个工作流挂掉）。
-  #   代价也要知道：这段等待**不占任何超时预算**（code_max_sec 与调用方下发的
-  #   code.<lang>.timeout 都从 ready 之后才计时），所以它是纯粹的额外尾延迟；
-  #   且客户端在等 ready 时没有自己的超时，取消也不会通知本服务
-  #   （见 handle_code.go 的 ctx），多等的部分会表现为「取消不够及时」。
-  # lua 是 µs 级高频调用、池 32 并发，真到需要排队时等 5s 与等 15s 都等不到，
-  # 若察觉争抢可单独配短：pools.lua.acquire_timeout_sec: 5。
+  # Why 15 rather than something smaller: python / js only have concurrency budgets of 16 / 8, a single script can
+  # itself run for tens of seconds (long tasks), and during a burst the requests queued behind get rejected after
+  # waiting 5s — while "busy" means a failed node (the whole workflow fails when on_error.retry is not configured).
+  #   The cost must be known too: this wait consumes **no timeout budget** (both code_max_sec and the caller-supplied
+  #   code.<lang>.timeout start counting after ready), so it is pure extra tail latency;
+  #   and a client waiting for ready has no timeout of its own and its cancellation is not signalled to this service
+  #   (see ctx in handle_code.go), so the extra wait shows up as "cancellation is not timely".
+  # lua is a microsecond-level high-frequency call with a pool of 32; when real queueing happens, waiting 5s or 15s
+  # makes no difference, so it can be configured shorter if contention is observed:
+  #   pools.lua.acquire_timeout_sec: 5.
   acquire_timeout_sec: 15
   pools:
     lua:
-      # 循环条件 / 分支条件 / binding transform 都是高频调用，
-      # 固定开销（建连 + 进程启动）会盖过 lua 本身的执行时间，因此默认开池。
+      # Loop conditions / branch conditions / binding transforms are all high-frequency calls, and the fixed overhead
+      # (connection setup + process start) would dwarf lua's own execution time, so the pool is on by default.
       idle:
         initial: 2
         max: 16
-      # 必须 >= 2：binding transform 是嵌套调用，会同时占用两个会话
+      # Must be >= 2: binding transforms are nested calls and occupy two sessions at once
       max_concurrent: 32
-      # 取槽等待上限（秒）：缺省取 code.acquire_timeout_sec（15）；lua 高频，需要时可配短。
+      # Cap on waiting for a slot (seconds): defaults to code.acquire_timeout_sec (15); lua is high frequency, so it can
+      # be shortened when needed.
       # acquire_timeout_sec: 5
 
     python:
@@ -427,8 +459,9 @@ code:
     #     max: 4
     #   max_concurrent: 8
 
-    # 关掉一个语言的写法：**整条**注释掉（连 idle 一起）。
-    # 只注释 idle 会退化成「语言照跑但每次现场冷启动」的静默性能悬崖，所以没有那一档。
+    # How to turn a language off: comment out the **whole** entry (idle included).
+    # Commenting out only idle would degrade to the silent performance cliff of "the language still runs but every call
+    # cold-starts", which is why that tier does not exist.
     #   ruby:
     #     idle:
     #       initial: 1

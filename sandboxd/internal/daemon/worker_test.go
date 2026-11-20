@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// TestResolveCodehostBinary 钉住 codehost 二进制路径的归一化契约。
-// 核心是「容器内绝对路径必须原样透传」：filepath.Abs 是平台相关的，在 Windows 上
-// 会把 /usr/local/bin/codehost 转成 d:\usr\...，导致 docker/nsjail exec 失败。
+// TestResolveCodehostBinary pins down the normalisation contract for the codehost binary path.
+// The core point is "an in-container absolute path must be passed through verbatim": filepath.Abs is platform
+// dependent and on Windows would turn /usr/local/bin/codehost into d:\usr\..., making docker / nsjail exec fail.
 func TestResolveCodehostBinary(t *testing.T) {
 	t.Run("container absolute path passthrough", func(t *testing.T) {
 		got, err := resolveCodehostBinary("/usr/local/bin/codehost")

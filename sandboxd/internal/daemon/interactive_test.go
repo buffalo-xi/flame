@@ -13,12 +13,13 @@ import (
 	"flame/tools/sandbox"
 )
 
-// 这些测试只针对长交互注册表（interactiveRegistry）本身，不碰真实隔离实现：
-// fakeExec / fakeProc 提供可控的进程，验证「懒建/复用 / 自退重建 / 移除 / 空闲回收 /
-// 单元生命周期 / 关闭销毁」这几条语义。stdout 广播与 Wait 收尸两个常驻 goroutine
-// 在 spawn 里，这里通过 fakeProc 的 echo 与 exit 直接驱动它们。
+// These tests target the long-lived interactive registry (interactiveRegistry) itself and never touch a real
+// isolation implementation: fakeExec / fakeProc provide controllable processes and verify the semantics of "lazy
+// creation / reuse / recreation after a self-exit / removal / idle reclamation / unit lifecycle / destroy on close".
+// The two resident goroutines — stdout broadcast and the Wait reaper — live in spawn, and the fakeProc echo and exit
+// drive them directly here.
 
-// fakeExec 记录 Start 次数，返回可控的 fakeProc（stdin→stdout 直通）。
+// fakeExec counts Start calls and returns a controllable fakeProc (stdin passthrough to stdout).
 type fakeExec struct {
 	mu       sync.Mutex
 	started  int
@@ -52,7 +53,7 @@ func (f *fakeExec) proc(i int) *fakeProc {
 	return f.procs[i]
 }
 
-// fakeProc 可控假进程：stdin → stdout 直通（echo），Wait 阻塞到 exit/Kill。
+// fakeProc is a controllable fake process: stdin passthrough to stdout (echo), Wait blocks until exit/Kill.
 type fakeProc struct {
 	stdinW   *io.PipeWriter
 	stdoutR  *io.PipeReader
@@ -89,7 +90,8 @@ func (p *fakeProc) Kill() error {
 	return nil
 }
 
-// exit 模拟进程自己退出（不标 killed，走「自退 → 收尸移除」路径）。
+// exit simulates the process exiting on its own (killed is not set, so the "self-exit → reaper removes it" path is
+// taken).
 func (p *fakeProc) exit() {
 	p.exitOnce.Do(func() {
 		close(p.exited)
@@ -97,7 +99,8 @@ func (p *fakeProc) exit() {
 	})
 }
 
-// fakeReusable 同时满足 Sandbox 与 Reusable，模拟 docker：Acquire 建单元、Exec 起进程。
+// fakeReusable satisfies Sandbox and Reusable at once, simulating docker: Acquire creates the unit, Exec starts
+// processes.
 type fakeReusable struct {
 	mu       sync.Mutex
 	acquired int
@@ -107,7 +110,7 @@ type fakeReusable struct {
 func (f *fakeReusable) Name() string { return "fake-reusable" }
 
 func (f *fakeReusable) Start(ctx context.Context, spec *sandbox.Spec) (sandbox.Process, error) {
-	return nil, errors.New("fake-reusable: Start must not be called (reusable 走 unit.Exec)")
+	return nil, errors.New("fake-reusable: Start must not be called (a reusable sandbox goes through unit.Exec)")
 }
 
 func (f *fakeReusable) Acquire(ctx context.Context, spec *sandbox.Spec) (sandbox.Unit, error) {
@@ -153,7 +156,8 @@ func (u *fakeUnit) count() int {
 	return u.execCount
 }
 
-// testToolCount 加锁读某个 session 的 tool 数（避免与 spawn/removeTool 并发访问 map 竞态）。
+// testToolCount reads a session's tool count under the lock (avoiding a data race on the map with
+// spawn/removeTool).
 func testToolCount(r *interactiveRegistry, sid string) int {
 	r.mu.Lock()
 	sb := r.sessions[sid]
@@ -166,7 +170,7 @@ func testToolCount(r *interactiveRegistry, sid string) int {
 	return len(sb.tools)
 }
 
-// waitFor 轮询直到条件成立（收尸 / 空闲回收是异步的）。
+// waitFor polls until the condition holds (reaping / idle reclamation are asynchronous).
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -179,7 +183,8 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// 首次 acquire 懒建；同一 session+tool 再次 acquire 复用同一进程、不再 Start。
+// The first acquire creates lazily; acquiring the same session+tool again reuses the same process and does not Start
+// again.
 func TestInteractiveAcquireReusesProcess(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistry(ex, time.Hour)
@@ -198,14 +203,14 @@ func TestInteractiveAcquireReusesProcess(t *testing.T) {
 	tp2.unlock()
 
 	if tp1 != tp2 {
-		t.Errorf("复用会话应返回同一进程句柄")
+		t.Errorf("reusing a session should return the same process handle")
 	}
 	if got := ex.startCount(); got != 1 {
-		t.Errorf("两次 acquire 只该 Start 一次，got %d", got)
+		t.Errorf("two acquires should Start only once, got %d", got)
 	}
 }
 
-// 首次创建缺 argv 必须报错，且不产生任何进程。
+// Creating without argv must report an error and produce no process at all.
 func TestInteractiveAcquireEmptyArgv(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistry(ex, time.Hour)
@@ -215,11 +220,12 @@ func TestInteractiveAcquireEmptyArgv(t *testing.T) {
 		t.Errorf("want errInteractiveEmptyArgv, got %v", err)
 	}
 	if got := ex.startCount(); got != 0 {
-		t.Errorf("空 argv 不该 Start，got %d", got)
+		t.Errorf("an empty argv must not Start, got %d", got)
 	}
 }
 
-// 进程自退后，收尸 goroutine 把它移除，下次 acquire 重建（Start 第二次）。
+// After the process exits on its own, the reaper goroutine removes it and the next acquire recreates it (a second
+// Start).
 func TestInteractiveRecreatesAfterExit(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistry(ex, time.Hour)
@@ -232,7 +238,7 @@ func TestInteractiveRecreatesAfterExit(t *testing.T) {
 	tp1.unlock()
 
 	ex.proc(0).exit()
-	waitFor(t, "收尸移除 tool", func() bool { return testToolCount(r, "s1") == 0 })
+	waitFor(t, "the reaper to remove the tool", func() bool { return testToolCount(r, "s1") == 0 })
 
 	tp2, err := r.acquire("s1", nil, "shell", []string{"sh"}, sandbox.Limits{})
 	if err != nil {
@@ -241,14 +247,14 @@ func TestInteractiveRecreatesAfterExit(t *testing.T) {
 	tp2.unlock()
 
 	if tp1 == tp2 {
-		t.Errorf("进程自退后应重建，而不是复用旧句柄")
+		t.Errorf("after a self-exit the process should be recreated, not the old handle reused")
 	}
 	if got := ex.startCount(); got != 2 {
-		t.Errorf("自退后重建应 Start 第二次，got %d", got)
+		t.Errorf("recreating after a self-exit should Start a second time, got %d", got)
 	}
 }
 
-// removeTool（FrameKill 语义）：kill 进程，session 变空则一并释放。
+// removeTool (FrameKill semantics): kill the process, and release the session when it becomes empty.
 func TestInteractiveRemoveToolKills(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistry(ex, time.Hour)
@@ -263,14 +269,14 @@ func TestInteractiveRemoveToolKills(t *testing.T) {
 	r.removeTool("s1", "shell")
 
 	if !ex.proc(0).killed.Load() {
-		t.Errorf("removeTool 应 kill 进程")
+		t.Errorf("removeTool should kill the process")
 	}
 	if r.sessions["s1"] != nil {
-		t.Errorf("变空的 session 应被释放")
+		t.Errorf("a session that became empty should be released")
 	}
 }
 
-// 空闲超时的进程被回收，session 随之释放。
+// A process past its idle timeout is reclaimed, and the session is released with it.
 func TestInteractiveReapIdle(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistry(ex, 20*time.Millisecond)
@@ -286,14 +292,14 @@ func TestInteractiveReapIdle(t *testing.T) {
 	r.reapIdle()
 
 	if !ex.proc(0).killed.Load() {
-		t.Errorf("空闲超时应 kill 进程")
+		t.Errorf("an idle timeout should kill the process")
 	}
 	if r.sessions["s1"] != nil {
-		t.Errorf("空闲回收后 session 应被释放")
+		t.Errorf("the session should be released after idle reclamation")
 	}
 }
 
-// 正在服务调用的进程（tp.mu 被持有）不被空闲回收 —— TryLock 失败即跳过。
+// A process currently serving a call (tp.mu held) is not reclaimed — a failing TryLock means skip.
 func TestInteractiveReapSkipsActive(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistry(ex, time.Millisecond)
@@ -303,17 +309,17 @@ func TestInteractiveReapSkipsActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
-	// 故意不 unlock：模拟进程正被一次调用独占
+	// Deliberately not unlocking: simulating a process exclusively held by one call
 	time.Sleep(20 * time.Millisecond)
 	r.reapIdle()
 
 	if ex.proc(0).killed.Load() {
-		t.Errorf("正在服务的进程不该被空闲回收")
+		t.Errorf("a process currently serving a call must not be reclaimed")
 	}
 	tp.unlock()
 }
 
-// Close 销毁全部 session 并 kill 所有进程。
+// Close destroys every session and kills all processes.
 func TestInteractiveCloseDestroys(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistry(ex, time.Hour)
@@ -327,14 +333,15 @@ func TestInteractiveCloseDestroys(t *testing.T) {
 	r.Close()
 
 	if !ex.proc(0).killed.Load() {
-		t.Errorf("Close 应 kill 进程")
+		t.Errorf("Close should kill the process")
 	}
 	if len(r.sessions) != 0 {
-		t.Errorf("Close 后 sessions 应为空")
+		t.Errorf("sessions should be empty after Close")
 	}
 }
 
-// docker（Reusable）：建第一个进程时 Acquire 容器、删最后一个时 Close；中间多工具共享容器。
+// docker (Reusable): Acquire the container when the first process is created, Close it when the last is removed;
+// several tools in between share the container.
 func TestInteractiveDockerUnitLifecycle(t *testing.T) {
 	fr := &fakeReusable{}
 	r := newInteractiveRegistry(fr, time.Hour)
@@ -353,33 +360,33 @@ func TestInteractiveDockerUnitLifecycle(t *testing.T) {
 	t2.unlock()
 
 	if got := fr.acquireCount(); got != 1 {
-		t.Errorf("两个工具应共用一个容器，Acquire %d 次，want 1", got)
+		t.Errorf("two tools should share one container, Acquire called %d times, want 1", got)
 	}
 	if got := fr.unit(0).count(); got != 2 {
-		t.Errorf("两个工具应各 Exec 一次，Exec %d 次，want 2", got)
+		t.Errorf("two tools should each Exec once, Exec called %d times, want 2", got)
 	}
 
 	r.removeTool("s1", "a")
 	if fr.unit(0).closed.Load() {
-		t.Errorf("还剩工具 b，容器不该被 Close")
+		t.Errorf("tool b is still there, the container must not be Closed")
 	}
 	r.removeTool("s1", "b")
 	if !fr.unit(0).closed.Load() {
-		t.Errorf("最后一个工具移除后应 Close 容器")
+		t.Errorf("removing the last tool should Close the container")
 	}
 }
 
-// stats：session 数 / tool 进程数计数正确（/metrics 负载快照的 interactive 部分）。
+// stats: the session count / tool process count are correct (the interactive part of the /metrics load snapshot).
 func TestInteractiveStats(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistry(ex, time.Hour)
 	defer r.Close()
 
 	if s, p, a := r.stats(); s != 0 || p != 0 || a != 0 {
-		t.Fatalf("初始 stats = %d/%d/%d，want 0/0/0", s, p, a)
+		t.Fatalf("initial stats = %d/%d/%d, want 0/0/0", s, p, a)
 	}
 
-	// s1 两个 tool、s2 一个 tool
+	// s1 has two tools, s2 has one
 	for _, tc := range []struct{ sid, tool string }{
 		{"s1", "a"}, {"s1", "b"}, {"s2", "c"},
 	} {
@@ -391,19 +398,19 @@ func TestInteractiveStats(t *testing.T) {
 	}
 
 	if s, p, a := r.stats(); s != 2 || p != 3 || a != 0 {
-		t.Fatalf("stats = %d sessions / %d processes / %d active，want 2/3/0", s, p, a)
+		t.Fatalf("stats = %d sessions / %d processes / %d active, want 2/3/0", s, p, a)
 	}
 }
 
-// stats 的 active 口径：tp.mu 被持有（正服务一次调用）计活跃，空闲不计。
-// 与 reapIdle 的 TryLock 探针同源 —— 释放锁后活跃数归零，保证 /metrics 的
-// interactive_active 只反映「真正在烧 CPU 的调用」。
+// The active criterion of stats: tp.mu being held (currently serving one call) counts as active, idle does not. It
+// comes from the same TryLock probe as reapIdle — the active count returns to zero once the lock is released,
+// guaranteeing that /metrics' interactive_active only reflects "calls that are really burning CPU".
 func TestInteractiveStatsCountsActive(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistry(ex, time.Hour)
 	defer r.Close()
 
-	// s1: a 活跃（故意不 unlock，模拟正服务调用）、b 空闲；s2: c 空闲。
+	// s1: a is active (deliberately not unlocked, simulating a call in flight), b is idle; s2: c is idle.
 	tpA, err := r.acquire("s1", nil, "a", []string{"sh"}, sandbox.Limits{})
 	if err != nil {
 		t.Fatalf("acquire a: %v", err)
@@ -422,27 +429,28 @@ func TestInteractiveStatsCountsActive(t *testing.T) {
 	tpC.unlock()
 
 	if s, p, a := r.stats(); s != 2 || p != 3 || a != 1 {
-		t.Fatalf("stats = %d sessions / %d processes / %d active，want 2/3/1", s, p, a)
+		t.Fatalf("stats = %d sessions / %d processes / %d active, want 2/3/1", s, p, a)
 	}
 
-	// 释放 a 的锁（本次调用结束）后，活跃数归零。
+	// Once a's lock is released (the call is over), the active count drops to zero.
 	tpA.unlock()
 	if s, p, a := r.stats(); s != 2 || p != 3 || a != 0 {
-		t.Fatalf("a 释放后 stats = %d sessions / %d processes / %d active，want 2/3/0", s, p, a)
+		t.Fatalf("stats after a released = %d sessions / %d processes / %d active, want 2/3/0", s, p, a)
 	}
 }
 
-// writerSwitch：nil 目标丢弃、目标写失败吞错（不能拆掉持久输出路径）、正常目标透传。
+// writerSwitch: a nil target drops the data, a failing target swallows the error (the persistent output path must not
+// be torn down), a normal target passes through.
 func TestWriterSwitch(t *testing.T) {
 	var sw writerSwitch
 
 	if n, err := sw.Write([]byte("x")); n != 1 || err != nil {
-		t.Errorf("nil 目标应丢弃并返回成功：n=%d err=%v", n, err)
+		t.Errorf("a nil target should drop and report success: n=%d err=%v", n, err)
 	}
 
 	sw.set(errWriter{})
 	if n, err := sw.Write([]byte("x")); n != 1 || err != nil {
-		t.Errorf("目标写失败应吞错：n=%d err=%v", n, err)
+		t.Errorf("a failing target should swallow the error: n=%d err=%v", n, err)
 	}
 
 	var buf bytes.Buffer
@@ -459,8 +467,8 @@ type errWriter struct{}
 
 func (errWriter) Write(p []byte) (int, error) { return 0, errors.New("boom") }
 
-// 巡检间隔可配且真的生效：空闲回收的真实时刻落在 (idle, idle+janitor]，
-// 这个上界正是 gateway 粘性 TTL 要覆盖的东西，所以它不能是硬编码的常数。
+// The sweep interval is configurable and really takes effect: the real reclaim time falls in (idle, idle+janitor],
+// and that upper bound is exactly what the gateway's sticky TTL must cover, so it cannot be a hardcoded constant.
 func TestInteractiveJanitorIntervalHonored(t *testing.T) {
 	ex := &fakeExec{}
 	r := newInteractiveRegistryWithJanitor(ex, 20*time.Millisecond, 0, 10*time.Millisecond)
@@ -469,16 +477,16 @@ func TestInteractiveJanitorIntervalHonored(t *testing.T) {
 	if r.janitorInterval != 10*time.Millisecond {
 		t.Fatalf("janitorInterval = %v, want 10ms", r.janitorInterval)
 	}
-	// ephemeral 未指定时回落到 idle（保持旧语义）
+	// When ephemeral is not given it falls back to idle (keeping the old semantics)
 	if r.ephemeralIdleTimeout != 20*time.Millisecond {
-		t.Fatalf("ephemeralIdleTimeout = %v, want 回落 20ms", r.ephemeralIdleTimeout)
+		t.Fatalf("ephemeralIdleTimeout = %v, want the 20ms fallback", r.ephemeralIdleTimeout)
 	}
 
 	tp, err := r.acquire("s1", nil, "shell", []string{"sh"}, sandbox.Limits{})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
-	tp.unlock() // 本次调用结束，之后只靠 janitor 回收
+	tp.unlock() // the call is over; from here only the janitor reclaims it
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -487,10 +495,11 @@ func TestInteractiveJanitorIntervalHonored(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("10ms 巡检 + 20ms 空闲后 session 应被回收")
+	t.Fatalf("the session should be reclaimed after a 10ms sweep and 20ms idle")
 }
 
-// 巡检间隔缺省值：不传时用包内默认（1 分钟），别静默变成 0（ticker 会 panic）。
+// The sweep interval default: when not passed, the package default (1 minute) is used and it must not silently
+// become 0 (the ticker would panic).
 func TestInteractiveJanitorIntervalDefault(t *testing.T) {
 	r := newInteractiveRegistry(&fakeExec{}, time.Hour)
 	defer r.Close()

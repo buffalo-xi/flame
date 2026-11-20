@@ -9,17 +9,17 @@ import (
 	"syscall"
 )
 
-// setProcessGroup 让子进程自成一个进程组（pgid = pid）。
+// setProcessGroup puts the child process into its own process group (pgid = pid).
 //
-// 为什么必须：kill 只能杀一个 pid，而一次执行往往是一棵进程树
-// （shell → 命令行工具 → 它自己的子进程）。把子进程放进独立进程组之后，
-// 对该组发一次信号就能覆盖整棵树。
+// Why it is necessary: kill can only target a single pid, while one execution is usually a process tree
+// (shell → command-line tool → its own children). Once the child is in a separate process group, one signal to that
+// group covers the whole tree.
 //
-// 顺带的收益：子进程不再收到发给 sandboxd 的信号（Ctrl-C 不会穿透进沙箱）。
+// A side benefit: the child no longer receives signals sent to sandboxd (Ctrl-C does not reach into the sandbox).
 //
-// ⚠️ 上限：进程组是自愿加入、且可以主动 setsid 脱离的。脱离之后就杀不到了，
-// 而 none 模式没有 cgroup / namespace 兜底 —— 所以它的保证只是「组内干净」，
-// 不是「杀掉全部后代」。docker 模式的兜底才是不可逃逸的（见 docker.go）。
+// ⚠️ Limit: a process group is joined voluntarily and can be left with setsid. Once it has left it can no longer be
+// killed, and the none mode has no cgroup / namespace to fall back on — so its guarantee is only "clean inside the
+// group", not "every descendant killed". Only the docker mode's fallback is inescapable (see docker.go).
 func setProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -27,21 +27,21 @@ func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
-// killTree 杀掉子进程所在进程组的全部成员。
+// killTree kills every member of the child's process group.
 //
-// 用 SIGKILL 而不是先 TERM：调用方（客户端断开 / 超时 / 取消）要的是
-// 「立刻收干净」，没有留给优雅退出的窗口。
+// SIGKILL rather than TERM first: the caller (client disconnect / timeout / cancellation) wants "cleaned up right now",
+// with no window left for a graceful exit.
 //
-// 返回 os.ErrProcessDone 表示「这次执行已经结束」—— 这是 exec.Cmd.Cancel
-// 约定的语义（见 os/exec 的 watchCtx）：进程本来就没了时不该报错。
+// Returning os.ErrProcessDone means "this execution has already ended" — that is the semantics exec.Cmd.Cancel expects
+// (see watchCtx in os/exec): it should not report an error when the process was already gone.
 func killTree(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return os.ErrProcessDone
 	}
 	pid := cmd.Process.Pid
 
-	// 先对整组下手（覆盖后代的常规手段），再对 pid 补一次 ——
-	// 子进程可能还没来得及执行 setpgid（组还不存在），此时组杀会 ESRCH。
+	// Hit the whole group first (the normal way to cover descendants), then the pid once more — the child may not have
+	// run setpgid yet (the group does not exist), in which case the group kill returns ESRCH.
 	groupErr := syscall.Kill(-pid, syscall.SIGKILL)
 	selfErr := syscall.Kill(pid, syscall.SIGKILL)
 
@@ -51,7 +51,8 @@ func killTree(cmd *exec.Cmd) error {
 	case errors.Is(groupErr, syscall.ESRCH) && errors.Is(selfErr, syscall.ESRCH):
 		return os.ErrProcessDone
 	case errors.Is(selfErr, syscall.ESRCH):
-		// 自己没了但组杀失败：如实上报组杀的错误，不假装成功。
+		// The process itself is gone but the group kill failed: report the group kill's error honestly instead of
+		// pretending success.
 		return groupErr
 	default:
 		return selfErr

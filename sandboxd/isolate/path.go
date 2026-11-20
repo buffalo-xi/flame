@@ -8,18 +8,18 @@ import (
 	"flame/tools/sandbox"
 )
 
-// 路径约定：
+// Path conventions:
 //
-//	Spec.Argv / Spec.Dir 中出现的路径统一使用「沙箱内」语义（如 exec 约定的 /workspace、
-//	/agent，worker 执行器脚本的 /workers/default/worker.lua）。隔离实现（nsjail / docker）
-//	按 Mounts 做挂载后即可直接使用；none 实现不做隔离，因此需要按 Mounts 反向翻译回宿主
-//	路径再执行。
+//	Paths appearing in Spec.Argv / Spec.Dir uniformly use "in-sandbox" semantics (for example /workspace and /agent
+//	per the exec convention, and /workers/default/worker.lua for the former worker executor scripts). The isolation
+//	implementations (nsjail / docker) can use them directly once Mounts are mounted; the none implementation does no
+//	isolation, so it must translate them back into host paths according to Mounts before executing.
 //
-// 这样调用方无需区分实现，只写一套路径。
+// That way callers do not have to distinguish implementations and only write one set of paths.
 
-// TranslateToHost 把「沙箱内路径」按 mounts 反向翻译为宿主路径。
-// 若没有任何挂载点匹配（例如可执行文件名 "lua54"、或本身已是宿主路径），
-// 则原样返回。
+// TranslateToHost translates an "in-sandbox path" back into a host path according to mounts.
+// When no mount point matches (for example the executable name "lua54", or a path that is already a host path), it is
+// returned unchanged.
 func TranslateToHost(mounts []sandbox.Mount, guest string) string {
 	if guest == "" || len(mounts) == 0 {
 		return guest
@@ -51,10 +51,10 @@ func TranslateToHost(mounts []sandbox.Mount, guest string) string {
 	return filepath.Join(best.Host, filepath.FromSlash(rest))
 }
 
-// TranslateArgv 翻译 argv 中的沙箱内路径。
-// 只翻译「以 / 开头」的参数（沙箱内绝对路径）；命令行字符串、开关
-// （如 -c、echo hello）等一律跳过，避免误伤。第一个元素（可执行文件）
-// 同样按此规则处理：像 "/usr/bin/lua5.4" 会被翻译，而 "lua5.4" 保持原样。
+// TranslateArgv translates the in-sandbox paths in argv.
+// Only arguments "starting with /" (in-sandbox absolute paths) are translated; command-line strings and switches (such
+// as -c, "echo hello") are all skipped so nothing is hit by accident. The first element (the executable) follows the
+// same rule: "/usr/bin/lua5.4" is translated while "lua5.4" is left alone.
 func TranslateArgv(mounts []sandbox.Mount, argv []string) []string {
 	if len(argv) == 0 {
 		return argv
@@ -69,7 +69,7 @@ func TranslateArgv(mounts []sandbox.Mount, argv []string) []string {
 	return out
 }
 
-// hasPathPrefix 判断 p 是否位于 prefix 之下（按路径分段比较，避免 /work 匹配到 /workshop）。
+// hasPathPrefix reports whether p is under prefix (compared per path segment, so /work does not match /workshop).
 func hasPathPrefix(p, prefix string) bool {
 	pp := path.Clean(filepath.ToSlash(p))
 	pre := path.Clean(filepath.ToSlash(prefix))

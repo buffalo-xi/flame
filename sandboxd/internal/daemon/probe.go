@@ -14,106 +14,117 @@ import (
 	"flame/tools/sandbox"
 )
 
-// Environment 一次能力探测的结果（经 /v1/capabilities 原样交给 nexus）。
+// Environment is the result of one capability probe (handed to nexus verbatim through /v1/capabilities).
 //
-// Text 是若干行文本（各探针自己的输出）：**刻意不解析成结构** ——「沙箱里有什么」
-// 这份认知只该由沙箱自己持有（与「解释器入口名只该由 sandboxd 知道」同源），
-// 而读它的本来就是 LLM。
+// Text is a few lines of text (each probe's own output): it is **deliberately not parsed into a structure** —
+// the knowledge of "what is inside the sandbox" should only be held by the sandbox itself (the same principle
+// as "the interpreter entry name should only be known by sandboxd"), and whoever reads it is an LLM anyway.
 type Environment struct {
 	Text     string    `json:"text"`
 	ProbedAt time.Time `json:"probed_at"`
-	// Error 非空表示探测整体失败，Text 不可信。nexus 侧应当据此把能力报成
-	// 「未知」，而不是默认成「没有」—— 猜错比说不知道更糟。
+	// A non-empty Error means the whole probe failed and Text must not be trusted. nexus should report the
+	// capabilities as "unknown" because of it, not default to "none" — guessing wrong is worse than saying
+	// "I do not know".
 	Error string `json:"error,omitempty"`
 }
 
-// probe 一条探针：在沙箱内跑一个命令，收它的 stdout。
+// probe is one probe: run a command inside the sandbox and collect its stdout.
 type probe struct {
-	label string   // 输出前缀（仅失败提示用；成功的行由命令自己带前缀）
-	argv  []string // 沙箱内的命令 + 参数
-	// post 可选的「行级整理」：只做排版（丢噪声行、去重、补统一前缀），
-	// 不解析成结构、不推断结论 —— 谁产生这份事实，谁负责把它讲清楚。
+	label string   // output prefix (only for failure notices; successful lines carry their own prefix)
+	argv  []string // the command and arguments inside the sandbox
+	// post is an optional line-level tidy-up: layout only (drop noise lines, de-duplicate, add a uniform
+	// prefix) — no parsing into structures and no inferred conclusions: whoever produces the fact is
+	// responsible for stating it clearly.
 	post func(string) string
 }
 
-// probeLangOrder 探针的语言顺序。
+// probeLangOrder is the language order of the probes.
 //
-// 固定顺序而非遍历 map：探针是并发跑的，汇总时必须按稳定顺序拼接，
-// 否则每次启动给 agent 的文本都不一样（无谓的噪声）。
+// A fixed order rather than iterating a map: the probes run concurrently, so the summary must be assembled in
+// a stable order — otherwise every startup hands the agent different text (pointless noise).
 var probeLangOrder = []string{"python", "js", "lua"}
 
-// langSelfReport 语言名 → 「怎么问它自己」（参数，**不含命令名**）。
+// langSelfReport maps a language name to "how to ask it about itself" (the arguments, **excluding the command
+// name**).
 //
-// ⚠️ 命令名刻意不在这里：同一个名字在三种 mode 下未必都存在（镜像里是 Dockerfile
-// `ln` 出来的 lua，rootfs 里可能只有 lua5.4，Windows 宿主上是带版本号的文件名），
-// 那份认知的真源是 langs.<lang>.commands（见 config.go 的 CommandByMode），
-// 取当前 mode 的解析结果即可 —— 在这里再写一遍就是第二份认知。
+// ⚠️ The command name is deliberately absent: the same name does not necessarily exist under all three modes
+// (in an image lua is a Dockerfile `ln` target, a rootfs may only have lua5.4, and a Windows host has a
+// version-suffixed filename). The source of truth for that knowledge is langs.<lang>.commands (see
+// CommandByMode in config.go); just use the resolution for the current mode — writing it again here would be a
+// second copy of the same knowledge.
 //
-// 每种语言只用它的原生 API，不借 shell：探针在解释器里跑，不经过 sh，
-// 于是「沙箱里有没有 sh / 参数怎么转义」都不成为问题（这正是逐条 argv 的形态
-// 相对「一份 sh 脚本」的收益）。
+// Each language only uses its native API and never borrows a shell: the probe runs inside the interpreter, not
+// through sh, so "is there an sh in the sandbox / how are arguments escaped" never becomes a problem (exactly
+// the gain of argv lists over "a single sh script").
 var langSelfReport = map[string][]string{
 	"python": {"-c", pySelfReport},
 	"js":     {"-e", jsSelfReport},
 	"lua":    {"-e", luaSelfReport},
 }
 
-// pySelfReport 自报解释器版本与全部已装包。
+// pySelfReport reports the interpreter version and every installed package by itself.
 //
-// importlib.metadata 是 Python 3.8+；老版本落到 except 里报 unavailable，
-// 而不是让整条探测失败（能力缺失要如实说，但不能连带其它行一起崩）。
+// importlib.metadata is Python 3.8+; older versions fall into the except branch and report unavailable instead
+// of failing the whole probe (a missing capability must be stated honestly, but must not take the other lines
+// down with it).
+//
+// The output line prefixes are English on purpose: these lines are pasted into the agent's context verbatim (see
+// Environment.Text) and are model-facing copy only — a human reads them through the model, never in a UI.
 const pySelfReport = `import sys, importlib.metadata as m
-print("Python 版本:", sys.version.split()[0])
+print("Python version:", sys.version.split()[0])
 try:
     names = []
     for d in m.distributions():
         n = d.metadata["Name"]
         if n:
             names.append(str(n) + "==" + str(d.version))
-    print("已装 Python 包:", " ".join(sorted(names)) or "(none)")
+    print("Installed Python packages:", " ".join(sorted(names)) or "(none)")
 except Exception as e:
-    print("已装 Python 包: (unavailable:", e, ")")
+    print("Installed Python packages: (unavailable:", e, ")")
 `
 
-// jsSelfReport 自报 node 版本与全局模块。
+// jsSelfReport reports the node version and global modules by itself.
 //
-// 用 fs.readdirSync 读全局 node_modules，**不用 execSync("npm ls -g")**：
-// 后者会把 shell 依赖重新引回来（正是逐条 argv 要消掉的东西），而沙箱里
-// npm 全局包本来就是空目录（加包只能改 Dockerfile 重建镜像）。
+// It reads the global node_modules with fs.readdirSync and **does not use execSync("npm ls -g")**: the latter
+// brings the shell dependency back (exactly what argv lists are meant to remove), and global npm packages
+// inside the sandbox are an empty directory anyway (adding packages means rebuilding the image).
 const jsSelfReport = `const fs = require("fs");
-console.log("Node 版本:", process.version);
+console.log("Node version:", process.version);
 const dirs = ["/usr/local/lib/node_modules", "/usr/lib/node_modules"].concat(
   (process.env.NODE_PATH || "").split(":").filter(Boolean));
 const pkgs = new Set();
 for (const d of dirs) {
   try { fs.readdirSync(d).forEach(n => { if (!n.startsWith(".")) pkgs.add(n); }); } catch (e) {}
 }
-console.log("全局 Node 包:", [...pkgs].sort().join(" ") || "(none)");
+console.log("Global Node packages:", [...pkgs].sort().join(" ") || "(none)");
 `
 
-// luaSelfReport 自报 Lua 版本。
+// luaSelfReport reports the Lua version by itself.
 //
-// 原本还报 package.path（模块搜索路径），去掉了：那是一串 `/usr/local/share/lua/5.4/?.lua`
-// 模板路径（去重后仍占几百字符），对模型的决策没有用处 —— 它既不会去设 LUA_PATH，
-// 也无法据此判断某个库能不能 require（那只能看沙箱里装没装）。而每次 agent 运行都会把
-// 这段塞进上下文，换来的只是噪声。
+// It used to report package.path (the module search path) too; that was removed: it is a list of
+// `/usr/local/share/lua/5.4/?.lua` templates (hundreds of characters even after de-duplication) and useless for
+// the model's decisions — it will not set LUA_PATH, and it cannot tell from those paths whether a library can
+// be required (only whether it is installed in the sandbox can). And every agent run would paste that into the
+// context, buying nothing but noise.
 //
-// 注意与 js 那条的区别：js 报的是**读出来的模块名**，镜像里加了全局包就会体现出来；
-// 这里报的是路径模板，就算往那些目录里塞了模块也看不出来 —— 所以它筛不出信息。
+// Note the difference from the js probe: js reports **the module names it read**, so a global package added to
+// the image shows up; this one reports path templates, where a module copied into those directories would stay
+// invisible — which is why it filters nothing useful out.
 //
-// 版本行留着：5.1 / 5.4 的语义差别很大（goto、整除、table.unpack、require 查找行为），
-// 它直接影响脚本该怎么写。
+// The version line stays: 5.1 and 5.4 differ substantially (goto, integer division, table.unpack, require
+// lookup), which directly shapes how a script must be written.
 const luaSelfReport = `local ver = _VERSION:gsub("^Lua ", "")
-print("Lua 版本: " .. ver)
+print("Lua version: " .. ver)
 `
 
-// probeEnvironment 探测「沙箱里有什么」。
+// probeEnvironment probes "what is inside the sandbox".
 //
-//	mode=none       沙箱即宿主：走 Go 原生（GOOS/GOARCH + LookPath），不起任何子进程；
-//	docker / nsjail 事实只有镜像 / rootfs 自己知道：在沙箱内逐条跑探针。
+//	mode=none       the sandbox is the host: use native Go (GOOS/GOARCH + LookPath), spawn no child process;
+//	docker / nsjail only the image / rootfs knows the facts: run the probes one by one inside the sandbox.
 //
-// 每条探针独立执行、独立失败：某条失败只让那一行标 (unavailable)，不影响其它行；
-// 只有**全部都失败**才算整体失败（那说明沙箱根本起不来，而不是某个能力缺失）。
+// Each probe runs and fails independently: a failure only marks that line (unavailable) and leaves the other
+// lines alone; only **every probe failing** counts as a total failure (that means the sandbox cannot start at
+// all, not that some capability is missing).
 func (s *Server) probeEnvironment(ctx context.Context) Environment {
 	env := Environment{ProbedAt: time.Now()}
 
@@ -130,7 +141,8 @@ func (s *Server) probeEnvironment(ctx context.Context) Environment {
 	var wg sync.WaitGroup
 	for i, p := range probes {
 		wg.Add(1)
-		// 并发跑：docker 下每条都是一次容器冷启动（300ms~1s），串行会把启动拖成好几秒
+		// Concurrent: under docker each one is a cold container start (300ms~1s), and serially that would drag
+		// startup out to several seconds
 		go func(i int, p probe) {
 			defer wg.Done()
 			text, err := s.runProbe(ctx, p)
@@ -155,35 +167,35 @@ func (s *Server) probeEnvironment(ctx context.Context) Environment {
 	}
 
 	if failed > 0 && failed == len(outcomes) {
-		// 全灭：沙箱不可用。此时任何输出都不可信，宁可不给。
+		// Total failure: the sandbox is unusable. No output can be trusted then, so better to give none.
 		env.Error = fmt.Sprintf("all %d probes failed: %v", len(outcomes), outcomes[0].err)
 		return env
 	}
-	// 末尾不留换行：这段 Text 会被 nexus 原样拼进 system prompt 的一个条目里，
-	// 多一个 \n 就会在它与下一条说明之间顶出一个空行（纯噪声）。
+	// No trailing newline: this Text is pasted verbatim by nexus as one item of the system prompt, and an extra
+	// \n would open a blank line between it and the next explanation (pure noise).
 	env.Text = strings.TrimRight(b.String(), "\n")
 	return env
 }
 
-// probeOutcome 一条探针的结果（汇总时按序取用）。
+// probeOutcome is the result of one probe (consumed in order by the summary).
 type probeOutcome struct {
 	label string
 	text  string
 	err   error
 }
 
-// sandboxProbes 组装本次要跑的探针：系统信息 + 各语言自报。
+// sandboxProbes assembles the probes for this run: system information plus each language's self-report.
 //
-// 每条探针的输出都会原样进 agent 的上下文，所以行前缀一律写成「读者看得懂的话」
-// （Python 版本 / 已装 Python 包 / …），而不是内部缩写：翻译放在产生方，
-// nexus 侧继续零解析地透传（见 Environment.Text）。
+// Every probe's output goes into the agent's context verbatim, so line prefixes are written as plain English words
+// (Python version / Installed Python packages / ...) rather than internal abbreviations: this text is model-facing
+// only, and nexus keeps passing it through with zero parsing (see Environment.Text).
 func (s *Server) sandboxProbes() []probe {
-	// os：os-release 是事实标准（base 镜像为 Debian，必然有）；万一没有，
-	// 由 runProbe 报 unavailable —— 回退到 uname 交给 nexus 侧文案说明即可，
-	// 不值得为极端环境再加一条探针（异常本身也是信息）。
+	// os: os-release is the de-facto standard (the base image is Debian, so it is always there); if it is
+	// missing, runProbe reports unavailable — falling back to uname is left to a copy note on the nexus side,
+	// and one more probe for an extreme environment is not worth it (the anomaly is information too).
 	//
-	// post 只做排版：整份 os-release 有十来行，其中 HOME_URL / SUPPORT_URL 之类
-	// 对 agent 毫无信息量，却会随每一次 agent 运行进 LLM 上下文。
+	// post only does layout: the whole os-release is a dozen lines, of which HOME_URL / SUPPORT_URL and the
+	// like carry no information for the agent yet would ride along into the LLM context on every agent run.
 	probes := []probe{{
 		label: "os",
 		argv:  []string{"cat", "/etc/os-release"},
@@ -195,8 +207,9 @@ func (s *Server) sandboxProbes() []probe {
 		if !ok {
 			continue
 		}
-		// 语言入口名按当前 mode 解析：顶层 langs 里没定义就跳过（那是「没配」，
-		// 与「配了但沙箱里跑不起来」是两回事，不该报成 unavailable）。
+		// The language entry name is resolved for the current mode: not defined in the top-level langs means
+		// skip (that is "not configured", which is different from "configured but cannot run inside the
+		// sandbox" and must not be reported as unavailable).
 		cmd, err := s.cfg.ResolveLangCommand(lang)
 		if err != nil {
 			continue
@@ -204,21 +217,24 @@ func (s *Server) sandboxProbes() []probe {
 		probes = append(probes, probe{label: lang, argv: append([]string{cmd}, args...)})
 	}
 
-	// 这里原本还有一条 luarocks 探针，删掉了：
-	//   - 它在 read-only rootfs 下**必然**失败（luarocks 起手就要写临时文件，
-	//     报 "unable to generate a unique filename"），所以永远只是一行 unavailable；
-	//   - 失败原因是 500 字节的 Lua 栈回溯，对这行的可用性没有任何补充信息，
-	//     白白占掉 LLM 上下文；
-	//   - 镜像里本来就没装任何 rock，「Lua 有哪些第三方模块」的答案是「没有」，
-	//     不值得为确认它再起一条探针（lua 那条也不报搜索路径了，见 luaSelfReport）。
+	// There used to be a luarocks probe here; it was removed:
+	//   - it **always** fails on a read-only rootfs (luarocks writes a temp file first and reports
+	//     "unable to generate a unique filename"), so it was forever a single unavailable line;
+	//   - the failure reason is a 500-byte Lua stack trace that adds nothing about this line's usability and
+	//     just eats LLM context;
+	//   - the image ships no rocks at all, so the answer to "which third-party modules does Lua have" is
+	//     "none", and one more probe to confirm it is not worth it (the lua probe no longer reports the search
+	//     path either, see luaSelfReport).
 	return probes
 }
 
-// runProbe 跑一条探针。
+// runProbe runs one probe.
 //
-// 不挂载任何目录：探针只读系统信息，不需要工作区，也就不必碰 allowed_mount_roots。
-// 走 s.exec（隔离实现）而不是宿主直跑 —— 探到的环境才是 agent 实际会得到的那个
-// （只读 rootfs / 断网 / --user 都生效），否则就是另一个环境。
+// It mounts nothing: a probe only reads system information, needs no workspace, and therefore never touches
+// allowed_mount_roots.
+// It goes through s.exec (the isolation implementation) rather than running on the host — the environment it
+// probes is the one the agent actually gets (read-only rootfs / no network / --user all apply), otherwise it
+// would be a different environment.
 func (s *Server) runProbe(ctx context.Context, p probe) (string, error) {
 	res, err := sandbox.Run(ctx, s.exec, &sandbox.Spec{
 		Argv:   p.argv,
@@ -227,51 +243,57 @@ func (s *Server) runProbe(ctx context.Context, p probe) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// 非零退出码不是 error（见 sandbox.Run 的约定），要自己判：
-	// 命令不存在（127）、没有该文件（1）都在这里。
+	// A non-zero exit code is not an error (see the sandbox.Run contract) and must be checked here: a missing
+	// command (127) and a missing file (1) both land here.
 	if res.ExitCode != 0 {
-		// 错误只取首行：工具报错常带多行栈回溯，而这一段会进 LLM 上下文，
-		// 既破坏「每行一条」的形状，又没有信息量（原因首行已经写清）。
+		// Only the first line of the error: tool errors often carry a multi-line stack trace, and this text
+		// goes into the LLM context — it would break the "one fact per line" shape without adding information
+		// (the first line already states the cause).
 		return "", fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(string(res.Stderr)))
 	}
 	return string(res.Stdout), nil
 }
 
-// probeHost 用 Go 原生探测宿主（mode=none：沙箱就是宿主本身）。
+// probeHost probes the host natively (mode=none: the sandbox is the host itself).
 //
-// 为什么不起 uname / cat 之类：宿主可能是 Windows（本机调试走的就是这条路），
-// 那里没有 sh / cat / uname —— Go 自身的 GOOS/GOARCH 与 LookPath 跨平台且零依赖。
+// Why not spawn uname / cat: the host may be Windows (local debugging runs this very path), where there is no
+// sh / cat / uname — Go's own GOOS/GOARCH and LookPath are cross-platform and need no dependency.
 //
-// 输出与沙箱分支保持同一套「每行一条」的形状，nexus 侧不必区分来源。
+// The output keeps the same "one fact per line" shape as the sandbox branch, so nexus does not have to tell the
+// sources apart.
+//
+// The line prefixes are English and one of them is a cross-process protocol string: the nexus side parses the
+// `OS: ` line to infer the platform (see sandboxinfo.OS), so changing it means changing both sides.
 func (s *Server) probeHost() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "系统: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(&b, "OS: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	for _, lang := range probeLangOrder {
 		cmd, err := s.cfg.ResolveLangCommand(lang)
 		if err != nil {
 			continue
 		}
-		// 行前缀与沙箱分支保持同一套「读者看得懂」的风格；语言名沿用 langs 的键
-		// （用户配置里看到的就是它），值换成宿主绝对路径 —— mode=none 下 agent
-		// 真正会用的就是这条路径。
+		// The line prefix keeps the same plain style as the sandbox branch; the language name stays the
+		// key from langs (that is what the user sees in the config) while the value is the absolute host path —
+		// under mode=none that is the path the agent really uses.
 		if p, lerr := exec.LookPath(cmd); lerr == nil {
-			fmt.Fprintf(&b, "%s 解释器: %s\n", lang, filepath.ToSlash(p))
+			fmt.Fprintf(&b, "%s interpreter: %s\n", lang, filepath.ToSlash(p))
 		} else {
-			// mode=none 下启动期 checkCommands 已经校验过一轮，这里只是防御。
-			fmt.Fprintf(&b, "%s 解释器: (unavailable: 宿主 PATH 中找不到 %s)\n", lang, cmd)
+			// Under mode=none the startup checkCommands already verified this; this is only defensive.
+			fmt.Fprintf(&b, "%s interpreter: (unavailable: %s not found on the host PATH)\n", lang, cmd)
 		}
 	}
 	return b.String()
 }
 
-// formatOSRelease 把 /etc/os-release 整理成一行「系统: <名称> <版本>」。
+// formatOSRelease tidies /etc/os-release into one "OS: <name> <version>" line.
 //
-// 只做排版：按 os-release 的既定格式取 PRETTY_NAME / ID / VERSION_ID，丢掉
-// HOME_URL / SUPPORT_URL / BUG_REPORT_URL 之类对 agent 毫无信息量、却会随每次
-// agent 运行进入 LLM 上下文的行。不推断任何结论（比如「这系统有没有 yum」）——
-// 那是 agent 自己的事，说了就成了替它下结论。
+// Layout only: it takes PRETTY_NAME / ID / VERSION_ID per the os-release format and drops HOME_URL /
+// SUPPORT_URL / BUG_REPORT_URL and the like, which carry nothing for the agent yet would enter the LLM context
+// on every run. It infers no conclusions (such as "does this system have yum") — that is the agent's own job,
+// and stating it would mean deciding on its behalf.
 //
-// 认不出任何已知键时**原样返回**：宁可给一份没整理的原文，也不要凭空吞掉事实。
+// When none of the known keys is recognized it returns the input **unchanged**: better a raw os-release than
+// silently swallowing facts.
 func formatOSRelease(text string) string {
 	var pretty, id, ver string
 	for _, line := range strings.Split(text, "\n") {
@@ -279,7 +301,7 @@ func formatOSRelease(text string) string {
 		if !ok {
 			continue
 		}
-		val = strings.Trim(val, `"`) // os-release 的值多数带引号，去掉更像个名字
+		val = strings.Trim(val, `"`) // most os-release values are quoted; stripping reads more like a name
 		switch key {
 		case "PRETTY_NAME":
 			pretty = val
@@ -292,21 +314,21 @@ func formatOSRelease(text string) string {
 
 	switch {
 	case pretty != "":
-		return "系统: " + pretty
+		return "OS: " + pretty
 	case id != "" && ver != "":
-		return "系统: " + id + " " + ver
+		return "OS: " + id + " " + ver
 	case id != "":
-		return "系统: " + id
+		return "OS: " + id
 	default:
 		return strings.TrimRight(text, "\n")
 	}
 }
 
-// firstLine 取首行并设长度上限。
+// firstLine takes the first line and caps its length.
 //
-// 用途只有一个：把「这条探针为什么没有结果」压成一行 —— 工具报错常带多行栈回溯
-// （luarocks 是典型），整段塞进 Environment.Text 会破坏「每行一条」的形状，
-// 也没有额外信息量。
+// It has exactly one use: squeezing "why this probe produced nothing" into one line — tool errors often carry
+// multi-line stack traces (luarocks is the classic), and pasting all of it into Environment.Text would break the
+// "one fact per line" shape without adding information.
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]

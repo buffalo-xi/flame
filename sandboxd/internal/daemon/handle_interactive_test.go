@@ -11,13 +11,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// 端到端：起真实 WS 服务，验证长交互的「断连不杀进程、跨连接复用、FrameKill 移除」。
-// fakeProc 的 stdin→stdout 直通 + spawn 的 stdout 广播，构成完整闭环：
-// ws → stdin → echo → stdout 广播 → ws。
+// End to end: a real WS server is started to verify the long-lived interactive behaviour of "a disconnect does not
+// kill the process, connections reuse it, FrameKill removes it". The fakeProc stdin passthrough plus spawn's stdout
+// broadcast close the loop: ws → stdin → echo → stdout broadcast → ws.
 
 func newTestInteractiveServer(t *testing.T, ex *fakeExec) (*Server, *httptest.Server, string) {
 	t.Helper()
-	gin.SetMode(gin.TestMode) // 静音 gin 的 debug 启动日志
+	gin.SetMode(gin.TestMode) // silence gin's debug startup log
 	s := &Server{
 		cfg:         &Config{Exec: UseConfig{}, Limits: LimitsConfig{}},
 		interactive: newInteractiveRegistry(ex, time.Hour),
@@ -31,7 +31,7 @@ func newTestInteractiveServer(t *testing.T, ex *fakeExec) (*Server, *httptest.Se
 	return s, ts, url
 }
 
-// dialInteractive 建连并走完 open→ready，argv 非空表示首次创建。
+// dialInteractive connects and completes open→ready; a non-nil argv means first creation.
 func dialInteractive(t *testing.T, url, sessionID, toolID string, argv []string) *websocket.Conn {
 	t.Helper()
 	c, _, err := websocket.DefaultDialer.Dial(url, nil)
@@ -65,7 +65,8 @@ func sendStdin(t *testing.T, c *websocket.Conn, s string) {
 	}
 }
 
-// readUntil 读 ChanStdout 帧，直到累积内容包含 want（进程长驻，输出流不会自然结束）。
+// readUntil reads ChanStdout frames until the accumulated content contains want (the process is long-lived, so the
+// output stream never ends by itself).
 func readUntil(t *testing.T, c *websocket.Conn, want string) {
 	t.Helper()
 	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
@@ -87,7 +88,8 @@ func readUntil(t *testing.T, c *websocket.Conn, want string) {
 	}
 }
 
-// 两次连接（首次带 argv、第二次不带）复用同一进程：stdout 广播第二次仍工作，Start 仅 1 次。
+// Two connections (the first with argv, the second without) reuse the same process: the stdout broadcast still works
+// on the second one and Start happened only once.
 func TestInteractiveHandlerReusesProcessAcrossConnections(t *testing.T) {
 	ex := &fakeExec{}
 	_, _, url := newTestInteractiveServer(t, ex)
@@ -97,20 +99,21 @@ func TestInteractiveHandlerReusesProcessAcrossConnections(t *testing.T) {
 	readUntil(t, c1, "hello")
 	_ = c1.Close()
 
-	// 断开后进程保留：第二次连接不带 argv，复用同一进程
+	// The process survives the disconnect: the second connection carries no argv and reuses the same process
 	c2 := dialInteractive(t, url, "s1", "shell", nil)
 	sendStdin(t, c2, "world")
 	readUntil(t, c2, "world")
 	_ = c2.Close()
 
 	if got := ex.startCount(); got != 1 {
-		t.Errorf("两次连接应复用同一进程（Start 1 次），got %d", got)
+		t.Errorf("both connections should reuse one process (Start once), got %d", got)
 	}
 }
 
-// 多工具会话：杀一个不算作废 —— 只有最后一个工具被杀的连接才收到 session_empty。
-// 网关据此决定解不解粘性绑定，所以这条判据错了会导致「会话还活着却被解绑」
-// （下一个工具的调用可能落到别的后端、重建一份沙箱）。
+// A multi-tool session: killing one does not invalidate it — only the connection that kills the last tool receives
+// session_empty. The gateway uses this criterion to decide whether to drop the sticky binding, so getting it wrong
+// means "the session is still alive but gets unbound" (the next tool call may land on another backend and rebuild a
+// sandbox).
 func TestInteractiveKillSignalsEmptyOnlyWhenNoToolsLeft(t *testing.T) {
 	ex := &fakeExec{}
 	_, _, url := newTestInteractiveServer(t, ex)
@@ -118,30 +121,30 @@ func TestInteractiveKillSignalsEmptyOnlyWhenNoToolsLeft(t *testing.T) {
 	c1 := dialInteractive(t, url, "s1", "shell", []string{"sh"})
 	c2 := dialInteractive(t, url, "s1", "repl", []string{"sh"})
 
-	// 杀 shell：repl 还在 → 读到的只能是连接关闭，不能是 session_empty
+	// Kill shell: repl is still alive → only a closed connection may be read, never session_empty
 	if err := c1.WriteJSON(map[string]any{"type": "kill"}); err != nil {
 		t.Fatalf("write kill: %v", err)
 	}
 	_ = c1.SetReadDeadline(time.Now().Add(3 * time.Second))
 	var f map[string]any
 	if err := c1.ReadJSON(&f); err == nil && f["type"] == "session_empty" {
-		t.Fatalf("还有工具存活时报了 session_empty")
+		t.Fatalf("session_empty was reported while another tool was still alive")
 	}
 
-	// 杀最后一个：必须收到带 session_id 的 session_empty
+	// Kill the last one: session_empty carrying session_id must arrive
 	if err := c2.WriteJSON(map[string]any{"type": "kill"}); err != nil {
 		t.Fatalf("write kill: %v", err)
 	}
 	_ = c2.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := c2.ReadJSON(&f); err != nil {
-		t.Fatalf("最后一个工具被杀后应收到 session_empty: %v", err)
+		t.Fatalf("session_empty should arrive after the last tool is killed: %v", err)
 	}
 	if f["type"] != "session_empty" || f["session_id"] != "s1" {
 		t.Fatalf("want session_empty(s1), got %v", f)
 	}
 }
 
-// FrameKill 显式杀进程并把它从注册表移除。
+// FrameKill explicitly kills the process and removes it from the registry.
 func TestInteractiveHandlerKillRemovesProcess(t *testing.T) {
 	ex := &fakeExec{}
 	_, _, url := newTestInteractiveServer(t, ex)
@@ -150,6 +153,6 @@ func TestInteractiveHandlerKillRemovesProcess(t *testing.T) {
 	if err := c.WriteJSON(map[string]any{"type": "kill"}); err != nil {
 		t.Fatalf("write kill: %v", err)
 	}
-	waitFor(t, "kill 后进程被杀", func() bool { return ex.proc(0).killed.Load() })
+	waitFor(t, "the process to be killed after a kill frame", func() bool { return ex.proc(0).killed.Load() })
 	_ = c.Close()
 }

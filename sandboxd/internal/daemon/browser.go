@@ -12,52 +12,56 @@ import (
 	"flame/tools/xlog"
 )
 
-// BrowserInfo 浏览器能力快照（/v1/capabilities 的 browser 段）。
+// BrowserInfo is the browser capability snapshot (the browser section of /v1/capabilities).
 //
-// 为什么要有这一项而不是让模型「调一次试试」：镜像里到底有没有 Chromium，
-// 只有沙箱自己知道。不说，模型就会把「浏览器不可用」误判成「页面打不开」，
-// 然后在错误的方向上重试 —— 与 langs / environment 是同一个理由。
+// Why this item exists instead of letting the model "just try a call": whether the image actually has Chromium is
+// only known by the sandbox itself. Without it, the model misreads "the browser is unavailable" as "the page will not
+// open" and retries in the wrong direction — the same reason as langs / environment.
 type BrowserInfo struct {
 	Enabled bool `json:"enabled"`
-	// Engine / Version 来自 browserhost --selftest 的实测（不是配置声明）。
+	// Engine / Version come from an actual `browserhost --selftest` run (not a config statement).
 	Engine  string `json:"engine,omitempty"`
 	Version string `json:"version,omitempty"`
-	// HeadlessDefault 本部署缺省是否无头；HeadedAvailable 当前隔离方式下能否有头。
+	// HeadlessDefault reports whether this deployment defaults to headless; HeadedAvailable whether headed is
+	// possible under the current isolation mode.
 	HeadlessDefault bool `json:"headless_default"`
 	HeadedAvailable bool `json:"headed_available"`
-	// Error 非空表示不可用的原因（未启用 / 二进制缺失 / 镜像里没装浏览器）。
+	// A non-empty Error is the reason it is unavailable (not enabled / binary missing / no browser in the image).
 	Error string `json:"error,omitempty"`
 }
 
-// browserProbeTimeout 自检的上限。它只跑 `<browserhost> --selftest`
-// （内部是 `chromium --version`），不拉起浏览器；docker 下多半花在建容器上。
+// browserProbeTimeout caps the self-test. It only runs `<browserhost> --selftest` (which internally runs
+// `chromium --version`), it never launches the browser; under docker the cost is mostly building the container.
 const browserProbeTimeout = 30 * time.Second
 
 const (
-	// browserProbeRetryInterval 探测失败后的重试间隔。失败多半是环境性的
-	// （浏览器正在更新、已有会话忙、容器刚起），快一点重试就能自愈。
+	// browserProbeRetryInterval is the retry interval after a failed probe. Failures are mostly environmental
+	// (the browser is being updated, existing sessions are busy, a container just started), and a quick retry
+	// usually heals them.
 	browserProbeRetryInterval = 30 * time.Second
-	// browserProbeRefreshInterval 可用状态下的复核间隔。docker 下每次探测都要
-	// 建一次容器，所以不跟着调用频率走，隔几分钟对一次即可。
+	// browserProbeRefreshInterval is the re-check interval while it is available. Under docker every probe builds a
+	// container, so it does not follow the call rate; once every few minutes is enough.
 	browserProbeRefreshInterval = 5 * time.Minute
 )
 
-// startBrowserProbe 启动异步能力探测（失败重试，成功定期复核）。
+// startBrowserProbe starts the asynchronous capability probe (retrying on failure, re-checking periodically on
+// success).
 //
-// 异步是刻意的：探测失败不该阻断 sandboxd 启动（浏览器只是可选能力），
-// 但结果必须如实上报 —— 所以在完成前先落一个「探测中」的不可用态，
-// 而不是先乐观地说「可用」。乐观默认会让模型在镜像还没装好时就开始点页面。
+// Asynchronous on purpose: a failed probe must not block sandboxd startup (the browser is an optional capability),
+// but the result must be reported honestly — so an "unavailable, probing" state is stored before it completes
+// rather than optimistically claiming "available". An optimistic default would make the model start clicking pages
+// while the image is not ready yet.
 //
-// 为什么不能只探一次：探测结果会由 /v1/capabilities 持续播报，而失败往往是
-// 临时性的。只探一次意味着「一次失败 = 浏览器永久 disabled，直到重启」——
-// 这正是 `bad output ""` 事件里真实的放大环节。
+// Why it cannot probe only once: the result is broadcast continuously through /v1/capabilities, and failures are
+// usually temporary. Probing once means "one failure = the browser is disabled forever until a restart" — exactly
+// the amplification that caused the `bad output ""` incident.
 func (s *Server) startBrowserProbe() {
 	if !s.cfg.Browser.Enabled {
 		info := BrowserInfo{Enabled: false, Error: "disabled by config (browser.enabled: false)"}
 		s.browser.Store(&info)
 		return
 	}
-	// 非 none 下不可能为 true（validateBrowser 已拦），所以不再重复 `Mode == "none"`。
+	// Outside none it can never be true (validateBrowser already rejects it), so `Mode == "none"` is not repeated.
 	headed := s.cfg.AllowHeadedFor(s.cfg.Mode)
 	initial := BrowserInfo{
 		Enabled:         false,
@@ -78,7 +82,8 @@ func (s *Server) startBrowserProbe() {
 			case ok && !prevReady:
 				xlog.Info("sandboxd: browser ready (%s, headed_available=%v)", info.Version, info.HeadedAvailable)
 			case !ok && info.Error != lastErr:
-				// 同样的错误只在首次出现时记一条：重试间隔 30s，每次都打会把日志写成噪声。
+				// The same error is logged only when it first appears: the retry interval is 30s, and logging every
+				// attempt would turn the log into noise.
 				xlog.Error("sandboxd: browser unavailable: %s", info.Error)
 			}
 
@@ -98,10 +103,11 @@ func (s *Server) startBrowserProbe() {
 	}()
 }
 
-// probeBrowserOnce 跑一次 `<browserhost> --selftest`，返回能力快照与是否可用。
+// probeBrowserOnce runs `<browserhost> --selftest` once and returns the capability snapshot plus whether it is
+// available.
 //
-// 走 BrowserArgv 而不是自己拼：探测必须和真实调用看同一个 exec_path（按 mode 解析），
-// 否则会出现「探测说可用、open 时找不到浏览器」。
+// It goes through BrowserArgv rather than assembling its own command: the probe must see the same exec_path as a real
+// call (resolved per mode), otherwise "the probe says available but open cannot find the browser" happens.
 func (s *Server) probeBrowserOnce(headed bool) (BrowserInfo, bool) {
 	info := BrowserInfo{
 		HeadlessDefault: !s.cfg.Browser.Headed,
@@ -118,8 +124,9 @@ func (s *Server) probeBrowserOnce(headed bool) (BrowserInfo, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), browserProbeTimeout)
 	defer cancel()
 
-	// stderr 必须收下来：失败原因几乎只出现在这里（二进制版本不对、缺库、
-	// 镜像里没有浏览器）。之前填 io.Discard，症状就退化成一句 `bad output ""`。
+	// stderr must be captured: the failure reason almost only appears there (wrong binary version, missing
+	// libraries, no browser in the image). It used to be io.Discard, which degraded the symptom to a single
+	// `bad output ""`.
 	errBuf := &cappedWriter{n: 4096}
 
 	spec := &sandbox.Spec{
@@ -153,8 +160,8 @@ func (s *Server) probeBrowserOnce(headed bool) (BrowserInfo, bool) {
 	return info, true
 }
 
-// cappedWriter 只保留前 n 字节（探测用的 stderr 缓冲）：
-// 要的是「为什么起不来」的开头，而不是可能无限增长的日志。
+// cappedWriter keeps only the first n bytes (the stderr buffer used by the probe): what is wanted is the beginning
+// of "why it will not start", not a log that could grow without bound.
 type cappedWriter struct {
 	buf []byte
 	n   int
@@ -173,7 +180,7 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 
 func (w *cappedWriter) String() string { return string(w.buf) }
 
-// BrowserSnapshot 取当前浏览器能力快照（未探测完时返回不可用态）。
+// BrowserSnapshot returns the current browser capability snapshot (an unavailable state while still probing).
 func (s *Server) BrowserSnapshot() BrowserInfo {
 	if p := s.browser.Load(); p != nil {
 		return *p
@@ -181,7 +188,7 @@ func (s *Server) BrowserSnapshot() BrowserInfo {
 	return BrowserInfo{Error: "browser not probed"}
 }
 
-// truncateText 截断过长文本（只用于日志 / 错误信息）。
+// truncateText truncates over-long text (only used for logs / error messages).
 func truncateText(s string, n int) string {
 	if len(s) <= n {
 		return s

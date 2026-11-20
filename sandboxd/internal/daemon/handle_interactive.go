@@ -7,21 +7,23 @@ import (
 	"flame/tools/xlog"
 )
 
-// handleInteractive 长交互端点：一条连接 = 一次喂命令，进程归注册表、跨连接存活。
+// handleInteractive is the long-interaction endpoint: one connection = one command feed, while the process belongs
+// to the registry and outlives the connection.
 //
-// 与 handleExec 的差别只有两处：
-//  1. 进程来源是 interactiveRegistry（懒建/复用），而不是 exec.Start；
-//  2. 客户端断开不杀进程 —— 只是「本次调用结束」，进程归还注册表。
+// The differences from handleExec are only two:
+//  1. the process comes from interactiveRegistry (lazy creation / reuse) rather than exec.Start;
+//  2. a client disconnect does not kill the process — it only means "this call is over" and the process goes back
+//     to the registry.
 //
-// 协议（复用 exec 的帧）：
+// Protocol (reusing the exec frames):
 //
-//	open(session_id + tool_id [+ argv/mounts 首次]) → ready
-//	→ ChanStdin 喂命令 → 客户端断开 = 本次调用结束（进程保留）
-//	→ FrameKill = 显式杀进程
+//	open(session_id + tool_id [+ argv/mounts on the first call]) → ready
+//	→ feed commands over ChanStdin → client disconnects = this call is over (the process stays)
+//	→ FrameKill = explicitly kill the process
 //
-// stdout 转发与进程退出检测都不在本 handler 里 —— 它们在 spawn 的常驻 goroutine
-// 里（stdout 广播 + Wait 收尸）。这里只剩一根 stdin 要喂，因此没有 io.Copy、
-// 也没有 copyDone/clientGone 那套一次性转发逻辑。
+// Neither stdout forwarding nor process-exit detection lives in this handler — they are in the resident goroutine
+// started by spawn (stdout broadcast + Wait reaping). All that is left here is one stdin to feed, hence no io.Copy
+// and none of the one-shot copyDone/clientGone forwarding logic.
 func (s *Server) handleInteractive(c *gin.Context) {
 	ws, err := s.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -30,7 +32,7 @@ func (s *Server) handleInteractive(c *gin.Context) {
 	wc := sandbox.NewConn(ws)
 	defer func() { _ = ws.Close() }()
 
-	// 1) open：session_id + tool_id，首次调用还带 argv + mounts
+	// 1) open: session_id + tool_id, plus argv + mounts on the first call
 	f, _, rerr := wc.Recv()
 	if rerr != nil {
 		return
@@ -64,10 +66,10 @@ func (s *Server) handleInteractive(c *gin.Context) {
 
 	lim := s.cfg.ExecLimits(reqLimits)
 
-	// 浏览器工具与 shell 共用这条通道（都是「session 级常驻进程」），
-	// 差别只在 argv 由本服务组装：沙箱内 browserhost 叫什么、profile 放哪，
-	// 是 sandboxd 才知道的事实（与 langs / codehost 同一个理由）。
-	// 资源上限也换成 browser.limits —— Chrome 的进程树远大于一条 shell。
+	// The browser tool shares this channel with shell (both are "session-level resident processes"); the only
+	// difference is that this service assembles the argv: what the in-sandbox browserhost is called and where the
+	// profile goes are facts only sandboxd knows (the same reason as langs / codehost).
+	// The resource caps switch to browser.limits too — Chrome's process tree is far larger than a shell's.
 	if f.ToolID == BrowserToolID {
 		if !s.cfg.Browser.Enabled {
 			_ = wc.SendFrame(&sandbox.Frame{Type: sandbox.FrameError,
@@ -83,17 +85,18 @@ func (s *Server) handleInteractive(c *gin.Context) {
 		lim = s.cfg.BrowserLimits(reqLimits)
 	}
 
-	// 2) 懒建/复用进程（进程被锁住，本次调用独占）
-	// f.Ephemeral：无 session 的临时进程，注册表用短空闲超时兜底回收。
+	// 2) Lazily create / reuse the process (the process is locked, so this call has it exclusively)
+	// f.Ephemeral: a temporary process with no session; the registry reclaims it through the short idle timeout.
 	tp, aerr := s.interactive.acquire(f.SessionID, mounts, f.ToolID, argv, lim,
 		acquireOpts{dir: dir, ephemeral: f.Ephemeral})
 	if aerr != nil {
 		_ = wc.SendFrame(&sandbox.Frame{Type: sandbox.FrameError, Message: aerr.Error()})
 		return
 	}
-	defer tp.unlock() // 本次调用结束释放锁；不杀进程
+	defer tp.unlock() // release the lock when this call ends; the process is not killed
 
-	// stdout/stderr 都跟随当前连接；调用结束复位为丢弃（避免写到已关闭连接）
+	// Both stdout and stderr follow the current connection; they are reset to discard when the call ends (so nothing
+	// is written to a closed connection)
 	tp.stderr.set(&wsWriter{c: wc, ch: sandbox.ChanStderr})
 	tp.stdoutOut.set(&wsWriter{c: wc, ch: sandbox.ChanStdout})
 	defer tp.stderr.set(nil)
@@ -103,13 +106,14 @@ func (s *Server) handleInteractive(c *gin.Context) {
 		return
 	}
 
-	// 3) 客户端 → 进程 stdin。
+	// 3) client → process stdin.
 	//
-	// 断开 = 本次调用结束（进程保留）；FrameKill = 显式杀并从注册表移除。
+	// Disconnecting means this call is over (the process stays); FrameKill explicitly kills it and removes it from
+	// the registry.
 	for {
 		cf, data, rerr := wc.Recv()
 		if rerr != nil {
-			return // 客户端断开，进程保留
+			return // client disconnected, the process stays
 		}
 		if data != nil {
 			if data[0] == sandbox.ChanStdin {
@@ -121,11 +125,12 @@ func (s *Server) handleInteractive(c *gin.Context) {
 		}
 		switch cf.Type {
 		case sandbox.FrameKill:
-			// 先杀，再看还剩不剩：只有这个 session 的工具全没了才通知「已空」——
-			// 网关据此解掉粘性绑定。多工具会话杀一个不算作废。
+			// Kill first, then look at what is left: the "empty" notice is only sent once every tool of this session
+			// is gone — the gateway unbinds its sticky binding on it. Killing one tool of a multi-tool session does
+			// not invalidate it.
 			//
-			// 帧要在连接关闭前发出（defer 才关 ws）；对端不认识这个帧时会忽略，
-			// 所以老客户端不受影响。
+			// The frame must go out before the connection closes (the ws is only closed by the defer); a peer that
+			// does not know this frame ignores it, so older clients are unaffected.
 			if empty := s.interactive.removeTool(f.SessionID, f.ToolID); empty {
 				_ = wc.SendFrame(&sandbox.Frame{
 					Type:      sandbox.FrameSessionEmpty,

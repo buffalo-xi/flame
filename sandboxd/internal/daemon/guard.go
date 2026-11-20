@@ -9,13 +9,13 @@ import (
 	"flame/tools/sandbox"
 )
 
-// guardMounts 校验挂载表的 Host 是否全部落在允许的根之一之下。
+// guardMounts validates that every Mounts Host falls under one of the allowed roots.
 //
-// 背景：Mounts[].Host 是调用方给出的宿主绝对路径；不校验的话，一个伪造或写错的
-// 请求就能把 /etc、/ 之类的目录挂进沙箱。这属于「策略」层面的兜底 ——
-// sandboxd 不解析调用方的业务路径（那是调用方自己的责任），只做范围校验。
+// Background: Mounts[].Host is a host absolute path supplied by the caller; unchecked, a forged or mistyped
+// request could mount /etc or / into the sandbox. This is a policy-level backstop — sandboxd does not interpret
+// the caller's business paths (that is the caller's own responsibility), it only validates the range.
 //
-// roots 为空表示未配置白名单 —— 此时不校验（启动阶段会打警告）。
+// An empty roots means no allowlist is configured — nothing is validated then (a warning is logged at startup).
 func guardMounts(mounts []sandbox.Mount, roots []string) error {
 	if len(roots) == 0 {
 		return nil
@@ -49,7 +49,7 @@ func guardMounts(mounts []sandbox.Mount, roots []string) error {
 		for _, root := range absRoots {
 			rel, rerr := filepath.Rel(root, abs)
 			if rerr != nil {
-				continue // 不同盘符等无法比较：这一条不匹配，继续试下一个 root
+				continue // incomparable paths (different drive letters etc.): this root does not match, try the next
 			}
 			if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				matched = true
@@ -63,13 +63,15 @@ func guardMounts(mounts []sandbox.Mount, roots []string) error {
 	return nil
 }
 
-// guardDir 校验 dir 落在某个挂载点的 Guest 之下（空串表示交给实现默认）。
+// guardDir validates that dir falls under some mount point's Guest (an empty string means "leave it to the
+// implementation's default").
 //
-// 必要性：none 实现的 TranslateToHost 在匹配不到任何挂载点时会**原样返回输入**，
-// 于是一个本该是「沙箱内路径」的 dir 会变成宿主路径被直接当成工作目录使用 ——
-// 打破了「Spec 中的路径一律是沙箱内语义」这个契约。
+// Why it is needed: when the none implementation's TranslateToHost matches no mount point it **returns the input
+// unchanged**, so a dir meant to be "an in-sandbox path" becomes a host path and is used directly as the working
+// directory — breaking the contract that "paths in a Spec always carry in-sandbox semantics".
 //
-// 注意 Guest 是沙箱内语义，因此这里用 path（正斜杠）而不是 filepath 来规范化。
+// Note that Guest is in-sandbox semantics, so path (forward slashes) is used for normalization here rather than
+// filepath.
 func guardDir(dir string, mounts []sandbox.Mount) error {
 	if dir == "" {
 		return nil

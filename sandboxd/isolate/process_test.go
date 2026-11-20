@@ -14,8 +14,8 @@ import (
 	"flame/tools/sandbox"
 )
 
-// 角色协议：同一个测试二进制靠环境变量认出自己扮演哪一层。
-// 用「重新执行自己」来造进程树，不依赖 sh / cmd 这类平台的 shell 特性。
+// Role protocol: the same test binary recognises which layer it is playing from an environment variable.
+// Re-executing itself builds the process tree without relying on platform shell features such as sh / cmd.
 const (
 	helperRoleEnv = "ISOLATE_TEST_HELPER_ROLE"
 	roleChild     = "child"
@@ -23,11 +23,12 @@ const (
 	heartbeatEnv  = "ISOLATE_TEST_HEARTBEAT"
 )
 
-// TestKillTreeKillsGrandchildren 验证「杀干净」的核心承诺：
-// 收掉一次执行时，它派生出的**孙进程**也必须一起消失。
+// TestKillTreeKillsGrandchildren verifies the core promise of "kill everything": when an execution is cleaned up, the
+// **grandchildren** it spawned must disappear too.
 //
-// 为什么断言必须落在孙进程上：只杀直接子进程的实现同样能让本测试的父进程退出，
-// 所以父进程的结束不能作为判据 —— 只能看孙进程还写不写心跳。
+// Why the assertion must be on the grandchild: an implementation that kills only the direct child also makes this
+// test's parent exit, so the parent's termination cannot be the criterion — only whether the grandchild still writes
+// its heartbeat.
 func TestKillTreeKillsGrandchildren(t *testing.T) {
 	switch os.Getenv(helperRoleEnv) {
 	case roleChild:
@@ -40,15 +41,15 @@ func TestKillTreeKillsGrandchildren(t *testing.T) {
 
 	beat := filepath.Join(t.TempDir(), "beat")
 
-	// 必须用 CommandContext 构造：os/exec 拒绝为 exec.Command 出来的 Cmd 设置 Cancel
-	// （"command with a non-nil Cancel was not created with CommandContext"）。
+	// It must be built with CommandContext: os/exec refuses Cancel on a Cmd created by exec.Command
+	// ("command with a non-nil Cancel was not created with CommandContext").
 	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=TestKillTreeKillsGrandchildren")
 	cmd.Env = append(os.Environ(),
 		helperRoleEnv+"="+roleChild,
 		heartbeatEnv+"="+beat,
 	)
-	// 只设 Stderr（Spec.Stderr 为 nil 时会接到空设备）；
-	// Stdout 不能设 —— startWithPipes 要自己建管道。
+	// Only Stderr is set (a nil Spec.Stderr is wired to the null device); Stdout must not be set — startWithPipes
+	// creates its own pipes.
 	cmd.Stderr = io.Discard
 
 	proc, err := startWithPipes(cmd, &sandbox.Spec{}, nil, nil)
@@ -56,36 +57,37 @@ func TestKillTreeKillsGrandchildren(t *testing.T) {
 		t.Fatalf("startWithPipes: %v", err)
 	}
 
-	// 等孙进程真正跑起来，否则后面的断言可能只是在测「它还没起来」。
+	// Wait until the grandchild is really running, otherwise the later assertion may just be testing "it is not up
+	// yet".
 	waitHeartbeat(t, beat)
 
 	if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		t.Fatalf("Kill: %v", err)
 	}
 
-	// 父进程也要收掉：Kill 之后 Wait 必须很快返回。
+	// The parent must be collected as well: after Kill, Wait has to return quickly.
 	done := make(chan error, 1)
 	go func() { done <- proc.Wait() }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("Kill 之后父进程没有结束（Wait 卡住了）")
+		t.Fatal("the parent did not end after Kill (Wait hung)")
 	}
 
-	// 关键断言：孙进程不再写心跳 = 它真的不存在了。
-	// 心跳值是自增序号，只要它活着就一定会变。
+	// The key assertion: the grandchild no longer writes a heartbeat = it really no longer exists.
+	// The heartbeat is an incrementing counter, so it necessarily changes as long as it is alive.
 	before := readHeartbeat(beat)
 	time.Sleep(500 * time.Millisecond)
 	after := readHeartbeat(beat)
 	if before != after {
-		t.Errorf("孙进程仍在运行：心跳 %q → %q —— 这次 Kill 只覆盖了直接子进程", before, after)
+		t.Errorf("the grandchild is still running: heartbeat %q → %q — this Kill only covered the direct child", before, after)
 	}
 }
 
-// childHelper 中间层：派生孙进程后自己一直活着。
+// childHelper is the middle layer: it spawns the grandchild and then stays alive itself.
 //
-// 不主动退出是关键：父进程自己退出不算「杀干净」，这一层必须活到被信号收走，
-// 测试才在测同一件事。
+// Not exiting voluntarily is the point: the parent exiting by itself does not count as "killed", so this layer must stay
+// alive until it is taken out by a signal for the test to be testing the same thing.
 func childHelper(t *testing.T) {
 	beat := os.Getenv(heartbeatEnv)
 
@@ -99,10 +101,10 @@ func childHelper(t *testing.T) {
 		t.Fatalf("child: start grandchild: %v", err)
 	}
 
-	select {} // 挂住，等被杀
+	select {} // block until killed
 }
 
-// grandchildHelper 心跳层：持续刷新心跳文件，直到进程消失。
+// grandchildHelper is the heartbeat layer: it keeps refreshing the heartbeat file until the process disappears.
 func grandchildHelper() {
 	beat := os.Getenv(heartbeatEnv)
 	for tick := 0; ; tick++ {
@@ -111,7 +113,7 @@ func grandchildHelper() {
 	}
 }
 
-// waitHeartbeat 等心跳文件出现且有内容。
+// waitHeartbeat waits for the heartbeat file to appear and have content.
 func waitHeartbeat(t *testing.T, beat string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -121,7 +123,7 @@ func waitHeartbeat(t *testing.T, beat string) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("孙进程没有写出心跳：helper 进程树没起来，测试前提不成立")
+	t.Fatal("the grandchild never wrote a heartbeat: the helper process tree did not start, so the test premise does not hold")
 }
 
 func readHeartbeat(beat string) string {

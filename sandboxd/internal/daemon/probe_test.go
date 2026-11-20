@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-// formatOSRelease 只做排版：取已知键、丢掉噪声行，**不推断结论**。
-// 这条界线是刻意的 —— 一旦这里开始「解释」（比如「这系统有没有 yum」），
-// 就等于替 agent 下结论，而那本该由它自己从系统名推断。
+// formatOSRelease only reformats: it picks the known keys and drops the noisy lines, and draws **no conclusions**.
+// That boundary is deliberate — the moment this starts "interpreting" (for example "does this system have yum"), it is
+// drawing conclusions on the agent's behalf, which the agent should infer from the system name itself.
 func TestFormatOSRelease(t *testing.T) {
-	// 真实样例（Debian 13 容器里的 /etc/os-release），也是当前触发这次改动的那个：
-	// 十来行里只有 PRETTY_NAME 对 agent 有意义。
+	// A real sample (/etc/os-release inside a Debian 13 container), and the very one that triggered this change: of a
+	// dozen lines only PRETTY_NAME means anything to the agent.
 	debian := `PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
 NAME="Debian GNU/Linux"
 VERSION_ID="13"
@@ -28,18 +28,19 @@ BUG_REPORT_URL="https://bugs.debian.org/"
 		in   string
 		want string
 	}{
-		{"真实样例 → 一行", debian, "系统: Debian GNU/Linux 13 (trixie)"},
-		{"无引号的值", "PRETTY_NAME=Alpine Linux v3.20\nID=alpine\n", "系统: Alpine Linux v3.20"},
-		{"缺 PRETTY_NAME → 退回 ID + 版本", "ID=alpine\nVERSION_ID=3.20\n", "系统: alpine 3.20"},
-		{"只有 ID", "ID=debian\n", "系统: debian"},
+		{"real sample → one line", debian, "OS: Debian GNU/Linux 13 (trixie)"},
+		{"unquoted value", "PRETTY_NAME=Alpine Linux v3.20\nID=alpine\n", "OS: Alpine Linux v3.20"},
+		{"no PRETTY_NAME → fall back to ID + version", "ID=alpine\nVERSION_ID=3.20\n", "OS: alpine 3.20"},
+		{"ID only", "ID=debian\n", "OS: debian"},
 		{
-			// 认不出任何已知键：宁可原样给，也不要凭空吞掉事实。
-			// os-release 缺失时 `cat` 会报错走 unavailable，这里防的是「文件在、但格式不像」。
-			"认不出 → 原样返回",
+			// No known key recognised: better to hand it over verbatim than to swallow the fact.
+			// When os-release is missing, `cat` fails and the unavailable path is taken; this guards the case where
+			// the file is there but does not look like os-release.
+			"unrecognised → returned verbatim",
 			"some unexpected\ntext here\n",
 			"some unexpected\ntext here",
 		},
-		{"空输入 → 原样（空串）", "", ""},
+		{"empty input → verbatim (empty string)", "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,19 +51,19 @@ BUG_REPORT_URL="https://bugs.debian.org/"
 	}
 }
 
-// firstLine：失败信息只留首行 + 设上限。
-// 起因是 luarocks 那条探针在只读 rootfs 下必然失败，并把 500 字节的 Lua 栈回溯
-// 灌进了 Environment.Text —— 破坏了「每行一条」的形状，也没有信息量。
+// firstLine: keep only the first line of a failure message, with a cap.
+// The cause was the luarocks probe failing on every read-only rootfs and pouring a 500-byte Lua stack traceback into
+// Environment.Text — breaking the "one line per entry" shape without adding information.
 func TestFirstLine(t *testing.T) {
 	cases := []struct {
 		name string
 		in   string
 		want string
 	}{
-		{"单行原样", "exit 1: permission denied\n", "exit 1: permission denied"},
-		{"多行只取首行", "boom\nstack traceback:\n\t[C]: in function 'x'\n", "boom"},
-		{"空输出给占位", "\n\n", "no output"},
-		{"超长截断", strings.Repeat("a", 300), strings.Repeat("a", 200) + "..."},
+		{"single line verbatim", "exit 1: permission denied\n", "exit 1: permission denied"},
+		{"multi-line keeps only the first", "boom\nstack traceback:\n\t[C]: in function 'x'\n", "boom"},
+		{"empty output gets a placeholder", "\n\n", "no output"},
+		{"over-long output truncated", strings.Repeat("a", 300), strings.Repeat("a", 200) + "..."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

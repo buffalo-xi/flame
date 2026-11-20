@@ -19,10 +19,10 @@ const (
 	taskkillNotFound = 128
 )
 
-// setProcessGroup 把解释器进程放进新的进程组。
+// setProcessGroup puts the interpreter process into a new process group.
 //
-// Windows 没有可杀的「进程组」对象，这里的旗标只让子进程不接收发给 codehost 控制台
-// 的 Ctrl+C 之类事件；真正的整树清理靠 killTree 的 taskkill /T。
+// Windows has no "process group" object that can be killed; the flag here only keeps the child from receiving events
+// such as Ctrl+C sent to codehost's console. The real whole-tree cleanup relies on killTree's taskkill /T.
 func setProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -30,9 +30,9 @@ func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.CreationFlags |= syscall.CREATE_NEW_PROCESS_GROUP
 }
 
-// killTree 用 taskkill /T 杀掉解释器及其全部后代。
+// killTree kills the interpreter and all its descendants with taskkill /T.
 //
-// 返回 os.ErrProcessDone 表示「进程已经结束」（exec.Cmd.Cancel 约定的语义）。
+// Returning os.ErrProcessDone means "the process is already gone" (the semantics exec.Cmd.Cancel expects).
 func killTree(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return os.ErrProcessDone

@@ -1,11 +1,13 @@
-// Package codehost 实现 sandboxd 的脚本执行宿主：一个语言无关的常驻进程，
-// 跑在隔离单元内部（nsjail / none），替 sandboxd 逐次 fork 全新解释器进程执行脚本。
+// Package codehost implements sandboxd's script execution host: a language-agnostic resident process that runs inside
+// the isolation unit (nsjail / none) and forks a fresh interpreter process on behalf of sandboxd for every script.
 //
-// 与旧 worker.lua/py/js 的区别：
-//   - 一份 Go 代码 fork 三种解释器（lua / python / node），不再有三份语言 worker；
-//   - 每次 execute 都 fork 全新解释器，进程级干净，天然没有跨请求状态残留；
-//   - 协议退化成单向 execute / done / error（砍掉 callback / callback_resp 交互），
-//     脚本的 print / log 一律走 stderr，stdout 只留给结构化结果。
+// Differences from the old worker.lua/py/js:
+//   - one body of Go code forks three interpreters (lua / python / node) instead of three per-language workers;
+//   - every execute forks a brand-new interpreter, so it is clean at the process level and has no cross-request state
+//     left over by construction;
+//   - the protocol degenerates into a one-way execute / done / error exchange (the callback / callback_resp
+//     interaction is gone), script print / log always goes to stderr, and stdout is reserved for the structured
+//     result.
 package codehost
 
 import (
@@ -22,17 +24,17 @@ import (
 )
 
 const (
-	// maxMsgSize 单条协议帧上限，与 daemon/protocol.go 保持一致。
+	// maxMsgSize is the cap on a single protocol frame, kept in sync with daemon/protocol.go.
 	maxMsgSize = 10 * 1024 * 1024
-	// maxStderrCapture 回传 logs 时留存解释器 stderr 的尾部上限（转发不受此限）。
-	// 也用作 reply 的错误回退（lastNonEmptyLine）来源。
+	// maxStderrCapture is the tail cap of the interpreter stderr kept for returning logs (forwarding is not limited
+	// by it). It is also the source of the reply's error fallback (lastNonEmptyLine).
 	maxStderrCapture = 64 * 1024
-	// killWaitDelay 杀进程后等待 I/O 管道收尾的上限：解释器的 stderr 可能被
-	// 逃逸的孙进程攥着，Wait 最多等这么久，避免永久卡住。
+	// killWaitDelay caps the wait for the I/O pipes to settle after killing the process: the interpreter's stderr may
+	// be held by an escaped grandchild process, so Wait waits at most this long instead of hanging forever.
 	killWaitDelay = 5 * time.Second
 )
 
-// request 是 host → codehost 的一帧。
+// request is one frame from host → codehost.
 type request struct {
 	Action    string          `json:"action"`
 	Lang      string          `json:"lang"`
@@ -42,28 +44,29 @@ type request struct {
 	TimeoutMS int64           `json:"timeout_ms"`
 }
 
-// Host 一个 codehost 实例：持有 stdin/stdout（协议通道）与 stderr（解释器 stderr 的
-// 转发目的地）。stdin/stdout/stderr 全部注入，便于测试。
+// Host is one codehost instance: it owns stdin/stdout (the protocol channel) and stderr (the forwarding destination for
+// the interpreter's stderr). All three are injected, which makes testing easy.
 //
-// 注意 stderr 的去向：sandboxd 侧接的是 io.Discard（见 stderrCollector 的说明），
-// 脚本 print 是靠协议帧里的 logs 返回给 nexus 的，不是靠这条路。
+// Note where stderr goes: the sandboxd side wires it to io.Discard (see the note on stderrCollector), so a script's
+// print output reaches nexus through the logs field of the protocol frame, not through this path.
 type Host struct {
 	in     io.Reader
 	out    io.Writer
 	stderr io.Writer
 }
 
-// Run 以默认宿主环境跑 codehost 主循环。
+// Run runs the codehost main loop with the default host environment.
 func Run(in io.Reader, out, errW io.Writer) error {
 	return (&Host{in: in, out: out, stderr: errW}).run()
 }
 
-// run 主循环：读一帧、执行一次、回一帧。stdin 读到 EOF（sandboxd 关闭连接）即退出。
+// run is the main loop: read one frame, execute once, reply with one frame. Reading EOF on stdin (sandboxd closed the
+// connection) exits.
 //
-// 协议里的帧只有 execute（进）/ done、error（出），外加两个控制帧：
-//   - ping / pong —— liveness 探针，供 sandboxd 的池做借出/归还/巡检探活。
-//     它不是 callback 那种「双向交互」，只是确认宿主进程还活着。
-//   - shutdown —— 优雅收尾。
+// The only frames in the protocol are execute (in) and done / error (out), plus two control frames:
+//   - ping / pong — a liveness probe for sandboxd's pool to use on lend / return / sweeps. It is not the two-way
+//     interaction of the old callbacks, it only confirms the host process is still alive.
+//   - shutdown — a graceful wrap-up.
 func (h *Host) run() error {
 	for {
 		req, err := h.readRequest()
@@ -87,11 +90,12 @@ func (h *Host) run() error {
 	}
 }
 
-// execute 执行一次：按 lang 选中模板 → 织成完整脚本 → 写盘 → fork 解释器 →
-// 收集结果（stdout）与 print 输出（stderr 转发）→ 回 done / error。
+// execute runs once: select the template by lang → weave the complete script → write it to disk → fork the interpreter
+// → collect the result (stdout) and the print output (stderr forwarding) → reply done / error.
 //
-// 僵尸回收：解释器是唯一被 Wait 的子进程，无论正常退出还是超时强杀都会 Wait 一次，
-// 所以不会积累僵尸。killTree 顺带覆盖它自己 fork 的后代（见 proc_*.go）。
+// Zombie reaping: the interpreter is the only child that is Waited, and it is Waited exactly once whether it exits
+// normally or is killed on timeout, so no zombies accumulate. killTree additionally covers the descendants it forked
+// (see proc_*.go).
 func (h *Host) execute(req *request) {
 	if req.Command == "" {
 		h.sendError("execute: empty command", "", false)
@@ -105,9 +109,9 @@ func (h *Host) execute(req *request) {
 
 	src := tmpl.build(req.Script, req.Inputs)
 
-	// 脚本临时文件写在 cwd（"."），而不是 os.TempDir()：sandboxd 会把 codehost 的
-	// cwd 设成本次会话独占的可写目录，脚本与其临时产物都落在这里，随会话结束一并清掉，
-	// 不会泄漏到宿主 /tmp。
+	// The temporary script file is written to cwd (".") rather than os.TempDir(): sandboxd sets codehost's cwd to the
+	// writable directory exclusive to this session, so the script and its temporary artefacts land there and are
+	// cleaned up with the session instead of leaking into the host /tmp.
 	f, err := os.CreateTemp(".", "codehost-*"+tmpl.ext)
 	if err != nil {
 		h.sendError("codehost: create temp script: "+err.Error(), "", false)
@@ -127,7 +131,7 @@ func (h *Host) execute(req *request) {
 	}
 	defer os.Remove(fname)
 
-	// 超时：0 / 未写 = 不限时（standalone 调试）；接入后由 sandboxd 逐次下发。
+	// Timeout: 0 / unset = no limit (standalone debugging); once wired in, sandboxd sends it on every call.
 	ctx := context.Background()
 	cancel := context.CancelFunc(nil)
 	if req.TimeoutMS > 0 {
@@ -147,10 +151,11 @@ func (h *Host) execute(req *request) {
 	cmd.Stderr = col
 
 	setProcessGroup(cmd)
-	// 内存上限由隔离层（nsjail cgroup v2 的 memory.max）统一施加，解释器不再单独设
-	// RLIMIT_AS —— VSZ 上限会误杀 node/V8 这类预留大量虚拟地址空间的运行时。
-	// 关键：ctx 超时 / 取消时走 killTree（整组），而不是默认的只杀单 pid ——
-	// 脚本可能 fork 后代，只杀解释器会留下逃逸进程。
+	// The memory cap is applied uniformly by the isolation layer (nsjail's cgroup v2 memory.max) and the interpreter
+	// no longer sets RLIMIT_AS on its own — a VSZ cap would kill runtimes like node/V8 that reserve large amounts of
+	// virtual address space. What matters: on ctx timeout / cancellation it goes through killTree (the whole group)
+	// rather than the default single-pid kill — a script may fork descendants, and killing only the interpreter would
+	// leave escaped processes behind.
 	cmd.Cancel = func() error { return killTree(cmd) }
 	cmd.WaitDelay = killWaitDelay
 
@@ -161,8 +166,9 @@ func (h *Host) execute(req *request) {
 
 	waitErr := cmd.Wait()
 
-	// 超时优先于其它判定：ctx 被 DeadlineExceeded 触发，脚本一定没跑完。
-	// 超时也带 logs：脚本可能已经 print 了一部分，带回对排障有用。
+	// The timeout takes precedence over every other judgement: ctx fired with DeadlineExceeded, so the script
+	// certainly did not finish. The timeout still carries logs: the script may already have printed something, and
+	// bringing it back helps troubleshooting.
 	if ctx.Err() == context.DeadlineExceeded {
 		h.sendError(fmt.Sprintf("script execution timed out after %dms", req.TimeoutMS), col.String(), col.truncated)
 		return
@@ -171,10 +177,11 @@ func (h *Host) execute(req *request) {
 	h.reply(stdout.Bytes(), waitErr, req.Command, col)
 }
 
-// reply 解析解释器 stdout（{"result": X} / {"error": msg} / {}）并回帧。
+// reply parses the interpreter's stdout ({"result": X} / {"error": msg} / {}) and replies with a frame.
 //
-// stdout 兜底：解析不出 JSON 时，用退出码 + stderr 尾部拼一条错误，覆盖「脚本语法错误
-// 让整份文件解析失败」「解释器崩溃」这类模板抓不到的路径。
+// The stdout fallback: when no JSON can be parsed, an error is assembled from the exit code plus the stderr tail,
+// covering the paths the template cannot catch — "a syntax error makes the whole file fail to parse", "the
+// interpreter crashed" and the like.
 func (h *Host) reply(stdout []byte, waitErr error, command string, col *stderrCollector) {
 	logs := col.String()
 	var interp map[string]json.RawMessage
@@ -192,13 +199,13 @@ func (h *Host) reply(stdout []byte, waitErr error, command string, col *stderrCo
 			h.sendError(msg, logs, col.truncated)
 			return
 		}
-		// 既无 result 也无 error（如模板里写出的 "{}"）：当作无返回值完成。
+		// Neither result nor error (the "{}" the templates emit): treat it as done without a return value.
 		h.sendDone(nil, logs, col.truncated)
 		return
 	}
 
 	if waitErr == nil {
-		// 正常退出却读不到结构化结果：模板 bug 之类的异常，如实报出来。
+		// A clean exit with no structured result: an anomaly such as a template bug, so report it honestly.
 		h.sendError("codehost: "+command+" produced no parseable result", logs, col.truncated)
 		return
 	}
@@ -209,7 +216,7 @@ func (h *Host) reply(stdout []byte, waitErr error, command string, col *stderrCo
 	h.sendError(msg, logs, col.truncated)
 }
 
-// ---------- 协议帧 ----------
+// ---------- Protocol frames ----------
 
 func (h *Host) readRequest() (*request, error) {
 	header := make([]byte, 4)
@@ -256,21 +263,22 @@ func (h *Host) sendError(msg, logs string, trunc bool) {
 type doneMsg struct {
 	Action string          `json:"action"`
 	Result json.RawMessage `json:"result,omitempty"`
-	Logs   string          `json:"logs,omitempty"`          // 脚本 stderr 全文（print 输出，可能截断）
-	Trunc  bool            `json:"logs_truncated,omitempty"` // logs 是否因超限被截断
+	Logs   string          `json:"logs,omitempty"`           // the full script stderr (print output, possibly truncated)
+	Trunc  bool            `json:"logs_truncated,omitempty"` // whether logs were truncated by the cap
 }
 
 type errorMsg struct {
-	Action string          `json:"action"`
-	Error  string          `json:"error"`
-	Logs   string          `json:"logs,omitempty"`          // 错误时的完整 stderr（含 traceback / stack）
-	Trunc  bool            `json:"logs_truncated,omitempty"` // logs 是否因超限被截断
+	Action string `json:"action"`
+	Error  string `json:"error"`
+	Logs   string `json:"logs,omitempty"`           // the full stderr on error (including a traceback / stack)
+	Trunc  bool   `json:"logs_truncated,omitempty"` // whether logs were truncated by the cap
 }
 
-// ---------- 输出收集 ----------
+// ---------- Output collection ----------
 
-// cappedBuffer 有上限地收集解释器 stdout。超出的部分照常返回写入长度（让 os/exec 的
-// 复制 goroutine 不报错），但不再落盘 —— 结果进协议帧，本就有 10MB 上限。
+// cappedBuffer collects the interpreter's stdout up to a cap. Beyond the cap the write length is still reported (so
+// os/exec's copying goroutine does not error) but nothing more is stored — the result goes into a protocol frame,
+// which already has a 10MB cap.
 type cappedBuffer struct {
 	buf bytes.Buffer
 	max int
@@ -292,16 +300,16 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 
 func (b *cappedBuffer) Bytes() []byte { return b.buf.Bytes() }
 
-// stderrCollector 把解释器 stderr 转发给 codehost 自己的 stderr，同时尾部留存 max 字节
-// 供 logs 回传，超限置 truncated。
+// stderrCollector forwards the interpreter's stderr to codehost's own stderr while keeping the last max bytes for
+// returning as logs, setting truncated when the cap is exceeded.
 //
-// 转发目的地要说清：sandboxd 起 codehost 时把它的 stderr 接到 io.Discard（见
-// daemon/worker.go 的 spawnCodehost），所以这段输出**不会**进服务日志。
-// 脚本 print 真正回传给 nexus 的是下面那个 tail（协议帧的 logs 字段，尾部 64KB）；
-// 保留 dst 是为了 codehost 的单测与 standalone 调试能直接看到输出。
+// The forwarding destination needs to be clear: when sandboxd starts codehost it wires its stderr to io.Discard (see
+// spawnCodehost in daemon/worker.go), so this output does **not** reach the service log. What actually returns a
+// script's print output to nexus is the tail below (the logs field of the protocol frame, the last 64KB); dst is kept
+// so that codehost's unit tests and standalone debugging can see the output directly.
 //
-// 为什么留尾部而不是前缀：错误 traceback / 最近的 print 都在尾部，回传给 nexus 的
-// logs 要的是「最后发生了什么」；且 lastNonEmptyLine 靠尾部才能拿到真正的最后一行。
+// Why the tail rather than the head: error tracebacks / the most recent prints are at the tail, and the logs returned
+// to nexus must answer "what happened last"; lastNonEmptyLine also needs the tail to find the real last line.
 type stderrCollector struct {
 	dst       io.Writer
 	max       int
