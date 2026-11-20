@@ -378,7 +378,8 @@ func (t *createOwnSkillTool) Meta() ToolMeta {
 		Name:     "create_own_skill",
 		Category: CategorySkillOwn,
 		Description: "Create a skill in your own private space: write SKILL.md and register it in the skill library. " +
-			"A private skill is visible to you only; to reuse it across agents, have the supervisor create a shared skill with create_shared_skill and bind it with bind_skill.",
+			"A private skill is visible to you only; to reuse it across agents, have the supervisor create a shared skill with create_shared_skill and bind it with bind_skill. " +
+			"Returns id / name / scope / bound_agents; a private skill is never bound, so bound_agents is always empty - do not try to bind it yourself.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -425,7 +426,16 @@ func createSkillInSpace(ctx context.Context, c *Context, args map[string]any, sp
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"id": id, "name": name, "scope": space}, nil
+	// bound_agents is always present, so "not bound to anyone" is explicit information rather than a missing key:
+	//   - a shared skill lists its creator: Create grants the creator visibility (a shared skill is restricted by default),
+	//     and that row is what makes the skill usable at all - the model must not report it as a binding it made;
+	//   - a private skill has no binding dimension (visibility follows the owner), so the list stays empty.
+	bound := []string{}
+	if space == SkillScopeTenant && c.AgentID != "" && c.AgentName != "" {
+		// The same condition as skillManager.Create's automatic grant: no agent context means no creator row either.
+		bound = append(bound, c.AgentName)
+	}
+	return map[string]any{"id": id, "name": name, "scope": space, "bound_agents": bound}, nil
 }
 
 // createSharedSkillTool creates a "tenant-level shared" skill (super agent only: category skill-admin, closed at three
@@ -441,7 +451,8 @@ func (t *createSharedSkillTool) Meta() ToolMeta {
 		Name:     "create_shared_skill",
 		Category: CategorySkillAdmin,
 		Description: "Create a tenant-level shared skill (supervisor only): write SKILL.md and register it in the skill library. " +
-			"Other agents only see it after bind_skill binds it; by default only you are granted, so it never spreads on its own.",
+			"Other agents only see it after bind_skill binds it; by default only you are granted, so it never spreads on its own. " +
+			"Returns id / name / scope / bound_agents, where bound_agents lists who can already see it (the creator) - binding anyone else is a separate, explicit bind_skill call.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -723,7 +734,8 @@ func (t *createAgentSkillTool) Meta() ToolMeta {
 		Category: CategorySkillAdmin,
 		Description: "Create a **specified agent**'s private skill (supervisor only): write SKILL.md and register it in the skill library. " +
 			"The skill belongs to the target agent and only that agent can see it; all content goes into skill_md. " +
-			"To share it between several agents, use create_shared_skill + bind_skill instead.",
+			"To share it between several agents, use create_shared_skill + bind_skill instead. " +
+			"Returns id / name / scope / bound_agents; a private skill is never bound, so bound_agents is always empty.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

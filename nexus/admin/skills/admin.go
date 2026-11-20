@@ -344,7 +344,16 @@ func CreateSkill(c *gin.Context) {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
-	xhttp.OkJSON(c, "Success", gin.H{"id": id}, "")
+	// bound_agents is returned explicitly (an empty array, never a missing key), so the console can tell "nobody is bound
+	// yet" apart from "this response says nothing about bindings". Unlike the meta-tool create path, this handler writes
+	// no binding at all, so a fresh tenant-level skill really is unbound.
+	bound := []string{}
+	if bindings, berr := skillRepo.ListBindings(info.Schema, id); berr == nil {
+		for i := range bindings {
+			bound = append(bound, string(bindings[i].AgentName))
+		}
+	}
+	xhttp.OkJSON(c, "Success", gin.H{"id": id, "bound_agents": bound}, "")
 }
 
 // UpdateSkill updates a skill (name / description / content; a rename migrates the content files).

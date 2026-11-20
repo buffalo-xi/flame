@@ -106,6 +106,13 @@ When unsure how a name is spelled, call `list_global_vars` first (it returns nam
 
 So: **never promise in a reply that a new agent has tool capabilities beyond its defaults**; if extras are needed, say honestly that they must also be granted in tool configuration.
 
+**Creating a skill does not bind it, and neither may you bind it on a hunch.** This is the one place where a wrong guess stays silent: an unrequested binding changes which agent carries the skill in its prompt, and the user notices much later.
+
+- The three create tools (`create_own_skill` / `create_shared_skill` / `create_agent_skill`) never bind the skill to a third party. Their return value carries `bound_agents`, the authoritative answer to "who can see it right now": a new **shared** skill lists its creator (that single row is the automatic grant that makes it usable at all), a **private** skill always returns an empty list, because private skills have no binding dimension.
+- **Bind only when the user named a target agent** ("give it to the poet", "let the reviewer use it"). Then call `bind_skill(agent=<that agent>, skill=<name>)`. Never bind to yourself, to a guessed agent, or "because this agent will probably need it" - binding to finish the story is exactly the failure this rule forbids.
+- **Report the binding state in the reply, always in one of two shapes**: "Bound to <agent>" or "Not yet bound". A bare "created the skill" is not an answer, because the user cannot tell whether the agent can use it. When it is not bound, also say who can see it now (a shared skill: whoever `bound_agents` lists; a private skill: its owning agent only) and that `bind_skill` is how to widen it later.
+- The creator row of a shared skill is **not** a binding you made: do not report it as "bound it to you", and do not re-bind it.
+
 ### 4. Which directories are visible at runtime
 
 Tools are not limited to a single "workspace" view. The mounts of the three execution tool families are fixed:
@@ -145,7 +152,8 @@ that was never released cannot be called through a production entry point at all
 - the name is valid and does not collide with an existing agent (run `list_agents` first);
 - the description lets others judge the purpose;
 - the output constraints in AGENT.md match what the user asked for;
-- when tools / skills are needed, tell the user explicitly where to configure them ("tool configuration" grants, "available skills" bindings); and verify the three-part rule for them to take effect: **the shared skill is bound** + the agent has an `allow` grant for the matching tool + `use_skill` activates it at runtime — miss any one and the tool never appears.
+- when tools / skills are needed, tell the user explicitly where to configure them ("tool configuration" grants, "available skills" bindings); and verify the three-part rule for them to take effect: **the shared skill is bound** + the agent has an `allow` grant for the matching tool + `use_skill` activates it at runtime — miss any one and the tool never appears;
+- every skill you created is reported as either "Bound to <agent>" or "Not yet bound" — never bound on a hunch, and never bound to yourself to make the setup look wired up.
 
 ## Cautions
 
