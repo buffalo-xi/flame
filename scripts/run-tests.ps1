@@ -15,12 +15,20 @@
     -count=1 is passed on purpose: a cached "ok" from an earlier tree must not be able to hide a
     failure from the current one.
 
+    The copy rules are checked at the end through `check-locale.ps1 -Gate` and fold into the same
+    verdict: a Go comment or a display field that drifts back to Chinese is a source rule violation
+    (AGENTS.md), and it is cheap enough to run next to the tests. It always scans all four modules,
+    even when -Module narrows the test run.
+
 .PARAMETER Module
     Restrict the run to some modules. Default: all four.
 
 .PARAMETER RequireDocker
     Fail instead of skipping when the Docker daemon is unreachable (use this in CI, where a silent
     skip would quietly drop coverage).
+
+.PARAMETER SkipCopyCheck
+    Skip the copy-rule step (for a run that only cares about the tests, e.g. while bisecting).
 
 .EXAMPLE
     pwsh scripts/run-tests.ps1
@@ -30,12 +38,17 @@
 
 .EXAMPLE
     pwsh scripts/run-tests.ps1 -RequireDocker
+
+.EXAMPLE
+    pwsh scripts/run-tests.ps1 -SkipCopyCheck
 #>
 param(
     [ValidateSet('tools', 'nexus', 'sandboxd', 'sandboxg')]
     [string[]]$Module = @('tools', 'nexus', 'sandboxd', 'sandboxg'),
 
-    [switch]$RequireDocker
+    [switch]$RequireDocker,
+
+    [switch]$SkipCopyCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -145,10 +158,33 @@ foreach ($pkg in $skipped) {
     Write-Host ("  skip  {0}  (needs docker)" -f $pkg) -ForegroundColor Yellow
 }
 
+# Copy rules last: they do not need a database or Docker, only the sources. Run in a child process
+# because check-locale.ps1 exits, and its exit code must not end this script's own verdict.
+$copyOk = $true
+if (-not $SkipCopyCheck) {
+    $localeScript = Join-Path $PSScriptRoot 'check-locale.ps1'
+    $copyOutput = & powershell -NoProfile -File $localeScript -Gate 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $copyOk = $false
+        Write-Host '  FAIL  copy rules' -ForegroundColor Red
+        $copyOutput | Where-Object { $_ -match 'GATE FAILED|^  - ' } |
+            Select-Object -First 20 |
+            ForEach-Object { Write-Host ("        {0}" -f $_) -ForegroundColor DarkGray }
+    }
+    else {
+        Write-Host '  ok    copy rules' -ForegroundColor Green
+    }
+}
+
 Write-Host ''
-if ($failed.Count -gt 0) {
-    Write-Host ("{0} module(s) failed: {1}" -f $failed.Count, ($failed -join ', ')) -ForegroundColor Red
+if ($failed.Count -gt 0 -or -not $copyOk) {
+    if ($failed.Count -gt 0) {
+        Write-Host ("{0} module(s) failed: {1}" -f $failed.Count, ($failed -join ', ')) -ForegroundColor Red
+    }
+    if (-not $copyOk) {
+        Write-Host 'the copy rules failed; run scripts/check-locale.ps1 -Gate for the full list' -ForegroundColor Red
+    }
     exit 1
 }
 
-Write-Host ("all {0} module(s) passed" -f $Module.Count) -ForegroundColor Green
+Write-Host ("all {0} module(s) passed, copy rules clean" -f $Module.Count) -ForegroundColor Green

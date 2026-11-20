@@ -56,6 +56,23 @@ tenant's language:
 This rule constrains only **the body text written into files**; it does not affect reply language — replies still follow the
 user, see `responseLanguageRule` in `nexus/service/agent/agent_impl.go`.
 
+## Comments are English; what a user reads follows the user
+
+Two things that are easy to conflate, and both directions are wrong in their own way:
+
+- **code comments** written or rewritten by an AI assistant (Go, `.vue` / `.js`, SQL, `_test.go`) are **English**, whatever
+  language the user writes in. A comment is read by whoever opens the file next — never by a tenant — and a file whose comments
+  alternate between two languages is harder to review than a file in either language;
+- **anything a user reads** — labels, buttons, empty states, errors, run text — **follows the user's language**, and it comes
+  from the locale bundle. Hardcoding English is the same defect as hardcoding Chinese: it just breaks a different user. The
+  error path is code + bundle (`nexus/docs/error-codes.md`), the UI path is `t()` over
+  `desktop/src/locales/{zh-CN,en}/**`.
+
+Scope of the comment rule is **the lines you write or rewrite**, not the whole file: a touched file with a large Chinese
+comment block is not converted wholesale, because that is how a diff becomes unreviewable. Go is already at zero and gated
+(`scripts/check-locale.ps1 -Gate`, run by `scripts/run-tests.ps1`); the desktop backlog is section 7b of the same script —
+reported so it can shrink by touch rather than in one sweep.
+
 ## Commit messages must be English
 
 Commit subjects and bodies are **English**, in Conventional Commits form: `type(scope): subject`, where `type` is `feat` /
@@ -107,7 +124,8 @@ Verification:
   (`schema.sql` + `seed.sql`) into a throwaway schema with `search_path` set — the way `CreateTenant` does — and drops the
   database again. The template is dump-ordered: tables first, every PK / FK last, never a column-level `REFERENCES`.
 - running the tests: `powershell -File scripts/run-tests.ps1` covers all four modules (separate modules, no `go.work`). The
-  sandboxd E2E packages are skipped and listed when Docker is unreachable; `-RequireDocker` turns that into a failure.
+  sandboxd E2E packages are skipped and listed when Docker is unreachable; `-RequireDocker` turns that into a failure. The
+  run ends with the copy-rule gate (`check-locale.ps1 -Gate`, always over all four modules); `-SkipCopyCheck` drops that step.
 - checking tenant provisioning through the driver: `FLAME_TEST_DSN='postgres://postgres:pg@localhost:5432/postgres?sslmode=disable'
   go test ./platform/provision -run Template` runs `template/schema.sql` + `seed.sql` the way `CreateTenant` does (one
   multi-statement `Exec` inside a transaction with a transaction-scoped `search_path`) and asserts the seeded `main` agent.
@@ -115,4 +133,6 @@ Verification:
 - checking the copy rules: `powershell -File scripts/check-locale.ps1` reports the Chinese left in Go sources, the
   user-visible copy that never reaches a locale bundle (a response without a code, an `ErrCode` whose code has no bundle
 entry, hardcoded Chinese display fields), and the
-  code-versus-bundle diff for `en` / `zh-CN`. It is a baseline, not a gate.
+  code-versus-bundle diff for `en` / `zh-CN`. It is a baseline by default; `-Gate` turns the decidable checks (Chinese
+comments, Chinese in non-test Go sources, un-bundled Chinese copy in the desktop sources, `ErrJSON`, a Chinese `msg`) into
+  an exit code, with the two allowlists at the bottom of the script as the only exceptions.

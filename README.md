@@ -11,7 +11,7 @@ Ships with a Vue 3 admin console (`desktop/`), shared by the tenant side and the
 
 **Build artifacts**
 
-- **Agents** — prompt + model + tools + skills, with knowledge bases and tool permissions
+- **Agents** — prompt + model + tools + skills, with knowledge bases, tool permissions and a per-agent default reply language
 - **Skills** — a capability package of `SKILL.md` plus scripts, executed inside the sandbox
 - **Tools** — a tool catalog (MCP / RPC and other inbound capabilities), plugins, and custom tools
 - **Workflows** — visual orchestration (nodes / edges / variables) with a debugger, versions and releases

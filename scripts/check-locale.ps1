@@ -16,14 +16,31 @@
        into the UI, and so does an ErrCode whose code is missing from a bundle. The ErrJSON helper was
        removed from tools/xhttp in 2026-11; section 3 below stays as a tripwire in case it comes back.
 
+    3. The other direction: user-facing copy that never reaches a locale bundle. Section 7 scans the
+       desktop sources with comments stripped, because "the file contains N lines of Chinese" counts
+       design notes as if they were copy and makes the remaining L4 work look an order of magnitude
+       bigger than it is. What is left is either copy that needs a key, or a business value that must
+       not be translated (see the i18n plan, pitfall 2) - both are worth a human look, for opposite
+       reasons.
+
     This is a baseline, not a gate. Regex cannot follow variables or helper wrappers, so the numbers are
     a lower bound and the lists are meant to be read by a human, not asserted on by CI.
+
+    -Gate narrows that to the checks that are unambiguous and finishes with an exit code: Chinese comments
+    anywhere, Chinese outside comments in a Go file that is not a test, un-bundled Chinese copy in the
+    desktop sources, ErrJSON, and a Chinese msg on an ErrCode line. Test fixtures are allowed - they are
+    data, and the whole point of the split above is that they are not a todo list. The remaining
+    exceptions are two short allowlists at the bottom of this file, each with its reason.
 
 .PARAMETER Module
     Limit the scan to some Go modules. Default: all four.
 
 .PARAMETER Detailed
     Print every hit instead of only the per-file counts and the top offenders.
+
+.PARAMETER Gate
+    Exit non-zero when a rule that can be decided by regex is violated. Intended for CI and for a
+    pre-commit run; running without it only prints the report.
 
 .EXAMPLE
     powershell -File scripts/check-locale.ps1
@@ -35,7 +52,9 @@ param(
     [ValidateSet('tools', 'nexus', 'sandboxd', 'sandboxg')]
     [string[]]$Module = @('tools', 'nexus', 'sandboxd', 'sandboxg'),
 
-    [switch]$Detailed
+    [switch]$Detailed,
+
+    [switch]$Gate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,7 +121,14 @@ foreach ($name in $Module) {
             $o = 0
             foreach ($line in ($raw -split "`r?`n")) {
                 if ($line -notmatch $han) { continue }
-                if ($line -match '^\s*//') { $c++ } else { $o++ }
+                if ($line -match '^\s*//') {
+                    # A comment often quotes the data it describes: the `系统:` line of a capability probe, the DOM text of a
+                    # button, a byte offset inside "中". That is a fixture living in a comment, not prose to translate, so
+                    # quoted spans are dropped before counting - at the cost of missing a real Chinese sentence in quotes.
+                    $quoted = [regex]::Replace($line, '"[^"]*"|`[^`]*`', '')
+                    if ($quoted -match $han) { $c++ }
+                }
+                else { $o++ }
             }
             if ($c -gt 0) { $commentLines[$rel] = $c }
             if ($o -gt 0) { $otherLines[$rel] = $o }
@@ -227,6 +253,98 @@ if (-not $Detailed) { $shown = $displayHits | Select-Object -First 15 }
 foreach ($hit in $shown) { Write-Host ("  {0}" -f $hit) -ForegroundColor DarkGray }
 if ($displayHits.Count -gt $shown.Count) {
     Write-Host ("  ... {0} more (-Detailed)" -f ($displayHits.Count - $shown.Count)) -ForegroundColor DarkGray
+}
+
+# ---------------------------------------------------------------- 7. desktop copy
+# Chinese left in a .vue / .js file is either copy that never reached a bundle (a defect) or a business
+# value that must not be translated (a hazard). Comments are stripped first: the old way of counting
+# "lines containing Chinese" mixed the two and made the remaining L4 work look far bigger than it is.
+$desktopDir = Join-Path $repoRoot 'desktop/src'
+$desktopCopy = @{}
+$desktopComments = @{}
+$desktopScanned = 0
+if (Test-Path $desktopDir) {
+    $files = @(Get-ChildItem -Path $desktopDir -Recurse -File -Include *.vue, *.js |
+        Where-Object { $_.FullName -notlike '*\node_modules\*' })
+    $desktopScanned = $files.Count
+    foreach ($file in $files) {
+        $raw = Get-Content -Path $file.FullName -Raw -Encoding UTF8
+        if (-not $raw -or $raw -notmatch $han) { continue }
+        # Block comments, HTML comments, then line comments. A `//` inside a URL truncates the rest of
+        # that line, which can only hide a hit - another reason this stays a lower bound.
+        $code = [regex]::Replace($raw, '(?s)/\*.*?\*/', '')
+        $code = [regex]::Replace($code, '(?s)<!--.*?-->', '')
+        $code = [regex]::Replace($code, '(?m)//.*$', '')
+        $n = 0
+        foreach ($line in ($code -split "`r?`n")) {
+            if ($line -match $han) { $n++ }
+        }
+        if ($n -gt 0) {
+            $desktopCopy[$file.FullName.Substring($repoRoot.Length + 1)] = $n
+        }
+        # Comments are reported separately and are not gated: the rule is "a comment you touch is English", not a
+        # wholesale migration, because the backlog is two orders of magnitude larger than the Go one.
+        $m = 0
+        foreach ($line in ($raw -split "`r?`n")) {
+            if ($line -notmatch $han) { continue }
+            if ($line -match '^\s*(//|/\*|\*|<!--)') { $m++ }
+        }
+        if ($m -gt 0) {
+            $desktopComments[$file.FullName.Substring($repoRoot.Length + 1)] = $m
+        }
+    }
+    Show-Ranking -Table $desktopCopy -Title ("7. Chinese outside comments in desktop sources ({0} files scanned)" -f $desktopScanned) -Unit 'lines'
+    Show-Ranking -Table $desktopComments -Title '7b. Chinese comments in desktop sources (not gated: convert the ones you touch)' -Unit 'lines'
+}
+else {
+    Write-Host ''
+    Write-Host '7. desktop sources: not found (skipped)' -ForegroundColor DarkGray
+}
+
+# ---------------------------------------------------------------- 8. gate
+# Two short allowlists and nothing else: every entry is Chinese the product deliberately keeps, and adding
+# one is a decision that belongs in review, not in a passing build.
+$nonTestChineseAllowed = @(
+    # zh-CN skeleton bodies: generated content for a Chinese-language tenant (see docs/i18n-plan.md, class 5)
+    'nexus\shared\skeleton\skeleton.go',
+    # responseLanguageRule: bilingual on purpose, so a non-Chinese author of AGENT.md can read the constraint
+    'nexus\service\agent\agent_impl.go'
+)
+$desktopChineseAllowed = @(
+    # the language picker lists each language by its own name; translating it defeats the picker
+    'desktop\src\locales\index.js',
+    # legacy `msg` fallback, used only when a backend is old enough to have no `error` field
+    'desktop\src\tenant\components\MainWindow.vue'
+)
+
+$gateProblems = New-Object System.Collections.Generic.List[string]
+foreach ($f in $commentLines.Keys) {
+    $gateProblems.Add(("Chinese comment: {0} ({1} line(s))" -f $f, $commentLines[$f]))
+}
+foreach ($f in $otherLines.Keys) {
+    if ($f -like '*_test.go') { continue }          # fixtures are data, not prose
+    if ($nonTestChineseAllowed -contains $f) { continue }
+    $gateProblems.Add(("Chinese outside comments: {0} ({1} line(s))" -f $f, $otherLines[$f]))
+}
+foreach ($f in $desktopCopy.Keys) {
+    if ($desktopChineseAllowed -contains $f) { continue }
+    $gateProblems.Add(("Chinese copy in desktop sources: {0} ({1} line(s))" -f $f, $desktopCopy[$f]))
+}
+foreach ($f in $errJSON.Keys) {
+    $gateProblems.Add(("ErrJSON is back (it is meant to be gone): {0}" -f $f))
+}
+foreach ($f in $msgChinese.Keys) {
+    $gateProblems.Add(("an ErrCode msg contains Chinese: {0} ({1} call(s))" -f $f, $msgChinese[$f]))
+}
+
+if ($Gate) {
+    Write-Host ''
+    if ($gateProblems.Count -gt 0) {
+        Write-Host ("GATE FAILED: {0} problem(s) - see docs/i18n-plan.md for the rule behind each" -f $gateProblems.Count) -ForegroundColor Red
+        foreach ($p in $gateProblems) { Write-Host ("  - " + $p) -ForegroundColor Red }
+        exit 1
+    }
+    Write-Host 'GATE PASSED: no Chinese in comments, no Chinese in non-test Go sources beyond the allowlist, no un-bundled desktop copy, no ErrJSON, no Chinese msg' -ForegroundColor Green
 }
 
 Write-Host ''

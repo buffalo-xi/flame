@@ -1,39 +1,42 @@
-# 界面截图
+# Screenshots
 
-这个目录放 README 引用的界面截图。目标是让第一次打开仓库的人**不用跑起来**就能看清系统长什么样、有哪些页面。
+[中文](README.zh.md) | English
 
-## 建议截这几张
+This directory holds the screenshots the README links to. The point is that someone opening the repository for the first time
+can see what the system looks like and which screens it has **without running it**.
 
-按「一个页面说明一个能力」来选，不用全截：
+## Which ones to take
 
-| 文件名 | 页面 | 想表达什么 |
+Pick by "one screen demonstrates one capability"; there is no need to capture everything:
+
+| File | Screen | What it shows |
 |---|---|---|
-| `01-runtime.png` | 运行 → 运行中 | 跨实例运行台账：谁在跑、跑了多久、可终止 |
-| `02-runtime-history.png` | 运行 → 运行历史 | 跑完的记录可按时间段 / 状态查，可导出 |
-| `03-flow-editor.png` | 工作流 → 编辑 | 可视化编排（节点 / 连线 / 变量面板） |
-| `04-agent.png` | 智能体 | 提示词 / 模型 / 工具 / 技能的装配面 |
-| `05-endpoints.png` | 端点 | 把智能体 / 工作流暴露成 MCP / RPC |
-| `06-capabilities.png` | 工具 | 工具目录 / 插件 / 自定义工具 |
+| `01-runtime.png` | Runs → Running | the cross-instance run ledger: what is running, for how long, what can be stopped |
+| `02-runtime-history.png` | Runs → History | finished runs, searchable by time range and status, exportable |
+| `03-flow-editor.png` | Workflows → Edit | visual orchestration (nodes / edges / variable panel) |
+| `04-agent.png` | Agents | the assembly surface: prompt / model / tools / skills |
+| `05-endpoints.png` | Endpoints | exposing an agent or a workflow as MCP / RPC |
+| `06-capabilities.png` | Tools | tool catalog / plugins / custom tools |
 
-## 规格
+## Specs
 
-- **尺寸**：1440×900 或 1600×1000（够看清，又不至于太大）
-- **格式**：PNG；同一个页面不要混用深浅色主题
-- **体积**：单张压缩到 **300 KB 以内**（可用 TinyPNG / `pngquant`），否则 clone 会变慢
-- **命名**：`序号-页面.png`，序号决定 README 里的顺序
+- **Size**: 1440×900 or 1600×1000 — large enough to read, not so large that the repository bloats
+- **Format**: PNG; do not mix the light and dark theme across screenshots of the same screen
+- **Weight**: compress each one to **under 300 KB** (TinyPNG / `pngquant`), otherwise cloning gets slow
+- **Naming**: `NN-screen.png`; the number decides the order in the README
 
-## 截图前先清场
+## Clean up before capturing
 
-- 把租户名、账号名换成演示值（如 `demo` / `acme`）
-- 不要露出真实的模型 key、token、内网地址、客户名
-- 运行历史里如果有真实报错信息，挑一条干净的
+- Replace tenant and account names with demo values (`demo` / `acme`)
+- Never show a real model key, token, internal address or customer name
+- If the run history holds real error messages, pick a clean record
 
-## 怎么被引用
+## How they are referenced
 
-图片放进本目录后，根 `README.md` 的「界面一览」区块用相对路径引用：
+Drop the images here, then reference them from the "screens" block of the root `README.md` with a relative path:
 
 ```markdown
-![运行台账](docs/screenshots/01-runtime.png)
+![run ledger](docs/screenshots/01-runtime.png)
 ```
 
-GitHub 会直接渲染相对路径的 PNG。
+GitHub renders relative PNG paths directly.
