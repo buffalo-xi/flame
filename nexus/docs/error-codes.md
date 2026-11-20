@@ -65,7 +65,7 @@ Constraints:
 | `asset` | `asset.not_found`, `asset.not_available`, `asset.storage_unavailable`, `asset.build_conflict` (`params.build`, `data.existing`) | `not_available` = exists but is not listed to this tenant |
 | `flow` | `flow.not_released`, `flow.deprecated` | same word as `models.StatusDeprecated`; the UI says "deprecated" too |
 | `agent` | `agent.call_depth_exceeded`, `agent.not_found` | |
-| `skill` | `skill.not_found` | |
+| `skill` | `skill.not_found`, `skill.not_invocable`, `skill.invalid_command` | `not_invocable` = the skill exists but is not open as a user command (`user_invocable` is off); `invalid_command` = `command_dispatch` / `command_tool` disagree (only an empty value and `tool` are valid, and `tool` needs a target) |
 | `tool` | `tool.not_found`, `tool.contract_readonly` | custom tools (`customtools`); `contract_readonly` covers create / update / delete / upload of TOOL.json |
 | `version` | `version.not_found` | the version domain, same domain as release / rollback / apply |
 | `llm` | `llm.model_not_found`, `llm.provider_not_found` | |

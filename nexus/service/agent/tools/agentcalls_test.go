@@ -210,6 +210,45 @@ func TestUpdateSharedSkillPassesRestricted(t *testing.T) {
 	}
 }
 
+// stubCaller records the CallRequest so the language pass-through can be asserted.
+type stubCaller struct {
+	AgentCaller
+	got CallRequest
+}
+
+func (s *stubCaller) Call(_ context.Context, req CallRequest) (string, error) {
+	s.got = req
+	return "ok", nil
+}
+
+// A decided language travels to the callee - a caller pin or the agent's own default_language, so a chain keeps one language.
+// The bare product fallback does not travel: as a pin it would force "en" onto the children of a Chinese conversation.
+func TestCallAgentPassesDecidedLanguage(t *testing.T) {
+	cases := []struct {
+		name string
+		ctx  Context
+		want string
+	}{
+		{"caller pin", Context{OutputLanguage: "zh-CN", OutputLanguagePinned: true, OutputLanguageChosen: true}, "zh-CN"},
+		{"agent default", Context{OutputLanguage: "zh-CN", OutputLanguageChosen: true}, "zh-CN"},
+		{"product fallback", Context{OutputLanguage: "en"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			caller := &stubCaller{}
+			c := tc.ctx
+			c.Schema, c.AgentName, c.AgentID, c.Caller = "t0", "caller", "self", caller
+			if _, err := (&callAgentTool{}).Execute(context.Background(), &c,
+				map[string]any{"agent_name": "poet"}); err != nil {
+				t.Fatal(err)
+			}
+			if caller.got.OutputLanguage != tc.want {
+				t.Fatalf("OutputLanguage = %q, want %q", caller.got.OutputLanguage, tc.want)
+			}
+		})
+	}
+}
+
 // A private skill does not accept restricted: its visibility is decided by the owning agent, and ignoring the argument silently
 // would make the model believe it changed something.
 func TestUpdateOwnSkillRejectsRestricted(t *testing.T) {

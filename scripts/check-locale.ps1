@@ -306,9 +306,7 @@ else {
 # one is a decision that belongs in review, not in a passing build.
 $nonTestChineseAllowed = @(
     # zh-CN skeleton bodies: generated content for a Chinese-language tenant (see docs/i18n-plan.md, class 5)
-    'nexus\shared\skeleton\skeleton.go',
-    # responseLanguageRule: bilingual on purpose, so a non-Chinese author of AGENT.md can read the constraint
-    'nexus\service\agent\agent_impl.go'
+    'nexus\shared\skeleton\skeleton.go'
 )
 $desktopChineseAllowed = @(
     # the language picker lists each language by its own name; translating it defeats the picker

@@ -222,8 +222,9 @@ func newAgentImpl(instance *models.Agent, schema string, arguments map[string]an
 	// Chinese-first rule and an English-first prompt.
 	outputLanguage, outputLanguagePinned := resolveOutputLanguage(arguments, instance)
 	// Whether anybody actually chose this language, as opposed to it being the product fallback. Only a chosen value is
-	// worth handing to the next hop (a workflow exposes it as builtin `language`): telling a flow that a run is "en"
-	// because no one configured anything would read as a decision and steer templates the wrong way.
+	// worth handing to the next hop - a workflow exposes it as builtin `language`, and call_agent passes it to the child as its
+	// pinned language: telling either of them that a run is "en" because no one configured anything would read as a decision and
+	// steer the flow's templates or the child's reply the wrong way.
 	a.languageChosen = outputLanguagePinned || agentDefaultLanguage(instance) != ""
 
 	a.toolCtx = &tools.Context{
@@ -259,6 +260,7 @@ func newAgentImpl(instance *models.Agent, schema string, arguments map[string]an
 		CallChain:            callChain,
 		OutputLanguage:       outputLanguage,
 		OutputLanguagePinned: outputLanguagePinned,
+		OutputLanguageChosen: a.languageChosen,
 		Timeout:              60 * time.Second,
 		MaxOutput:            a.limits.MaxOutputBytes,
 		Sandbox:              tools.CurrentSandbox(),
@@ -285,6 +287,11 @@ func newAgentImpl(instance *models.Agent, schema string, arguments map[string]an
 		Temperature:   temperature,
 		TopP:          topP,
 	}
+
+	// A "/name args" invocation picked by the user in the chat window: rewrite the message and pre-activate the skill before
+	// the first tool resolution, so the tools it declares are already declared to the model (see applyCommand). A run without
+	// the reserved argument is unaffected.
+	a.applyCommand(context.Background())
 
 	// 3. Bind tools (the tool grant system takes priority; when unconfigured only the built-in super agent is fully open)
 	a.refreshToolDefs()
@@ -519,15 +526,13 @@ func (a *agentImpl) Stream(parent context.Context) error {
 	}
 	ctx, cancel := context.WithCancelCause(parent)
 	defer cancel(nil)
-	// Carry the run's output language on ctx (the same mechanism as callchain.With). Everything this run calls -
-	// workflows, sub-agents, remote endpoints - can then read it: a flow exposes it as the builtin variable `language`,
-	// and a pinned value keeps travelling over the wire while a resolved default stops at the process boundary.
+	// Carry the run's output language on ctx (the same mechanism as callchain.With). Everything this run calls reads it from
+	// there - workflows (builtin `language`), sub-agents (call_agent) and remote endpoints (RPC / MCP tools, as
+	// params._meta.language): a decision made once holds for the whole chain instead of every hop re-guessing. Only the bare
+	// product fallback stays behind - sending "en" merely because nobody configured anything would override the peer's own
+	// default.
 	if c := a.toolCtx; c != nil && c.OutputLanguage != "" && a.languageChosen {
-		if c.OutputLanguagePinned {
-			ctx = core.WithPinnedLanguage(ctx, c.OutputLanguage)
-		} else {
-			ctx = core.WithLanguageHint(ctx, c.OutputLanguage)
-		}
+		ctx = core.WithPinnedLanguage(ctx, c.OutputLanguage)
 	}
 	if c := a.toolCtx; c != nil {
 		defer registerRun(runledger.Entry{
@@ -786,9 +791,12 @@ func outputLanguageHint(c *tools.Context) string {
 	}
 	if c.OutputLanguagePinned {
 		return fmt.Sprintf("The caller pinned the output language of this call: %s (%s). Answer in that language whatever language "+
-			"the input and this prompt are written in. If AGENT.md pins a language explicitly, AGENT.md still wins.", label, tag)
+			"the input and this prompt are written in, and use it for the whole output - the notes around tool calls, the progress "+
+			"updates and the conclusions included, never mixing two languages. If AGENT.md pins a language explicitly, "+
+			"AGENT.md still wins.", label, tag)
 	}
-	return fmt.Sprintf("No output language was specified for this call: reply in the language the input is written in, and when the "+
+	return fmt.Sprintf("No output language was specified for this call: reply in the language the input is written in, use the same "+
+		"language for the rest of the output (notes around tool calls, progress, conclusions) instead of mixing two, and when the "+
 		"input carries no language signal (pure JSON, ids, numbers), answer in %s (%s). If AGENT.md pins a language explicitly, "+
 		"AGENT.md still wins.", label, tag)
 }
@@ -830,17 +838,21 @@ func agentDefaultLanguage(inst *models.Agent) string {
 // the one regression a user notices immediately when the primary language switches to English.
 //
 // So this rule decouples the two: the prompt's language != the reply language, and the reply follows the user.
-// It is written in both languages on purpose: it does not rely on the model's reading comprehension of the other language, and it stays
-// readable to a non-Chinese author of AGENT.md.
+// It covers the **whole** output, not just the final answer: a model that answers in Chinese but narrates its tool calls in English reads
+// as two different speakers, and the mixed text is what a user notices first.
+// It is written in English only, like every other model-facing string (tool descriptions, labels, argument schemas): the rule constrains
+// language, so it has to be one unambiguous instruction - and a bilingual copy would invite the model to mirror the mix it describes.
 // An explicit setting in AGENT.md wins - some agents only ever serve one language (a writing tutor for one language, say), which is
 // deliberate and must not be overridden by this general rule.
 //
-// The value below is intentionally bilingual: it is model-facing copy that constrains reply language, not a comment or diagnostic.
-const responseLanguageRule = "回复语言：跟随用户当前使用的语言（用户用中文就用中文，用英文就用英文）。" +
-	"本提示词、工具说明、技能正文的语言**不**代表回复语言。" +
-	"仅当 AGENT.md 明确指定了固定语言时，才按它执行。\n" +
-	"Reply in the language the user writes in. The language of this prompt, of tool descriptions " +
-	"and of skill docs is NOT the reply language. Follow AGENT.md only if it explicitly pins one."
+// The value below is model-facing copy: English, like the rest of the prompt's own text.
+const responseLanguageRule = "Reply in the language the user writes in: Chinese input, Chinese reply; English input, English reply. " +
+	"Keep the whole output in that one language - the body, the notes before and after tool calls, progress updates, " +
+	"conclusions and error explanations. Never mix two languages; keep identifiers such as code, tool names and file paths " +
+	"verbatim. The language of this prompt, of tool descriptions and of skill docs is NOT the reply language. " +
+	"Follow AGENT.md only if it explicitly pins one language. When you call another agent (call_agent) or an external tool " +
+	"(mcp__ / rpc__), write the natural-language parts of the request in that same language and report the result back in it - " +
+	"a chain must not switch language halfway."
 
 // sandboxNotes builds the "sandbox environment" note: whether the sandbox can reach the network (sandboxd's **declaration**) plus what
 // is inside it (the raw probe output).

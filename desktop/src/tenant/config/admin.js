@@ -43,6 +43,8 @@ const adminApi = {
     relations: (id) => `${apiBase}/admin/agents/${id}/relations`,
     // 技能绑定（agent_skill_bindings 的 agent 侧）：GET 读取 | PUT 全量替换（{skill_ids}）
     skillBindings: (id) => `${apiBase}/admin/agents/${id}/skillbindings`,
+    // 对话窗口的斜杠命令（user_invocable 技能）：GET {items:[{name,description,dispatch,tool}]}
+    commands: (id) => `${apiBase}/admin/agents/${id}/commands`,
     // 定义域文件（agent 即文件夹）：files 列目录 | file 读/写/建/删
     files: (id) => `${apiBase}/admin/agents/${id}/files`,
     file: (id) => `${apiBase}/admin/agents/${id}/file`,

@@ -284,14 +284,16 @@ func installSkill(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		if md, ok := src.payload["metadata"].(map[string]any); ok && len(md) > 0 {
 			meta = xsql.JSONB{Data: md}
 		}
+		commandDispatch, commandTool := normalizeCommand(
+			asString(src.payload["command_dispatch"]), asString(src.payload["command_tool"]))
 		upd := &models.Skill{
 			ID:              string(prev.ID),
 			Name:            name,
 			Description:     xsql.String(asString(src.payload["description"])),
 			Metadata:        meta,
 			UserInvocable:   xsql.Bool(asBool(src.payload["user_invocable"])),
-			CommandDispatch: xsql.String(asString(src.payload["command_dispatch"])),
-			CommandTool:     xsql.String(asString(src.payload["command_tool"])),
+			CommandDispatch: xsql.String(commandDispatch),
+			CommandTool:     xsql.String(commandTool),
 			UpdatedBy:       xsql.UUID(info.ID),
 		}
 		if uerr := skillRepo.Update(info.Schema, upd); uerr != nil {
@@ -360,6 +362,8 @@ func insertInstalledSkill(info *auth.AuthInfo, name string, status int, payload 
 		meta = []byte("{}")
 	}
 	now := time.Now()
+	commandDispatch, commandTool := normalizeCommand(
+		asString(payload["command_dispatch"]), asString(payload["command_tool"]))
 
 	_, err = db.DB.Exec(`INSERT INTO `+tenantTable(info.Schema, "skills")+`
 		(id, name, description, created_by, updated_by, metadata, status, restricted,
@@ -369,8 +373,7 @@ func insertInstalledSkill(info *auth.AuthInfo, name string, status int, payload 
 		info.ID, info.ID, string(meta), status, false,
 		now, now,
 		asBool(payload["user_invocable"]),
-		asString(payload["command_dispatch"]),
-		asString(payload["command_tool"]))
+		commandDispatch, commandTool)
 	if err != nil {
 		return "", err
 	}
@@ -951,6 +954,7 @@ func restorePrivateSkills(info *auth.AuthInfo, agentID string, raw any) []string
 			continue
 		}
 
+		commandDispatch, commandTool := normalizeCommand(asString(m["command_dispatch"]), asString(m["command_tool"]))
 		sk := &models.Skill{
 			Name:            name,
 			Description:     xsql.String(asString(m["description"])),
@@ -958,8 +962,8 @@ func restorePrivateSkills(info *auth.AuthInfo, agentID string, raw any) []string
 			Status:          xsql.Int(models.StatusNormal),
 			Restricted:      xsql.Bool(asBool(m["restricted"])),
 			UserInvocable:   xsql.Bool(asBool(m["user_invocable"])),
-			CommandDispatch: xsql.String(asString(m["command_dispatch"])),
-			CommandTool:     xsql.String(asString(m["command_tool"])),
+			CommandDispatch: xsql.String(commandDispatch),
+			CommandTool:     xsql.String(commandTool),
 			AgentID:         xsql.UUID(agentID), // ownership points at the new agent, not the source one
 			CreatedBy:       xsql.UUID(info.ID),
 			UpdatedBy:       xsql.UUID(info.ID),
@@ -1492,4 +1496,18 @@ func flagFrom(payload map[string]any, key string, fallback bool) bool {
 func asBool(v any) bool {
 	b, _ := v.(bool)
 	return b
+}
+
+// normalizeCommand drops an unusable user-command definition on import.
+//
+// An asset pack may come from a newer or older build, so an unknown dispatch mode is ignored rather than rejected: refusing
+// the whole install over one optional frontmatter field would be worse, and a value nobody consumes would be a lie. The
+// pair is also repaired as a pair - a dispatch without a target tool (or the reverse) is no command at all.
+func normalizeCommand(dispatch, tool string) (string, string) {
+	dispatch = strings.TrimSpace(dispatch)
+	tool = strings.TrimSpace(tool)
+	if dispatch != "tool" || tool == "" {
+		return "", ""
+	}
+	return dispatch, tool
 }

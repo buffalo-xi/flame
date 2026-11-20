@@ -59,7 +59,7 @@
 | `asset` | `asset.not_found`、`asset.not_available`、`asset.storage_unavailable`、`asset.build_conflict`（`params.build`、`data.existing`） | `not_available` = 存在但未对本租户开放 |
 | `flow` | `flow.not_released`、`flow.deprecated` | 与 `models.StatusDeprecated`「废弃」同词，界面也叫废弃 |
 | `agent` | `agent.call_depth_exceeded`、`agent.not_found` | |
-| `skill` | `skill.not_found` | |
+| `skill` | `skill.not_found`、`skill.not_invocable`、`skill.invalid_command` | `not_invocable` = 技能存在但没开放为用户命令（`user_invocable` 未开）；`invalid_command` = `command_dispatch` 与 `command_tool` 不配套（只接受空值与 `tool`，选 `tool` 必须填目标工具） |
 | `tool` | `tool.not_found`、`tool.contract_readonly` | 自定义工具（`customtools`）；`contract_readonly` 覆盖 TOOL.json 的建 / 改 / 删 / 上传 |
 | `version` | `version.not_found` | 版本域，与 release / rollback / apply 同域 |
 | `llm` | `llm.model_not_found`、`llm.provider_not_found` | |

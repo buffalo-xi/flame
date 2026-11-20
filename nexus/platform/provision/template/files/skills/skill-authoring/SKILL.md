@@ -234,6 +234,32 @@ Must match `^[a-zA-Z0-9][a-zA-Z0-9-]*$` and be at most 64 characters:
 - lowercase + dashes: `git-pr-flow`, `report-format`;
 - recognizable at a glance: `code-review` beats `cr` or `helper`.
 
+## Making a skill a user command (`/name`)
+
+A skill can also be invoked **by the user** from the chat window: typing `/name args` runs it without the model deciding to
+pick it. Three frontmatter keys control this; they belong to the skill definition, so they version with it:
+
+| Key | Meaning |
+|---|---|
+| `user_invocable` | whether `/<name>` appears in the chat window's command menu. Default **off**: a skill stays model-only until someone turns this on |
+| `command_dispatch` | `""` (default) = inject `SKILL.md` and let the model work; `tool` = dispatch the arguments straight to `command_tool`, **bypassing the model** |
+| `command_tool` | the target tool for `command_dispatch: tool` (for example `local:rpc:daily-report`). Required whenever the dispatch mode is `tool` |
+
+What follows from those three keys:
+
+- a command is offered only to agents that can already **use** the skill (private + bound, plus whatever their discovery
+  setting admits). `/` never reaches a shared skill that `restricted` keeps away from that agent;
+- an injected command replaces the message the model sees with the body plus `Arguments: <rest>`, and pre-activates the
+  skill's tool dependencies, so the declared tools are available on the very next turn - the model does not need `use_skill`
+  again;
+- a `tool`-dispatched command receives `{command, commandName, skillName}`: the raw argument string, `"/name"` and the skill
+  name. Design the target tool around that shape;
+- dispatch bypasses the model, **never the grants**: the tool still has to be injected for that agent, otherwise the command
+  fails with a permission error.
+
+Do **not** make a skill a command when it needs understanding, clarification or multi-step judgement. A command is for "one
+sentence in, one fixed action out" - a thin wrapper around a tool, not a conversation.
+
 ## Which tools to use
 
 **Private** (your own, visible only to this agent) — usable only after **an administrator grants the agent `*_own_skill`**:

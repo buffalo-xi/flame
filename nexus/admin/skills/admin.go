@@ -5,6 +5,7 @@ package skills
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -246,6 +247,28 @@ type skillRequest struct {
 	Lang string `json:"lang"`
 }
 
+// validateCommand checks the user-command definition (OpenClaw user-invocable / command-dispatch / command-tool).
+//
+// The dispatch mode is a closed set: today only "" (inject the body and let the model work) and "tool" (dispatch straight to
+// command_tool, bypassing the model) are defined. Validating here matters because the column is free text and three write
+// paths reach it (this handler, asset-pack install, version restore) - a value nobody consumes would sit in the database
+// looking configured while every reader treats it as "not set".
+func validateCommand(dispatch, tool string) error {
+	switch strings.TrimSpace(dispatch) {
+	case "":
+		if strings.TrimSpace(tool) != "" {
+			return errors.New("command_tool requires command_dispatch=tool")
+		}
+	case "tool":
+		if strings.TrimSpace(tool) == "" {
+			return errors.New("command_dispatch=tool requires command_tool (the tool the command dispatches to)")
+		}
+	default:
+		return fmt.Errorf("unknown command_dispatch %q (only an empty value and \"tool\" are supported)", dispatch)
+	}
+	return nil
+}
+
 // CreateSkill creates a skill.
 func CreateSkill(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
@@ -319,6 +342,11 @@ func CreateSkill(c *gin.Context) {
 	}
 	if err := st.WriteFile(context.Background(), contentPath(info.Schema, agentName, req.Name), []byte(entry)); err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+
+	if verr := validateCommand(req.CommandDispatch, req.CommandTool); verr != nil {
+		xhttp.ErrCode(c, "skill.invalid_command", nil, verr.Error(), "")
 		return
 	}
 
@@ -423,6 +451,11 @@ func UpdateSkill(c *gin.Context) {
 		return
 	}
 	oldPath := contentPath(info.Schema, agentName, s.Name)
+
+	if verr := validateCommand(req.CommandDispatch, req.CommandTool); verr != nil {
+		xhttp.ErrCode(c, "skill.invalid_command", nil, verr.Error(), "")
+		return
+	}
 
 	oldName := s.Name
 	s.Name = newName

@@ -46,8 +46,8 @@ func TestOutputLanguageHintRejectsUnvalidated(t *testing.T) {
 	}
 }
 
-// TestOutputLanguageHintIsEnglish: the hint is model-facing product text, not copy for a user, so it carries no Chinese - unlike
-// responseLanguageRule, which is bilingual on purpose.
+// TestOutputLanguageHintIsEnglish: the hint is model-facing product text, not copy for a user, so it carries no Chinese - the same
+// rule as responseLanguageRule, which is English only.
 func TestOutputLanguageHintIsEnglish(t *testing.T) {
 	hint := outputLanguageHint(&tools.Context{OutputLanguage: "ja"})
 	for _, r := range hint {

@@ -10,6 +10,7 @@ import (
 
 	"flame/nexus/service/agent"
 	"flame/nexus/service/agent/core"
+	"flame/nexus/service/agent/tools"
 	"flame/nexus/shared/auth"
 	"flame/nexus/shared/callchain"
 	"flame/nexus/shared/models"
@@ -101,9 +102,31 @@ func ChatAgent(c *gin.Context) {
 	// The attachment list is appended only to what the model sees; the stored record (_record_input) and history replay keep the user's own text.
 	// History is no longer read here: the agent layer reads session_records by session_id, sharing one
 	// memory implementation with the protocol endpoints (otherwise one session entered through two doors could differ in history length, order and count).
+	// "/name args": the user picked a skill command. It is resolved here so a wrong pick gets a proper error code instead of
+	// a failure inside the run; the injection and the tool activation belong to the agent layer, which re-resolves the name
+	// against its own visibility surface (the argument travels through the run args and can be forged).
+	st, serr := getStorage()
+	var commandName, commandArgs string
+	if name, rest, ok := agent.ParseCommand(message); ok && serr == nil {
+		mgr := agent.NewSkillManager(ai.Schema, instance.ID, instance.Name, ai.ID, st,
+			instance.SkillDiscovery, instance.IsSupervisor, tools.ModeDraft)
+		detail, gerr := mgr.Get(context.Background(), tools.SkillRef{Name: name})
+		switch {
+		case gerr != nil:
+			xhttp.ErrCode(c, "common.internal", nil, "failed to read the skill: "+gerr.Error(), "")
+			return
+		case detail != nil && !detail.UserInvocable:
+			xhttp.ErrCode(c, "skill.not_invocable", map[string]any{"name": name},
+				"the skill "+name+" is not available as a user command", "")
+			return
+		case detail != nil:
+			commandName, commandArgs = name, rest
+		}
+	}
+
 	prompt := message
 	var block string
-	if st, serr := getStorage(); serr == nil {
+	if serr == nil {
 		block = attachmentPrompt(st, ai.Schema, sessUserID, sessionID, req.Files)
 	}
 	if block != "" {
@@ -128,6 +151,9 @@ func ChatAgent(c *gin.Context) {
 	// so when it makes an outbound call (rpc__ / mcp__ / call_agent) the chain already contains itself -
 	// a loop back is rejected at the first level instead of wasting a full turn before the depth cap stops it.
 	args[callchain.ArgumentKey] = []string{callchain.Key(callchain.KindAgent, instance.ID)}
+	if commandName != "" {
+		agent.WithCommand(args, commandName, commandArgs)
+	}
 	// Admin chat is a "trial chat": the top-level agent always reads the draft, so a change can be verified at once.
 	// Only production calls (MCP / RPC / endpoints / flows) read the released version - those paths use SetReleaseMode.
 	agent.SetDraftMode(args)

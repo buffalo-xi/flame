@@ -1,0 +1,139 @@
+package agent
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"flame/nexus/service/agent/tools"
+	"flame/nexus/shared/models"
+)
+
+// TestParseCommand pins the shape of a command: only a leading "/" followed by a valid skill name counts, so a chat message
+// that happens to contain a path or a fraction is not swallowed.
+func TestParseCommand(t *testing.T) {
+	cases := []struct {
+		in   string
+		name string
+		rest string
+		ok   bool
+	}{
+		{"/daily-report", "daily-report", "", true},
+		{"/daily-report today", "daily-report", "today", true},
+		{"  /daily-report   今天  ", "daily-report", "今天", true},
+		{"/a\tb", "a", "b", true},
+		{"/", "", "", false},
+		{"", "", "", false},
+		{"hello /daily-report", "", "", false},
+		{"/tmp/x", "", "", false},
+		{"3/5", "", "", false},
+		{"/under_score", "", "", false},
+		{"/-leading-hyphen", "", "", false},
+	}
+	for _, tc := range cases {
+		name, rest, ok := ParseCommand(tc.in)
+		if ok != tc.ok || name != tc.name || rest != tc.rest {
+			t.Errorf("ParseCommand(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				tc.in, name, rest, ok, tc.name, tc.rest, tc.ok)
+		}
+	}
+}
+
+// TestCommandSkillsNarrows: the list handed to the chat window is whatever the agent can already see, minus the skills that are
+// not user-invocable and minus the deprecated ones. The function must never invent an entry.
+func TestCommandSkillsNarrows(t *testing.T) {
+	list := []tools.SkillInfo{
+		{Name: "invocable", UserInvocable: true},
+		{Name: "model-only", UserInvocable: false},
+		{Name: "deprecated", UserInvocable: true, Status: int(models.StatusDeprecated)},
+	}
+	got := commandSkills(list)
+	if len(got) != 1 || got[0].Name != "invocable" {
+		t.Fatalf("commandSkills = %+v, want only the invocable, non-deprecated skill", got)
+	}
+	if out := commandSkills(nil); out == nil || len(out) != 0 {
+		t.Fatalf("commandSkills(nil) = %v, want an empty non-nil slice", out)
+	}
+}
+
+// stubCommandSkills embeds the interface: the command path only ever calls Get, so the rest stays unimplemented (and unused).
+type stubCommandSkills struct {
+	tools.SkillsManager
+	detail *tools.SkillDetail
+}
+
+func (s *stubCommandSkills) Get(_ context.Context, ref tools.SkillRef) (*tools.SkillDetail, error) {
+	if s.detail == nil || s.detail.Name != ref.Name {
+		return nil, nil
+	}
+	return s.detail, nil
+}
+
+// TestApplyCommandInjectsAndActivates: a hit rewrites what the model sees and registers the skill with its dependency snapshot,
+// so the very next refreshToolDefs puts the declared tools into the schema.
+func TestApplyCommandInjectsAndActivates(t *testing.T) {
+	skills := &stubCommandSkills{detail: &tools.SkillDetail{
+		SkillInfo: tools.SkillInfo{ID: "skill-1", Name: "daily-report", UserInvocable: true},
+		Content:   "Write the daily report.",
+		ToolDeps:  []string{"local:daily-report"},
+	}}
+	tc := &tools.Context{Skills: skills}
+	a := &agentImpl{toolCtx: tc, args: map[string]interface{}{}}
+	WithCommand(a.args, "daily-report", "today")
+
+	a.applyCommand(context.Background())
+
+	msg, _ := a.args["_user_message"].(string)
+	if !strings.Contains(msg, "/daily-report") || !strings.Contains(msg, "Write the daily report.") {
+		t.Fatalf("_user_message = %q, want the command header and the skill body", msg)
+	}
+	if !strings.Contains(msg, "Arguments: today") {
+		t.Fatalf("_user_message = %q, want the arguments appended", msg)
+	}
+	if _, ok := tc.LoadedSkills()["skill-1"]; !ok {
+		t.Fatal("the skill was not activated: refreshToolDefs would never see its tool dependencies")
+	}
+	if !tc.ConsumeSkillsDirty() {
+		t.Fatal("activation did not mark the tool set dirty")
+	}
+}
+
+// TestApplyCommandIgnoresUnusable: a skill that exists but is not user-invocable, and a name that resolves to nothing, both leave
+// the message untouched - the turn proceeds as ordinary text instead of failing because of a leading slash.
+func TestApplyCommandIgnoresUnusable(t *testing.T) {
+	cases := []struct {
+		name   string
+		detail *tools.SkillDetail
+	}{
+		{"not user-invocable", &tools.SkillDetail{SkillInfo: tools.SkillInfo{ID: "s", Name: "quiet", UserInvocable: false}}},
+		{"unknown", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			skills := &stubCommandSkills{detail: tc.detail}
+			ctx := &tools.Context{Skills: skills}
+			a := &agentImpl{toolCtx: ctx, args: map[string]interface{}{"_user_message": "/quiet hi"}}
+			WithCommand(a.args, "quiet", "hi")
+
+			a.applyCommand(context.Background())
+
+			if msg, _ := a.args["_user_message"].(string); msg != "/quiet hi" {
+				t.Fatalf("_user_message = %q, want it untouched", msg)
+			}
+			if len(ctx.LoadedSkills()) != 0 {
+				t.Fatal("an unusable command must not activate anything")
+			}
+		})
+	}
+}
+
+// TestWithCommandReservedKey: the key is internal, and an empty name or a nil map is a no-op (callers may pass a zero value).
+func TestWithCommandReservedKey(t *testing.T) {
+	args := map[string]interface{}{}
+	WithCommand(args, "poet", "hi")
+	if _, ok := args[commandArgKey]; !ok {
+		t.Fatal("WithCommand did not write the reserved key")
+	}
+	WithCommand(args, "", "hi")
+	WithCommand(nil, "poet", "hi")
+}

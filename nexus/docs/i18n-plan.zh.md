@@ -134,10 +134,12 @@ Go 已归零并由闸门管住，前端存量靠触碰递减，只在审计里�
 `responseLanguageRule`（系统提示词的最后一行）要求模型把工具输出用用户的语言复述。界面若直接渲染这类值，它是**数据**
 而不是文案 —— 发布历史里的一条版本说明保持它写入时的语言，和骨架完全一致。
 
-两个例外刻意保持双语，且都属于内容而非文案：
+只剩一个例外刻意保持双语，且属于内容而非文案：
 
-- `responseLanguageRule` 本身用两种语言写，既不依赖模型读懂另一种语言，也让非中文的 `AGENT.md` 作者看得懂约束；
 - `shared/skeleton` 里的 `zh-CN` 正文是类别 5 的内容（给中文租户生成的），不是产品文案。
+
+`responseLanguageRule` **只用英文**，和其它给模型看的字符串一样（工具说明、工具 Label、参数 schema）：
+它本身就是一条语言约束，必须是一条无歧义的单语指令 —— 双语版本反而会诱使模型照着它描述的混排去混。
 
 若某个界面真要把这些字符串**当文案**渲染，它必须改成 `code` + `params` 再由语言包解析 ——
 和 `error` 信封同一形状。目前一个都没有；`AgentGrantView.Note` 与 `ResolveResult.Warnings` 的字段注释里写明了这条约束，
@@ -163,8 +165,8 @@ Go 已归零并由闸门管住，前端存量靠触碰递减，只在审计里�
   并且和其他 tag 一样校验（非法值直接落空，不会被透传）；
 - 非法 tag 在入口就被拒（`update_agent` 报错而不是照样写入），在读出时则被忽略（`NormalizeOutputLanguage` 让它落到下一级），
   因为这段文字最终会进系统提示词；
-- 它跟着链路走，但**只有“被指定”的值才往下传**：把解析出的缺省值传下去，等于把它变成子 agent 的强制值，
-  中文会话会因此把 `en` 传给每一层子 agent；
+- 它跟着链路走，**判定出来的值才往下传**：调用方指定的，或 agent 自己配的 `default_language`。产品兜底值不传 ——
+  只因为没人配置就把 `en` 当强制值发下去，会盖掉下一跳自己的缺省，中文会话会因此把 `en` 传给每一层子 agent；
 - 它只约束散文。错误文案仍走 `error` 编码 + 语言包，生成并落盘的内容仍取自己的 `lang` 参数（类别 5）——
   一次调用的提示不得悄悄改掉骨架的语言。
 
@@ -173,13 +175,13 @@ RPC 与 MCP 都从同一个 `params._meta` 读这个字段。这个值现在也�
 - flow 端点（RPC / MCP）像取 `_meta.session_id` 一样取 `_meta.language`，每次 flow 运行都带一个内置变量
   `language`（`flow.ExecContext.Language`，节点里是 `builtin.language`）。空串表示"没人指定过"，节点可以直接判断或
   拼进提示词，不需要第二个开关；
-- 它**双向**跟着链路走：agent 启动的 flow 通过 ctx（`core.WithLanguageHint`）继承该 agent 真正定下的语言 —— 被调用方
-  指定的，或它自己配的 `default_language`；产品兜底值**不往下传**，否则 flow 读到 `language: en` 会把它当成意图；出站
-  RPC 客户端把**被指定**的值重新写回 `params._meta.language`，所以 flow → agent、flow → 子 flow 都不会丢。解析出的
-  缺省值仍然停在进程边界：flow 和读 ctx 的地方都能看到它，但它不会被当作强制值转发 —— 否则本进程的缺省值会盖掉下一跳
-  自己的缺省（这条界线由 `core.LanguagePinnedFrom` 划）；
-- 因此有两个载体、各一个含义：`params._meta.language`（线上）是"强制值"，`core.WithLanguageHint`（进程内）是"事实"。
-  flow 只把收到的"强制值"再发出去。
+- 它**双向**跟着链路走：agent 把自己判定出的语言 —— 调用方指定的，或它自己配的 `default_language` —— 通过 ctx
+  （`core.WithPinnedLanguage`）记下，flow 据此继承为内置变量 `language`，出站 RPC 与 MCP 客户端再把它写回
+  `params._meta.language`：flow → agent、flow → 子 flow、agent → agent（`call_agent`）、agent → `mcp__` / `rpc__` 工具
+  都保持同一种语言。产品兜底值**不往下传**，否则 flow 读到 `language: en`、远端工具收到它当成强制值，都会误解成意图
+  （这条界线由 `core.LanguagePinnedFrom` 划）；
+- 因此有两个载体、各一个含义：`params._meta.language`（线上）是"强制值"，ctx 里的值是"事实 + 是否被判定过"。
+  `core.WithLanguageHint` 留给进程内没有强制含义的值；flow 只把收到的"强制值"再发出去。
 
 按设计如此：flow 自身的 LLM 节点**不会**自动追加语言规则。提示词里要不要说"用某语言回答"，由 flow 的作者决定；
 节点只负责把值给出去 —— 声明一个 `source_type: "builtin"`、`source_key: "language"` 的输入变量，然后在提示词里引用它。
@@ -267,8 +269,8 @@ flow 里的 agent 节点是被覆盖的：flow 的强制值随之调用传下去
 - 桌面源码里没进语言包的中文文案；
 - `ErrJSON`（2026-11 已移除，不许回来），以及 `ErrCode` 那行 `msg` 里含中文。
 
-唯一的例外是脚本末尾两张 allowlist：`shared/skeleton` 的 `zh-CN` 正文、双语的 `responseLanguageRule`、语言切换器的自名、
-一处老 `msg` 兜底。往里加一条是需要评审的决定，不是修构建的手法。
+唯一的例外是脚本末尾两张 allowlist：`shared/skeleton` 的 `zh-CN` 正文、语言切换器的自名、一处老 `msg` 兜底。
+往里加一条是需要评审的决定，不是修构建的手法。
 
 闸门刻意不管的（重写它的代价大于容忍）：测试 fixture；SQL 注释与 `COMMENT ON` 文本（迁移就是历史 ——
 `nexus/sql/system_entity_desc_en.sql` 才是把预置文案改成英文的正规做法，它写明了为什么实体行 **和** `is_current`

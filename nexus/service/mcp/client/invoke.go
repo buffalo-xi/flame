@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	agentcore "flame/nexus/service/agent/core"
 	"flame/nexus/service/flow/core"
 	"flame/nexus/shared/callchain"
 	"flame/nexus/shared/models"
@@ -258,6 +259,7 @@ func callToolOnSessionWithToken(ctx context.Context, session *mcp.ClientSession,
 	}
 	params.SetProgressToken(token)
 	withCallChain(params, callchain.From(ctx))
+	withLanguage(params, ctx)
 	result, err := session.CallTool(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call tool %s: %w", toolName, err)
@@ -275,6 +277,7 @@ func callToolOnSession(ctx context.Context, session *mcp.ClientSession, toolName
 		Arguments: arguments,
 	}
 	withCallChain(params, callchain.From(ctx))
+	withLanguage(params, ctx)
 	result, err := session.CallTool(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call tool %s: %w", toolName, err)
@@ -295,6 +298,32 @@ func withCallChain(params *mcp.CallToolParams, chain []string) {
 		params.Meta = mcp.Meta{}
 	}
 	params.Meta[callchain.MetaKey] = chain
+}
+
+// withLanguage writes the pinned output language into params._meta.language (the same key as on the RPC side), so an MCP
+// tool sees the same language decision the agent answered in.
+//
+// Only a **pinned** value travels: that field means "the caller demands this language", so forwarding a resolved default
+// would override the peer's own default - an English-default agent would pin every downstream agent to English. The
+// informational variant stays inside the process, where a flow reads it as the builtin `language`.
+func withLanguage(params *mcp.CallToolParams, ctx context.Context) {
+	tag := pinnedLanguage(ctx)
+	if params == nil || tag == "" {
+		return
+	}
+	if params.Meta == nil {
+		params.Meta = mcp.Meta{}
+	}
+	params.Meta[agentcore.MetaLanguageKey] = tag
+}
+
+// pinnedLanguage returns the language to send as params._meta.language, or "" (the same criterion as the RPC client).
+func pinnedLanguage(ctx context.Context) string {
+	if !agentcore.LanguagePinnedFrom(ctx) {
+		return ""
+	}
+	tag, _ := agentcore.NormalizeOutputLanguage(agentcore.LanguageHintFrom(ctx))
+	return tag
 }
 
 // flattenResult flattens the SDK CallToolResult into text and structured content.

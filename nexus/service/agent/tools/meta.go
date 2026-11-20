@@ -1067,9 +1067,10 @@ func (t *callAgentTool) Execute(ctx context.Context, c *Context, args map[string
 		// falls back to the draft silently.
 		DefinitionMode: c.ChildMode(),
 	}
-	// Only a **caller-pinned** language travels. Passing the resolved default down would turn it into a pin for the callee, and a
-	// Chinese conversation would then hand "en" to every child agent - the callee is free to resolve its own default.
-	if c.OutputLanguagePinned {
+	// Any **decided** language travels: a caller pin or this agent's own default_language, so an agent that serves one audience
+	// (a Chinese tutor, say) does not hand its children an English default. The bare product fallback stays behind - pinning it
+	// would force "en" onto every child of a Chinese conversation, and the callee is otherwise free to resolve its own default.
+	if c.OutputLanguageChosen {
 		req.OutputLanguage = c.OutputLanguage
 	}
 	out, err := c.Caller.Call(ctx, req)

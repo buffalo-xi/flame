@@ -153,11 +153,13 @@ knows. The user does not read raw English prose either: `responseLanguageRule` (
 model restate tool output in the language the user writes. Where the interface renders such a value directly it is *data*,
 not copy — a version note in the release history keeps the language it was written in, exactly like a skeleton.
 
-Two exceptions stay bilingual on purpose, and both are content rather than copy:
+One exception stays bilingual on purpose, and it is content rather than copy:
 
-- `responseLanguageRule` itself is written in both languages, so it does not depend on the model reading the other one and
-  stays legible to a non-Chinese author of `AGENT.md`;
 - the `zh-CN` bodies in `shared/skeleton` are class 5 content (generated for a Chinese-language tenant), not product copy.
+
+`responseLanguageRule` is **English only**, like every other model-facing string (tool descriptions, tool labels, argument
+schemas): the rule is itself a language constraint, so it has to be a single unambiguous instruction - a bilingual copy
+invites the model to mirror the very mix it forbids.
 
 If a screen ever has to render one of these strings **as copy**, it must arrive as a `code` + `params` resolved from the
 locale bundle — the same shape as the `error` envelope. None does today; `AgentGrantView.Note` and
@@ -186,8 +188,9 @@ the language the user writes in") has nothing to read. So the caller may pin it:
   `read_agent` echoes it), and validated like any other tag (a bad value falls through instead of being echoed);
 - a malformed tag is rejected on the way in (`update_agent` returns an error instead of storing it) and ignored on the way
   out (`NormalizeOutputLanguage` lets it fall through to the next step), because the value ends up inside a system prompt;
-- it follows the chain, but **only a pinned value travels**: passing a resolved default down would turn it into a pin for the
-  callee, and a Chinese conversation would hand `en` to every child agent;
+- it follows the chain, and a **decided** value travels: a caller pin, or the agent's own `default_language`. The bare
+  product fallback does not — forwarding `en` merely because nobody configured anything would turn it into a pin and
+  override the callee's own default, which is how a Chinese conversation ends up handing `en` to every child agent;
 - it constrains prose only. Error copy still comes from the `error` code plus the bundle, and generated-and-persisted content
   still takes its language from the `lang` parameter (class 5) — a call-level hint must not silently retarget a skeleton.
 
@@ -197,15 +200,15 @@ RPC and MCP read the same field from `params._meta`. The value also reaches work
 - a flow endpoint (RPC / MCP) takes `_meta.language` exactly like `_meta.session_id`, and every flow run carries it as
   the builtin variable `language` (`flow.ExecContext.Language`, `builtin.language` in a node). Empty means "nobody
   specified one", so a node can branch on it or drop it into a prompt without a second flag;
-- it follows the chain in both directions. A flow started by an agent inherits the language that agent actually decided —
-  a pin, or its configured `default_language`; the bare product fallback is **not** passed on, because a flow reading
-  `language: en` would take it for an intent. It travels through ctx (`core.WithLanguageHint`), and the outbound RPC
-  client puts a **pinned** value back into `params._meta.language`, so flow → agent and flow → sub-flow keep it. A
-  resolved default still stops at the process boundary: it is visible to the flow and to anyone that reads ctx, but it is
-  never forwarded as a pin — otherwise this process's default would override the next callee's own default
+- it follows the chain in both directions. An agent records what it decided — a caller pin, or its own `default_language` —
+  through ctx (`core.WithPinnedLanguage`), so a flow inherits it as the builtin `language` and the outbound RPC and MCP
+  clients put it back into `params._meta.language`: flow → agent, flow → sub-flow, agent → agent (`call_agent`) and
+  agent → `mcp__` / `rpc__` tools all keep one language. The bare product fallback is **not** passed on, because a flow
+  reading `language: en` — or a remote tool receiving it as a pin — would take it for an intent
   (`core.LanguagePinnedFrom` is what draws that line);
-- this has two carriers, one meaning each: `params._meta.language` (on the wire) is a pin, `core.WithLanguageHint` (in
-  process) is the fact. A flow re-sends only the pin it received.
+- this has two carriers, one meaning each: `params._meta.language` (on the wire) is a pin, the ctx value is the fact plus
+  whether anybody decided it. `core.WithLanguageHint` still exists for an in-process value nobody demanded; a flow
+  re-sends only the pin it received.
 
 By design: a flow's own LLM node does **not** append the language rule on its own. Whether a prompt says "answer in X" is
 the flow author's decision, so the node only gets the value: declare an input variable with `source_type: "builtin"` and
@@ -302,9 +305,8 @@ once (`-SkipCopyCheck` drops the step). The gate always scans all four modules, 
 - Chinese copy in the desktop sources that never reached a bundle;
 - `ErrJSON` (removed in 2026-11, it must not come back), and a `msg` containing Chinese on an `ErrCode` line.
 
-The only exceptions are two allowlists at the bottom of the script: the `zh-CN` bodies in `shared/skeleton`, the bilingual
-`responseLanguageRule`, the language picker's endonyms and one legacy `msg` fallback. Adding an entry is a review decision,
-not a build fix.
+The only exceptions are two allowlists at the bottom of the script: the `zh-CN` bodies in `shared/skeleton`, the language
+picker's endonyms and one legacy `msg` fallback. Adding an entry is a review decision, not a build fix.
 
 What the gate deliberately leaves alone, because rewriting it would cost more than living with it: test fixtures; SQL
 comments and `COMMENT ON` text (a migration is history — `nexus/sql/system_entity_desc_en.sql` is the sanctioned way to move

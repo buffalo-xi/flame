@@ -865,6 +865,32 @@ func (m *skillManager) List(ctx context.Context) ([]tools.SkillInfo, error) {
 	return toSkillInfos(list), nil
 }
 
+// ListCommands lists the skills exposed as user commands ("/<name>") for this agent.
+//
+// The visibility criterion is List's, deliberately: a command is "the user picks a skill for this agent", never "the user
+// grants it something new". A wider list (say, every tenant-level skill) would let "/" reach a shared skill that
+// `restricted` keeps away from this agent, which is an escalation path rather than a convenience.
+func (m *skillManager) ListCommands(ctx context.Context) ([]tools.SkillInfo, error) {
+	list, err := m.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return commandSkills(list), nil
+}
+
+// commandSkills narrows a visibility list to the skills a user may invoke: user_invocable and not deprecated. It takes the
+// list it is given (it never widens it), which is what keeps a command from reaching a skill the agent cannot use.
+func commandSkills(list []tools.SkillInfo) []tools.SkillInfo {
+	out := make([]tools.SkillInfo, 0, len(list))
+	for _, s := range list {
+		if !s.UserInvocable || s.Status == int(models.StatusDeprecated) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // fillBoundAgents fills in the whitelisted agent names of tenant-level skills in bulk (super agent view only; private skills are skipped).
 // One query fetches all of them (no per-row N+1); a failure does not affect the main flow - the list is still usable and the whitelist simply
 // stays empty.
@@ -1061,5 +1087,10 @@ func toSkillInfo(s models.Skill) tools.SkillInfo {
 		Scope:       scope,
 		Status:      int(s.Status),
 		Restricted:  restricted,
+		// The user-command definition travels with the skill (in a production run these three come from the current version,
+		// see applySkillMeta): it is part of the definition, not a runtime fact.
+		UserInvocable:   bool(s.UserInvocable),
+		CommandDispatch: string(s.CommandDispatch),
+		CommandTool:     string(s.CommandTool),
 	}
 }

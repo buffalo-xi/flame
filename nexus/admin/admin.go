@@ -194,6 +194,8 @@ func SetupRoutes(router *gin.RouterGroup) {
 		// Skill bindings (the agent side of agent_skill_bindings): the skills this agent may use
 		agentsGroup.GET("/:id/skillbindings", agents.GetAgentSkillBindings)
 		agentsGroup.PUT("/:id/skillbindings", agents.SetAgentSkillBindings)
+		// Skills exposed as user commands ("/<name>") for the chat window: the same visibility as the agent's own skills
+		agentsGroup.GET("/:id/commands", agents.ListAgentCommands)
 		// Workspace file management (an agent is essentially a folder; skills/ is read-only)
 		agentsGroup.GET("/:id/files", agents.ListAgentFiles)
 		agentsGroup.GET("/:id/file", agents.ReadAgentFile)

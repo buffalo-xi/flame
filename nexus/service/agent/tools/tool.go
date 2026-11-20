@@ -316,9 +316,10 @@ type CallRequest struct {
 	// Without the pass-through, "while debugging the child agent runs the live version" appears, and that is the easiest thing to be fooled by
 	// during triage.
 	DefinitionMode DefinitionMode
-	// OutputLanguage is the language the caller pinned for this chain (already validated), and only that: a resolved default must
-	// not travel, or it would become a pin for the callee. The pass-through matters most here - the callee's input is a JSON
-	// argument map, so without it the callee's model has no language signal at all.
+	// OutputLanguage is the language this chain decided on (already validated): a caller pin or the calling agent's own
+	// `default_language`, never the bare product fallback - passing the fallback down would turn it into a pin and force "en"
+	// onto the children of a Chinese conversation. The pass-through matters most here: the callee's input is a JSON argument map,
+	// so without it the callee's model has no language signal at all.
 	OutputLanguage string
 }
 
@@ -462,6 +463,13 @@ type SkillInfo struct {
 	// Filled only from the super agent's viewpoint (a non-super agent has no need, and no right, to see other agents' bindings);
 	// always empty for a private skill.
 	BoundAgents []string `json:"bound_agents,omitempty"`
+	// UserInvocable / CommandDispatch / CommandTool are the "user command" definition (OpenClaw's user-invocable /
+	// command-dispatch / command-tool): whether the skill may be invoked directly as "/<name>" in the chat window, and how
+	// that invocation runs. "" = inject the body and let the model work; "tool" = dispatch straight to CommandTool, which
+	// bypasses the model (never the grants - ExecuteTool's gate still applies).
+	UserInvocable   bool   `json:"user_invocable"`
+	CommandDispatch string `json:"command_dispatch,omitempty"`
+	CommandTool     string `json:"command_tool,omitempty"`
 }
 
 // SkillDetail is a skill's full information (returned by read_skill / use_skill), content included.
@@ -545,6 +553,10 @@ type SkillsManager interface {
 	// ListInjected lists the skills "injected into the current agent" (private + bound ones),
 	// for the resident system-prompt list: only name/description, the body is loaded on demand with read_skill.
 	ListInjected(ctx context.Context) ([]SkillInfo, error)
+	// ListCommands lists the skills exposed as user commands ("/<name>") for this agent: the same visibility as List,
+	// narrowed to user_invocable ones. The chat window's "/" menu and the command parser must share this source - a wider
+	// list would turn "/" into an escalation path (it could reach a shared skill restricted away from this agent).
+	ListCommands(ctx context.Context) ([]SkillInfo, error)
 	Get(ctx context.Context, ref SkillRef) (*SkillDetail, error)
 	// FindForWrite looks a skill up by "owner + name" (not narrowed by the current agent's visibility), so that the
 	// cross-domain write gate can decide whether it exists: an empty ownerAgentID means tenant-level; missing returns (nil, nil).
@@ -642,6 +654,11 @@ type Context struct {
 	// OutputLanguagePinned says whether that language came from the caller (true) or is only a default (false). The prompt words
 	// the two differently: a pin overrides the language of the input, a default only applies when the input carries no signal.
 	OutputLanguagePinned bool
+	// OutputLanguageChosen says whether anybody actually decided the language - a caller pin or the agent's own
+	// `default_language` - rather than it being the product fallback. Only a chosen language travels to the agents this run
+	// calls: pinning the bare fallback would force "en" onto every child of a Chinese conversation, while an agent that serves
+	// one audience (a Chinese tutor, say) really does want its children to answer in that language too.
+	OutputLanguageChosen bool
 	Timeout              time.Duration     // timeout of one tool call
 	Sandbox              sandbox.Sandbox   // command sandbox (nil = unisolated "none")
 	Env                  map[string]string // extra environment variables for command execution

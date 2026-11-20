@@ -278,13 +278,15 @@
               </div>
             </div>
             <el-input
+              ref="inputRef"
               v-model="input"
               type="textarea"
               :rows="3"
               resize="none"
               class="input-textarea"
               :placeholder="t('chat.inputPlaceholder')"
-              @keydown.enter.exact.prevent="send"
+              @input="onCommandInput"
+              @keydown="onInputKeydown"
             />
             <div class="input-actions">
               <!-- 子调用版本：只管「它调起的 agent / flow」读哪份，本对话的智能体自身始终读草稿。
@@ -323,6 +325,19 @@
                 :title="streaming ? t('chat.stop') : t('chat.send')"
                 @click="streaming ? stopRun() : send()"
               />
+            </div>
+          </div>
+          <!-- 斜杠命令：只列后端判定为「用户可调用」的技能，可见面与该 agent 的 use_skill 一致
+               （未绑定的共享技能不会出现在这里，否则 / 就成了绕过 restricted 的入口）。
+               放在输入卡片之外：卡片自身 overflow:hidden，弹层会被它裁掉。 -->
+          <div v-if="cmdOpen" class="cmd-panel">
+            <div class="cmd-panel-title">{{ t('chat.commandsTitle') }}</div>
+            <div v-if="!cmdMatches.length" class="cmd-panel-empty">{{ t('chat.commandsEmpty') }}</div>
+            <div v-for="(c, i) in cmdMatches" :key="c.name" class="cmd-item"
+                 :class="{ active: i === cmdIndex }" @mousedown.prevent="pickCommand(c)">
+              <span class="cmd-name">/{{ c.name }}</span>
+              <span class="cmd-desc">{{ c.description }}</span>
+              <span v-if="c.dispatch === 'tool'" class="cmd-badge">{{ t('chat.commandsToolBadge') }}</span>
             </div>
           </div>
         </div>
@@ -484,6 +499,13 @@ const sessionsQuotaWarn = computed(() =>
   sessionsLimit.value > 0 && sessionsUsed.value >= sessionsLimit.value)
 const messages = ref([])
 const input = ref('')
+// 斜杠命令（/<技能名>）：列表来自当前 agent 的 user_invocable 技能，切 agent 后重新拉取
+const inputRef = ref(null)
+const commands = ref([])
+const cmdOpen = ref(false)
+const cmdIndex = ref(0)
+const cmdQuery = ref('')
+const commandsAgentId = ref('') // 缓存归属：只有同一个 agent 才复用，避免绑定关系变了还显示旧菜单
 const streaming = ref(false)
 // 当前这一轮对话的 AbortController：停止 = 断开这条 SSE 连接（见 stopRun）
 let chatAbort = null
@@ -586,6 +608,94 @@ const toggleSessionPanel = () => {
 // 加载类请求失败时把原因说出来。
 // 以前这些地方是静默 return：接口一异常（401 / 500 / 路由 404），界面就只剩
 // 「暂无对话」，看起来像历史被删了，实际是没读到 —— 排查时完全无从下手。
+// ---- 斜杠命令 ----
+// 菜单口径由后端 ListCommands 决定（与该 agent 的 use_skill 同源的可见面，再筛 user_invocable）。
+// 前端不做权限判断：拿不到列表就当没有命令，手打的 /name 仍由后端解析并校验。
+const cmdMatches = computed(() => {
+  const q = (cmdQuery.value || '').toLowerCase()
+  if (!q) return commands.value
+  return commands.value.filter(c =>
+    c.name.toLowerCase().includes(q) || (c.description || '').toLowerCase().includes(q))
+})
+
+const closeCommands = () => {
+  cmdOpen.value = false
+  cmdQuery.value = ''
+  cmdIndex.value = 0
+}
+
+const fetchCommands = async () => {
+  const agentId = selectedAgentId.value
+  if (!agentId || commandsAgentId.value === agentId) return
+  const token = getToken()
+  if (!token) return
+  try {
+    const res = await fetch(adminApi.agents.commands(agentId), {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    const body = await res.json().catch(() => ({}))
+    // 辅助功能：拉不到就当没有命令，不打断对话（发送时后端还会再判一次）
+    if (!res.ok || body.code !== 200) return
+    commands.value = (body.data && body.data.items) || []
+    commandsAgentId.value = agentId
+  } catch (e) {
+    console.error('load commands failed:', e)
+  }
+}
+
+// 只有整条输入是 "/token" 时才弹菜单：正文里的路径（/tmp/x）和日期（3/5）不触发；
+// 一旦开始写参数（"/name 参数"）就自动收起，免得挡住正文。
+const onCommandInput = (val) => {
+  const text = typeof val === 'string' ? val : input.value
+  const m = /^\/([A-Za-z0-9-]*)$/.exec(text.trim())
+  if (!m) { closeCommands(); return }
+  cmdQuery.value = m[1]
+  cmdIndex.value = 0
+  if (!cmdOpen.value) {
+    cmdOpen.value = true
+    fetchCommands()
+  }
+}
+
+const pickCommand = (c) => {
+  if (!c) return
+  input.value = `/${c.name} `
+  closeCommands()
+  nextTick(() => { if (inputRef.value) inputRef.value.focus() })
+}
+
+// 方向键 / Tab / Enter 先交给菜单；其余回车仍然发送。
+// （原来模板上是 @keydown.enter.exact.prevent="send"，菜单打开时会把回车抢走）
+const onInputKeydown = (e) => {
+  if (cmdOpen.value) {
+    const list = cmdMatches.value
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (list.length) cmdIndex.value = (cmdIndex.value + 1) % list.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (list.length) cmdIndex.value = (cmdIndex.value - 1 + list.length) % list.length
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeCommands()
+      return
+    }
+    if (list.length && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
+      e.preventDefault()
+      pickCommand(list[cmdIndex.value])
+      return
+    }
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault()
+    send()
+  }
+}
+
 const reportLoadError = (what, res, body) => {
   const detail = formatError(body) || (res && !res.ok ? `HTTP ${res.status}` : '')
   ElMessage.error(detail
@@ -1870,7 +1980,78 @@ onMounted(async () => {
   background-color: #fff;
   display: flex;
   flex-direction: column;
+  /* 命令弹层向上溢出输入区：自身必须放行，它仍落在 .chat-main 的边界内，不会被外层裁掉 */
+  position: relative;
+  overflow: visible;
+}
+
+/* 斜杠命令弹层：贴在输入卡片上方，最多 260px 高，超出滚动 */
+.cmd-panel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% - 4px);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  z-index: 40;
+}
+
+.cmd-panel-title {
+  padding: 4px 8px 6px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.cmd-panel-empty {
+  padding: 10px 8px;
+  font-size: 13px;
+  color: #909399;
+}
+
+.cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cmd-item.active,
+.cmd-item:hover {
+  background: #f2f6fc;
+}
+
+.cmd-name {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: #1f6feb;
+}
+
+.cmd-desc {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: #909399;
+}
+
+.cmd-badge {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 18px;
+  color: #b26a00;
+  background: #fff4e0;
 }
 
 .input-card {
