@@ -7,6 +7,9 @@ exposes them as callable endpoints (MCP / RPC), and shows everything currently r
 
 Ships with a Vue 3 admin console (`desktop/`), shared by the tenant side and the platform side.
 
+> **Prebuilt, ready-to-run packages are on the way.** A compiled release that starts without a toolchain is being prepared —
+> stay tuned.
+
 ## Features
 
 **Build artifacts**
