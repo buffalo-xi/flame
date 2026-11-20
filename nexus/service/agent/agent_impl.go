@@ -547,6 +547,13 @@ func (a *agentImpl) Stream(parent context.Context) error {
 			StartedAt:  a.startedAt,
 		}, cancel)()
 	}
+	// A "/name args" command whose skill declares command_dispatch=tool never reaches the model: one sentence in, one tool call
+	// out. Returning here still records the turn (recordSessionRound is deferred above) and still gives the entry point a
+	// normal event sequence.
+	if handled, derr := a.dispatchCommand(ctx); handled {
+		return derr
+	}
+
 	// On termination, clean up the resident processes this run started (browser / shell).
 	// It is registered after cancel: LIFO runs it before cancel(nil), so context.Cause still returns the real reason (user stop / client
 	// disconnect).

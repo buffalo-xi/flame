@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"flame/nexus/service/agent/core"
 	"flame/nexus/service/agent/tools"
 )
 
@@ -91,4 +93,59 @@ func (a *agentImpl) applyCommand(ctx context.Context) {
 	a.args["_user_message"] = b.String()
 
 	a.toolCtx.MarkSkillLoaded(detail.ID, detail.Name, detail.ToolDeps)
+}
+
+// dispatchCommand runs a "/name args" command whose skill declares command_dispatch=tool, without involving the model.
+//
+// handled=false means this run is not such a command (ordinary text, or a skill that only injects its body), and Stream
+// proceeds normally. handled=true means the run ends here: the tool's output becomes the answer, so the entry point still
+// sees TEXT_MESSAGE_CONTENT followed by the usual RUN_FINISHED.
+//
+// The call goes through ExecuteTool like any other, so the grant gate and the capability check still apply: dispatch bypasses
+// the model, never the authorization. A failure is reported (RUN_ERROR at the entry point) rather than falling back to the
+// model - a silent fallback would make "this command is broken" look like "this command works, slowly".
+func (a *agentImpl) dispatchCommand(ctx context.Context) (bool, error) {
+	if a.toolCtx == nil || a.toolCtx.Skills == nil {
+		return false, nil
+	}
+	raw, _ := a.args[commandArgKey].(map[string]any)
+	name, _ := raw["name"].(string)
+	rest, _ := raw["args"].(string)
+	if name == "" {
+		return false, nil
+	}
+	detail, err := a.toolCtx.Skills.Get(ctx, tools.SkillRef{Name: name})
+	if err != nil || detail == nil || !detail.UserInvocable {
+		return false, nil
+	}
+	if detail.CommandDispatch != "tool" || strings.TrimSpace(detail.CommandTool) == "" {
+		return false, nil
+	}
+
+	// The argument shape is the OpenClaw one, fixed so a target tool can be written against it: the raw sentence the user
+	// typed, the command name as typed, and the skill name.
+	args := map[string]any{
+		"command":     rest,
+		"commandName": "/" + detail.Name,
+		"skillName":   detail.Name,
+	}
+	result, execErr := tools.ExecuteTool(ctx, a.toolCtx, detail.CommandTool, args)
+	if execErr != nil {
+		msg := fmt.Sprintf("command /%s failed: %v", detail.Name, execErr)
+		a.SetError(msg)
+		return true, errors.New(msg)
+	}
+	text := dispatchResultText(result)
+	a.pushEvent(core.Event{Type: core.EventText, Delta: text})
+	a.SetResult(text)
+	return true, nil
+}
+
+// dispatchResultText renders a tool result as the answer the user sees: a plain string passes through untouched, everything
+// else is JSON so no field is lost.
+func dispatchResultText(result any) string {
+	if s, ok := result.(string); ok {
+		return s
+	}
+	return marshalToolResult(result, nil)
 }

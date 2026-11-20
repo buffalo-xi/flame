@@ -127,6 +127,89 @@ func TestApplyCommandIgnoresUnusable(t *testing.T) {
 	}
 }
 
+// TestDispatchCommandOnlyHandlesToolDispatch: a skill without a dispatch target falls through, so the run takes the injection
+// path and the model still does the work.
+func TestDispatchCommandOnlyHandlesToolDispatch(t *testing.T) {
+	skills := &stubCommandSkills{detail: &tools.SkillDetail{
+		SkillInfo: tools.SkillInfo{ID: "s1", Name: "daily-report", UserInvocable: true},
+		Content:   "body",
+	}}
+	a := &agentImpl{toolCtx: &tools.Context{Skills: skills}, args: map[string]interface{}{}}
+	WithCommand(a.args, "daily-report", "today")
+
+	handled, err := a.dispatchCommand(context.Background())
+	if handled || err != nil {
+		t.Fatalf("dispatchCommand = (%v, %v), want (false, nil) when command_dispatch is not tool", handled, err)
+	}
+}
+
+// TestDispatchCommandReportsFailure: dispatch goes through ExecuteTool, so a tool the agent has no grant for fails the command
+// instead of silently falling back to the model (which would make a broken command look like a slow one).
+func TestDispatchCommandReportsFailure(t *testing.T) {
+	skills := &stubCommandSkills{detail: &tools.SkillDetail{
+		SkillInfo: tools.SkillInfo{
+			ID: "s1", Name: "daily-report", UserInvocable: true,
+			CommandDispatch: "tool", CommandTool: "local:daily-report",
+		},
+	}}
+	a := &agentImpl{
+		toolCtx: &tools.Context{Skills: skills, AllowedTools: map[string]bool{}},
+		args:    map[string]interface{}{},
+	}
+	WithCommand(a.args, "daily-report", "today")
+
+	handled, err := a.dispatchCommand(context.Background())
+	if !handled || err == nil {
+		t.Fatalf("dispatchCommand = (%v, %v), want handled with an error", handled, err)
+	}
+	if a.GetError() == "" {
+		t.Fatal("the failure must be recorded, otherwise the entry point reports RUN_FINISHED with no answer")
+	}
+}
+
+// captureCommandTool records the arguments it receives, so the dispatch contract can be asserted.
+type captureCommandTool struct {
+	got map[string]any
+}
+
+func (c *captureCommandTool) Meta() tools.ToolMeta {
+	return tools.ToolMeta{Name: "test__capture_command", Description: "test-only: records command dispatch arguments"}
+}
+
+func (c *captureCommandTool) Execute(_ context.Context, _ *tools.Context, args map[string]any) (any, error) {
+	c.got = args
+	return "report ready", nil
+}
+
+// TestDispatchCommandPassesOpenClawShape: dispatch hands the target tool {command, commandName, skillName} - the shape a tool
+// must be written against - and publishes the tool's text as the answer.
+func TestDispatchCommandPassesOpenClawShape(t *testing.T) {
+	tool := &captureCommandTool{}
+	tools.Register(tool)
+
+	skills := &stubCommandSkills{detail: &tools.SkillDetail{
+		SkillInfo: tools.SkillInfo{
+			ID: "s1", Name: "daily-report", UserInvocable: true,
+			CommandDispatch: "tool", CommandTool: "test__capture_command",
+		},
+	}}
+	tc := &tools.Context{Skills: skills, AllowedTools: map[string]bool{"test__capture_command": true}}
+	a := &agentImpl{toolCtx: tc, args: map[string]interface{}{}}
+	WithCommand(a.args, "daily-report", "today please")
+
+	handled, err := a.dispatchCommand(context.Background())
+	if !handled || err != nil {
+		t.Fatalf("dispatchCommand = (%v, %v), want handled without error", handled, err)
+	}
+	if tool.got["command"] != "today please" || tool.got["commandName"] != "/daily-report" ||
+		tool.got["skillName"] != "daily-report" {
+		t.Fatalf("tool args = %+v, want the {command, commandName, skillName} shape", tool.got)
+	}
+	if got := a.GetResult(); got != "report ready" {
+		t.Fatalf("result = %q, want the tool output", got)
+	}
+}
+
 // TestWithCommandReservedKey: the key is internal, and an empty name or a nil map is a no-op (callers may pass a zero value).
 func TestWithCommandReservedKey(t *testing.T) {
 	args := map[string]interface{}{}
