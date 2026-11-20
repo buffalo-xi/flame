@@ -652,9 +652,11 @@ watch(selectedAgentId, () => {
 
 // 只有整条输入是 "/token" 时才弹菜单：正文里的路径（/tmp/x）和日期（3/5）不触发；
 // 一旦开始写参数（"/name 参数"）就自动收起，免得挡住正文。
+// token 允许任意非空白、非斜杠字符（含汉字）：技能名是 ASCII，但描述常是中文，
+// 用户按中文描述过滤才有意义；选中后 pickCommand 写回的是真正的技能名，汉字不会流到后端。
 const onCommandInput = (val) => {
   const text = typeof val === 'string' ? val : input.value
-  const m = /^\/([A-Za-z0-9-]*)$/.exec(text.trim())
+  const m = /^\/([^\s/]*)$/.exec(text.trim())
   if (!m) { closeCommands(); return }
   cmdQuery.value = m[1]
   cmdIndex.value = 0
