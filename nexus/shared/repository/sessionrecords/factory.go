@@ -1,6 +1,6 @@
 package sessionrecords
 
-// NewRepository 创建会话记录存储实例
+// NewRepository creates the session record storage instance.
 func NewRepository() Repository {
 	return &PostgresRepository{}
 }

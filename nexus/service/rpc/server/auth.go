@@ -17,22 +17,23 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// errNoAuth 表示请求未携带任何凭证（需返回 401 + WWW-Authenticate）
+// errNoAuth means the request carried no credential at all (answer with 401 + WWW-Authenticate).
 var errNoAuth = fmt.Errorf("no authorization provided")
 
-// resolveTenant 从请求路径取出租户标识（即 Postgres schema 名）。
-// 路径形态：POST /service/rpc/{schema}，由路由 /rpc/:schema 注入上下文（见 svcpath）。
+// resolveTenant takes the tenant identifier (that is, the Postgres schema name) from the request path.
+// Path shape: POST /service/rpc/{schema}, injected into the context by the /rpc/:schema route (see svcpath).
 func resolveTenant(r *http.Request) (*auth.AuthInfo, error) {
 	schema := strings.TrimSpace(svcpath.FromContext(r.Context()))
 	if schema == "" {
 		return nil, fmt.Errorf("missing tenant schema in path: /service/rpc/<schema>")
 	}
-	// 第一道：schema 名只允许字母数字下划线，避免 SQL 注入
+	// First gate: the schema name may only contain letters, digits and underscores, to rule out SQL injection.
 	if !isValidSchemaName(schema) {
 		return nil, fmt.Errorf("invalid tenant schema name %q", schema)
 	}
-	// 第二道：注册表白名单 —— 只接受「已注册且 active」的租户（停用租户立即失效）。
-	// 查询失败一律拒绝（fail-closed），不要当成"放行"或"未注册"静默处理。
+	// Second gate: the registry allowlist — only tenants that are registered and active are accepted
+	// (deactivating a tenant takes effect immediately). A failed lookup always rejects (fail-closed);
+	// never treat it as "allowed" or as "not registered" and continue silently.
 	active, terr := sharedtenants.IsActive(schema)
 	if terr != nil {
 		return nil, fmt.Errorf("tenant lookup failed: %w", terr)
@@ -43,7 +44,8 @@ func resolveTenant(r *http.Request) (*auth.AuthInfo, error) {
 	return &auth.AuthInfo{Schema: schema}, nil
 }
 
-// isValidSchemaName 白名单校验租户标识（必须是合法标识符，避免拼接 SQL 注入）
+// isValidSchemaName allowlist-checks the tenant identifier (it must be a legal identifier, so that
+// concatenating it into SQL cannot inject).
 func isValidSchemaName(name string) bool {
 	if name == "" {
 		return false
@@ -56,22 +58,22 @@ func isValidSchemaName(name string) bool {
 	return true
 }
 
-// authenticate 校验请求凭证，成功返回带用户身份的 AuthInfo。
-// 无凭证时返回 errNoAuth（调用方应据此回 401 + WWW-Authenticate 指引）。
+// authenticate validates the request credential and returns an AuthInfo carrying the user identity.
+// Without a credential it returns errNoAuth (the caller should answer 401 + WWW-Authenticate).
 func authenticate(authInfo *auth.AuthInfo, r *http.Request) (*auth.AuthInfo, error) {
 	bearer := extractBearer(r)
 	if bearer == "" {
 		return nil, errNoAuth
 	}
 
-	// 靠值形态分流：JWT（eyJ 开头、三段）走 oauth，否则 apikey
+	// Dispatch on the value's shape: a JWT (starting with eyJ, three segments) goes to oauth, everything else to apikey.
 	if looksLikeJWT(bearer) {
 		return verifyOAuth(authInfo, bearer)
 	}
 	return verifyAPIKey(authInfo, bearer)
 }
 
-// extractBearer 取出 Authorization: Bearer <token> 中的 token
+// extractBearer pulls the token out of "Authorization: Bearer <token>".
 func extractBearer(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	const prefix = "Bearer "
@@ -81,7 +83,7 @@ func extractBearer(r *http.Request) string {
 	return ""
 }
 
-// looksLikeJWT 启发式判断 token 是否 JWT（eyJ 开头、含两个句点）
+// looksLikeJWT heuristically decides whether the token is a JWT (starts with eyJ, contains two dots).
 func looksLikeJWT(token string) bool {
 	if !strings.HasPrefix(token, "eyJ") {
 		return false
@@ -90,7 +92,8 @@ func looksLikeJWT(token string) bool {
 	return dots == 2
 }
 
-// verifyAPIKey 校验 apikey：方式开关启用 + 在 svc_auth_bindings 命中绑定，返回绑定用户。
+// verifyAPIKey validates an apikey: the scheme must be enabled and a binding must match in
+// svc_auth_bindings, whose user is returned.
 func verifyAPIKey(authInfo *auth.AuthInfo, token string) (*auth.AuthInfo, error) {
 	cfg, err := GetServerConfig(authInfo, "apikey")
 	if err != nil {
@@ -100,7 +103,7 @@ func verifyAPIKey(authInfo *auth.AuthInfo, token string) (*auth.AuthInfo, error)
 		return nil, fmt.Errorf("apikey auth disabled")
 	}
 
-	// 明文 token 直接查绑定表（apikey 的 external_issuer 为空串）
+	// The plaintext token is looked up in the binding table directly (external_issuer is empty for apikey).
 	bi, err := authorizeBinding(authInfo.Schema, "apikey", "", token)
 	if err != nil {
 		return nil, err
@@ -108,7 +111,8 @@ func verifyAPIKey(authInfo *auth.AuthInfo, token string) (*auth.AuthInfo, error)
 	return authInfoFromBinding(authInfo.Schema, bi), nil
 }
 
-// verifyOAuth 用 JWKS 验签 JWT，校验 audience / scope，并在 svc_auth_bindings 命中所属用户。
+// verifyOAuth verifies a JWT against JWKS, checks audience / scope, and resolves the bound owner in
+// svc_auth_bindings.
 func verifyOAuth(authInfo *auth.AuthInfo, token string) (*auth.AuthInfo, error) {
 	cfg, err := GetServerConfig(authInfo, "oauth")
 	if err != nil {
@@ -136,7 +140,7 @@ func verifyOAuth(authInfo *auth.AuthInfo, token string) (*auth.AuthInfo, error) 
 		return nil, fmt.Errorf("invalid oauth token: %w", err)
 	}
 
-	// audience 校验
+	// Audience check.
 	if oc.Audience != "" {
 		if aud, ok := claims["aud"]; ok {
 			if !containsAudience(aud, oc.Audience) {
@@ -147,7 +151,7 @@ func verifyOAuth(authInfo *auth.AuthInfo, token string) (*auth.AuthInfo, error) 
 		}
 	}
 
-	// scope 校验（required_scope 需出现在 token 的 scope 中）
+	// Scope check (required_scope must appear in the token scope).
 	if oc.RequiredScope != "" {
 		scp, _ := claims["scope"].(string)
 		if !containsScope(scp, oc.RequiredScope) {
@@ -155,7 +159,7 @@ func verifyOAuth(authInfo *auth.AuthInfo, token string) (*auth.AuthInfo, error) 
 		}
 	}
 
-	// 从 token 提取外部身份（iss + sub）→ 查 svc_auth_bindings
+	// Extract the external identity from the token (iss + sub) and look it up in svc_auth_bindings.
 	iss, _ := claims["iss"].(string)
 	sub, _ := claims["sub"].(string)
 	if sub == "" {
@@ -168,11 +172,13 @@ func verifyOAuth(authInfo *auth.AuthInfo, token string) (*auth.AuthInfo, error) 
 	return authInfoFromBinding(authInfo.Schema, bi), nil
 }
 
-// authorizeBinding 解析绑定并做唯一一项校验：绑定命中的账号处于 active。
-// 刻意不判角色 —— 绑定只是给服务调用一个身份（审计用），不代表权限；
-// 账号被停用/锁定后其绑定立即失效（无需删绑定），账号恢复后自动生效。
+// authorizeBinding resolves the binding and performs exactly one check: the bound account is active.
+// It deliberately ignores roles — a binding only gives a service call an identity (for auditing), it
+// does not grant permissions; deactivating or locking an account invalidates its bindings immediately
+// (no need to delete them) and restoring the account brings them back.
 //
-// 返回值带上该凭证的端点访问范围（restrict_targets / 白名单），由调用方装进 AuthInfo。
+// The return value also carries the credential's endpoint scope (restrict_targets / allowlist), which
+// the caller puts into the AuthInfo.
 func authorizeBinding(schema, authType, issuer, subject string) (*svcauthbindings.BindingIdentity, error) {
 	bi, err := svcauthbindings.NewRepository().ResolveBindingIdentity(schema, authType, issuer, subject)
 	if err != nil {
@@ -181,10 +187,11 @@ func authorizeBinding(schema, authType, issuer, subject string) (*svcauthbinding
 	if bi == nil {
 		return nil, fmt.Errorf("%s identity not bound to any user", authType)
 	}
-	// 绑定必须指向一个具体用户：RPC 没有「租户级凭证」这种身份。
-	// 鉴权后的 AuthInfo.ID 就是运行域、会话与审计归属的依据，允许为空会让
-	// 「有会话但不记记忆」这类静默降级重新出现（见 agent 层 sessionMeta 的口径）。
-	// 列定义是 uuid NOT NULL，这里是防御性硬校验：将来新增认证分支忘了带用户会当场 401。
+	// A binding must point at a concrete user: RPC has no such identity as a "tenant-level credential".
+	// The authenticated AuthInfo.ID is what the run domain, sessions and audit attribution rely on, and
+	// letting it be empty would bring back silent downgrades such as "a session but no memory"
+	// (see sessionMeta in the agent layer). The column is uuid NOT NULL, so this is a defensive hard
+	// check: a future auth branch that forgets the user fails with a 401 right here.
 	if strings.TrimSpace(bi.UserID) == "" {
 		return nil, fmt.Errorf("%s identity is not bound to a user", authType)
 	}
@@ -194,11 +201,11 @@ func authorizeBinding(schema, authType, issuer, subject string) (*svcauthbinding
 	return bi, nil
 }
 
-// authInfoFromBinding 把绑定身份与它的端点访问范围装进 AuthInfo。
+// authInfoFromBinding packs the bound identity and its endpoint scope into an AuthInfo.
 //
-// 范围只做**收窄**：不限制时 TargetAllow 留空（TargetAllowed 恒真）；
-// restrict=true 但白名单为空时，任何端点都会被拒 —— 这是「全禁」的表达方式，
-// 不能退化成「不限制」。
+// The scope can only **narrow**: when unrestricted, TargetAllow stays empty (TargetAllowed is always
+// true); when restrict=true but the allowlist is empty, every endpoint is rejected — that is how "deny
+// everything" is expressed, and it must never degrade into "unrestricted".
 func authInfoFromBinding(schema string, bi *svcauthbindings.BindingIdentity) *auth.AuthInfo {
 	ai := &auth.AuthInfo{ID: bi.UserID, Schema: schema, RestrictTargets: bi.RestrictTargets,
 		ExcludeSupervisor: bi.ExcludeSupervisor}
@@ -211,11 +218,11 @@ func authInfoFromBinding(schema string, bi *svcauthbindings.BindingIdentity) *au
 	return ai
 }
 
-// unmarshalAuthConfig 从 xsql.JSONB 解析出具体配置结构
+// unmarshalAuthConfig decodes a concrete config structure from xsql.JSONB.
 func unmarshalAuthConfig(raw xsql.JSONB, v interface{}) error {
 	data, ok := raw.Data.(json.RawMessage)
 	if !ok {
-		// 兜底：尝试从 []byte 转 RawMessage
+		// Fallback: try converting a []byte to RawMessage.
 		if b, ok := raw.Data.([]byte); ok {
 			data = json.RawMessage(b)
 		} else {
@@ -228,7 +235,7 @@ func unmarshalAuthConfig(raw xsql.JSONB, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
 
-// containsAudience 校验 audience 是否包含期望值
+// containsAudience checks whether the audience contains the expected value.
 func containsAudience(aud interface{}, want string) bool {
 	switch v := aud.(type) {
 	case string:
@@ -243,7 +250,7 @@ func containsAudience(aud interface{}, want string) bool {
 	return false
 }
 
-// containsScope 校验 scope 字符串（空格分隔）是否包含所需 scope
+// containsScope checks whether the scope string (space separated) contains the required scope.
 func containsScope(scope, want string) bool {
 	for _, s := range strings.Fields(scope) {
 		if s == want {
@@ -253,8 +260,9 @@ func containsScope(scope, want string) bool {
 	return false
 }
 
-// jwksCache 简单的内存缓存（按 jwks_url），避免每次请求都拉取。
-// 多实例部署下各实例各存一份是刻意的：数据来自外部 IdP、我们不可写、无需跨实例失效。
+// jwksCache is a simple in-memory cache (keyed by jwks_url) so that requests do not fetch it every time.
+// Each instance keeping its own copy in a multi-instance deployment is deliberate: the data comes from an
+// external IdP, we cannot write it, and it needs no cross-instance invalidation.
 var (
 	jwksCacheMu sync.RWMutex
 	jwksCache   = map[string]*jwksSet{}
@@ -276,7 +284,7 @@ type jwkEntry struct {
 	Y   string `json:"y"`
 }
 
-// jwksKeyFunc 返回一个 jwt.Keyfunc，从 JWKS 端点取公钥验签
+// jwksKeyFunc returns a jwt.Keyfunc that verifies signatures with a public key taken from the JWKS endpoint.
 func jwksKeyFunc(jwksURL string) (jwt.Keyfunc, error) {
 	set, err := fetchJWKS(jwksURL)
 	if err != nil {
@@ -298,9 +306,10 @@ func jwksKeyFunc(jwksURL string) (jwt.Keyfunc, error) {
 	}, nil
 }
 
-// fetchJWKS 拉取并缓存 JWKS。
-// 命中走读锁；HTTP 拉取放在锁外（不阻塞其它请求）；写入走写锁。
-// 未做 singleflight：过期瞬间多个并发请求可能各拉一次，属可接受的重复。
+// fetchJWKS fetches and caches the JWKS.
+// A cache hit takes the read lock; the HTTP fetch happens outside the lock (so it does not block other
+// requests); storing takes the write lock. There is no singleflight: several concurrent requests may each
+// fetch once right after expiry, which is acceptable duplication.
 func fetchJWKS(jwksURL string) (*jwksSet, error) {
 	jwksCacheMu.RLock()
 	set, ok := jwksCache[jwksURL]
@@ -330,7 +339,7 @@ func fetchJWKS(jwksURL string) (*jwksSet, error) {
 	return &fetched, nil
 }
 
-// buildVerifyKey 从 JWK 条目构造 Go 验签公钥
+// buildVerifyKey builds a Go verification public key from a JWK entry.
 func buildVerifyKey(k jwkEntry) (interface{}, error) {
 	switch k.Kty {
 	case "RSA":
@@ -350,11 +359,12 @@ func buildVerifyKey(k jwkEntry) (interface{}, error) {
 	}
 }
 
-// writeWWWAuthenticate 在无凭证时写 401 + WWW-Authenticate 指引前端去 IdP 换 token
+// writeWWWAuthenticate writes 401 + WWW-Authenticate when no credential was supplied, telling the client
+// where to obtain a token from the IdP.
 func writeWWWAuthenticate(w http.ResponseWriter, authInfo *auth.AuthInfo) {
 	cfg, err := GetServerConfig(authInfo, "oauth")
 	if err != nil {
-		// oauth 未配置：给出通用提示
+		// oauth is not configured: give a generic hint.
 		w.Header().Set("WWW-Authenticate", `Bearer realm="flame-rpc"`)
 		w.WriteHeader(http.StatusUnauthorized)
 		return

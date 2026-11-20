@@ -17,13 +17,14 @@ Read this skill when these intents appear:
 
 ## How to do it
 
-### 1. Confirm three things first
+### 1. Confirm four things first
 
 | Item | Requirement |
 |---|---|
 | `name` | Unique; only **letters, digits, dashes** (`^[a-zA-Z0-9][a-zA-Z0-9-]*$`), no underscores, cannot start with a dash, ≤64 characters. Lowercase + dashes, e.g. `poet`, `english-mate`. It is also the **definition domain** directory name (`tenants/{schema}/agents/{name}/`); "workspace" means something else — the runtime domain (session / runs directories), and the two are not the same thing. |
 | `description` | One sentence saying what this agent does; it appears in lists and others use it to judge the purpose. |
 | `agent_md` | The full AGENT.md (see below). |
+| `default_language` | Optional: the agent's default reply language (BCP-47, e.g. `zh-CN`), for an agent that inherently serves one audience. Leave it out for the normal case — the agent then follows the caller / user. It can also be set later with `update_agent(default_language=…)`. |
 
 ### 2. Write AGENT.md
 
@@ -36,6 +37,13 @@ Structure it with second-level headings covering: **role, scope of responsibilit
 - short and precise; avoid piling up general knowledge unrelated to tool capabilities.
 
 **Why you must not hardcode "Chinese"**: tool descriptions, skill bodies, and the capability / sandbox notes injected by the system may be Chinese or English (they are translated in batches when the primary language changes) — that is the **language of the prompt**, not of the reply. The end of the system prompt already carries a general rule: "reply in the language the user writes in"; hardcoding a language in AGENT.md **overrides** it — do so only when this agent inherently serves a single language (e.g. a writing tutor for one language), and state the reason in the body.
+
+**Two ways to fix a language**: an agent that inherently serves one audience can either state it in AGENT.md (see above) or
+set the structured default at creation with `create_agent(default_language="zh-CN")`, or later with
+`update_agent(default_language="zh-CN")` — this writes `agents.default_language` (BCP-47; an empty string clears it, and
+`read_agent` echoes the current value). The structured default is the weaker of the two: a caller passing `_meta.language`
+still overrides it for that single call. Its advantage is reach — it also travels into the workflows this agent runs, where
+it is readable as the builtin variable `language`.
 
 **System entities are the exception**: `main`'s `AGENT.md` is part of the system prompt and is always written in
 **English**, whatever language the user speaks. Tenant-built agents follow the user's language instead.
@@ -114,9 +122,25 @@ Tools are not limited to a single "workspace" view. The mounts of the three exec
 
 ### 5. Calling `create_agent`
 
-Arguments: `name` and `agent_md` are required; `description` optional (recommended); `is_supervisor` optional (default false; the agent is created with super privileges right away — supervisor only, do not hand it out casually: it is the same level as the super agent).
+Arguments: `name` and `agent_md` are required; `description` optional (recommended); `default_language` optional (BCP-47, omit for "follow the caller"; a malformed tag fails the creation instead of being stored); `is_supervisor` optional (default false; the agent is created with super privileges right away — supervisor only, do not hand it out casually: it is the same level as the super agent).
 
-### 6. Self-check after creating
+### 6. Editing the draft is not going live
+
+Everything you can change about an agent — `AGENT.md`, the description, the two switches, the default reply language — lives in
+its **draft**. Production entry points (MCP / RPC / endpoints / a flow outside a debug run) read the **released current
+version**, so a change takes effect only after the agent is released again from its version panel in the console (the super
+agent has no release tool of its own):
+
+- **release** freezes the whole definition into a new version (`AGENT.md`, description, `tools_unrestricted`,
+  `skill_discovery`, `default_language`) and points production at it;
+- **apply** (load) writes an older version back into the draft and leaves production untouched — that is how you continue from
+  an old version;
+- **rollback** points production at an older version and leaves the draft untouched.
+
+So never say "it is already live" right after an edit: say what changed and that it takes effect at the next release. An agent
+that was never released cannot be called through a production entry point at all.
+
+### 7. Self-check after creating
 
 - the name is valid and does not collide with an existing agent (run `list_agents` first);
 - the description lets others judge the purpose;
@@ -125,8 +149,8 @@ Arguments: `name` and `agent_md` are required; `description` optional (recommend
 
 ## Cautions
 
-- **Do not "delete and recreate" to change configuration**: `create_agent` fails on a duplicate name, while renaming / re-describing / `discovery` / `unrestricted` are all handled by `update_agent`; to change the **AGENT.md body**, write it with the file tools directly — `write_file("/agents/<name>/AGENT.md", full text)` (or a partial change with `edit_file`). Deleting and recreating changes the **ID** and loses bound skills, so avoid it.
-- **`update_agent` forbids exactly one thing on "yourself while running": renaming** (`agent` = yourself + `new_name` is rejected — renaming would break the remaining file operations of this turn, a purely technical reason). **Description / `discovery` / `unrestricted` / `is_supervisor` all apply to yourself too**, no need to go through the console; to change your own AGENT.md body use `write_file("/agents/<yourself>/AGENT.md", full text)`.
+- **Do not "delete and recreate" to change configuration**: `create_agent` fails on a duplicate name, while renaming / re-describing / `discovery` / `unrestricted` / `default_language` are all handled by `update_agent`; to change the **AGENT.md body**, write it with the file tools directly — `write_file("/agents/<name>/AGENT.md", full text)` (or a partial change with `edit_file`). Deleting and recreating changes the **ID** and loses bound skills, so avoid it.
+- **`update_agent` forbids exactly one thing on "yourself while running": renaming** (`agent` = yourself + `new_name` is rejected — renaming would break the remaining file operations of this turn, a purely technical reason). **Description / `discovery` / `unrestricted` / `default_language` / `is_supervisor` all apply to yourself too**, no need to go through the console; to change your own AGENT.md body use `write_file("/agents/<yourself>/AGENT.md", full text)`.
 - **`main` (the built-in super agent) and three built-in skills are protected**: `delete_agent("main")` and renaming `main` are rejected (the error contains `protected agent`); `skill-authoring` / `agent-authoring` / `custom-tool-authoring` likewise cannot be deleted or renamed (body and description remain editable). This is a separate gate **orthogonal** to the "normal status" gate — when you see `protected`, do not retry with other arguments or try to change the status first.
 - **As the super agent you can write files across agents / skills**: a file path starting with `/` is resolved from the **tenant root** — `/agents/<name>/AGENT.md`, `/skills/<name>/SKILL.md`, `/agents/<name>/skills/<name>/SKILL.md`. Read the original with `read_file` first. The write gate has two criteria, do not confuse them: **the agent's own definition** (`AGENT.md`, description, etc.) requires that agent to be in **normal status** (deprecated is rejected); **files inside an agent's private skill directory** likewise require the **owning agent** to be in normal status (deprecated is frozen), plus the skill itself being normal. **Being the super agent does not relax this.** Note that the `/` prefix is **not yours alone**: an ordinary agent can also use it to reach **its own** private skill directory (`/agents/<itself>/skills/<skill>/...`, including attachments and subdirectories, through the same two gates); all other cross-domain paths remain yours only. An ordinary agent cannot even read or write **its own `AGENT.md`** (it is outside its reach); only you or the console can change it.
 - **Entities still go through meta tools**: create / delete / rename an agent with `create_agent` / `delete_agent` / `update_agent`; for skills there are three sets — `*_own_skill` for **your own private** skills, `*_shared_skill` for **tenant-level shared** skills, `*_agent_skill` for **a given agent's private** skills (the tool name is the ownership; the wrong one is rejected, and `skill_id` pinpoints the target). Do not use file tools to create or delete entity root directories.

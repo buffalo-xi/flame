@@ -2,21 +2,23 @@ package auth
 
 import "flame/nexus/shared/account"
 
-// 兼容层：密码哈希/校验与长度约束已挪到中立包 shared/account
-// （平台侧 platform.users 也要用，但不该依赖 auth —— 那里面还有租户登录 handler）。
-// 这里保留同名导出，现有调用点（login.go / admin/users / …）无需改动。
+// Compatibility layer: password hashing / verification and the length constraints moved to the neutral package
+// shared/account (the platform side needs them for platform.users too, but should not depend on auth — that package also
+// holds the tenant login handler). The same names are re-exported here, so existing call sites (login.go / admin/users /
+// ...) need no change.
 const (
-	// MaxPasswordBytes bcrypt 可处理的明文上限（字节）
+	// MaxPasswordBytes is the plaintext limit bcrypt can handle (bytes).
 	MaxPasswordBytes = account.MaxPasswordBytes
-	// MinPasswordLength 密码最小长度（与前端校验保持一致）
+	// MinPasswordLength is the minimum password length (kept in step with the frontend check).
 	MinPasswordLength = account.MinPasswordLength
 )
 
 var (
-	// ErrPasswordTooLong 密码超过 bcrypt 上限
+	// ErrPasswordTooLong means the password exceeds the bcrypt limit.
 	ErrPasswordTooLong = account.ErrPasswordTooLong
-	// HashPassword 生成密码哈希（bcrypt）
+	// HashPassword produces a password hash (bcrypt).
 	HashPassword = account.HashPassword
-	// VerifyPassword 校验明文密码；needRehash=true 表示命中旧 MD5，调用方应升级为 bcrypt
+	// VerifyPassword checks a plaintext password; needRehash=true means the old MD5 matched and the caller should upgrade
+	// it to bcrypt.
 	VerifyPassword = account.VerifyPassword
 )

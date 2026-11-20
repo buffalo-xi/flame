@@ -5,12 +5,13 @@ import (
 	"encoding/base64"
 )
 
-// GenerateAPIKey 生成符合大模型调用习惯的 API Key：sk- 前缀 + 32 字节高熵随机数。
+// GenerateAPIKey produces an API key shaped the way LLM clients expect: an sk- prefix followed by 32 bytes of
+// high-entropy randomness.
 //
-// info 会拼在 "sk-" 之后，用于肉眼区分用途（如租户 schema、服务名）；
-// 不需要区分时传空串。
+// info is appended after "sk-" so the purpose is visible to the eye (a tenant schema, a service name); pass an empty
+// string when no such distinction is needed.
 func GenerateAPIKey(info string) (string, error) {
-	// 32 字节（256 位）随机数，URL 安全的 Base64 编码（与 OpenAI 格式一致）
+	// 32 bytes (256 bits) of randomness, URL-safe Base64 encoded (the same shape as OpenAI's keys)
 	randomBytes := make([]byte, 32)
 	if _, err := rand.Read(randomBytes); err != nil {
 		return "", err

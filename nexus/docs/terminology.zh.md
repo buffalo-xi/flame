@@ -70,11 +70,12 @@
    `versions/{agents|skills|tools}/<name>/v<n>/`（租户根下一级，不加点开头 —— 它是正式
    数据，备份要能带走）。放实体目录里会让「草稿目录只装草稿」这句话不成立，快照还会套娃。
 3. **授权不冻结，声明冻结。** 版本里冻结的是定义（正文 + 描述 / 可见性 / 工具依赖声明 /
-   智能体的 `tools_unrestricted`、`skill_discovery` 两个开关 —— 它们决定运行时口径，属定义）；
+   智能体的 `tools_unrestricted`、`skill_discovery` 两个开关，以及默认回复语言 `default_language`
+   —— 它们决定运行时口径，属定义）；
    `agent_tool_grants` / `agent_skill_bindings` / `agent_relations`（调用授权）这类授权永远取当前
    —— `revoke` 必须立即生效，所以 `rollback` 不动它们，`apply` 也不回写它们。
-   推论：正式运行读的是**当前版本**里的这两个开关（`versioning.AgentCurrentSwitches`），
-   不是 `agents` 表里的当前值；载入旧版本会按版本回写这两列。
+   推论：正式运行读的是**当前版本**里的这些属性（`versioning.AgentCurrentAttributes`），
+   不是 `agents` 表里的当前值；载入旧版本会按版本回写这些列。
 
    自定义工具同理：正式运行的工具清单与契约（`TOOL.json`：参数 / 入口 / 语言 / 超时 / 出网）
    取当前版本（`customtoolstore.ListReleased / Released`），只有 `status` 与 `configs` 取当前表行；

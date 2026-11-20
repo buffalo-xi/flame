@@ -23,7 +23,8 @@ func (m *ProcessExecMap) Append(processID string, node *NodeResult) {
 	m.totalCount++
 }
 
-// TryAppend 原子检查并追加：若 max>0 且总数已达 max 则返回 false，否则追加并返回 true
+// TryAppend checks and appends atomically: when max > 0 and the total already reached max it returns false,
+// otherwise it appends and returns true.
 func (m *ProcessExecMap) TryAppend(processID string, node *NodeResult, max int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

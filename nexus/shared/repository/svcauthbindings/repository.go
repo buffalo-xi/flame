@@ -2,45 +2,48 @@ package svcauthbindings
 
 import "flame/nexus/shared/models"
 
-// BindingIdentity 服务凭证命中的身份。
-// 绑定只提供服务调用所需的身份（审计用），不限制角色，因此这里只带出账号状态。
+// BindingIdentity is the identity a service credential resolves to.
+// A binding only provides the identity a service call needs (for auditing) and does not restrict roles, so only the
+// account status is carried out here.
 type BindingIdentity struct {
 	UserID string
-	Status string // users.status（用户行缺失时为空串）
+	Status string // users.status (an empty string when the user row is missing)
 
-	// 该凭证的端点访问范围（对应 svc_auth_bindings.restrict_targets）。
-	// 新建绑定默认 true（安全默认），此时只允许 TargetAllow 里的目标，空集合表示一个都不允许；
-	// false = 不限制，需显式关闭（存量绑定在迁移时保持 false）。
-	// 元素形如 "agent:<uuid>" / "flow:<uuid>"。
+	// The endpoint access scope of this credential (svc_auth_bindings.restrict_targets).
+	// A new binding defaults to true (the safe default), which allows only the targets in TargetAllow, an empty set
+	// allowing none; false = unrestricted, and it has to be turned off explicitly (existing bindings stay false after the
+	// migration).
+	// Elements look like "agent:<uuid>" / "flow:<uuid>".
 	RestrictTargets bool
 	TargetAllow     []string
 
-	// ExcludeSupervisor 仅在 RestrictTargets=false 时生效：放行全部端点，但排除超级智能体。
-	// RestrictTargets=true 时忽略（白名单已经精确表达）。
+	// ExcludeSupervisor only takes effect when RestrictTargets=false: allow every endpoint but exclude the super agent.
+	// It is ignored when RestrictTargets=true (the allowlist already says it precisely).
 	ExcludeSupervisor bool
 }
 
-// Repository 服务端认证身份绑定存储接口（MCP/RPC 共用）。
+// Repository is the service-side authentication identity binding storage interface (shared by MCP / RPC).
 type Repository interface {
-	// ResolveBindingIdentity 按 (authType, issuer, subject) 解析绑定身份；
-	// 仅命中 is_active = true 的绑定，未命中返回 (nil, nil)。
+	// ResolveBindingIdentity resolves a binding identity by (authType, issuer, subject);
+	// only bindings with is_active = true match, and a miss returns (nil, nil).
 	ResolveBindingIdentity(schema, authType, issuer, subject string) (*BindingIdentity, error)
-	// List 列出绑定（authType 非空时按类型过滤），created_at 倒序。
+	// List lists bindings (filtered by type when authType is non-empty), newest created_at first.
 	List(schema, authType string) ([]models.SvcAuthBinding, error)
-	// GetByID 按 id 取绑定；不存在返回 (nil, nil)。
+	// GetByID fetches a binding by id; missing returns (nil, nil).
 	GetByID(schema, id string) (*models.SvcAuthBinding, error)
-	// Create 新建绑定（id 为空时自动生成）。
+	// Create creates a binding (the id is generated when empty).
 	Create(schema string, b *models.SvcAuthBinding) error
-	// Update 更新绑定（external_subject / user_id / is_active）。
+	// Update updates a binding (external_subject / user_id / is_active).
 	Update(schema string, b *models.SvcAuthBinding) error
-	// Delete 删除绑定。
+	// Delete deletes a binding.
 	Delete(schema, id string) error
-	// GetTargets 读取某绑定的端点访问范围（restrict 开关 + 排除超级智能体 + 白名单；
-	// 不存在返回 sql.ErrNoRows）。
+	// GetTargets reads a binding's endpoint access scope (the restrict switch + exclude-supervisor + the allowlist;
+	// missing returns sql.ErrNoRows).
 	GetTargets(schema, bindingID string) (restrict, excludeSupervisor bool, targets []BindingTarget, err error)
-	// SetTargets 全量替换某绑定的端点访问范围（restrict=true 且列表为空 = 一个都不允许）。
-	// restrict=true 时 excludeSupervisor 会被强制写成 false —— 两档互斥，白名单已经精确表达。
+	// SetTargets replaces a binding's endpoint access scope wholesale (restrict=true with an empty list = allow none).
+	// When restrict=true, excludeSupervisor is forced to false — the two settings are mutually exclusive, and the
+	// allowlist already says it precisely.
 	SetTargets(schema, bindingID string, restrict, excludeSupervisor bool, targets []BindingTarget) error
-	// ListTargetCandidates 列出可授权的候选目标：有对外开放端点的 agent / flow。
+	// ListTargetCandidates lists the grantable candidate targets: agents / flows that have an exposed endpoint.
 	ListTargetCandidates(schema string) ([]BindingTarget, error)
 }

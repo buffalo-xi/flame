@@ -161,7 +161,7 @@ func TestSearchCatalogGroupMembers(t *testing.T) {
 		t.Errorf("count = %d, want 2", got.Count)
 	}
 	for _, n := range res.Notes {
-		if strings.Contains(n, "只回了前") {
+		if strings.Contains(n, "only the first") {
 			t.Errorf("no truncation note should appear under the limit: %q", n)
 		}
 	}
@@ -187,7 +187,7 @@ func TestSearchCatalogTruncatesGroupMembers(t *testing.T) {
 	}
 	found := false
 	for _, n := range res.Notes {
-		if strings.Contains(n, "group:big") && strings.Contains(n, "只回了前") {
+		if strings.Contains(n, "group:big") && strings.Contains(n, "only the first") {
 			found = true
 		}
 	}
@@ -208,7 +208,7 @@ func TestSearchCatalogZeroHitNote(t *testing.T) {
 	}
 	found := false
 	for _, n := range res.Notes {
-		if strings.Contains(n, "没有匹配项") && strings.Contains(n, "substring") {
+		if strings.Contains(n, "No match") && strings.Contains(n, "substring") {
 			found = true
 		}
 	}
@@ -219,7 +219,7 @@ func TestSearchCatalogZeroHitNote(t *testing.T) {
 	// No such noise when something matched
 	res = searchCatalog("read_file", all, nil, nil)
 	for _, n := range res.Notes {
-		if strings.Contains(n, "没有匹配项") {
+		if strings.Contains(n, "No match") {
 			t.Errorf("a zero-hit note must not appear when something matched: %q", n)
 		}
 	}

@@ -22,37 +22,38 @@ func fixture() *models.CustomTool {
 	}
 }
 
-// Write → Read 必须一致；路径落在 tenants/{schema}/tools/{name}/TOOL.json。
+// Write -> Read must be lossless; the path lands on tenants/{schema}/tools/{name}/TOOL.json.
 func TestWriteReadRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	if err := WriteOf(root, "t0", fixture()); err != nil {
-		t.Fatalf("写失败: %v", err)
+		t.Fatalf("write failed: %v", err)
 	}
 	if _, err := os.Stat(Path(root, "t0", "demo")); err != nil {
-		t.Fatalf("契约文件没落盘: %v", err)
+		t.Fatalf("the contract file was not written to disk: %v", err)
 	}
 	if !strings.HasSuffix(Path(root, "t0", "demo"), models.ToolFileName) {
-		t.Fatalf("文件名不对: %s", Path(root, "t0", "demo"))
+		t.Fatalf("wrong file name: %s", Path(root, "t0", "demo"))
 	}
 
 	f, err := Read(root, "t0", "demo")
 	if err != nil || f == nil {
-		t.Fatalf("读失败: %v %v", f, err)
+		t.Fatalf("read failed: %v %v", f, err)
 	}
 	if f.Name != "demo" || f.Description != "示例工具" {
-		t.Fatalf("内容不对: %+v", f)
+		t.Fatalf("content mismatch: %+v", f)
 	}
 }
 
-// 缺文件不是错误：灰度期大多数行还没有 TOOL.json。
+// A missing file is not an error: during the rollout most rows do not have a TOOL.json yet.
 func TestReadMissingIsNotError(t *testing.T) {
 	f, err := Read(t.TempDir(), "t0", "absent")
 	if err != nil || f != nil {
-		t.Fatalf("缺文件应返回 (nil,nil)，实际 %v %v", f, err)
+		t.Fatalf("a missing file should return (nil, nil), got %v %v", f, err)
 	}
 }
 
-// ReadAt 与 WriteAt 对称：正式运行从版本目录读契约，口径必须和写版本时一致。
+// ReadAt and WriteAt are symmetric: a production run reads the contract from the version directory, so it must use the
+// same rules as when the version was written.
 func TestReadAtRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	if err := WriteAt(dir, &models.ToolFile{Description: "v1", Lang: "python", Entry: "main.py"}); err != nil {
@@ -63,14 +64,15 @@ func TestReadAtRoundTrip(t *testing.T) {
 		t.Fatalf("ReadAt = %v, %v", f, err)
 	}
 	if f.Description != "v1" || f.Entry != "main.py" {
-		t.Fatalf("内容不对: %+v", f)
+		t.Fatalf("content mismatch: %+v", f)
 	}
 	if miss, err := ReadAt(t.TempDir()); err != nil || miss != nil {
-		t.Fatalf("缺文件应返回 (nil,nil)，实际 %v %v", miss, err)
+		t.Fatalf("a missing file should return (nil, nil), got %v %v", miss, err)
 	}
 }
 
-// 文件坏了 → 回退表定义 + warning，工具仍然可用（不能因为描述坏了让工具消失）。
+// A broken file -> fall back to the table definition plus a warning, and the tool stays usable (a broken description must
+// not make the tool disappear).
 func TestLoadFallsBackOnBrokenFile(t *testing.T) {
 	root := t.TempDir()
 	tool := fixture()
@@ -84,17 +86,17 @@ func TestLoadFallsBackOnBrokenFile(t *testing.T) {
 
 	c := Load(root, "t0", tool)
 	if c.Source != "table" {
-		t.Fatalf("应回退表定义，实际 %s", c.Source)
+		t.Fatalf("should fall back to the table definition, got %s", c.Source)
 	}
 	if len(c.Warnings) == 0 {
-		t.Fatal("回退时必须有 warning，否则没人知道文件坏了")
+		t.Fatal("a fallback must carry a warning, or nobody would know the file is broken")
 	}
 	if tool.Description != "示例工具" {
-		t.Errorf("回退后不该改动表行: %+v", tool)
+		t.Errorf("a fallback must not modify the table row: %+v", tool)
 	}
 }
 
-// 文件优先：盘上的契约覆盖表行里的旧值。
+// The file wins: the on-disk contract overrides the stale value in the table row.
 func TestLoadFileWinsOverTable(t *testing.T) {
 	root := t.TempDir()
 	tool := fixture()
@@ -108,14 +110,14 @@ func TestLoadFileWinsOverTable(t *testing.T) {
 
 	c := Load(root, "t0", tool)
 	if c.Source != "file" {
-		t.Fatalf("应采用文件契约，实际 %s（warnings=%v）", c.Source, c.Warnings)
+		t.Fatalf("should use the file contract, got %s (warnings=%v)", c.Source, c.Warnings)
 	}
 	if tool.Description != "文件里的新描述" {
-		t.Errorf("文件没覆盖表行: %q", tool.Description)
+		t.Errorf("the file did not override the table row: %q", tool.Description)
 	}
 }
 
-// name 与目录名不一致 → 回退表 + warning（不静默接受）。
+// A name that disagrees with the directory -> fall back to the table plus a warning (never accept it silently).
 func TestLoadRejectsNameMismatch(t *testing.T) {
 	root := t.TempDir()
 	tool := fixture()
@@ -130,14 +132,14 @@ func TestLoadRejectsNameMismatch(t *testing.T) {
 
 	c := Load(root, "t0", tool)
 	if c.Source != "table" || len(c.Warnings) == 0 {
-		t.Fatalf("名字不一致应回退并告警: %+v", c)
+		t.Fatalf("a name mismatch should fall back and warn: %+v", c)
 	}
 	if tool.Description != "示例工具" {
-		t.Errorf("回退后不该采用文件内容: %q", tool.Description)
+		t.Errorf("a fallback must not adopt the file's content: %q", tool.Description)
 	}
 }
 
-// 入口文件缺失只告警，不拦截：执行时会给出更准确的错误（试跑能看到）。
+// A missing entry file only warns, never blocks: execution reports a more accurate error (and a trial run shows it).
 func TestLoadWarnsMissingEntry(t *testing.T) {
 	root := t.TempDir()
 	tool := fixture()
@@ -151,34 +153,34 @@ func TestLoadWarnsMissingEntry(t *testing.T) {
 
 	c := Load(root, "t0", tool)
 	if c.Source != "file" {
-		t.Fatalf("应采用文件契约: %+v", c)
+		t.Fatalf("should use the file contract: %+v", c)
 	}
 	if len(c.Warnings) == 0 || !strings.Contains(c.Warnings[0], "main.js") {
-		t.Fatalf("应提示入口缺失: %+v", c.Warnings)
+		t.Fatalf("a missing entry should be reported: %+v", c.Warnings)
 	}
 }
 
-// 迁移幂等：第一次补齐，第二次不再写。
+// The migration is idempotent: the first pass fills in, the second writes nothing.
 func TestEnsureAllIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	list := []models.CustomTool{*fixture()}
 
 	written, errs := EnsureAll(root, "t0", list)
 	if written != 1 || len(errs) != 0 {
-		t.Fatalf("首次应补写 1 份，实际 written=%d errs=%v", written, errs)
+		t.Fatalf("the first pass should write one file, got written=%d errs=%v", written, errs)
 	}
 	written, errs = EnsureAll(root, "t0", list)
 	if written != 0 || len(errs) != 0 {
-		t.Fatalf("第二次不该再写，实际 written=%d errs=%v", written, errs)
+		t.Fatalf("the second pass should write nothing, got written=%d errs=%v", written, errs)
 	}
 }
 
-// 名字只能是一级目录名：防止 Path 跳出 tools/ 或覆盖租户根目录。
+// A name may only be a single directory level: this keeps Path from escaping tools/ or overwriting the tenant root.
 func TestSafeName(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"", "..", ".", "a/b", `a\b`} {
 		if err := WriteOf(root, "t0", &models.CustomTool{Name: name}); err == nil {
-			t.Errorf("名字 %q 应被拒绝", name)
+			t.Errorf("name %q should be refused", name)
 		}
 	}
 }

@@ -200,7 +200,7 @@ func CodeLangs() ([]string, bool) {
 
 // OS reads the operating system ("windows" / "linux") out of the raw sandbox environment probe; it returns an empty string when unreadable.
 //
-// capabilities already gives the OS on the `系统: …` line (see sandboxd's probeHost / formatOSRelease), so there is no need to guess here,
+// capabilities already gives the OS on the `OS: …` line (see sandboxd's probeHost / formatOSRelease), so there is no need to guess here,
 // and nexus's host runtime.GOOS must not be used either: the sandbox may run on another platform. It reads that one line and infers no
 // capability, which is why it does not conflict with "hand Text to the LLM as is".
 //
@@ -211,14 +211,14 @@ func OS() string {
 		return ""
 	}
 	for _, line := range strings.Split(info.Environment.Text, "\n") {
-		v, ok := strings.CutPrefix(strings.TrimSpace(line), "系统: ")
+		v, ok := strings.CutPrefix(strings.TrimSpace(line), "OS: ")
 		if !ok {
 			continue
 		}
 		if strings.Contains(strings.ToLower(v), "windows") {
 			return "windows"
 		}
-		// os-release only exists on the Linux family; a readable `系统:` line that is not Windows means Linux.
+		// os-release only exists on the Linux family; a readable `OS:` line that is not Windows means Linux.
 		return "linux"
 	}
 	return ""

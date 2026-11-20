@@ -8,15 +8,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// PostgresRepository PostgreSQL实现的LLM服务商预设存储
+// PostgresRepository is the PostgreSQL implementation of LLM provider preset storage.
 type PostgresRepository struct{}
 
-// NewPostgresRepository 创建PostgreSQL存储实例
+// NewPostgresRepository creates a PostgreSQL storage instance.
 func NewPostgresRepository() *PostgresRepository {
 	return &PostgresRepository{}
 }
 
-// ListAll 获取所有LLM服务商预设，按 is_popular DESC, sort_order ASC 排序
+// ListAll lists every LLM provider preset, ordered by is_popular DESC, sort_order ASC.
 func (r *PostgresRepository) ListAll() ([]models.LLMProviderPreset, error) {
 	query := `SELECT id, name, icon, description, protocol, url, is_popular, sort_order FROM ` +
 		tableName() + ` ORDER BY is_popular DESC, sort_order ASC`
@@ -38,10 +38,11 @@ func (r *PostgresRepository) ListAll() ([]models.LLMProviderPreset, error) {
 	return results, nil
 }
 
-// Create 新增预设，返回生成的 id。
+// Create adds a preset and returns the generated id.
 //
-// id 由**程序生成**（表上没有 DB 默认值），与仓库里其它 uuid 主键表一致；
-// icon / description 传空串写 NULL；extra_params 不写，走表默认 {}。
+// The id is generated **in the program** (the table has no database default), consistent with the other uuid-keyed tables
+// in the repository; an empty icon / description is written as NULL; extra_params is not written, so the table default {}
+// applies.
 func (r *PostgresRepository) Create(in *PresetInput) (string, error) {
 	id := uuid.NewString()
 	_, err := db.DB.Exec(
@@ -55,7 +56,7 @@ func (r *PostgresRepository) Create(in *PresetInput) (string, error) {
 	return id, nil
 }
 
-// Update 按 id 覆盖可编辑字段，返回受影响行数（0 = 该预设不存在）。
+// Update overwrites the editable fields by id, returning the number of rows affected (0 = no such preset).
 func (r *PostgresRepository) Update(id string, in *PresetInput) (int64, error) {
 	res, err := db.DB.Exec(
 		`UPDATE `+tableName()+`
@@ -69,8 +70,9 @@ func (r *PostgresRepository) Update(id string, in *PresetInput) (int64, error) {
 	return res.RowsAffected()
 }
 
-// Delete 按 id 删除，返回受影响行数（0 = 该预设不存在）。
-// 无外键引用：租户点预设只是把 name / protocol / url 复制进自己的服务商记录。
+// Delete deletes by id, returning the number of rows affected (0 = no such preset).
+// There is no foreign key reference: picking a preset on the tenant side merely copies name / protocol / url into its own
+// provider record.
 func (r *PostgresRepository) Delete(id string) (int64, error) {
 	res, err := db.DB.Exec(`DELETE FROM `+tableName()+` WHERE id=$1::uuid`, id)
 	if err != nil {
@@ -79,7 +81,7 @@ func (r *PostgresRepository) Delete(id string) (int64, error) {
 	return res.RowsAffected()
 }
 
-// tableName 返回带 schema 的表名
+// tableName returns the table name with its schema.
 func tableName() string {
 	return config.Cfg.Database.PlatformSchema + ".llm_provider_presets"
 }

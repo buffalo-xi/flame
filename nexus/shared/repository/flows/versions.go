@@ -11,23 +11,25 @@ import (
 	"flame/tools/xsql"
 )
 
-// ErrNoReleasedVersion 实体没有正式版本（version 表里没有 is_current）。
+// ErrNoReleasedVersion means the entity has no released version (no is_current row in the version table).
 //
-// 正式入口（MCP / RPC / 端点 / flow 之间的直调）遇到它必须拒绝，
-// 不能悄悄退回草稿 —— 那样「正式运行用正式版本」就没有意义了。
-// 调试入口（编辑页调试器 / run_flow 试跑）读的是草稿，不经过这里。
-var ErrNoReleasedVersion = errors.New("尚未发布正式版本")
+// A production entry point (MCP / RPC / an endpoint / a direct call between flows) must refuse when it sees this,
+// never quietly falling back to the draft — otherwise "a production run uses the released version" means nothing.
+// A debug entry point (the editor's debugger / a run_flow trial) reads the draft and never comes through here.
+var ErrNoReleasedVersion = errors.New("no released version yet")
 
-// ErrCannotDeleteCurrentVersion 当前版本不能删除。
+// ErrCannotDeleteCurrentVersion means the current version cannot be deleted.
 //
-// 正式入口（MCP / RPC / 端点 / flow 之间的直调）跑的就是 is_current 那一行，
-// 删掉等于把线上定义抽走，所有正式调用会一起变成「尚未发布正式版本」。
-// 要删就先「切到线上」把指针切到别的版本 —— 那是一个动作，删除是另一个动作。
-var ErrCannotDeleteCurrentVersion = errors.New("当前版本不能删除，请先把线上切到其它版本")
+// A production entry point (MCP / RPC / an endpoint / a direct call between flows) runs the is_current row, so
+// deleting it pulls the production definition out from under them and every production call becomes
+// "no released version yet". To delete it, switch production over to another version first — that is one action,
+// deleting is another.
+var ErrCannotDeleteCurrentVersion = errors.New("the current version cannot be deleted; switch production to another version first")
 
-// FlowVersion 一条工作流版本记录（flow_versions）。
+// FlowVersion is one workflow version record (flow_versions).
 //
-// 列表接口不查 diagram（可能几十 KB）；需要整份定义时走 GetCurrentFlowVersion。
+// The list endpoint does not query diagram (it may be tens of KB); when the whole definition is needed, use
+// GetCurrentFlowVersion.
 type FlowVersion struct {
 	FlowID        string      `json:"flow_id"`
 	Version       int         `json:"version"`
@@ -35,12 +37,12 @@ type FlowVersion struct {
 	Description   xsql.String `json:"description"`
 	IsCurrent     bool        `json:"is_current"`
 	Note          string      `json:"note"`
-	CreatedBy     xsql.UUID   `json:"created_by"` // uuid 列：用 String 扫会报 "无法将 []uint8 转换为 string"
+	CreatedBy     xsql.UUID   `json:"created_by"` // a uuid column: scanning with String reports "cannot convert []uint8 to string"
 	CreatedByName xsql.String `json:"created_by_name"`
 	CreatedAt     xsql.Time   `json:"created_at"`
 }
 
-// ListFlowVersions 列出某工作流的全部版本（新到旧）。
+// ListFlowVersions lists every version of one workflow (newest first).
 func (r *PostgresRepository) ListFlowVersions(authInfo *auth.AuthInfo, flowID string) ([]FlowVersion, error) {
 	rows, err := db.DB.Query(`SELECT v.flow_id, v.version, v.name, v.description, v.is_current,
 			v.note, v.created_by, COALESCE(u.name, ''), v.created_at
@@ -65,10 +67,11 @@ func (r *PostgresRepository) ListFlowVersions(authInfo *auth.AuthInfo, flowID st
 	return out, rows.Err()
 }
 
-// ReleaseFlowVersion 把当前工作副本（flows 那一行）冻结成一个新版本并设为当前。
+// ReleaseFlowVersion freezes the current working copy (the flows row) into a new version and makes it current.
 //
-// 版本号在行锁内取 max+1：两个并发发布会排队，不会算出同一个号撞主键。
-// 历史版本只把 is_current 置 false，内容不动。
+// The version number is taken as max+1 under a row lock: two concurrent releases queue up instead of computing the
+// same number and hitting the primary key. Historical versions only have is_current set to false; their content is
+// untouched.
 func (r *PostgresRepository) ReleaseFlowVersion(authInfo *auth.AuthInfo, flowID, note string) (*FlowVersion, error) {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -86,14 +89,16 @@ func (r *PostgresRepository) ReleaseFlowVersion(authInfo *auth.AuthInfo, flowID,
 	return r.flowVersionMeta(authInfo, flowID, version, createdAt, note), nil
 }
 
-// RollbackFlowVersion 把「正在使用的版本」切回某个历史版本 —— 纯指针操作，不产生新版本。
+// RollbackFlowVersion switches "the version in use" back to a historical one — a pure pointer change that creates
+// no new version.
 //
-// 与 ApplyFlowVersionToDraft 是两个动作，对应两种意图：
-//   - 回滚：线上换回旧的那份产物，画布（草稿）不动；
-//   - 载入：画布换成旧版本内容继续改，线上不动。
+// It and ApplyFlowVersionToDraft are two actions for two intentions:
+//   - rollback: production goes back to the old artefact, the canvas (draft) is untouched;
+//   - apply: the canvas is replaced with the old content to keep editing, production is untouched.
 //
-// 合成一个动作会有两种代价：回滚时顺手覆盖别人正在写的草稿，或者每次回滚都多发一版，
-// 让历史堆满内容相同的副本（也就回答不了「同样的内容为什么有 v1 和 v3」）。
+// Merging them into one action costs one of two things: a rollback overwrites a draft someone else is writing, or
+// every rollback publishes another version, filling the history with identical copies (and making "why do v1 and
+// v3 hold the same content" unanswerable).
 func (r *PostgresRepository) RollbackFlowVersion(authInfo *auth.AuthInfo, flowID string, target int) (*FlowVersion, error) {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -101,14 +106,14 @@ func (r *PostgresRepository) RollbackFlowVersion(authInfo *auth.AuthInfo, flowID
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// 锁实体行：与发布串行，避免「发布到一半指针被切走」
+	// Lock the entity row: serialise against release, so the pointer cannot be moved mid-release
 	var status int
 	if err := tx.QueryRow(`SELECT status FROM `+authInfo.Schema+`.flows WHERE id = $1 FOR UPDATE`, flowID).
 		Scan(&status); err != nil {
 		return nil, err
 	}
 	if !models.IsModifiable(status) {
-		return nil, fmt.Errorf("该工作流已废弃，不能切换版本")
+		return nil, fmt.Errorf("this workflow is deprecated and cannot switch versions")
 	}
 
 	var exists bool
@@ -134,10 +139,12 @@ func (r *PostgresRepository) RollbackFlowVersion(authInfo *auth.AuthInfo, flowID
 	return r.getFlowVersion(authInfo, flowID, target)
 }
 
-// ApplyFlowVersionToDraft 把某个版本的内容写回工作副本（画布），**不发布**。
+// ApplyFlowVersionToDraft writes a version's content back into the working copy (the canvas) **without releasing
+// it**.
 //
-// 用途是「基于旧版本继续改」：写完就是「有改动」状态，需要再点发布才影响线上。
-// 线上当前版本一个字节都不动 —— 这正是「载入」与「回滚」分开的理由。
+// The purpose is "keep editing from an old version": once written it is in the "changed" state and only affects
+// production when released. The current production version is not touched by a single byte — which is exactly why
+// apply and rollback are separate.
 func (r *PostgresRepository) ApplyFlowVersionToDraft(authInfo *auth.AuthInfo, flowID string, target int) error {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -151,7 +158,7 @@ func (r *PostgresRepository) ApplyFlowVersionToDraft(authInfo *auth.AuthInfo, fl
 		return err
 	}
 	if !models.IsModifiable(status) {
-		return fmt.Errorf("该工作流已废弃，不能载入版本")
+		return fmt.Errorf("this workflow is deprecated and cannot load a version")
 	}
 
 	res, err := tx.Exec(`UPDATE `+authInfo.Schema+`.flows f
@@ -173,16 +180,18 @@ func (r *PostgresRepository) ApplyFlowVersionToDraft(authInfo *auth.AuthInfo, fl
 	return tx.Commit()
 }
 
-// DeleteFlowVersion 删掉一条历史版本：只清历史行，不进线上、不动画布。
+// DeleteFlowVersion deletes one historical version: it only clears the history row, touching neither production
+// nor the canvas.
 //
-// 当前版本一律拒绝（ErrCannotDeleteCurrentVersion）：它是正式调用的定义来源，
-// 也是「线上正在跑什么」的唯一记录（flow_runs 不存版本号）。想停服是另一个动作，
-// 不该藏在「删除历史」里。
+// The current version is always refused (ErrCannotDeleteCurrentVersion): it is where production calls take their
+// definition from, and the only record of "what production is running" (flow_runs stores no version number). Taking
+// a service down is a different action and should not hide inside "delete history".
 //
-// 已归档的 flow 也拒绝 —— 与发布 / 回滚 / 载入同一条规矩。
+// A deprecated flow is refused too — the same rule as release / rollback / apply.
 //
-// 版本号不复用：删掉 v2 之后下次发布仍是 MAX(version)+1，不会再发出一个 v2。
-// 复用号码会让「回滚到 v2」指向的东西随删除漂移，历史说明也就对不上号了。
+// Version numbers are not reused: after deleting v2 the next release is still MAX(version)+1, never another v2.
+// Reusing a number would make "roll back to v2" point at something that drifts with every deletion, and the history
+// notes would stop adding up.
 func (r *PostgresRepository) DeleteFlowVersion(authInfo *auth.AuthInfo, flowID string, target int) error {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -190,14 +199,15 @@ func (r *PostgresRepository) DeleteFlowVersion(authInfo *auth.AuthInfo, flowID s
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// 先锁实体行：发布与回滚都会切 is_current，串行之后这里读到的才是最终归属
+	// Lock the entity row first: release and rollback both move is_current, and only after serialising does the read
+	// below reflect the final ownership
 	var status int
 	if err := tx.QueryRow(`SELECT status FROM `+authInfo.Schema+`.flows WHERE id = $1 FOR UPDATE`, flowID).
 		Scan(&status); err != nil {
 		return err
 	}
 	if !models.IsModifiable(status) {
-		return fmt.Errorf("该工作流已废弃，不能删除版本")
+		return fmt.Errorf("this workflow is deprecated and cannot delete a version")
 	}
 
 	var isCurrent bool
@@ -210,14 +220,15 @@ func (r *PostgresRepository) DeleteFlowVersion(authInfo *auth.AuthInfo, flowID s
 		return err
 	}
 	if isCurrent {
-		// 只剩这一条时不说「先切到别的版本」—— 没有别的版本可切，用户会卡死
+		// When it is the only one left, "switch production to another version" is not the advice to give — there is
+		// no other version and the user would be stuck
 		var total int
 		if err := tx.QueryRow(`SELECT count(*) FROM `+authInfo.Schema+`.flow_versions
 			WHERE flow_id = $1`, flowID).Scan(&total); err != nil {
 			return err
 		}
 		if total <= 1 {
-			return fmt.Errorf("v%d 是唯一的版本，不能删除；如需清理历史请先发布一个新版本", target)
+			return fmt.Errorf("v%d is the only version and cannot be deleted; release a new version first to prune the history", target)
 		}
 		return ErrCannotDeleteCurrentVersion
 	}
@@ -229,7 +240,7 @@ func (r *PostgresRepository) DeleteFlowVersion(authInfo *auth.AuthInfo, flowID s
 	return tx.Commit()
 }
 
-// getFlowVersion 读一条版本记录（回滚后返回给前端刷新列表用）。
+// getFlowVersion reads one version record (returned to the frontend after a rollback to refresh the list).
 func (r *PostgresRepository) getFlowVersion(authInfo *auth.AuthInfo, flowID string, version int) (*FlowVersion, error) {
 	var v FlowVersion
 	err := db.DB.QueryRow(`SELECT v.flow_id, v.version, v.name, v.description, v.is_current,
@@ -245,12 +256,13 @@ func (r *PostgresRepository) getFlowVersion(authInfo *auth.AuthInfo, flowID stri
 	return &v, nil
 }
 
-// GetCurrentFlowVersion 取「正式版本」的定义，供正式入口执行。
+// GetCurrentFlowVersion returns the definition of the "released version", for a production entry point to execute.
 //
-// 返回的 models.Flow 是混合体：定义列（diagram / 变量 / 限额 / 名字 / 描述）来自
-// is_current 那一行，身份与生命周期（id / status / endpoints / 时间戳）来自实体行 ——
-// 运行期判可运行性必须看实体状态，快照里没有 status。
-// 没有正式版本时返回 ErrNoReleasedVersion，调用方应当拒绝执行，不要退回草稿。
+// The returned models.Flow is a hybrid: the definition columns (diagram / variables / limits / name / description)
+// come from the is_current row, while identity and lifecycle (id / status / endpoints / timestamps) come from the
+// entity row — deciding runnability at runtime must look at the entity status, which a snapshot does not carry.
+// With no released version it returns ErrNoReleasedVersion, and the caller should refuse to execute rather than fall
+// back to the draft.
 func (r *PostgresRepository) GetCurrentFlowVersion(authInfo *auth.AuthInfo, id string) (*models.Flow, error) {
 	base, err := r.GetFlow(authInfo, id)
 	if err != nil {
@@ -276,7 +288,8 @@ func (r *PostgresRepository) GetCurrentFlowVersion(authInfo *auth.AuthInfo, id s
 	return base, nil
 }
 
-// flowVersionMeta 发布成功后补齐返回体里的展示字段（名字 / 描述 / 发布人姓名）。
+// flowVersionMeta fills in the display fields of the response after a successful release (name / description /
+// releaser's name).
 func (r *PostgresRepository) flowVersionMeta(authInfo *auth.AuthInfo, flowID string, version int, createdAt xsql.Time, note string) *FlowVersion {
 	v := &FlowVersion{
 		FlowID:        flowID,
@@ -289,29 +302,33 @@ func (r *PostgresRepository) flowVersionMeta(authInfo *auth.AuthInfo, flowID str
 	}
 	if err := db.DB.QueryRow(`SELECT name, description FROM `+authInfo.Schema+`.flows WHERE id = $1`, flowID).
 		Scan(&v.Name, &v.Description); err != nil {
-		return v // 补不到展示字段不影响发布结果本身
+		return v // failing to fill in the display fields does not change the release itself
 	}
 	return v
 }
 
-// fillVersionState 给查询结果补上「当前版本号 + 是否有未发布改动」（两个非 DB 列）。
+// fillVersionState adds "current version number + are there unreleased changes" (two non-database columns) to a
+// query result.
 //
-// 编辑器必须能区分三种状态，否则用户改完画布会以为线上已经生效：
-//   - CurrentVersion = 0    尚未发布（正式调用会直接拒绝）
-//   - Dirty = false         工作副本与当前版本一致
-//   - Dirty = true          已保存的修改还没发布，线上仍跑旧版本
+// The editor must be able to tell three states apart, otherwise a user who edited the canvas believes production
+// already picked it up:
+//   - CurrentVersion = 0    not released yet (a production call refuses outright)
+//   - Dirty = false         the working copy matches the current version
+//   - Dirty = true          saved changes are not released yet, production still runs the old version
 //
-// 比对的是「定义列」：description / diagram / 变量 / 各项限额。
-// 名字不比 —— 改名会改掉对外工具名（local__<name>），但那是实体的身份，
-// 发布一个同名同内容的版本并不能「发布」一次改名，标成脏只会误导。
+// What is compared is the "definition columns": description / diagram / variables / each limit.
+// The name is not compared — renaming changes the external tool name (local__<name>), but that is the entity's
+// identity; releasing a version with the same name and content does not "release" a rename, and marking it dirty
+// would only mislead.
 func (r *PostgresRepository) fillVersionState(authInfo *auth.AuthInfo, f *models.Flow) {
 	if f == nil || f.ID == "" {
 		return
 	}
 	var version int
 	var dirty bool
-	// jsonb 列必须归一化：编辑器保存时把空变量写成 '{}'，而发布快照里可能是 NULL，
-	// 直接 IS DISTINCT FROM 会把「什么都没改」判成脏，提示立刻变成假的。
+	// The jsonb columns must be normalised: the editor writes empty variables as '{}' while a released snapshot may
+	// hold NULL, and a bare IS DISTINCT FROM would judge "nothing changed" as dirty, making the badge lie
+	// immediately.
 	err := db.DB.QueryRow(`SELECT v.version,
 			(COALESCE(f.description, '')      IS DISTINCT FROM COALESCE(v.description, '')
 			 OR COALESCE(f.diagram,   '{}'::jsonb) IS DISTINCT FROM COALESCE(v.diagram,   '{}'::jsonb)
@@ -335,24 +352,25 @@ func (r *PostgresRepository) fillVersionState(authInfo *auth.AuthInfo, f *models
 		return
 	}
 	if err != nil {
-		// 版本信息拿不到不该让整个详情页失败：退回「未知」，前端显示未发布
+		// Failing to read the version info must not fail the whole detail page: fall back to "unknown", which the
+		// frontend shows as not released
 		return
 	}
 	f.CurrentVersion = version
 	f.Dirty = dirty
 }
 
-// releaseFlowVersionTx 在事务内冻结当前工作副本：
-// 行锁 → 取下一版本号 → 旧版取消当前 → 插入新版。
+// releaseFlowVersionTx freezes the current working copy inside a transaction:
+// row lock -> take the next version number -> clear the old current flag -> insert the new version.
 func releaseFlowVersionTx(tx *sql.Tx, schema, flowID, note, userID string) (int, xsql.Time, error) {
-	// 行锁：并发发布会在这里排队，保证 max(version)+1 不会撞主键
+	// Row lock: concurrent releases queue here, guaranteeing max(version)+1 does not hit the primary key
 	var status int
 	if err := tx.QueryRow(`SELECT status FROM `+schema+`.flows WHERE id = $1 FOR UPDATE`, flowID).
 		Scan(&status); err != nil {
 		return 0, xsql.Time{}, err
 	}
 	if !models.IsModifiable(status) {
-		return 0, xsql.Time{}, fmt.Errorf("该工作流已废弃，不能发布版本")
+		return 0, xsql.Time{}, fmt.Errorf("this workflow is deprecated and cannot release a version")
 	}
 
 	var next int

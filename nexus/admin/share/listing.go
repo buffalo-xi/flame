@@ -528,8 +528,9 @@ func customToolNameOfRef(ref string) string {
 
 // listingAgent lists one agent.
 //
-// Three switches **travel with the bundle** (is_supervisor / tools_unrestricted / skill_discovery): they describe
-// "how this agent runs" and are applied on install in the target tenant; `warnings` names them, so nothing is downgraded silently.
+// Three switches **travel with the bundle** (is_supervisor / tools_unrestricted / skill_discovery), and so does the default
+// reply language (default_language): they describe "how this agent runs" and are applied on install in the target tenant;
+// `warnings` names them, so nothing is downgraded silently.
 // Listing and export share this assembly, so "export then import" and "list then install" produce the same thing.
 //
 // Only agent_relations is **deliberately left out**: it expresses "who may call this", a uuid relation that cannot be
@@ -573,6 +574,9 @@ func planAgent(info *auth.AuthInfo, id string) (listingPlan, error) {
 			"is_supervisor":      a.IsSupervisor,
 			"tools_unrestricted": a.ToolsUnrestricted,
 			"skill_discovery":    a.SkillDiscovery,
+			// The default reply language is part of the definition as well: a copy installed elsewhere that silently drops it
+			// would answer in a different language than the author configured.
+			"default_language": a.DefaultLanguage,
 		},
 	}
 	if a.IsSupervisor {
@@ -590,6 +594,10 @@ func planAgent(info *auth.AuthInfo, id string) (listingPlan, error) {
 	if a.ToolsUnrestricted || a.SkillDiscovery {
 		plan.warnings = append(plan.warnings,
 			"the \"unrestricted tools\" and \"discover unbound skills\" switches travel with the bundle and take effect in the target tenant")
+	}
+	if a.DefaultLanguage != "" {
+		plan.warnings = append(plan.warnings,
+			"the agent's default reply language ("+a.DefaultLanguage+") travels with the bundle and takes effect in the target tenant")
 	}
 
 	// Private skills travel whole: the files in agents/<agent>/skills/** (no skipDirs) and the metadata in the payload,

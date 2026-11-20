@@ -27,10 +27,10 @@ import (
 //	files/<rel>   every file of the snapshot (relative paths preserved verbatim)
 //
 // The package deliberately **omits**: grant rows of the tenant schema, and agent_relations (uuid
-// relations that cannot be remapped across environments). An agent's three switches (is_supervisor
-// / tools_unrestricted / skill_discovery) **are in the payload**, because they describe how the
-// entity runs and the importing side applies them from the package; `endpoints` belong to the target
-// tenant and do not travel.
+// relations that cannot be remapped across environments). An agent's definition attributes
+// (is_supervisor / tools_unrestricted / skill_discovery / default_language) **are in the payload**,
+// because they describe how the entity runs and the importing side applies them from the package;
+// `endpoints` belong to the target tenant and do not travel.
 const (
 	// PackageFormat identifies the package format. A change of value is a breaking change (the
 	// importing side rejects old or new formats based on it).

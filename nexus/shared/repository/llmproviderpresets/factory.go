@@ -1,6 +1,6 @@
 package repository
 
-// NewRepository 创建LLM服务商预设存储实例
+// NewRepository creates the LLM provider preset storage instance.
 func NewRepository() LLMProviderPresetRepository {
 	return NewPostgresRepository()
 }

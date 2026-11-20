@@ -14,8 +14,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// RefreshToolsWithRepo 建立与远端 MCP server 的连接，发现其工具列表，并全量同步到本地
-// mcp_connection_tools 表。通常在连接 is_active 由 false 变 true 时调用。
+// RefreshToolsWithRepo connects to the remote MCP server, discovers its tool list and replaces the
+// local mcp_connection_tools rows with it. Usually called when a connection's is_active flips from
+// false to true.
 func RefreshToolsWithRepo(ctx context.Context, authInfo *auth.AuthInfo, conn *models.McpConnection, repo mcpconnections.Repository) error {
 	session, err := NewClientSession(ctx, conn)
 	if err != nil {
@@ -52,7 +53,7 @@ func RefreshToolsWithRepo(ctx context.Context, authInfo *auth.AuthInfo, conn *mo
 	return repo.ReplaceTools(authInfo, conn.ID, tools)
 }
 
-// DiscoverTools 仅发现工具而不持久化（用于测试或预览）。
+// DiscoverTools only discovers the tools without persisting them (for tests or previews).
 func DiscoverTools(ctx context.Context, conn *models.McpConnection) ([]*models.McpConnectionTool, error) {
 	session, err := NewClientSession(ctx, conn)
 	if err != nil {

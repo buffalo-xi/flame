@@ -7,22 +7,24 @@ import (
 	"flame/tools/xredis"
 )
 
-// DefaultCacheTTL 配置类元数据缓存（quota / flowconfig 等）的兜底有效期。
-// 正常依赖各模块的「写后删」（Invalidate / InvalidateAll）；TTL 只是兜底：
-// 绕过接口直接改库、或多实例下漏删时，最多延迟一个 TTL 周期生效。
-// 若某模块对正/负缓存有各自的时效要求（如 tenants 的 2min / 30s），应自行定义，
-// 不要复用本常量。
+// DefaultCacheTTL is the fallback lifetime of configuration-style metadata caches (quota / flowconfig and so on).
+// The normal mechanism is each module's "delete on write" (Invalidate / InvalidateAll); the TTL is only a backstop — when
+// the database is edited around the API, or a delete is missed with several instances, the change takes effect at most
+// one TTL later.
+// A module with its own expiry needs (such as tenants' 2min / 30s for positive and negative results) must define its own
+// constant and not reuse this one.
 const DefaultCacheTTL = 5 * time.Minute
 
-// redisConnected Redis 连接状态（atomic，避免并发读写竞争）
+// redisConnected is the Redis connection state (atomic, so concurrent readers and writers do not race).
 var redisConnected atomic.Bool
 
-// IsConnected 返回 Redis 连接状态
+// IsConnected returns the Redis connection state.
 func IsConnected() bool { return redisConnected.Load() }
 
-// Client 全局Redis客户端
+// Client is the global Redis client.
 var Client xredis.Client
 
+// CheckRedisConnection pings Redis and records the result.
 func CheckRedisConnection() bool {
 	if Client == nil {
 		return false

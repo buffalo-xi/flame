@@ -5,7 +5,7 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// ListMcpConnectionsRequest MCP 连接列表请求参数（分页 + 过滤）
+// ListMcpConnectionsRequest holds the MCP connection list parameters (paging + filters).
 type ListMcpConnectionsRequest struct {
 	Page      int      `json:"page" form:"page"`
 	Limit     int      `json:"limit" form:"limit"`
@@ -16,29 +16,29 @@ type ListMcpConnectionsRequest struct {
 	SortOrder []string `json:"sort_order" form:"sort_order"`
 }
 
-// Repository MCP 连接仓储接口
+// Repository is the MCP connection repository interface.
 type Repository interface {
-	// GetByID 根据 ID 获取连接
+	// GetByID returns a connection by id.
 	GetByID(authInfo *auth.AuthInfo, id string) (*models.McpConnection, error)
 
-	// Create 创建连接，返回新记录 ID
+	// Create creates a connection and returns the new record id.
 	Create(authInfo *auth.AuthInfo, conn *models.McpConnection) (string, error)
 
-	// Update 更新连接（按 ID）
+	// Update updates a connection by id.
 	Update(authInfo *auth.AuthInfo, id string, conn *models.McpConnection) error
 
-	// UpdateIsActive 更新连接启用状态
+	// UpdateIsActive updates a connection's enabled state.
 	UpdateIsActive(authInfo *auth.AuthInfo, id string, isActive bool) error
 
-	// Delete 删除连接（级联删除工具）
+	// Delete deletes a connection (its tools cascade).
 	Delete(authInfo *auth.AuthInfo, id string) error
 
-	// List 列出连接（分页 + 过滤）
+	// List lists connections (paging + filters).
 	List(authInfo *auth.AuthInfo, req *ListMcpConnectionsRequest) ([]models.McpConnection, int, error)
 
-	// ListTools 列出某连接下已持久化的工具
+	// ListTools lists the tools already persisted for a connection.
 	ListTools(authInfo *auth.AuthInfo, connectionID string) ([]models.McpConnectionTool, error)
 
-	// ReplaceTools 全量替换某连接下的工具（先删后插），用于发现后同步
+	// ReplaceTools replaces a connection's tools wholesale (delete, then insert), for syncing after discovery.
 	ReplaceTools(authInfo *auth.AuthInfo, connectionID string, tools []*models.McpConnectionTool) error
 }

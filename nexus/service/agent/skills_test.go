@@ -318,8 +318,8 @@ func TestCheckOwnerAgentStatusGate(t *testing.T) {
 // skills" - the prompt would otherwise promise a capability the gate always refuses, which contradicts the very reason it exists as a
 // "before the fact" line.
 func TestCapabilityNotesDeprecatedAgent(t *testing.T) {
-	const allowedHint = "你可建/改**自己的私有**技能"
-	const blockedHint = "你**当前不能**改**自己的私有**技能"
+	const allowedHint = "You may create/modify **your own private** skills"
+	const blockedHint = "You **currently cannot** modify **your own private** skills"
 
 	cases := []struct {
 		name        string
@@ -374,10 +374,10 @@ func TestSkillCatalogListsNormalSkillsOnly(t *testing.T) {
 		},
 	}
 	out := a.skillCatalog()
-	if !strings.Contains(out, "- draft [私有]: 草稿") {
+	if !strings.Contains(out, "- draft [private]: 草稿") {
 		t.Errorf("a normal skill should be listed as \"- name [ownership]: description\", got:\n%s", out)
 	}
-	if strings.Contains(out, "只读") {
+	if strings.Contains(out, "read only") {
 		t.Errorf("the list must not carry a status marker any more, got:\n%s", out)
 	}
 }
@@ -413,7 +413,7 @@ func TestSkillCatalogDiscovery(t *testing.T) {
 				Description: strings.Repeat("长", maxSkillPromptChars+500)},
 		}
 		out := newImpl(true, list).skillCatalog()
-		if !strings.Contains(out, "已省略") {
+		if !strings.Contains(out, "omitted") {
 			t.Fatalf("truncation should trigger, got:\n%s", out)
 		}
 		if n := strings.Count(out, "list_skills"); n != 1 {

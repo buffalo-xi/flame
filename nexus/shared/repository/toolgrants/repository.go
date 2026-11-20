@@ -1,83 +1,90 @@
-// Package toolgrants 提供工具授权体系的数据访问：
-//   - 工具组（tool_groups / tool_group_items）
-//   - agent 工具授权（agent_tool_grants）
-//   - skill 工具依赖（skill_tool_grants）
+// Package toolgrants provides data access to the tool grant system:
+//   - tool groups (tool_groups / tool_group_items)
+//   - agent tool grants (agent_tool_grants)
+//   - skill tool dependencies (skill_tool_grants)
 //
-// 语义约定：
-//   - grant_kind = required（必须导入，恒注入）/ allow（可使用）/ deny（显式拒绝，优先于 allow）
-//   - 同一 ref 的 allow 与 deny 互斥，写入时由上层保证（设置 allow 即删除同 ref 的 deny，反之亦然）
-//   - 工具组成员只能是天然组或单个工具，不能引用其它工具组（DB 层 CHECK 兜底）
+// Semantics:
+//   - grant_kind = required (must import, always injected) / allow (usable) / deny (explicitly refused, outranking allow)
+//   - allow and deny are mutually exclusive for the same ref; the layer above guarantees it on write (setting allow
+//     deletes the deny of the same ref and vice versa)
+//   - a tool group member may only be a native group or a single tool; it must not reference another tool group (the
+//     database CHECK is the backstop)
 package toolgrants
 
 import "flame/nexus/shared/models"
 
-// Repository 工具授权仓储接口（按租户 schema 操作）。
+// Repository is the tool grant repository interface (it operates on the tenant schema).
 type Repository interface {
-	// ===== 自定义工具组 =====
-	// ListGroups 列出全部自定义组（含成员）。
+	// ===== custom tool groups =====
+	// ListGroups lists every custom group (members included).
 	ListGroups(schema string) ([]models.ToolGroup, error)
-	// GetGroup 按名字取自定义组（含成员）；不存在返回 (nil, nil)。
+	// GetGroup returns a custom group by name (members included); missing returns (nil, nil).
 	GetGroup(schema, name string) (*models.ToolGroup, error)
-	// UpsertGroup 按名字创建/更新自定义组并全量替换成员（事务），返回组 id。
+	// UpsertGroup creates / updates a custom group by name and replaces its members wholesale (transaction), returning
+	// the group id.
 	UpsertGroup(schema, name, description, userID string, items []models.ToolGroupItem) (string, error)
-	// DeleteGroup 按名字删除自定义组（成员级联删除）。
+	// DeleteGroup deletes a custom group by name (its members cascade).
 	DeleteGroup(schema, name string) error
 
-	// ===== agent 工具授权 =====
-	// ListAgentGrants 列出某 agent 的全部授权项。
+	// ===== agent tool grants =====
+	// ListAgentGrants lists every grant of an agent.
 	ListAgentGrants(schema, agentID string) ([]models.AgentToolGrant, error)
-	// ReplaceAgentGrants 全量替换某 agent 的授权项（事务）。
+	// ReplaceAgentGrants replaces an agent's grants wholesale (transaction).
 	ReplaceAgentGrants(schema, agentID, userID string, grants []models.AgentToolGrant) error
-	// UpsertAgentGrant 加/改某 agent 的一条授权（事务：先按 ref 删旧行，再插入）。
-	// 同 ref 换 kind 即覆盖 —— 天然保证一个 ref 只有一行（allow 与 required 不共存）。
+	// UpsertAgentGrant adds / changes one grant of an agent (transaction: delete the old row by ref first, then insert).
+	// Changing the kind for the same ref overwrites it — which inherently guarantees one row per ref (allow and required
+	// never coexist).
 	UpsertAgentGrant(schema, agentID, userID string, g models.AgentToolGrant) error
-	// DeleteAgentGrant 精确移除某 agent 的某条授权，返回删除行数（幂等报告用）。
+	// DeleteAgentGrant removes one grant of an agent precisely, returning the number of rows deleted (for an idempotent
+	// report).
 	DeleteAgentGrant(schema, agentID, ref string) (int64, error)
 
-	// ===== skill 工具依赖 =====
-	// ListSkillGrants 列出某 skill 声明的工具依赖。
+	// ===== skill tool dependencies =====
+	// ListSkillGrants lists the tool dependencies a skill declares.
 	ListSkillGrants(schema, skillID string) ([]models.SkillToolGrant, error)
-	// ReplaceSkillGrants 全量替换某 skill 的工具依赖（事务）。
+	// ReplaceSkillGrants replaces a skill's tool dependencies wholesale (transaction).
 	ReplaceSkillGrants(schema, skillID string, grants []models.SkillToolGrant) error
-	// AddSkillGrant 追加一条依赖（ON CONFLICT DO NOTHING）。返回是否真的插入（幂等）。
+	// AddSkillGrant appends one dependency (ON CONFLICT DO NOTHING). Reports whether anything was really inserted
+	// (idempotent).
 	AddSkillGrant(schema, skillID string, g models.SkillToolGrant) (bool, error)
-	// RemoveSkillGrant 按 ref 移除一条依赖（跨 item_type），返回删除行数。
-	// 刻意不校验 ref 是否存在 —— 工具/连接被删后留下的悬空依赖必须还能清掉。
+	// RemoveSkillGrant removes one dependency by ref (across item_type), returning the number of rows deleted.
+	// It deliberately does not check that the ref exists — a dangling dependency left after a tool / connection was
+	// deleted must still be cleanable.
 	RemoveSkillGrant(schema, skillID, ref string) (int64, error)
 
-	// ===== 反查（删除连接 / 端点 / 自定义组前的引用检查）=====
-	// CountRefUsages 统计 ref 在 agent 授权、skill 依赖、自定义组成员中的引用次数。
+	// ===== reverse lookup (reference checks before deleting a connection / endpoint / custom group) =====
+	// CountRefUsages counts how many times a ref is used in agent grants, skill dependencies and custom group members.
 	CountRefUsages(schema, ref string) (int, error)
-	// CountRefPrefixUsages 统计 ref 及其子项（ref:xxx）的引用次数，
-	// 例如删除连接 fs 时统计 "mcp:fs" 与 "mcp:fs:*" 两类引用。
+	// CountRefPrefixUsages counts the usages of a ref and its sub-items (ref:xxx), for example when deleting the
+	// connection fs it counts both "mcp:fs" and "mcp:fs:*".
 	CountRefPrefixUsages(schema, ref string) (int, error)
-	// ListRefUsages 返回 ref 的引用明细（管理端「被引用 N 处」用）。
-	// prefix=true 时同时匹配子项（如 ref=mcp:fs 也统计 mcp:fs:read_file）。
+	// ListRefUsages returns the usage details of a ref (for the admin side's "referenced in N places").
+	// With prefix=true sub-items match as well (e.g. ref=mcp:fs also counts mcp:fs:read_file).
 	ListRefUsages(schema, ref string, prefix bool) (*RefUsages, error)
 }
 
-// RefUsageAgent 一条 agent 授权引用。
+// RefUsageAgent is one agent grant reference.
 type RefUsageAgent struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	GrantKind string `json:"grant_kind"` // required | allow | deny
-	Ref       string `json:"ref"`        // 实际命中的 ref（前缀查询时可能是子项）
+	Ref       string `json:"ref"`        // the ref actually matched (a sub-item for a prefix query)
 }
 
-// RefUsageSkill 一条 skill 依赖引用。
+// RefUsageSkill is one skill dependency reference.
 type RefUsageSkill struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Ref  string `json:"ref"`
 }
 
-// RefUsageGroup 一条自定义组成员引用。
+// RefUsageGroup is one custom group member reference.
 type RefUsageGroup struct {
 	Name string `json:"name"`
 	Ref  string `json:"ref"`
 }
 
-// RefUsages ref 的引用明细：谁在用（agent 授权 / skill 依赖 / 自定义组成员）。
+// RefUsages holds a ref's usage details: who uses it (agent grants / skill dependencies / custom group members).
 type RefUsages struct {
 	Ref    string          `json:"ref"`
 	Prefix bool            `json:"prefix"`

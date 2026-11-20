@@ -9,10 +9,11 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// PostgresRepository PostgreSQL 实现的运行记录存储
+// PostgresRepository is the PostgreSQL implementation of run record storage.
 type PostgresRepository struct{}
 
-// SaveRun 在事务内：插入 run → 批量插入 nodes → 裁剪超限（保留最近 maxRunRecords 条）。
+// SaveRun runs in one transaction: insert the run, bulk-insert the nodes, then trim the excess (keeping the latest
+// maxRunRecords).
 func (r *PostgresRepository) SaveRun(schema string, run *models.FlowRunRecord, nodes []*models.FlowNodeRecord, maxRunRecords int) error {
 	if run == nil {
 		return nil
@@ -24,7 +25,7 @@ func (r *PostgresRepository) SaveRun(schema string, run *models.FlowRunRecord, n
 	}
 	defer tx.Rollback()
 
-	// 1. 插入 run 记录
+	// 1. Insert the run record
 	if err := tx.QueryRow(`
 		INSERT INTO `+schema+`.flow_run_records
 			(id, flow_id, status, run_type, result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
@@ -37,7 +38,7 @@ func (r *PostgresRepository) SaveRun(schema string, run *models.FlowRunRecord, n
 		return err
 	}
 
-	// 2. 批量插入 node 记录
+	// 2. Bulk-insert the node records
 	for _, n := range nodes {
 		if n == nil {
 			continue
@@ -50,8 +51,8 @@ func (r *PostgresRepository) SaveRun(schema string, run *models.FlowRunRecord, n
 				 local_vars, local_vars_truncated, local_vars_size,
 				 run_logs, run_logs_truncated, run_logs_lines,
 				 err_code, err_msg, err_stack, retry_count, error_action,
-				  start_time, end_time, duration_ms, extra)
-				 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
+				 start_time, end_time, duration_ms, extra)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
 			n.ID, run.ID, n.NodeID, n.ProcessID, n.NodeType, n.Status,
 			n.InputVars, n.InputVarsTruncated, n.InputVarsSize,
 			n.OutputVars, n.OutputVarsTruncated, n.OutputVarsSize,
@@ -64,7 +65,7 @@ func (r *PostgresRepository) SaveRun(schema string, run *models.FlowRunRecord, n
 		}
 	}
 
-	// 3. 裁剪：debug 与正式记录各自保留最近 maxRunRecords 条（分开计数）。
+	// 3. Trim: debug and real runs keep their own latest maxRunRecords (counted separately).
 	if err := trimExcess(tx, schema, run.FlowID, run.RunType, maxRunRecords); err != nil {
 		return err
 	}
@@ -72,30 +73,33 @@ func (r *PostgresRepository) SaveRun(schema string, run *models.FlowRunRecord, n
 	return tx.Commit()
 }
 
-// trimExcess 按 run_type 分组裁剪超限记录：
-//   - debug 与非 debug（call/task）分开计数，各自保留最近 limit 条；
-//   - limit<=0 不裁剪（0 表示不存储，调用方 SaveRun 之前就已返回）。
+// trimExcess trims the excess per run_type group:
+//   - debug and non-debug (call/task) are counted separately, each keeping its latest limit records;
+//   - limit<=0 means no trimming (0 means "store nothing", and the caller's SaveRun already returned before this).
 //
-// 历史执行列表读的就是这张表，所以 debug 运行同样要多条留存。
-// 早期这里把 debug 硬编码成"每 flow 只留 1 条"，表现出来就是
-// "明明调试跑了很多次，历史执行里只有一条"。
+// The past-runs list reads this very table, so debug runs have to be kept in quantity too.
+// Early on this hard-coded debug to "keep 1 per flow", which showed up as
+// "I debugged many times but the past-runs list has a single entry".
 func trimExcess(tx *sql.Tx, schema, flowId, runType string, limit int) error {
 	if limit <= 0 {
 		return nil
 	}
-	// debug 与 preview 都是「跑草稿」的运行，合在一组裁剪；正式调用（call/task）另算一组
+	// debug and preview both "run the draft" and are trimmed as one group; real calls (call/task) are another
 	return deleteExcess(tx, schema, flowId, runType == "debug" || runType == "preview", limit)
 }
 
-// deleteExcess 删除某分组下，按 started_at DESC（id 兜底）排序后超出 limit 的最旧 run 及其 node 记录。
-// debugOnly=true 匹配 run_type='debug'；false 匹配 run_type<>'debug'（call+task 一起裁剪）。
-func deleteExcess(tx *sql.Tx, schema, flowId string, debugOnly bool, limit int) error {
-	// 「跑草稿」的一组：debug（调试器）+ preview（试跑）
+// deleteExcess deletes the oldest runs beyond limit in one group (ordered by started_at DESC, id as the tiebreak)
+// together with their node records.
+// draftGroup=true matches the runs-the-draft group; false matches everything else (call+task trimmed together).
+func deleteExcess(tx *sql.Tx, schema, flowId string, draftGroup bool, limit int) error {
+	// The "runs the draft" group: debug (the debugger) plus preview (a trial run)
 	cond := "run_type IN ('debug','preview')"
-	if !debugOnly {
-		cond = "run_type NOT IN ('debug','preview')"
+	if !draftGroup {
+		// run_type is nullable (the column was added after the table existed), and `NULL NOT IN (...)` evaluates to
+		// NULL rather than true — without the IS NULL arm the legacy rows would never be trimmed and would grow forever.
+		cond = "(run_type IS NULL OR run_type NOT IN ('debug','preview'))"
 	}
-	// 先删 node（run_id 在超限集合内）
+	// Delete the nodes first (run_id within the over-limit set)
 	if _, err := tx.Exec(`
 		DELETE FROM `+schema+`.flow_node_records
 		WHERE run_id IN (
@@ -106,7 +110,7 @@ func deleteExcess(tx *sql.Tx, schema, flowId string, debugOnly bool, limit int) 
 		)`, flowId, limit); err != nil {
 		return err
 	}
-	// 再删 run
+	// Then the runs
 	if _, err := tx.Exec(`
 		DELETE FROM `+schema+`.flow_run_records
 		WHERE id IN (
@@ -120,10 +124,11 @@ func deleteExcess(tx *sql.Tx, schema, flowId string, debugOnly bool, limit int) 
 	return nil
 }
 
-// ListRuns 列出某个工作流的历史运行记录（按开始时间倒序）。
+// ListRuns lists one workflow's past runs (newest start first).
 func (r *PostgresRepository) ListRuns(schema string, flowId string, runType string, status string, startFrom, startTo *time.Time, limit int, offset int) ([]*models.FlowRunRecord, int, error) {
-	// flowId 为空 = 跨流程查（管理端「历史运行」用），此时不加 flow_id 条件。
-	// 不能改写成 flow_id = ''：uuid 列传空串会直接报 22P02。
+	// An empty flowId means a cross-flow query (the admin console's "past runs"), in which case the flow_id
+	// condition is omitted.
+	// It cannot be rewritten as flow_id = '': passing an empty string to a uuid column fails with 22P02.
 	where := "WHERE 1=1"
 	args := []interface{}{}
 	argIdx := 1
@@ -153,15 +158,16 @@ func (r *PostgresRepository) ListRuns(schema string, flowId string, runType stri
 		argIdx++
 	}
 
-	// 总数
+	// Total
 	var total int
 	countSQL := `SELECT COUNT(*) FROM ` + schema + `.flow_run_records ` + where
 	if err := db.DB.QueryRow(countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	// 列表
-	listSQL := `SELECT id, flow_id, status, run_type, result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
+	// The list
+	// run_type is nullable: COALESCE keeps a legacy NULL from failing the scan (converting NULL to string is unsupported).
+	listSQL := `SELECT id, flow_id, status, COALESCE(run_type, ''), result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
 			run_args, run_limits, run_flow_vars, run_flow_vars_truncated, run_flow_vars_size, drafts
 		FROM ` + schema + `.flow_run_records ` + where +
 		fmt.Sprintf(" ORDER BY started_at DESC, id DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
@@ -187,11 +193,11 @@ func (r *PostgresRepository) ListRuns(schema string, flowId string, runType stri
 	return records, total, rows.Err()
 }
 
-// GetRunDetail 获取一次运行记录及其所有节点记录（节点按开始时间升序）。
+// GetRunDetail fetches one run record plus all of its node records (nodes ascending by start time).
 func (r *PostgresRepository) GetRunDetail(schema string, runID string) (*models.FlowRunRecord, []*models.FlowNodeRecord, error) {
 	var run models.FlowRunRecord
 	err := db.DB.QueryRow(`
-		SELECT id, flow_id, status, run_type, result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
+		SELECT id, flow_id, status, COALESCE(run_type, ''), result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
 			run_args, run_limits, run_flow_vars, run_flow_vars_truncated, run_flow_vars_size, drafts
 		FROM `+schema+`.flow_run_records WHERE id = $1`, runID).Scan(
 		&run.ID, &run.FlowID, &run.Status, &run.RunType, &run.Result, &run.Progress, &run.ProgressTruncated, &run.ProgressSize, &run.ErrMsg,
@@ -233,10 +239,12 @@ func (r *PostgresRepository) GetRunDetail(schema string, runID string) (*models.
 	return &run, nodes, rows.Err()
 }
 
-// DeleteRun 删除某工作流下的一次运行记录及其节点记录，返回删除的 run 条数。
+// DeleteRun deletes one run record of a workflow together with its node records, returning the number of runs
+// removed.
 //
-// 先删节点再删 run：node 表不依赖级联外键，显式删才不会留孤儿记录
-// （run 被删、node 还在，「按 run 查节点」就会读到幽灵数据）。
+// Nodes are deleted before runs: the node table does not rely on a cascading foreign key, so deleting explicitly is
+// what keeps orphan records from piling up (the run gone, the nodes still there, and "nodes by run" then returns
+// ghost data).
 func (r *PostgresRepository) DeleteRun(schema, flowId, runID string) (int64, error) {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -263,7 +271,7 @@ func (r *PostgresRepository) DeleteRun(schema, flowId, runID string) (int64, err
 	return n, tx.Commit()
 }
 
-// DeleteRuns 删除某工作流的全部运行记录（调试与正式一起），返回删除的 run 条数。
+// DeleteRuns deletes every run record of a workflow (debug and real alike), returning the number of runs removed.
 func (r *PostgresRepository) DeleteRuns(schema, flowId string) (int64, error) {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -290,10 +298,13 @@ func (r *PostgresRepository) DeleteRuns(schema, flowId string) (int64, error) {
 	return n, tx.Commit()
 }
 
-// DeleteRunsByFilter 按组合条件批量删除运行记录（管理端「批量清理」），返回删除的 run 条数。
+// DeleteRunsByFilter deletes run records in bulk by a combination of criteria (the admin console's "bulk clean-up"),
+// returning the number of runs removed.
 //
-// 与 DeleteRuns 一样先删节点记录再删运行记录，区别是条件可选可组合。
-// 无条件直接拒绝：管理端的批量清理必须带筛选，否则一次误调用就是清库。
+// Like DeleteRuns it deletes the node records first and the runs second; the difference is that the criteria are
+// optional and combinable.
+// Unconditional deletion is refused outright: the admin console's bulk clean-up must carry a filter, otherwise one
+// mistaken call wipes the table.
 func (r *PostgresRepository) DeleteRunsByFilter(schema, flowId, status string, startFrom, startTo *time.Time) (int64, error) {
 	where := ""
 	args := []interface{}{}
@@ -320,7 +331,7 @@ func (r *PostgresRepository) DeleteRunsByFilter(schema, flowId, status string, s
 		add("started_at <= $%d", *startTo)
 	}
 	if where == "" {
-		return 0, fmt.Errorf("拒绝无条件删除运行记录：请至少指定一个筛选条件")
+		return 0, fmt.Errorf("refusing to delete run records without a filter: specify at least one criterion")
 	}
 
 	tx, err := db.DB.Begin()

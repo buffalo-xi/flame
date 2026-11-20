@@ -14,24 +14,24 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// S3ClientPool 管理多个 S3 client，按配置指纹复用。
+// S3ClientPool manages several S3 clients and reuses them by a configuration fingerprint.
 type S3ClientPool struct {
 	mu      sync.Mutex
 	clients map[string]*s3.Client
 }
 
-// DefaultPool 全局 S3 client 池。
+// DefaultPool is the global S3 client pool.
 var DefaultPool = &S3ClientPool{clients: make(map[string]*s3.Client)}
 
-// s3Key 由 S3 配置内容生成确定性指纹：
-// 相同配置（同一个 S3）→ 相同 key → 复用；不同配置 → 独立 client。
+// s3Key derives a deterministic fingerprint from the S3 configuration content:
+// the same configuration (the same S3) -> the same key -> reuse; a different configuration -> its own client.
 func s3Key(cfg config.S3Config) string {
 	raw := cfg.Endpoint + "|" + cfg.Region + "|" + cfg.Bucket + "|" + cfg.AccessKey + "|" + cfg.SecretKey
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
 
-// Get 按配置返回（并复用）S3 client。
+// Get returns (and reuses) the S3 client for a configuration.
 func (p *S3ClientPool) Get(cfg config.S3Config) (*s3.Client, error) {
 	key := s3Key(cfg)
 	p.mu.Lock()
@@ -47,7 +47,7 @@ func (p *S3ClientPool) Get(cfg config.S3Config) (*s3.Client, error) {
 	return c, nil
 }
 
-// newS3Client 创建一个新的 S3 client（懒连接，此处不产生网络请求）。
+// newS3Client creates a new S3 client (lazily connected; no network request happens here).
 func newS3Client(cfg config.S3Config) (*s3.Client, error) {
 	opts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(cfg.Region),
@@ -62,7 +62,7 @@ func newS3Client(cfg config.S3Config) (*s3.Client, error) {
 	return s3.NewFromConfig(awscfg, func(o *s3.Options) {
 		if cfg.Endpoint != "" {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
-			o.UsePathStyle = true // minio/自建通常需要 path-style
+			o.UsePathStyle = true // minio / self-hosted setups usually need path style
 		}
 	}), nil
 }

@@ -24,21 +24,21 @@ func TestCapabilityNotesResidentTools(t *testing.T) {
 	}
 
 	shell := newImpl(map[string]bool{"exec": true, "shell": true}).capabilityNotes()
-	for _, want := range []string{"常驻进程", "exec", "kill"} {
+	for _, want := range []string{"resident process", "exec", "kill"} {
 		if !strings.Contains(shell, want) {
 			t.Errorf("granting shell should mention the resident cost and the closing action (missing %q):\n%s", want, shell)
 		}
 	}
 
 	browser := newImpl(map[string]bool{"browser": true}).capabilityNotes()
-	for _, want := range []string{"常驻进程", "close"} {
+	for _, want := range []string{"resident process", "close"} {
 		if !strings.Contains(browser, want) {
 			t.Errorf("granting browser should mention the resident cost and the closing action (missing %q):\n%s", want, browser)
 		}
 	}
 
 	plain := newImpl(map[string]bool{"exec": true, "read_file": true}).capabilityNotes()
-	if strings.Contains(plain, "常驻进程") {
+	if strings.Contains(plain, "resident process") {
 		t.Errorf("no resident-tool reminder should appear without shell / browser granted:\n%s", plain)
 	}
 }

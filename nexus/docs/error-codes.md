@@ -81,6 +81,7 @@ Constraints:
 | `capability` | `capability.dependency_missing` | dependency admission for capability toggles (`params.deps` is the candidate list joined with " / ") |
 | `quota` | `quota.session_storage_exceeded` | maps to 507 |
 | `sandbox` | `sandbox.not_ready` | |
+| `agentconfig` | `agentconfig.invalid_value`, `agentconfig.exceeds_system_limit` | agent run limits (`platform/handler/agentconfigs.go` and `admin/agentconfigs`), same shape as `quota.*`: `params.field` / `params.min` / `params.limit`; this table has no `-1`, so `min` is always 1 |
 | `common` | `common.invalid_params`, `common.internal` | |
 
 File cases uniformly use `<domain>.file_not_found` (`agent.file_not_found` / `skill.file_not_found` /
@@ -155,6 +156,9 @@ Three steps, which can be rolled out in batches; every step ships independently:
    `quota.agent_limit_reached` / `quota.skill_limit_reached` / `quota.flow_limit_reached` when a create hits the per-tenant
    count cap (`params.used` / `params.limit`) - these used to be reported as `common.internal`, which told an admin their
    own quota was a server fault;
+   the agent run limits (`platform/handler/agentconfigs.go` and `admin/agentconfigs`) answer
+   `agentconfig.invalid_value` / `agentconfig.exceeds_system_limit` instead of `common.internal` when a value the user
+   typed is below 1 or above the system ceiling, so the form's own field name travels in `params.field`;
    `admin/customtools` (54) is covered: `tool.invalid_name` / `tool.name_taken` / `tool.not_found` / `tool.invalid_contract` /
    `tool.deprecated` / `tool.contract_readonly` (the same code for all four TOOL.json write entry points) /
    `tool.entry_exists` / `tool.entry_readonly` / `tool.invalid_path` / `tool.file_too_large` / `tool.contract_write_failed` /
@@ -191,7 +195,7 @@ into `data.error`:
 
 ```json
 { "jsonrpc": "2.0", "id": 1,
-  "error": { "code": -32602, "message": "服务端点不存在: poet", "data": { "error": "endpoint.not_found", "params": { "name": "poet" } } } }
+  "error": { "code": -32602, "message": "service endpoint does not exist: poet", "data": { "error": "endpoint.not_found", "params": { "name": "poet" } } } }
 ```
 
 Reason: external clients (Claude Desktop, third-party MCP hosts) only understand JSON-RPC error-code semantics; putting a

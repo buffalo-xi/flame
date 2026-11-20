@@ -36,6 +36,9 @@ CREATE TABLE agents (
     tools_unrestricted boolean DEFAULT false NOT NULL,
     skill_discovery boolean DEFAULT false NOT NULL,
     is_supervisor boolean DEFAULT false NOT NULL,
+    -- Default reply language (BCP-47, e.g. zh-CN). NULL = not configured: the caller's _meta.language wins, then the
+    -- input's own language, then the product default. It is part of the definition (released, versioned, packed).
+    default_language character varying(35),
     CONSTRAINT agents_status_check CHECK ((status = ANY (ARRAY[1, 3])))
 );
 COMMENT ON COLUMN agents.status IS '1:正常,3:废弃（不设「锁定」：线上由版本管理，废弃自动收回端点）';
@@ -181,6 +184,7 @@ CREATE TABLE agent_versions (
     config jsonb,
     tools_unrestricted boolean,
     skill_discovery boolean,
+    default_language character varying(35),
     files jsonb DEFAULT '[]'::jsonb NOT NULL,
     -- 私有技能的元数据快照（name / description / metadata / user_invocable /
     -- command_dispatch / command_tool / restricted / tool_deps）。

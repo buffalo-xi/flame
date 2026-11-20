@@ -75,6 +75,7 @@
 | `capability` | `capability.dependency_missing` | 能力开闭的依赖准入（`params.deps` 是「 / 」连接的候选清单） |
 | `quota` | `quota.session_storage_exceeded` | 对应 507 |
 | `sandbox` | `sandbox.not_ready` | |
+| `agentconfig` | `agentconfig.invalid_value`、`agentconfig.exceeds_system_limit` | 智能体运行参数（`platform/handler/agentconfigs.go` 与 `admin/agentconfigs`），形状同 `quota.*`：`params.field` / `params.min` / `params.limit`；本表没有 `-1`，所以 `min` 恒为 1 |
 | `common` | `common.invalid_params`、`common.internal` | |
 
 文件类统一用 `<域>.file_not_found`（`agent.file_not_found` / `skill.file_not_found` / `tool.file_not_found`）：
@@ -142,6 +143,9 @@
    `quota.exceeds_tenant_limit` / `quota.exceeds_system_limit`（`params.field` 带字段名）；
    新建撞到租户数量上限时用 `quota.agent_limit_reached` / `quota.skill_limit_reached` / `quota.flow_limit_reached`
    （`params.used` / `params.limit`）—— 以前这里报的是 `common.internal`，等于告诉管理员"你自己的配额是服务器故障"；
+   智能体运行参数（`platform/handler/agentconfigs.go` 与 `admin/agentconfigs`）在用户填的值小于 1 或超过系统级时
+   改答 `agentconfig.invalid_value` / `agentconfig.exceeds_system_limit`，字段名走 `params.field`，不再是
+   `common.internal`；
    `admin/customtools`(54) 已铺：`tool.invalid_name` / `tool.name_taken` / `tool.not_found` /
    `tool.invalid_contract` / `tool.deprecated` / `tool.contract_readonly`（TOOL.json 四个写口同码）/
    `tool.entry_exists` / `tool.entry_readonly` / `tool.invalid_path` / `tool.file_too_large` /
@@ -176,7 +180,7 @@ MCP / RPC 走 JSON-RPC，错误对象里要用**标准错误码**（`-32602` 等
 
 ```json
 { "jsonrpc": "2.0", "id": 1,
-  "error": { "code": -32602, "message": "服务端点不存在: poet", "data": { "error": "endpoint.not_found", "params": { "name": "poet" } } } }
+  "error": { "code": -32602, "message": "service endpoint does not exist: poet", "data": { "error": "endpoint.not_found", "params": { "name": "poet" } } } }
 ```
 
 原因：外部客户端（Claude Desktop、第三方 MCP 宿主）只认 JSON-RPC 的错误码语义，

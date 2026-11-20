@@ -6,10 +6,10 @@ import (
 	"flame/tools/xsql"
 )
 
-// PostgresRepository PostgreSQL 实现。
+// PostgresRepository is the PostgreSQL implementation.
 type PostgresRepository struct{}
 
-// relationColumns 查询列（caller_name / callee_name 为关联结果，非 DB 列）。
+// relationColumns are the selected columns (caller_name / callee_name are joined results, not table columns).
 func relationColumns(schema string) string {
 	return "caller_id, callee_id, created_by, created_at, " +
 		"(SELECT name FROM " + schema + ".agents WHERE id = agent_relations.caller_id) as caller_name, " +
@@ -20,7 +20,7 @@ func scanRelation(scanner interface{ Scan(...interface{}) error }, m *models.Age
 	return scanner.Scan(&m.CallerID, &m.CalleeID, &m.CreatedBy, &m.CreatedAt, &m.CallerName, &m.CalleeName)
 }
 
-// Allowed 判断 caller 是否有权调用 callee（无行 = 不允许）。
+// Allowed reports whether the caller may call the callee (no row = not allowed).
 func (r *PostgresRepository) Allowed(schema, callerID, calleeID string) (bool, error) {
 	var ok bool
 	err := db.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM `+schema+`.agent_relations
@@ -28,14 +28,15 @@ func (r *PostgresRepository) Allowed(schema, callerID, calleeID string) (bool, e
 	return ok, err
 }
 
-// ListByCaller 列出 caller 可调用的目标（出边）。
+// ListByCaller lists the targets the caller may call (out-edges).
 func (r *PostgresRepository) ListByCaller(schema, callerID string) ([]models.AgentRelation, error) {
 	return r.list(schema, `WHERE caller_id = $1 ORDER BY callee_name ASC`, callerID)
 }
 
-// ListCallableByCaller 一次 JOIN 取回可调用目标摘要（含描述与状态）。
-// 状态过滤（可运行）留由调用方按 models 的判定函数做，保持规则单一真源。
-// supervisor 不在这里排除 —— 它可被调用，是否放行只看有没有这一行授权。
+// ListCallableByCaller fetches the callable target summaries in one JOIN (description and status included).
+// The state filter (runnable) is left to the caller through the models predicate, keeping the rule in one source of
+// truth. The supervisor is not excluded here — it may be called, and whether it is let through depends only on whether
+// this grant row exists.
 func (r *PostgresRepository) ListCallableByCaller(schema, callerID string) ([]models.CallableAgent, error) {
 	rows, err := db.DB.Query(`SELECT a.id, a.name, COALESCE(a.description, ''), a.status, a.is_supervisor
 		FROM `+schema+`.agent_relations r
@@ -58,7 +59,7 @@ func (r *PostgresRepository) ListCallableByCaller(schema, callerID string) ([]mo
 	return out, rows.Err()
 }
 
-// ListByCallee 反查：哪些 agent 可以调用 callee（入边）。
+// ListByCallee is the reverse lookup: which agents may call the callee (in-edges).
 func (r *PostgresRepository) ListByCallee(schema, calleeID string) ([]models.AgentRelation, error) {
 	return r.list(schema, `WHERE callee_id = $1 ORDER BY caller_name ASC`, calleeID)
 }
@@ -81,17 +82,18 @@ func (r *PostgresRepository) list(schema, where, arg string) ([]models.AgentRela
 	return out, rows.Err()
 }
 
-// AddRelation 追加一条调用授权（幂等：同一 (caller, callee) 只保留一行）。
+// AddRelation appends one call grant (idempotent: one row per (caller, callee)).
 //
-// 不用 ReplaceByCaller / ReplaceByCallee 拼：它们是全量替换 —— 单条操作走全量
-// 会连带清掉该 caller 的其它出边（ReplaceByCallee 更狠，会清掉别人配的入边）。
+// ReplaceByCaller / ReplaceByCallee are not used for this: they replace everything — a single operation going through a
+// wholesale replace would take the caller's other out-edges with it (ReplaceByCallee is worse: it wipes the in-edges
+// others configured).
 func (r *PostgresRepository) AddRelation(schema, callerID, calleeID, operatorID string) error {
 	_, err := db.DB.Exec(`INSERT INTO `+schema+`.agent_relations (caller_id, callee_id, created_by)
 		VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, callerID, calleeID, xsql.UUID(operatorID))
 	return err
 }
 
-// RemoveRelation 移除一条调用授权，返回删除行数（幂等报告用）。
+// RemoveRelation removes one call grant, returning the number of rows deleted (for an idempotent report).
 func (r *PostgresRepository) RemoveRelation(schema, callerID, calleeID string) (int64, error) {
 	res, err := db.DB.Exec(`DELETE FROM `+schema+`.agent_relations
 		WHERE caller_id = $1 AND callee_id = $2`, callerID, calleeID)
@@ -101,7 +103,7 @@ func (r *PostgresRepository) RemoveRelation(schema, callerID, calleeID string) (
 	return res.RowsAffected()
 }
 
-// ReplaceByCaller 全量替换 caller 的出边（它能调用谁）。
+// ReplaceByCaller replaces the caller's out-edges wholesale (whom it may call).
 func (r *PostgresRepository) ReplaceByCaller(schema, callerID string, calleeIDs []string, operatorID string) error {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -122,7 +124,7 @@ func (r *PostgresRepository) ReplaceByCaller(schema, callerID string, calleeIDs 
 	return tx.Commit()
 }
 
-// ReplaceByCallee 全量替换 callee 的入边（谁能调用它）。
+// ReplaceByCallee replaces the callee's in-edges wholesale (who may call it).
 func (r *PostgresRepository) ReplaceByCallee(schema, calleeID string, callerIDs []string, operatorID string) error {
 	tx, err := db.DB.Begin()
 	if err != nil {

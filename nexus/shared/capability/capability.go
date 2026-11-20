@@ -108,17 +108,17 @@ func Valid(key string) bool {
 func Label(key string) string {
 	switch Normalize(key) {
 	case Exec:
-		return "一次性执行（exec / 技能脚本 / 自定义工具，起完即退）"
+		return "one-shot execution (exec / skill scripts / custom tools, exits once done)"
 	case Shell:
-		return "常驻会话（shell，进程跨调用保留）"
+		return "persistent session (shell, the process outlives the call)"
 	case Code:
-		return "代码片段执行（工作流 code 节点 / 分支 / binding，服务端托管解释器）"
+		return "code snippet execution (workflow code node / branch / binding, server-hosted interpreter)"
 	case Browser:
-		return "浏览器（browser，Chromium 常驻进程）"
+		return "browser (browser, resident Chromium process)"
 	// Egress only describes the "command-execution family": browser brings its own egress (following sandbox.browser), the workflow code
 	// channel is always offline, and neither is controlled by this key.
 	case Egress:
-		return "出网（exec / shell / 技能脚本可访问外网）"
+		return "egress (exec / shell / skill scripts may reach the network)"
 	}
 	return key
 }
@@ -131,15 +131,15 @@ func Label(key string) string {
 func ShortLabel(key string) string {
 	switch Normalize(key) {
 	case Exec:
-		return "一次性执行"
+		return "one-shot execution"
 	case Shell:
-		return "常驻会话"
+		return "persistent session"
 	case Code:
-		return "代码片段执行"
+		return "code snippet execution"
 	case Browser:
-		return "浏览器"
+		return "browser"
 	case Egress:
-		return "出网"
+		return "egress"
 	}
 	return key
 }

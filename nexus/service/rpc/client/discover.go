@@ -10,8 +10,9 @@ import (
 	"flame/tools/xsql"
 )
 
-// RefreshToolsWithRepo 建立与远端 RPC server 的连接，发现其工具列表（tools/list），并全量同步到本地
-// rpc_connection_tools 表。通常在连接 is_active 由 false 变 true 时调用。
+// RefreshToolsWithRepo connects to the remote RPC server, discovers its tool list (tools/list) and
+// replaces the local rpc_connection_tools rows with it. Usually called when a connection's is_active
+// flips from false to true.
 func RefreshToolsWithRepo(ctx context.Context, authInfo *auth.AuthInfo, conn *models.RpcConnection, repo rpcconnections.Repository) error {
 	session, err := NewClientSession(ctx, conn)
 	if err != nil {
@@ -31,7 +32,7 @@ func RefreshToolsWithRepo(ctx context.Context, authInfo *auth.AuthInfo, conn *mo
 	return repo.ReplaceTools(authInfo, conn.ID, tools)
 }
 
-// DiscoverTools 仅发现工具而不持久化（用于测试或预览）。
+// DiscoverTools only discovers the tools without persisting them (for tests or previews).
 func DiscoverTools(ctx context.Context, conn *models.RpcConnection) ([]*models.RpcConnectionTool, error) {
 	session, err := NewClientSession(ctx, conn)
 	if err != nil {

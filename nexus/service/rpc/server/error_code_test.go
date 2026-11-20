@@ -7,62 +7,64 @@ import (
 	"testing"
 )
 
-// 契约：业务编码进 error.data.error，协议码 error.code 保持标准语义不变。
-// 前端按 data.error 翻译；外部 MCP 宿主按 code 判协议错。两者混用会同时坏掉两边。
+// Contract: the business code goes into error.data.error and the protocol code in error.code keeps its
+// standard meaning. The frontend translates by data.error; an external MCP host reads code as the
+// protocol error. Mixing the two breaks both sides at once.
 func TestWriteRPCErrorCodeKeepsProtocolCode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeRPCErrorCode(rec, 1, errCodeInvalidParams, "endpoint.not_exposed",
-		map[string]string{"name": "poet"}, "服务端点未对外开放: %s", "poet")
+		map[string]string{"name": "poet"}, "service endpoint is not exposed: %s", "poet")
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("HTTP 状态应为 200（错误在 body 里），实际 %d", rec.Code)
+		t.Fatalf("HTTP status should be 200 (the error lives in the body), got %d", rec.Code)
 	}
 
 	var resp rpcResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("响应不是合法 JSON: %v", err)
+		t.Fatalf("the response is not valid JSON: %v", err)
 	}
 	if resp.Error == nil {
-		t.Fatal("error 字段缺失")
+		t.Fatal("the error field is missing")
 	}
 
-	// 协议码必须还是 -32602，不能被业务编码顶替
+	// The protocol code must still be -32602, never replaced by the business code.
 	if resp.Error.Code != errCodeInvalidParams {
-		t.Fatalf("error.code 应为 %d，实际 %d", errCodeInvalidParams, resp.Error.Code)
+		t.Fatalf("error.code should be %d, got %d", errCodeInvalidParams, resp.Error.Code)
 	}
-	// message 保留中文原文：curl、日志、旧客户端都依赖它
-	if resp.Error.Message != "服务端点未对外开放: poet" {
-		t.Fatalf("error.message 被改动: %q", resp.Error.Message)
+	// The message is the diagnostic text handed to the caller as is.
+	if resp.Error.Message != "service endpoint is not exposed: poet" {
+		t.Fatalf("error.message was changed: %q", resp.Error.Message)
 	}
 
 	data, ok := resp.Error.Data.(map[string]interface{})
 	if !ok {
-		t.Fatalf("error.data 应为对象，实际 %T", resp.Error.Data)
+		t.Fatalf("error.data should be an object, got %T", resp.Error.Data)
 	}
 	if got := data["error"]; got != "endpoint.not_exposed" {
-		t.Fatalf("data.error 应为 endpoint.not_exposed，实际 %v", got)
+		t.Fatalf("data.error should be endpoint.not_exposed, got %v", got)
 	}
 	params, ok := data["params"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("data.params 应为对象，实际 %T", data["params"])
+		t.Fatalf("data.params should be an object, got %T", data["params"])
 	}
 	if got := params["name"]; got != "poet" {
-		t.Fatalf("data.params.name 应为 poet，实际 %v", got)
+		t.Fatalf("data.params.name should be poet, got %v", got)
 	}
 }
 
-// params 为空时不输出该键（omitempty）：前端据「有没有 params」决定用不用模板渲染。
+// Empty params omit the key (omitempty): the frontend uses "is params present" to decide whether to
+// render the template.
 func TestWriteRPCErrorCodeOmitsEmptyParams(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeRPCErrorCode(rec, 1, errCodeInternalError, "common.internal", nil, "内部错误")
+	writeRPCErrorCode(rec, 1, errCodeInternalError, "common.internal", nil, "internal error")
 
 	var body map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("响应不是合法 JSON: %v", err)
+		t.Fatalf("the response is not valid JSON: %v", err)
 	}
 	errObj := body["error"].(map[string]interface{})
 	data := errObj["data"].(map[string]interface{})
 	if _, exists := data["params"]; exists {
-		t.Fatalf("params 为空时不应出现该键，实际 %v", data)
+		t.Fatalf("the params key must not appear when empty, got %v", data)
 	}
 }

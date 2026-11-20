@@ -1,16 +1,19 @@
 package versioning
 
-// 版本状态（非 DB 列）：当前版本号 + 草稿是否有未发布改动。
+// Version state (not a DB column): the current version number plus whether the draft has unreleased changes.
 //
-// flow 的定义在数据库列里，比对可以直接写 SQL（见 repository/flows/versions.go 的
-// fillVersionState）。agent / skill / tool 的定义是「列 + 目录」两半：
-//   - 元数据（描述 / 可见性 / 参数 schema / 工具依赖）在版本行里，用 SQL IS DISTINCT FROM 比；
-//   - 正文是目录，只能对着版本清单逐个文件比 sha256。
+// A flow's definition lives in database columns, so the comparison can be written in SQL (see fillVersionState in
+// repository/flows/versions.go). The definition of an agent / skill / tool has two halves, "columns + directory":
+//   - the metadata (description / visibility / argument schema / tool dependencies) is in the version row and is compared
+//     with SQL IS DISTINCT FROM;
+//   - the body is the directory and can only be compared file by file against the version's file list, by sha256.
 //
-// 只比文件不比元数据，就会出现「改了描述、界面说已发布、线上还是旧的」——
-// 这正是版本体系要防的那类谎话。所以两半都算。
+// Comparing only the files and not the metadata would produce "the description was changed, the UI says it is released,
+// production still runs the old one" — exactly the kind of lie the version system exists to prevent. So both halves
+// count.
 //
-// 读不到版本信息时返回 (0,false)：与 flow 同口径，不让详情页因为版本查询失败而报错。
+// When the version information cannot be read it returns (0, false): the same rule as flows, so a failed version query
+// never breaks the detail page.
 
 import (
 	"context"
@@ -29,10 +32,10 @@ import (
 	"flame/nexus/shared/versions"
 )
 
-// SkillVersionState 租户级技能的版本状态。
+// SkillVersionState is the version state of a tenant-level skill.
 //
-// 私有技能没有独立版本号（它的版本就是所属 agent 的版本）→ 恒返回 (0,false)，
-// 前端据此显示「随所属智能体版本」，而不是「未发布」。
+// A private skill has no version number of its own (its version is the version of the agent it belongs to) and therefore
+// always returns (0, false); the frontend shows "follows the owning agent's version" instead of "unreleased".
 func SkillVersionState(ctx context.Context, st storage.Storage, schema string, s *models.Skill) (int, bool) {
 	if string(s.AgentID) != "" {
 		return 0, false
@@ -61,8 +64,8 @@ func SkillVersionState(ctx context.Context, st storage.Storage, schema string, s
 		return version, true
 	}
 
-	// 工具依赖：声明属于定义。与发布时同一个查询（ORDER BY ref），解成切片再比 ——
-	// 直接比 JSON 字节会被键序 / 空白影响。
+	// Tool dependencies: a declaration is part of the definition. The same query as at release time (ORDER BY ref), decoded
+	// into a slice before comparing — comparing the JSON bytes directly would be affected by key order / whitespace.
 	curDeps, derr := SkillToolDepsSnapshot(schema, s.ID)
 	if derr != nil {
 		return version, true
@@ -85,9 +88,11 @@ func SkillVersionState(ctx context.Context, st storage.Storage, schema string, s
 	return version, changed
 }
 
-// ToolVersionState 自定义工具的版本状态（目录即实体，没有改名，只按 name 键）。
+// ToolVersionState is the version state of a custom tool (the directory is the entity, there is no rename, so it is keyed
+// by name only).
 //
-// configs 不比：它是运行时事实（key / 开关），不是定义；发布时本来也存成 '{}'。
+// configs is not compared: it is a runtime fact (keys / switches), not a definition; at release time it is stored as '{}'
+// anyway.
 func ToolVersionState(ctx context.Context, st storage.Storage, schema, toolName string) (int, bool) {
 	var (
 		version     int
@@ -129,12 +134,14 @@ func ToolVersionState(ctx context.Context, st storage.Storage, schema, toolName 
 	return version, changed
 }
 
-// AgentVersionState 智能体的版本状态。
+// AgentVersionState is the version state of an agent.
 //
-// 三段都要比，否则会漏：
-//  1. agents 的定义列（描述 / config / 两个开关）；
-//  2. 私有技能的**元数据**（描述 / 可见性 / 工具依赖）—— 它在版本行 skills 列里；
-//  3. 正文目录（AGENT.md + 私有技能文件），排除已废弃的私有技能（发布时也排除）。
+// All three parts have to be compared, or something is missed:
+//  1. the definition columns of agents (description / config / the two switches / the default reply language);
+//  2. the **metadata** of private skills (description / visibility / tool dependencies) — it lives in the version row's
+//     skills column;
+//  3. the body directory (AGENT.md + private skill files), excluding deprecated private skills (they are excluded at
+//     release time too).
 func AgentVersionState(ctx context.Context, st storage.Storage, schema, agentID, agentName string) (int, bool) {
 	var (
 		version     int
@@ -146,7 +153,8 @@ func AgentVersionState(ctx context.Context, st storage.Storage, schema, agentID,
 			(v.description IS DISTINCT FROM a.description
 			 OR v.config::text IS DISTINCT FROM a.config::text
 			 OR v.tools_unrestricted IS DISTINCT FROM a.tools_unrestricted
-			 OR v.skill_discovery IS DISTINCT FROM a.skill_discovery)
+			 OR v.skill_discovery IS DISTINCT FROM a.skill_discovery
+			 OR v.default_language IS DISTINCT FROM a.default_language)
 		FROM `+schema+`.agent_versions v
 		JOIN `+schema+`.agents a ON a.id = v.agent_id
 		WHERE v.agent_id = $1 AND v.is_current`, agentID).
@@ -158,7 +166,7 @@ func AgentVersionState(ctx context.Context, st storage.Storage, schema, agentID,
 		return version, true
 	}
 
-	// 私有技能元数据：与发布时同一个查询、同样 ORDER BY name，逐字段比较
+	// Private skill metadata: the same query and the same ORDER BY name as at release time, compared field by field
 	now, serr := PrivateSkillsSnapshot(schema, agentID)
 	if serr != nil || !sameSkillSnapshot(rawSkills, now) {
 		return version, true
@@ -171,7 +179,8 @@ func AgentVersionState(ctx context.Context, st storage.Storage, schema, agentID,
 	if st == nil {
 		return version, false
 	}
-	// 与发布时同一套排除规则：已废弃的私有技能不进快照，比对时也不能把它们算成「有改动」
+	// The same exclusion rule as at release time: deprecated private skills do not enter the snapshot, so they must not
+	// count as "changed" here either
 	skip, kerr := DeprecatedPrivateSkillDirs(schema, agentID)
 	if kerr != nil {
 		return version, true
@@ -183,8 +192,9 @@ func AgentVersionState(ctx context.Context, st storage.Storage, schema, agentID,
 	return version, changed
 }
 
-// sameSkillSnapshot 比较两份私有技能元数据快照。
-// 都解成 []SkillMeta 再 DeepEqual：JSON 的键序不稳定，直接比字节会误报。
+// sameSkillSnapshot compares two private skill metadata snapshots.
+// Both are decoded into []SkillMeta before DeepEqual: JSON key order is not stable, so comparing bytes directly would
+// report false positives.
 func sameSkillSnapshot(a, b []byte) bool {
 	var sa, sb []SkillMeta
 	if len(a) > 0 {
@@ -203,7 +213,7 @@ func sameSkillSnapshot(a, b []byte) bool {
 	return reflect.DeepEqual(sa, sb)
 }
 
-// sameDeps 比较两份工具依赖快照（都来自同一查询，顺序稳定）。
+// sameDeps compares two tool dependency snapshots (both come from the same query, so the order is stable).
 func sameDeps(a, b []byte) bool {
 	var da, db2 []toolDep
 	if len(a) > 0 {
@@ -222,11 +232,11 @@ func sameDeps(a, b []byte) bool {
 	return reflect.DeepEqual(da, db2)
 }
 
-// DraftChanged 报告草稿目录与已冻结清单是否不一致：
-// 多文件、少文件、任一文件内容（sha256）不同都算改动。
+// DraftChanged reports whether the draft directory disagrees with the frozen file list:
+// an extra file, a missing file or a different sha256 on any file all count as a change.
 //
-// skipDirs 是相对草稿目录的路径（如 "skills/old"），与发布时排除的目录同口径；
-// 这些前缀下的内容既不算多文件、也不参与比较。
+// skipDirs are paths relative to the draft directory (such as "skills/old"), on the same rule as the directories excluded
+// at release time; content under those prefixes neither counts as an extra file nor takes part in the comparison.
 func DraftChanged(ctx context.Context, st storage.Storage, draftDir string, files []assetpack.FileEntry, skipDirs []string) (bool, error) {
 	if st == nil {
 		return false, nil
@@ -269,7 +279,7 @@ func DraftChanged(ctx context.Context, st storage.Storage, draftDir string, file
 			seen[childRel] = true
 			sum, ok := want[childRel]
 			if !ok {
-				changed = true // 版本里没有这个文件
+				changed = true // the version does not have this file
 				continue
 			}
 			data, rerr := st.ReadFile(ctx, path.Join(dir, e.Name))
@@ -287,7 +297,7 @@ func DraftChanged(ctx context.Context, st storage.Storage, draftDir string, file
 		return false, err
 	}
 	if len(want) != len(seen) {
-		changed = true // 版本里有、草稿里没有
+		changed = true // the version has it, the draft does not
 	}
 	return changed, nil
 }

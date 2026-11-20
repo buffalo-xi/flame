@@ -11,15 +11,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// PostgresRepository 工具授权的 PostgreSQL 实现。
+// PostgresRepository is the PostgreSQL implementation of tool grants.
 type PostgresRepository struct{}
 
-// NewRepository 创建仓储实例。
+// NewRepository creates a repository instance.
 func NewRepository() Repository { return &PostgresRepository{} }
 
-// ===== 自定义工具组 =====
+// ===== custom tool groups =====
 
-// ListGroups 列出全部自定义组（含成员）。
+// ListGroups lists every custom group (members included).
 func (r *PostgresRepository) ListGroups(schema string) ([]models.ToolGroup, error) {
 	q := fmt.Sprintf(`SELECT g.id, g.name, COALESCE(g.description, ''), g.created_by, g.updated_by,
 			g.created_at, g.updated_at, i.item_type, i.ref
@@ -90,8 +90,8 @@ func (r *PostgresRepository) ListGroups(schema string) ([]models.ToolGroup, erro
 	return out, nil
 }
 
-// GetGroup 按名字取自定义组（含成员）；不存在返回 (nil, nil)。
-// 组数量很少，直接复用 ListGroups 过滤，避免重复维护 SQL。
+// GetGroup returns a custom group by name (members included); missing returns (nil, nil).
+// Groups are few, so it filters ListGroups rather than maintaining a second copy of the SQL.
 func (r *PostgresRepository) GetGroup(schema, name string) (*models.ToolGroup, error) {
 	groups, err := r.ListGroups(schema)
 	if err != nil {
@@ -105,7 +105,8 @@ func (r *PostgresRepository) GetGroup(schema, name string) (*models.ToolGroup, e
 	return nil, nil
 }
 
-// UpsertGroup 按名字创建/更新自定义组并全量替换成员（事务），返回组 id。
+// UpsertGroup creates / updates a custom group by name and replaces its members wholesale (transaction), returning the
+// group id.
 func (r *PostgresRepository) UpsertGroup(schema, name, description, userID string, items []models.ToolGroupItem) (string, error) {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -133,13 +134,13 @@ func (r *PostgresRepository) UpsertGroup(schema, name, description, userID strin
 	return id, nil
 }
 
-// DeleteGroup 按名字删除自定义组（成员级联删除）。
+// DeleteGroup deletes a custom group by name (its members cascade).
 func (r *PostgresRepository) DeleteGroup(schema, name string) error {
 	_, err := db.DB.Exec(fmt.Sprintf(`DELETE FROM %s.tool_groups WHERE name = $1`, schema), name)
 	return err
 }
 
-// replaceGroupItems 全量替换组内成员（去重、忽略空项）。
+// replaceGroupItems replaces a group's members wholesale (deduplicated, empty items ignored).
 func replaceGroupItems(tx *sql.Tx, schema, groupID string, items []models.ToolGroupItem) error {
 	if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s.tool_group_items WHERE group_id = $1`, schema), groupID); err != nil {
 		return err
@@ -164,9 +165,9 @@ func replaceGroupItems(tx *sql.Tx, schema, groupID string, items []models.ToolGr
 	return nil
 }
 
-// ===== agent 工具授权 =====
+// ===== agent tool grants =====
 
-// ListAgentGrants 列出某 agent 的全部授权项。
+// ListAgentGrants lists every grant of an agent.
 func (r *PostgresRepository) ListAgentGrants(schema, agentID string) ([]models.AgentToolGrant, error) {
 	q := fmt.Sprintf(`SELECT grant_kind, item_type, ref, updated_by, updated_at
 		FROM %s.agent_tool_grants WHERE agent_id = $1 ORDER BY grant_kind ASC, ref ASC`, schema)
@@ -198,8 +199,8 @@ func (r *PostgresRepository) ListAgentGrants(schema, agentID string) ([]models.A
 	return out, rows.Err()
 }
 
-// ReplaceAgentGrants 全量替换某 agent 的授权项（事务）。
-// allow 与 deny 互斥：同一 ref 同时出现时以 deny 为准。
+// ReplaceAgentGrants replaces an agent's grants wholesale (transaction).
+// allow and deny are mutually exclusive: when both appear for the same ref, deny wins.
 func (r *PostgresRepository) ReplaceAgentGrants(schema, agentID, userID string, grants []models.AgentToolGrant) error {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -224,7 +225,7 @@ func (r *PostgresRepository) ReplaceAgentGrants(schema, agentID, userID string, 
 			continue
 		}
 		if g.GrantKind == models.GrantKindAllow && denied[g.ItemType+"|"+g.Ref] {
-			continue // deny 优先
+			continue // deny wins
 		}
 		key := g.GrantKind + "|" + g.ItemType + "|" + g.Ref
 		if seen[key] {
@@ -242,11 +243,12 @@ func (r *PostgresRepository) ReplaceAgentGrants(schema, agentID, userID string, 
 	return tx.Commit()
 }
 
-// UpsertAgentGrant 加/改某 agent 的一条授权（事务：先按 ref 删旧行，再插入）。
+// UpsertAgentGrant adds / changes one grant of an agent (transaction: delete the old row by ref first, then insert).
 //
-// 为什么不用 ReplaceAgentGrants 拼：那样是「读-改-写」，有竞态，且会把该 agent 其余
-// 授权行的 updated_by / updated_at 全部刷新（审计信息被冲掉）。
-// 同 ref 换 kind 即覆盖 —— 天然保证一个 ref 只有一行（allow 与 required 不共存）。
+// Why not assemble it through ReplaceAgentGrants: that is a read-modify-write with a race, and it would refresh the
+// updated_by / updated_at of every other grant row of the agent (wiping the audit trail).
+// Changing the kind for the same ref overwrites it — which inherently guarantees one row per ref (allow and required never
+// coexist).
 func (r *PostgresRepository) UpsertAgentGrant(schema, agentID, userID string, g models.AgentToolGrant) error {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -270,7 +272,8 @@ func (r *PostgresRepository) UpsertAgentGrant(schema, agentID, userID string, g 
 	return tx.Commit()
 }
 
-// DeleteAgentGrant 精确移除某 agent 的某条授权（按 ref），返回删除行数（幂等报告用）。
+// DeleteAgentGrant removes one grant of an agent precisely (by ref), returning the number of rows deleted (for an
+// idempotent report).
 func (r *PostgresRepository) DeleteAgentGrant(schema, agentID, ref string) (int64, error) {
 	res, err := db.DB.Exec(
 		fmt.Sprintf(`DELETE FROM %s.agent_tool_grants WHERE agent_id = $1 AND ref = $2`, schema),
@@ -282,9 +285,9 @@ func (r *PostgresRepository) DeleteAgentGrant(schema, agentID, ref string) (int6
 	return res.RowsAffected()
 }
 
-// ===== skill 工具依赖 =====
+// ===== skill tool dependencies =====
 
-// ListSkillGrants 列出某 skill 声明的工具依赖。
+// ListSkillGrants lists the tool dependencies a skill declares.
 func (r *PostgresRepository) ListSkillGrants(schema, skillID string) ([]models.SkillToolGrant, error) {
 	q := fmt.Sprintf(`SELECT item_type, ref FROM %s.skill_tool_grants WHERE skill_id = $1 ORDER BY ref ASC`, schema)
 	rows, err := db.DB.Query(q, skillID)
@@ -304,7 +307,7 @@ func (r *PostgresRepository) ListSkillGrants(schema, skillID string) ([]models.S
 	return out, rows.Err()
 }
 
-// ReplaceSkillGrants 全量替换某 skill 的工具依赖（事务）。
+// ReplaceSkillGrants replaces a skill's tool dependencies wholesale (transaction).
 func (r *PostgresRepository) ReplaceSkillGrants(schema, skillID string, grants []models.SkillToolGrant) error {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -336,10 +339,10 @@ func (r *PostgresRepository) ReplaceSkillGrants(schema, skillID string, grants [
 	return tx.Commit()
 }
 
-// AddSkillGrant 追加一条依赖（幂等）：已存在时返回 false，不做任何写入。
+// AddSkillGrant appends one dependency (idempotent): it returns false when it already exists and writes nothing.
 //
-// 用 ON CONFLICT 而不是「先读再写」：并发的两次 add 不会互相覆盖，也不会把
-// 全量替换的读-改-写竞态引进来（PK 是 (skill_id, item_type, ref)）。
+// ON CONFLICT rather than a read-then-write: two concurrent adds do not overwrite each other, nor do they drag in the
+// read-modify-write race of a wholesale replace (the PK is (skill_id, item_type, ref)).
 func (r *PostgresRepository) AddSkillGrant(schema, skillID string, g models.SkillToolGrant) (bool, error) {
 	if g.ItemType == "" || g.Ref == "" {
 		return false, fmt.Errorf("skill grant requires item_type and ref")
@@ -359,10 +362,10 @@ func (r *PostgresRepository) AddSkillGrant(schema, skillID string, g models.Skil
 	return n > 0, nil
 }
 
-// RemoveSkillGrant 按 ref 移除一条依赖（跨 item_type，幂等），返回删除行数。
+// RemoveSkillGrant removes one dependency by ref (across item_type, idempotent), returning the number of rows deleted.
 //
-// 不校验 ref 是否还能展开：工具 / 连接被删后留下的悬空依赖必须还能清掉
-// （与 DeleteAgentGrant 同一条考虑）。
+// It does not check that the ref can still be resolved: a dangling dependency left after a tool / connection was deleted
+// must still be cleanable (the same consideration as DeleteAgentGrant).
 func (r *PostgresRepository) RemoveSkillGrant(schema, skillID, ref string) (int64, error) {
 	res, err := db.DB.Exec(
 		fmt.Sprintf(`DELETE FROM %s.skill_tool_grants WHERE skill_id = $1 AND ref = $2`, schema),
@@ -374,9 +377,9 @@ func (r *PostgresRepository) RemoveSkillGrant(schema, skillID, ref string) (int6
 	return res.RowsAffected()
 }
 
-// ===== 引用反查 =====
+// ===== reference reverse lookup =====
 
-// CountRefUsages 统计 ref 在 agent 授权、skill 依赖、自定义组成员中的引用次数。
+// CountRefUsages counts how many times a ref is used in agent grants, skill dependencies and custom group members.
 func (r *PostgresRepository) CountRefUsages(schema, ref string) (int, error) {
 	q := fmt.Sprintf(`SELECT
 		(SELECT COUNT(*) FROM %s.agent_tool_grants WHERE ref = $1) +
@@ -389,8 +392,8 @@ func (r *PostgresRepository) CountRefUsages(schema, ref string) (int, error) {
 	return n, nil
 }
 
-// CountRefPrefixUsages 统计 ref 及其子项（ref:xxx）的引用次数。
-// 用 starts_with 而不是 LIKE：ref 里可能含 '_'，LIKE 会把它当成单字符通配符。
+// CountRefPrefixUsages counts the usages of a ref and its sub-items (ref:xxx).
+// It uses starts_with rather than LIKE: a ref may contain '_', which LIKE would treat as a single-character wildcard.
 func (r *PostgresRepository) CountRefPrefixUsages(schema, ref string) (int, error) {
 	q := fmt.Sprintf(`SELECT
 		(SELECT COUNT(*) FROM %s.agent_tool_grants WHERE ref = $1 OR starts_with(ref, $2)) +
@@ -403,7 +406,8 @@ func (r *PostgresRepository) CountRefPrefixUsages(schema, ref string) (int, erro
 	return n, nil
 }
 
-// refUsageFilter 生成引用匹配条件：精确命中 ref；prefix=true 时同时命中 ref:xxx 子项。
+// refUsageFilter builds the reference match condition: an exact ref hit; with prefix=true the ref:xxx sub-items match as
+// well.
 func refUsageFilter(alias, ref string, prefix bool) (string, []any) {
 	if !prefix {
 		return alias + ".ref = $1", []any{ref}
@@ -411,7 +415,7 @@ func refUsageFilter(alias, ref string, prefix bool) (string, []any) {
 	return fmt.Sprintf("(%s.ref = $1 OR starts_with(%s.ref, $2))", alias, alias), []any{ref, ref + ":"}
 }
 
-// ListRefUsages 返回 ref 在 agent 授权 / skill 依赖 / 自定义组成员中的引用明细。
+// ListRefUsages returns the usage details of a ref across agent grants / skill dependencies / custom group members.
 func (r *PostgresRepository) ListRefUsages(schema, ref string, prefix bool) (*RefUsages, error) {
 	out := &RefUsages{
 		Ref:    ref,
@@ -421,7 +425,7 @@ func (r *PostgresRepository) ListRefUsages(schema, ref string, prefix bool) (*Re
 		Groups: []RefUsageGroup{},
 	}
 
-	// 1) agent 授权
+	// 1) agent grants
 	cond, args := refUsageFilter("g", ref, prefix)
 	q := fmt.Sprintf(`SELECT a.id, a.name, g.grant_kind, g.ref
 		FROM %s.agent_tool_grants g
@@ -446,7 +450,7 @@ func (r *PostgresRepository) ListRefUsages(schema, ref string, prefix bool) (*Re
 	}
 	rows.Close()
 
-	// 2) skill 依赖
+	// 2) skill dependencies
 	cond, args = refUsageFilter("g", ref, prefix)
 	q = fmt.Sprintf(`SELECT s.id, s.name, g.ref
 		FROM %s.skill_tool_grants g
@@ -471,7 +475,7 @@ func (r *PostgresRepository) ListRefUsages(schema, ref string, prefix bool) (*Re
 	}
 	rows.Close()
 
-	// 3) 自定义组成员
+	// 3) custom group members
 	cond, args = refUsageFilter("i", ref, prefix)
 	q = fmt.Sprintf(`SELECT gp.name, i.ref
 		FROM %s.tool_group_items i

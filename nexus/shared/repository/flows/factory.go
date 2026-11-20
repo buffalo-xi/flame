@@ -1,6 +1,6 @@
 package repository
 
-// NewRepository 创建工作流实例存储实例
+// NewRepository creates the workflow instance storage instance.
 func NewRepository() Repository {
 	return NewPostgresRepository()
 }

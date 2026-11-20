@@ -1,6 +1,6 @@
 package repository
 
-// NewRepository 创建智能体存储库
+// NewRepository creates the agent storage repository.
 func NewRepository() Repository {
 	return NewPostgresRepository()
 }

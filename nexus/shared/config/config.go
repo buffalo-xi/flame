@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config 表示服务配置
+// Config is the service configuration.
 type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	Database DatabaseConfig `yaml:"database"`
@@ -26,26 +26,29 @@ type Config struct {
 	Plugin   PluginConfig   `yaml:"plugin"`
 }
 
-// PluginConfig 磁盘插件（{root_dir}/plugins/<kind>/<tool>/<impl>/plugin.py）的宿主配置。
+// PluginConfig is the host configuration of the on-disk plugins
+// ({root_dir}/plugins/<kind>/<tool>/<impl>/plugin.py).
 //
-// 这里只有「宿主级」参数：插件目录在哪、用哪个解释器、超时与刷新间隔。
-// 每个租户用哪个实现、key 是多少，属于租户级配置（DB plugins 表），不在这里。
+// Only "host-level" parameters live here: where the plugin directory is, which interpreter to use, the timeout and the
+// refresh interval.
+// Which implementation each tenant uses and what its keys are is tenant-level configuration (the DB plugins table) and
+// does not belong here.
 type PluginConfig struct {
-	Dir             string `yaml:"dir"`              // 空 = {agent.root_dir}/plugins；也可写绝对路径
-	Python          string `yaml:"python"`           // 解释器命令；空 = python（Windows 上通常是 python）
-	Timeout         int    `yaml:"timeout"`          // 单次调用超时（秒）；0 = 30
-	RefreshInterval int    `yaml:"refresh_interval"` // manifest 刷新间隔（秒）；0 = 60
+	Dir             string `yaml:"dir"`              // empty = {agent.root_dir}/plugins; an absolute path also works
+	Python          string `yaml:"python"`           // interpreter command; empty = python (usually python on Windows)
+	Timeout         int    `yaml:"timeout"`          // per-call timeout in seconds; 0 = 30
+	RefreshInterval int    `yaml:"refresh_interval"` // manifest refresh interval in seconds; 0 = 60
 
-	// 调用额度不在这里：它是「租户 × 插件」的平台策略，存在
-	// {platform_schema}.tenant_plugins（见 shared/pluginpolicy 与
-	// platform/sql/tenant_plugins.sql）。放在配置文件里会变成全局一个数，
-	// 既没法按租户给，也挡不住租户给自己加额度。
+	// The call quota is not here: it is a "tenant × plugin" platform policy stored in
+	// {platform_schema}.tenant_plugins (see shared/pluginpolicy and
+	// platform/sql/tenant_plugins.sql). In a config file it would become one global number,
+	// neither per-tenant nor able to stop a tenant from raising its own quota.
 }
 
-// DirOrDefault 返回插件根目录：dir 为空时取 {root_dir}/plugins。
+// DirOrDefault returns the plugin root: when dir is empty, {root_dir}/plugins.
 //
-// rootDir 由调用方传入（config.Agent.RootDir），不在这里读全局 Cfg —— 免得
-// 「config 包读全局配置」这种循环依赖式的写法。
+// rootDir is passed in by the caller (config.Agent.RootDir) rather than read from the global Cfg here — that avoids the
+// circular-dependency-flavoured style of "the config package reads the global config".
 func (c PluginConfig) DirOrDefault(rootDir string) string {
 	if d := strings.TrimSpace(c.Dir); d != "" {
 		return d
@@ -57,7 +60,7 @@ func (c PluginConfig) DirOrDefault(rootDir string) string {
 	return filepath.Join(root, "plugins")
 }
 
-// TimeoutDuration 单次调用超时；未配置时 30s。
+// TimeoutDuration is the per-call timeout: 30s when it is not configured.
 func (c PluginConfig) TimeoutDuration() time.Duration {
 	if c.Timeout > 0 {
 		return time.Duration(c.Timeout) * time.Second
@@ -65,7 +68,7 @@ func (c PluginConfig) TimeoutDuration() time.Duration {
 	return 30 * time.Second
 }
 
-// RefreshIntervalDuration manifest 刷新间隔；未配置时 60s。
+// RefreshIntervalDuration is the manifest refresh interval: 60s when it is not configured.
 func (c PluginConfig) RefreshIntervalDuration() time.Duration {
 	if c.RefreshInterval > 0 {
 		return time.Duration(c.RefreshInterval) * time.Second
@@ -73,63 +76,68 @@ func (c PluginConfig) RefreshIntervalDuration() time.Duration {
 	return time.Minute
 }
 
-// 沙箱端点路径（与 sandboxd 的路由一致，见 sandboxd/internal/daemon/server.go）。
+// Sandbox endpoint paths (matching sandboxd's routes, see sandboxd/internal/daemon/server.go).
 const (
-	// sandboxExecPath 单工端点：一次性命令执行（argv 由调用方给全）。
+	// sandboxExecPath is the simplex endpoint: one-shot command execution (the caller supplies the full argv).
 	sandboxExecPath = "/v1/exec"
-	// sandboxCodePath 托管式代码片段端点：调用方给「语言 + 代码片段 + inputs」，
-	// 服务端按包装模板织成完整程序、托管解释器、返回结构化结果。
+	// sandboxCodePath is the managed code snippet endpoint: the caller supplies "language + snippet + inputs", and the
+	// server weaves them into a complete program through a wrapper template, hosts the interpreter and returns a
+	// structured result.
 	//
-	// 2026-10 由 /v1/script 更名：exec 通道同样在执行脚本文件（.py/.js/.lua/.sh），
-	// 用 script 命名等于把两条通道共有的性质当成其中一条的名字。契约上的真正差别是
-	// 「解释器与输入输出协议由谁定」，那正是 code 表达的意思。
+	// Renamed from /v1/script in 2026-10: the exec channel also runs script files (.py/.js/.lua/.sh), so naming the
+	// channel "script" took a property both channels share and made it the name of one of them. The real difference in
+	// the contract is "who decides the interpreter and the input/output protocol", which is exactly what code says.
 	sandboxCodePath = "/v1/code"
-	// legacySandboxScriptPath 旧端点，**只用于剥壳**（配置里可能写了完整的旧端点）。
-	// 不作请求路径：两端同仓同模块，路由不存在新旧并存。
+	// legacySandboxScriptPath is the old endpoint, **used only for stripping** (a config may carry the full old
+	// endpoint).
+	// It is never a request path: both ends are in the same repo and module, so old and new routes do not coexist.
 	legacySandboxScriptPath = "/v1/script"
-	// sandboxInteractivePath 长交互端点：持久进程，跨连接存活（shell 工具）。
+	// sandboxInteractivePath is the long-interaction endpoint: a persistent process that outlives the connection (the
+	// shell tool).
 	sandboxInteractivePath = "/v1/interactive"
-	// sandboxCapabilitiesPath 能力快照端点。
+	// sandboxCapabilitiesPath is the capability snapshot endpoint.
 	//
-	// ⚠️ 这是**普通 HTTP**（不是 WebSocket）：返回 sandboxd 的隔离方式、网络声明
-	// 与启动时探测到的沙箱环境，由 nexus 拉取后注入 agent 提示词。
+	// ⚠️ This is **plain HTTP** (not WebSocket): it returns sandboxd's isolation mode, network declaration and the
+	// sandbox environment probed at startup, which nexus pulls and injects into the agent prompt.
 	sandboxCapabilitiesPath = "/v1/capabilities"
 )
 
-// SandboxConfig 沙箱服务连接配置。
+// SandboxConfig is the sandbox service connection configuration.
 //
-// nexus 侧不做隔离、不持有池：所有执行都委托给独立的 sandboxd 服务。
-// 隔离方式（none / nsjail / docker）、资源上限、worker 池策略，
-// 全部由 sandboxd 自己的配置决定 —— 业务侧只负责连上它并提交请求。
+// The nexus side does no isolation and holds no pool: every execution is delegated to the separate sandboxd service.
+// The isolation mode (none / nsjail / docker), the resource limits and the worker pool policy are all decided by
+// sandboxd's own configuration — the business side only connects to it and submits requests.
 //
-// 这里只给「基地址」而不是两个完整 URL：单工 / 双工是**同一台 sandboxd 上的
-// 两条路由**，各自配一份 host:port 会允许配成两个不同实例，而 mode / limits /
-// allowed_mount_roots / token 都是单实例级的 —— 错配后表现为「exec 能跑、
-// 工作流 code 节点报挂载越权或繁忙」，极难定位。路径由本类型按用途拼。
+// Only a "base address" is given here, not two full URLs: simplex / duplex are **two routes on the same sandboxd**, and
+// configuring a host:port for each would allow two different instances, while mode / limits / allowed_mount_roots / token
+// are all instance-level — a mismatch shows up as "exec works, but the workflow code node reports a mount violation or
+// busy", which is extremely hard to pin down. This type assembles the paths by purpose.
 type SandboxConfig struct {
-	// URL 沙箱服务基地址（不含路径），形如 ws://sandboxd:8080、wss://sandboxd:443。
+	// URL is the sandbox service base address (without a path), such as ws://sandboxd:8080 or wss://sandboxd:443.
 	URL string `yaml:"url"`
-	// Token 可选：作为 Bearer 令牌随握手发送，需与 sandboxd 侧一致。
+	// Token is optional: sent as a Bearer token with the handshake, and must match the sandboxd side.
 	Token string `yaml:"token"`
 }
 
-// ExecEndpoint 单工端点（agent 的 exec / run_skill_script 工具）。
-// URL 未配置时返回空串，由调用方判定是否可用。
+// ExecEndpoint is the simplex endpoint (the agent's exec / run_skill_script tools).
+// An unconfigured URL returns an empty string, and the caller decides whether it is usable.
 func (c SandboxConfig) ExecEndpoint() string { return c.endpoint(sandboxExecPath) }
 
-// CodeEndpoint 代码片段端点（工作流 code / 分支 / 循环 / binding）。
-// URL 未配置时返回空串，由调用方判定是否可用。
+// CodeEndpoint is the code snippet endpoint (workflow code / branch / loop / binding).
+// An unconfigured URL returns an empty string, and the caller decides whether it is usable.
 func (c SandboxConfig) CodeEndpoint() string { return c.endpoint(sandboxCodePath) }
 
-// InteractiveEndpoint 长交互端点（agent 的 shell 工具）：持久进程，跨连接存活。
-// URL 未配置时返回空串，由调用方判定是否可用。
+// InteractiveEndpoint is the long-interaction endpoint (the agent's shell tool): a persistent process that outlives the
+// connection.
+// An unconfigured URL returns an empty string, and the caller decides whether it is usable.
 func (c SandboxConfig) InteractiveEndpoint() string { return c.endpoint(sandboxInteractivePath) }
 
-// CapabilitiesEndpoint 能力快照端点（HTTP）：沙箱能否联网 + 沙箱里有什么。
+// CapabilitiesEndpoint is the capability snapshot endpoint (HTTP): whether the sandbox can reach the network and what it
+// contains.
 //
-// ⚠️ 与上面两条不同，这是普通 HTTP 而不是 WebSocket —— sandbox.url 写的是 ws:// 基地址，
-// 这里必须把 scheme 换算成 http（wss → https），否则 net/http 会直接拒绝这个 URL。
-// URL 未配置时返回空串，由调用方判定是否可用。
+// ⚠️ Unlike the two above, this is plain HTTP rather than WebSocket — sandbox.url holds a ws:// base address, so the
+// scheme must be converted to http here (wss -> https), otherwise net/http rejects the URL outright.
+// An unconfigured URL returns an empty string, and the caller decides whether it is usable.
 func (c SandboxConfig) CapabilitiesEndpoint() string {
 	switch u := c.endpoint(sandboxCapabilitiesPath); {
 	case strings.HasPrefix(u, "ws://"):
@@ -137,19 +145,21 @@ func (c SandboxConfig) CapabilitiesEndpoint() string {
 	case strings.HasPrefix(u, "wss://"):
 		return "https://" + strings.TrimPrefix(u, "wss://")
 	default:
-		return u // 已经是 http(s)，或未配置（空串）
+		return u // already http(s), or unconfigured (an empty string)
 	}
 }
 
-// endpoint 拼出「基地址 + 用途路径」。
+// endpoint assembles "base address + purpose path".
 //
-// 顺带兼容「把完整端点写进 url」的写法（如 ws://h/v1/exec）：先剥掉结尾的已知
-// 端点路径再拼，免得出 /v1/exec/v1/exec。空值原样返回空串，不产生 "/v1/exec" 这种半截地址。
+// It also tolerates "the full endpoint written into url" (such as ws://h/v1/exec): a trailing known endpoint path is
+// stripped first and the path appended afterwards, so /v1/exec/v1/exec never appears. An empty value returns an empty
+// string as is, never a half address such as "/v1/exec".
 //
-// ★ 剥壳列表本次多一项 legacySandboxScriptPath：端点路径在 2026-10 由 /v1/script
-// 改为 /v1/code，而**端点可以写进 config.yaml**（落在编译期外）—— 把完整旧端点写进
-// url 的部署确实存在，不剥就会拼出 /v1/script/v1/code。它只用于剥壳，不产生路由兼容：
-// 请求永远打到 /v1/code。路由本身仍是编译期内的东西，两端同仓同模块，build 一次就同步。
+// The strip list gained legacySandboxScriptPath: the endpoint path changed from /v1/script to /v1/code in 2026-10, and
+// **the endpoint can be written into config.yaml** (outside compile time) — deployments that put the full old endpoint
+// into url really exist, and without the strip they would assemble /v1/script/v1/code. It is used only for stripping and
+// provides no route compatibility: requests always go to /v1/code. The route itself stays a compile-time matter; both
+// ends are in the same repo and module, so one build keeps them in sync.
 func (c SandboxConfig) endpoint(p string) string {
 	base := strings.TrimRight(strings.TrimSpace(c.URL), "/")
 	for _, ep := range []string{sandboxExecPath, sandboxCodePath, sandboxInteractivePath, legacySandboxScriptPath} {
@@ -164,44 +174,48 @@ func (c SandboxConfig) endpoint(p string) string {
 	return base + p
 }
 
-// AgentConfig agent 存储相关配置
+// AgentConfig is the agent storage configuration.
 type AgentConfig struct {
 	RootDir string          `yaml:"root_dir"`
 	Storage StorageConfig   `yaml:"storage"`
 	HTTP    AgentHTTPConfig `yaml:"http"`
 }
 
-// AgentHTTPConfig 工作区文件「下载」的交付方式（只影响下载，不影响预览与上传）。
+// AgentHTTPConfig is how workspace file "downloads" are delivered (it affects downloads only, not previews or uploads).
 type AgentHTTPConfig struct {
-	// XAccelPrefix nginx 内部路径前缀（如 /__files）。配置后下载改由 nginx 从磁盘直接发送：
-	// nexus 只回一个 X-Accel-Redirect 头，不占应用带宽、不占 goroutine，且天然支持 Range。
-	// 为空（默认）则退回 http.ServeContent，由本进程发送。
+	// XAccelPrefix is the nginx internal path prefix (such as /__files). Once configured, downloads are sent by nginx
+	// straight from disk: nexus returns only an X-Accel-Redirect header, spending no application bandwidth and no
+	// goroutine, and Range comes for free.
+	// Empty (the default) falls back to http.ServeContent, served by this process.
 	XAccelPrefix string `yaml:"x_accel_prefix"`
 
-	// PresignDownload 开启后，S3 存储的下载直接 302 到预签名 URL，浏览器连对象存储取字节
-	// （天然支持 Range / 断点续传，nexus 不占带宽）。
+	// PresignDownload makes S3-stored downloads 302 straight to a presigned URL, so the browser fetches the bytes from
+	// the object store (Range / resumable downloads for free, and nexus spends no bandwidth).
 	//
-	// 默认 false，且这是刻意的：它是对「本部署」的断言，不是性能优化选项 ——
-	//   - 内网 MinIO 常常「nexus 通、浏览器不通」；
-	//   - 某些 S3 兼容实现会忽略 response-content-disposition（下载名照旧乱码）；
-	//   - 桶策略只允许经 CDN 访问时，预签名直连源站会 403。
-	// 断言错了的代价是下载 400，不是降速。即使 driver 是 s3，也能关掉它走 nexus 转发
-	// （行为与加这个功能之前完全一致）。
+	// The default is false, deliberately: it is an assertion about **this deployment**, not a performance option —
+	//   - an internal MinIO often is "reachable from nexus but not from the browser";
+	//   - some S3-compatible implementations ignore response-content-disposition (the download name stays garbled);
+	//   - when the bucket policy only allows access through a CDN, a presigned direct hit on the origin returns 403.
+	// The price of a wrong assertion is a 400 on download, not a slower one. Even with the s3 driver it can be turned off
+	// to go through nexus (exactly the behaviour from before this feature existed).
 	PresignDownload bool `yaml:"presign_download"`
 
-	// PresignProbeKey 让上面的断言可被自动求值：配一个 bucket 里真实存在的小对象（0 字节最好），
-	// 首次下载前先签一次 URL 并真的 GET 一下，检查响应头是否被覆盖。通过才用预签名，
-	// 不通过自动降级（冷却 10 分钟后重试）。留空 = 不做探针，直接信任 PresignDownload。
-	// 注意：必须配「存在」的对象 —— 对不存在的 key 只会拿到错误 XML，验不出覆盖头。
+	// PresignProbeKey lets the assertion above be evaluated automatically: configure a small object that really exists in
+	// the bucket (0 bytes is best), and before the first download the URL is signed once and really GET, checking whether
+	// the response headers were overridden. It is used only if that passes; otherwise it degrades automatically (retrying
+	// after a 10-minute cooldown). Empty = no probe, PresignDownload is trusted directly.
+	// Note: it must be an object that **exists** — a missing key only yields an error XML, which cannot prove the headers
+	// were overridden.
 	PresignProbeKey string `yaml:"presign_probe_key"`
 
-	// PresignTTL 预签名链接有效期（秒），默认 300：够浏览器接住 302，又不至于链接长期外泄。
+	// PresignTTL is the presigned link lifetime in seconds, 300 by default: enough for the browser to catch the 302,
+	// without leaking the link for long.
 	PresignTTL int `yaml:"presign_ttl"`
-	// MaxDownloadSize 单文件下载上限（MiB），默认 100。
+	// MaxDownloadSize is the per-file download limit in MiB, 100 by default.
 	MaxDownloadSize int64 `yaml:"max_download_size"`
 }
 
-// PresignTTLDuration 预签名有效期；未配置时 5 分钟。
+// PresignTTLDuration is the presigned lifetime: 5 minutes when it is not configured.
 func (c AgentHTTPConfig) PresignTTLDuration() time.Duration {
 	if c.PresignTTL > 0 {
 		return time.Duration(c.PresignTTL) * time.Second
@@ -209,7 +223,7 @@ func (c AgentHTTPConfig) PresignTTLDuration() time.Duration {
 	return 5 * time.Minute
 }
 
-// MaxDownloadBytes 单文件下载上限（字节）；未配置时 100 MiB。
+// MaxDownloadBytes is the per-file download limit in bytes: 100 MiB when it is not configured.
 func (c AgentHTTPConfig) MaxDownloadBytes() int64 {
 	if c.MaxDownloadSize > 0 {
 		return c.MaxDownloadSize << 20
@@ -217,49 +231,50 @@ func (c AgentHTTPConfig) MaxDownloadBytes() int64 {
 	return 100 << 20
 }
 
-// StorageConfig 存储驱动配置
+// StorageConfig is the storage driver configuration.
 type StorageConfig struct {
 	Driver string   `yaml:"driver"` // local / nfs / s3
 	S3     S3Config `yaml:"s3"`
 }
 
-// S3Config S3 连接配置
+// S3Config is the S3 connection configuration.
 type S3Config struct {
 	Bucket    string `yaml:"bucket"`
 	Prefix    string `yaml:"prefix"`
 	Region    string `yaml:"region"`
-	Endpoint  string `yaml:"endpoint"` // 空=走 AWS 官方；非空=自建/minio 兼容
+	Endpoint  string `yaml:"endpoint"` // empty = the official AWS endpoint; non-empty = self-hosted / minio compatible
 	AccessKey string `yaml:"access_key"`
 	SecretKey string `yaml:"secret_key"`
 }
 
-// LiteLLMConfig 表示 LiteLLM Proxy 网关配置
+// LiteLLMConfig is the LiteLLM Proxy gateway configuration.
 type LiteLLMConfig struct {
 	Enabled   bool   `yaml:"enabled"`
 	URL       string `yaml:"url"`
 	MasterKey string `yaml:"master_key"`
-	Database  string `yaml:"database"` // LiteLLM 自身的 Postgres 库名（如 litellm），用于直接查注册表
+	Database  string `yaml:"database"` // LiteLLM's own Postgres database name (such as litellm), used to query its registry directly
 }
 
-// JWTConfig 表示JWT配置
+// JWTConfig is the JWT configuration.
 type JWTConfig struct {
 	SecretKey   string `yaml:"secret_key"`
 	TokenExpiry int    `yaml:"token_expiry"`
 	Issuer      string `yaml:"issuer"`
 }
 
-// SecurityConfig 敏感配置值的静态加密设置（见 shared/secureval）。
+// SecurityConfig is the static encryption setting for sensitive configuration values (see shared/secureval).
 //
-// 只管「落库的配置值」：目前是 {schema}.global_vars 里 kind=secret 的 value。
-// 它不参与登录鉴权，轮换它只会让已加密的值解不开，不会让 token 失效 ——
-// 这是与 jwt.secret_key 拆开的原因。
+// It only covers "configuration values stored in the database": currently the value of kind=secret rows in
+// {schema}.global_vars.
+// It takes no part in login authentication; rotating it only makes already-encrypted values undecryptable and never
+// invalidates a token — which is why it is kept separate from jwt.secret_key.
 type SecurityConfig struct {
-	// ValueKey 加密密钥。留空 = 从 jwt.secret_key 派生（开箱可用，
-	// 但换 jwt.secret_key 会让已加密的值全部解不开）。
+	// ValueKey is the encryption key. Empty = derived from jwt.secret_key (works out of the box,
+	// but changing jwt.secret_key makes every already-encrypted value undecryptable).
 	ValueKey string `yaml:"value_key"`
 }
 
-// ServerConfig 表示服务器配置
+// ServerConfig is the server configuration.
 type ServerConfig struct {
 	Name         string `yaml:"name"`
 	Port         int    `yaml:"port"`
@@ -269,7 +284,7 @@ type ServerConfig struct {
 	StaticRoot   string `yaml:"static_root"`
 }
 
-// DatabaseConfig 表示数据库配置
+// DatabaseConfig is the database configuration.
 type DatabaseConfig struct {
 	Type     string `yaml:"type"`
 	Host     string `yaml:"host"`
@@ -277,18 +292,18 @@ type DatabaseConfig struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
 	Database string `yaml:"database"`
-	// PlatformSchema 平台/管理 schema 名。系统级共享数据（如 LLM 服务商预设、
-	// 租户注册表、平台管理员账号等）存放于此 schema，与租户 schema（t0/t1/...）区分。
+	// PlatformSchema is the platform / admin schema name. System-level shared data (LLM provider presets, the tenant
+	// registry, platform admin accounts and so on) is stored there, apart from the tenant schemas (t0/t1/...).
 	PlatformSchema string `yaml:"platform_schema"`
 }
 
-// LoggingConfig 表示日志配置
+// LoggingConfig is the logging configuration.
 type LoggingConfig struct {
 	Level  string `yaml:"level"`
 	Format string `yaml:"format"`
 }
 
-// RegistryConfig 表示服务注册配置
+// RegistryConfig is the service registry configuration.
 type RegistryConfig struct {
 	Enabled     bool     `yaml:"enabled"`
 	Type        string   `yaml:"type"`
@@ -299,13 +314,14 @@ type RegistryConfig struct {
 	Tags        []string `yaml:"tags"`
 }
 
-// RedisConfig 表示Redis配置。
+// RedisConfig is the Redis configuration.
 //
-// 没有 enabled 开关：Redis 是必须依赖，进程起来就建连、连不上就每 5s 重试，
-// 且未连通期间 checkReadiness 报不就绪、对外一律 503。
-// 原先的 redis.enabled 会让同一种配置对应两套功能集 —— 关掉后缓存仍能回源 DB、
-// 配额仍能走 PG 计数，看起来一切正常，但运行台账只剩本进程、跨实例停止广播不出去
-// （runledger.BroadcastStop 直接返回 false）。这种配错只在多副本时才暴露，不值得留。
+// There is no enabled switch: Redis is a hard dependency — the process connects at startup and retries every 5s while it
+// cannot, and during that time checkReadiness reports not ready and the outside gets a 503 throughout.
+// The old redis.enabled made one configuration map onto two feature sets — with it off the cache still fell back to the
+// DB and quotas still counted in PG, so everything looked fine, while the run ledger held only this process and a
+// cross-instance stop was never broadcast (runledger.BroadcastStop simply returned false). Such a misconfiguration only
+// shows up with several replicas, which is not worth keeping.
 type RedisConfig struct {
 	Mode     string   `yaml:"mode"`
 	Addrs    []string `yaml:"addrs"`
@@ -316,15 +332,15 @@ type RedisConfig struct {
 	Prefix   string   `yaml:"prefix"`
 }
 
-// Cfg 全局配置实例
+// Cfg is the global configuration instance.
 var Cfg *Config
 
-// AgentRootDir 返回 agent 存储根；配置未加载时返回空串。
+// AgentRootDir returns the agent storage root; an unloaded configuration returns an empty string.
 //
-// 之所以要这个 nil-safe 的入口：直接解引用 config.Cfg 会让「只构造、不执行」的
-// 单测（比如只验目录树的 Catalog 测试）在构造期就 panic。空串不是默认值 ——
-// 使用方（shared/toolfile 的 checkRoot）会明确报「存储根未初始化」，
-// 而不是悄悄在工作目录下读写，造出一棵假目录树。
+// Why a nil-safe entry point is needed: dereferencing config.Cfg directly would panic at construction time in
+// "construct only, never execute" unit tests (such as a Catalog test that only checks a directory tree). The empty string
+// is not a default value — the consumer (checkRoot in shared/toolfile) reports "storage root is not initialised" outright,
+// rather than quietly reading and writing under the working directory and conjuring a fake directory tree.
 func AgentRootDir() string {
 	if Cfg == nil {
 		return ""
@@ -332,29 +348,29 @@ func AgentRootDir() string {
 	return Cfg.Agent.RootDir
 }
 
-// envPattern 匹配 ${VAR} 形式的环境变量占位符
+// envPattern matches ${VAR} style environment variable placeholders.
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// expandEnv 仅展开 ${VAR} 形式，不触碰其它 $ 字符
+// expandEnv expands the ${VAR} form only and leaves every other $ character alone.
 func expandEnv(data []byte) []byte {
 	return envPattern.ReplaceAllFunc(data, func(m []byte) []byte {
-		key := string(m[2 : len(m)-1]) // 去掉 ${ 和 }
+		key := string(m[2 : len(m)-1]) // strip ${ and }
 		return []byte(os.Getenv(key))
 	})
 }
 
-// LoadConfig 从文件加载配置
+// LoadConfig loads the configuration from a file.
 func LoadConfig(filePath string) (*Config, error) {
-	// 读取配置文件
+	// Read the config file
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// 展开 ${VAR} 环境变量占位符
+	// Expand the ${VAR} environment placeholders
 	data = expandEnv(data)
 
-	// 解析YAML
+	// Decode the YAML
 	var config Config
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
@@ -370,7 +386,7 @@ func LoadConfig(filePath string) (*Config, error) {
 	return &config, nil
 }
 
-// setDefaultConfig 设置默认配置
+// setDefaultConfig applies the defaults.
 func setDefaultConfig(config *Config) {
 	if config.Server.Name == "" {
 		config.Server.Name = "nexus"
@@ -436,8 +452,8 @@ func setDefaultConfig(config *Config) {
 		config.Registry.ServicePort = config.Server.Port
 	}
 
-	// Redis 默认配置
-	// 默认启用 Redis
+	// Redis defaults
+	// Redis is enabled by default
 	if config.Redis.Mode == "" {
 		config.Redis.Mode = "single"
 	}
@@ -451,52 +467,57 @@ func setDefaultConfig(config *Config) {
 		config.Redis.Timeout = 1
 	}
 
-	// 注意：不再为 jwt.secret_key 兜底 —— 空值/默认值/占位符/过短一律拒绝启动（见 validateJWT）。
-	// 否则会静默回退到公开的默认密钥，等于任何人可伪造 token 并指定任意租户。
+	// Note: jwt.secret_key is no longer given a fallback — empty / default / placeholder / too short all refuse to start
+	// (see validateJWT). Otherwise it would silently fall back to the public default key, meaning anyone could forge a
+	// token and name any tenant.
 	if config.JWT.TokenExpiry == 0 {
-		config.JWT.TokenExpiry = 24 * 60 * 60 // 分钟
+		config.JWT.TokenExpiry = 24 * 60 * 60 // minutes
 	}
 	if config.JWT.Issuer == "" {
 		config.JWT.Issuer = "nexus"
 	}
 
-	// Script 的缺省超时已移出本地配置（见 CodeLangConfig 注释）：节点未设超时控制时
-	// 走通用兜底链（Instance.Timeout → flow_configs.max_timeout → 代码兜底 300）。
+	// The default timeout of Script moved out of the local configuration (see the CodeLangConfig comment): when a node has
+	// no timeout control, the generic fallback chain applies (Instance.Timeout -> flow_configs.max_timeout -> the code
+	// fallback 300).
 
-	// Agent 存储默认配置：driver 为空时默认 local
+	// Agent storage defaults: an empty driver means local
 	if config.Agent.Storage.Driver == "" {
 		config.Agent.Storage.Driver = "local"
 	}
 }
 
-// validateJWT 强制 JWT 密钥显式配置：空值 / 占位符 / 内置默认值 / 过短都拒绝启动。
+// validateJWT forces the JWT key to be configured explicitly: empty / placeholder / built-in default / too short all
+// refuse to start.
 //
-// 原因：HS256 是对称签名，密钥一旦可猜即可自签 token，而 claims 里带 schema，
-// 意味着可以越过登录直接操作任意租户的后台。
+// Reason: HS256 is a symmetric signature, so once the key is guessable a token can be forged, and the claims carry the
+// schema — meaning one could skip login and operate any tenant's admin surface directly.
 //
-// 支持两种写法，展开在 YAML 解析之前完成（见 expandEnv）：
-//   - 直接写随机字符串： secret_key: "xxxxx"
-//   - 环境变量注入：     secret_key: "${JWT_SECRET}"（未设置则展开为空串 → 此处拒绝启动）
+// Two forms are supported, both expanded before YAML parsing (see expandEnv):
+//   - a literal random string:  secret_key: "xxxxx"
+//   - an injected environment variable: secret_key: "${JWT_SECRET}" (expanded to an empty string when unset -> refused
+//     here)
 func validateJWT(c *Config) error {
 	key := c.JWT.SecretKey
 	switch {
 	case key == "":
-		return fmt.Errorf("jwt.secret_key 为空：请填入随机密钥，或确认 ${JWT_SECRET} 这类环境变量已注入")
+		return fmt.Errorf("jwt.secret_key is empty: set a random key, or make sure an environment variable such as ${JWT_SECRET} is injected")
 	case strings.Contains(strings.ToUpper(key), "CHANGE_ME"):
-		return fmt.Errorf("jwt.secret_key 仍是占位符，请替换为随机密钥（openssl rand -base64 48）")
+		return fmt.Errorf("jwt.secret_key is still a placeholder; replace it with a random key (openssl rand -base64 48)")
 	case key == "your-secret-key" || key == "defaultSecretKey":
-		return fmt.Errorf("jwt.secret_key 仍是内置默认值，必须替换为随机密钥")
+		return fmt.Errorf("jwt.secret_key is still the built-in default and must be replaced with a random key")
 	case len(key) < 32:
-		return fmt.Errorf("jwt.secret_key 过短（%d 字符），至少 32 字符的随机值", len(key))
+		return fmt.Errorf("jwt.secret_key is too short (%d characters); use a random value of at least 32 characters", len(key))
 	}
 	return nil
 }
 
-// validateSecurity 只校验「显式配置了 security.value_key」的情况。
+// validateSecurity only checks the case where security.value_key is **configured explicitly**.
 //
-// 留空是合法配置：此时按 jwt.secret_key 派生，与本文件之前的版本行为一致，
-// 不让存量部署因为新增一段可选配置而起不来。
-// 但一旦显式填了，就不能是弱值 —— 它直接决定 secret 类配置值的加密强度。
+// Empty is a valid configuration: it is then derived from jwt.secret_key, the behaviour of this file before the setting
+// existed, so existing deployments do not fail to start over a new optional setting.
+// Once it is filled in, however, it must not be weak — it directly decides the encryption strength of secret-class
+// configuration values.
 func validateSecurity(c *Config) error {
 	key := strings.TrimSpace(c.Security.ValueKey)
 	if key == "" {
@@ -504,14 +525,14 @@ func validateSecurity(c *Config) error {
 	}
 	switch {
 	case strings.Contains(strings.ToUpper(key), "CHANGE_ME"):
-		return fmt.Errorf("security.value_key 仍是占位符，请替换为随机密钥（openssl rand -base64 48）")
+		return fmt.Errorf("security.value_key is still a placeholder; replace it with a random key (openssl rand -base64 48)")
 	case len(key) < 32:
-		return fmt.Errorf("security.value_key 过短（%d 字符），至少 32 字符的随机值", len(key))
+		return fmt.Errorf("security.value_key is too short (%d characters); use a random value of at least 32 characters", len(key))
 	}
 	return nil
 }
 
-// GetDSN 获取数据库连接字符串
+// GetDSN returns the database connection string.
 func (c *DatabaseConfig) GetDSN() string {
 	switch c.Type {
 	case "postgres":

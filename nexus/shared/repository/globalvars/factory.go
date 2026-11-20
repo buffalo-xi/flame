@@ -1,21 +1,22 @@
 package globalvars
 
-// NewRepository 创建全局变量存储实例
+// NewRepository creates the global variable storage instance.
 func NewRepository() Repository {
 	return &PostgresRepository{}
 }
 
-// Repository 全局变量存储接口。
+// Repository is the global variable storage interface.
 //
-// 没有分页：变量的量级是「十几到几十条」，用不到分页，
-// 加了反而让调用方多一层翻页逻辑。真要几百条再说。
+// No paging: the volume is "a dozen to a few dozen" variables, so paging is unnecessary,
+// and adding it would only give the caller one more layer of page-flipping logic. Revisit it when there really are
+// hundreds.
 type Repository interface {
-	// List 列出一个租户的全部变量（按 name 升序）。
+	// List lists all variables of a tenant (by name ascending).
 	List(schema string) ([]GlobalVar, error)
-	// Get 取一条；不存在返回 (nil, nil)，让调用方自己决定是报错还是新建。
+	// Get fetches one; missing returns (nil, nil), leaving it to the caller to decide between an error and a create.
 	Get(schema, name string) (*GlobalVar, error)
-	// Upsert 按 name 写入或覆盖（created_by 只在首次创建时落，覆盖不动它）。
+	// Upsert writes or overwrites by name (created_by is only written on the first create and is left alone afterwards).
 	Upsert(schema string, v *GlobalVar) error
-	// Delete 删除一条，返回是否真的删掉了（不存在返回 false，不报错）。
+	// Delete deletes one, reporting whether it was really deleted (missing returns false, not an error).
 	Delete(schema, name string) (bool, error)
 }

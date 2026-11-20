@@ -2,26 +2,27 @@ package globalvars
 
 import "testing"
 
-// 没有租户上下文（平台级 / 单测）时原样返回：不属于任何租户，没有可解析的值。
+// With no tenant context (platform level / a unit test) the input is returned as is: it belongs to no tenant, so there is
+// no value to resolve.
 func TestExpandWithoutSchema(t *testing.T) {
 	in := "数据库地址是 ${global_vars.DB_HOST}"
 	out, err := Expand("", in)
 	if err != nil {
-		t.Fatalf("无 schema 不该报错: %v", err)
+		t.Fatalf("an empty schema should not error: %v", err)
 	}
 	if out != in {
-		t.Fatalf("无 schema 应原样返回，实际 %q", out)
+		t.Fatalf("an empty schema should return the input unchanged, got %q", out)
 	}
 }
 
-// 没有引用时不查库（也不该报错）：绝大多数文档里根本没有 ${global_vars.X}。
+// With no references no query runs (and nothing errors): most documents contain no ${global_vars.X} at all.
 func TestExpandWithoutRefs(t *testing.T) {
 	out, err := Expand("t0", "# 标题\n没有任何引用")
 	if err != nil {
-		t.Fatalf("无引用不该报错: %v", err)
+		t.Fatalf("no references should not error: %v", err)
 	}
 	if out != "# 标题\n没有任何引用" {
-		t.Fatalf("内容被改动: %q", out)
+		t.Fatalf("the content was modified: %q", out)
 	}
 }
 
@@ -30,20 +31,19 @@ func TestDocRefs(t *testing.T) {
 	got := DocRefs(text)
 	want := []string{"DB_HOST", "REGION"}
 	if len(got) != len(want) {
-		t.Fatalf("DocRefs = %v, want %v（需要去重）", got, want)
+		t.Fatalf("DocRefs = %v, want %v (duplicates must be removed)", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("DocRefs = %v, want %v（保持出现顺序）", got, want)
+			t.Fatalf("DocRefs = %v, want %v (order of appearance must be kept)", got, want)
 		}
 	}
 }
 
-// 变量名必须符合字符集：带点 / 中括号的写法不应被当成引用（防止误伤示例代码）。
+// A variable name must fit the character set: a dotted or bracketed form is not a reference (so sample code is not
+// rewritten by accident).
 func TestDocRefsIgnoresInvalidNames(t *testing.T) {
 	if got := DocRefs("${global_vars.a.b} ${global_vars.中文}"); len(got) != 0 {
-		t.Fatalf("非法变量名不该被识别，实际 %v", got)
+		t.Fatalf("an invalid variable name should not be recognised, got %v", got)
 	}
 }
-
-

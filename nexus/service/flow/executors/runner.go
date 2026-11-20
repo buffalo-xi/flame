@@ -83,6 +83,9 @@ func NewFlow(Instance *models.Flow, args map[string]interface{}, reqID, runID, s
 	if err != nil {
 		return nil, err
 	}
+	// Output language: the same reserved-key mechanism as session_id. A value in the arguments is a pin (an entry point
+	// put it there from params._meta.language); a value on ctx is the caller's resolved language and stays informational.
+	language, languagePinned, args := extractOutputLanguage(args, ctx)
 	// Session ownership is deliberately **not** checked here: when an agent calls a flow (a local tool / an
 	// rpc node) it passes the caller's session down so the sub-flow and its parent land in the same
 	// users/{uid}/sessions/{sid}/ area — and that session belongs to the parent agent, not to this flow.
@@ -165,21 +168,32 @@ func NewFlow(Instance *models.Flow, args map[string]interface{}, reqID, runID, s
 	limits := flowconfig.Resolve(schema)
 
 	stdCtx, cancel := context.WithCancel(ctx)
+	// Everything downstream reads the language off the standard ctx: executors that call an agent endpoint (outbound RPC)
+	// need it there, and a sub-flow inherits it through its own NewFlow call.
+	if language != "" {
+		if languagePinned {
+			stdCtx = agentcore.WithPinnedLanguage(stdCtx, language)
+		} else {
+			stdCtx = agentcore.WithLanguageHint(stdCtx, language)
+		}
+	}
 	execCtx := &flow.ExecContext{
-		Flow:         f,
-		RunEnvVars:   defEnvVars,
-		RunFlowVars:  flow.InitFlowVars(defFlowVars),
-		RunArguments: flow.InitArguments(args),
-		StdCtx:       stdCtx,
-		ReqID:        reqID,
-		RunID:        runID,
-		SessionID:    sessionID,
-		UserID:       userID,
-		CallDepth:    callDepth,
-		CallChain:    callChain,
-		Schema:       schema,
-		Limits:       &limits,
-		StartedAt:    time.Now(),
+		Flow:           f,
+		RunEnvVars:     defEnvVars,
+		RunFlowVars:    flow.InitFlowVars(defFlowVars),
+		RunArguments:   flow.InitArguments(args),
+		StdCtx:         stdCtx,
+		ReqID:          reqID,
+		RunID:          runID,
+		SessionID:      sessionID,
+		Language:       language,
+		LanguagePinned: languagePinned,
+		UserID:         userID,
+		CallDepth:      callDepth,
+		CallChain:      callChain,
+		Schema:         schema,
+		Limits:         &limits,
+		StartedAt:      time.Now(),
 
 		ProgressChan:       make(chan flow.ProgressMsg, 100),
 		ResultChan:         make(chan string, 100),
@@ -298,6 +312,28 @@ func extractSessionID(args map[string]interface{}) (string, map[string]interface
 		return "", nil, fmt.Errorf("session_id is not a valid UUID: %s", sid)
 	}
 	return sid, agentcore.StripSessionID(args), nil
+}
+
+// extractOutputLanguage takes the output language out of the run arguments and strips it (the original map is not
+// modified), falling back to the caller's ctx hint.
+//
+// The arguments carry a **pin**: an entry point put the tag there from params._meta.language, i.e. "the caller demanded
+// this language". A tag that arrives only on ctx is the caller's already-resolved language (its own default, or the
+// product default) - shown to nodes as the builtin variable `language`, but not forwarded as a pin, because that would
+// let a default override the next callee's own default.
+//
+// A malformed tag counts as "not given" rather than an error: the value is advisory, and refusing a whole run over a
+// mistyped tag would be worse than ignoring it. session_id is the opposite, because it is a real switch.
+func extractOutputLanguage(args map[string]interface{}, ctx context.Context) (string, bool, map[string]interface{}) {
+	if _, ok := args[agentcore.OutputLanguageKey]; ok {
+		tag, _ := agentcore.OutputLanguage(args)
+		return tag, tag != "", agentcore.StripOutputLanguage(args)
+	}
+	tag, _ := agentcore.NormalizeOutputLanguage(agentcore.LanguageHintFrom(ctx))
+	if tag == "" {
+		return "", false, args
+	}
+	return tag, agentcore.LanguagePinnedFrom(ctx), args
 }
 
 // extractCallDepth takes the call depth out of the run arguments and strips it (the original map is not

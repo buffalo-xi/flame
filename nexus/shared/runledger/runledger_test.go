@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// fakeStore 内存版台账，只实现 runledger.go 用到的那几个命令。
+// fakeStore is an in-memory ledger implementing only the commands runledger.go uses.
 type fakeStore struct {
 	mu   sync.Mutex
 	data map[string]map[string]string
@@ -20,7 +20,7 @@ func newFakeStore() *fakeStore {
 	}
 }
 
-// ttlOf 读某个键最近一次的续期时长（未续期过返回 0）。
+// ttlOf reads the last renewal duration of a key (0 when it was never renewed).
 func (f *fakeStore) ttlOf(key string) time.Duration {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -96,7 +96,7 @@ func testEntry(runID, kind string) Entry {
 	}
 }
 
-// 写台账 → 读得到；注销后为空，且空 hash 的键被删除。
+// Write to the ledger -> readable back; after dropping it the list is empty and the now-empty hash key is deleted.
 func TestRecordAndDrop(t *testing.T) {
 	store := newFakeStore()
 	now := time.Now()
@@ -120,26 +120,27 @@ func TestRecordAndDrop(t *testing.T) {
 		t.Fatalf("list after drop = %+v, want empty", runs)
 	}
 	if _, ok := store.data[ledgerKey("t1")]; ok {
-		t.Fatal("空 hash 的键应被删除")
+		t.Fatal("the now-empty hash key should be deleted")
 	}
 }
 
-// 写台账要给键续期：租户彻底没在跑之后，脏条目不必等下一次读才清掉。
+// Writing to the ledger must renew the key: once a tenant has stopped running entirely, dirty entries should not have to
+// wait for the next read to be cleaned up.
 func TestRecordRefreshesKeyTTL(t *testing.T) {
 	store := newFakeStore()
 	if err := record(store, testEntry("run-ttl", KindAgent), time.Now()); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	if got := store.ttlOf(ledgerKey("t1")); got != ledgerTTL {
-		t.Fatalf("record 后键 TTL = %v, want %v", got, ledgerTTL)
+		t.Fatalf("key TTL after record = %v, want %v", got, ledgerTTL)
 	}
-	// TTL 必须明显长于失效判定，否则活着的租户会被误清
+	// The TTL must be noticeably longer than the staleness threshold, or a live tenant would be swept away by mistake
 	if ledgerTTL <= runLedgerTTL {
-		t.Fatalf("ledgerTTL(%v) 必须大于 runLedgerTTL(%v)", ledgerTTL, runLedgerTTL)
+		t.Fatalf("ledgerTTL(%v) must be greater than runLedgerTTL(%v)", ledgerTTL, runLedgerTTL)
 	}
 }
 
-// 心跳过期（实例崩溃）的条目在读取时被裁掉，不会一直挂在列表里。
+// An entry whose heartbeat expired (the instance crashed) is pruned on read, so it never sits in the list forever.
 func TestListPrunesStale(t *testing.T) {
 	store := newFakeStore()
 	now := time.Now()
@@ -152,11 +153,12 @@ func TestListPrunesStale(t *testing.T) {
 		t.Fatalf("list = %+v, err = %v, want empty", runs, err)
 	}
 	if _, ok := store.data[ledgerKey("t1")]["run-stale"]; ok {
-		t.Fatal("失效条目应被读时裁剪掉")
+		t.Fatal("a stale entry should be pruned on read")
 	}
 }
 
-// 本进程兜底 + kind 过滤：Redis 未初始化时（测试里 redis.Client 为 nil）只看本地。
+// Local-process fallback + kind filtering: with Redis uninitialised (redis.Client is nil in a test) only local state is
+// visible.
 func TestListFallsBackToLocal(t *testing.T) {
 	unregAgent := Register(testEntry("run-a", KindAgent))
 	defer unregAgent()
@@ -184,7 +186,7 @@ func TestListFallsBackToLocal(t *testing.T) {
 		t.Fatalf("List(flow) = %+v, want run-f only", flows)
 	}
 
-	// 别的租户看不到
+	// Another tenant cannot see them
 	if other, _ := List("t2", ""); len(other) != 0 {
 		t.Fatalf("List(t2) = %+v, want empty", other)
 	}
@@ -196,7 +198,7 @@ func TestListFallsBackToLocal(t *testing.T) {
 	}
 }
 
-// 没租户语义的调用（schema 空）直接跳过，不能污染任何租户的台账。
+// A call with no tenant semantics (empty schema) is skipped outright and must not pollute any tenant's ledger.
 func TestRegisterRequiresSchema(t *testing.T) {
 	e := testEntry("run-no-schema", KindAgent)
 	e.Schema = ""

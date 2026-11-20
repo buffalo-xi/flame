@@ -164,25 +164,24 @@ func searchCatalog(query string, all map[string]toolgrant.ToolInfo, groups []too
 		res.Truncated = true
 	}
 	if res.Truncated {
-		res.Notes = append(res.Notes, "命中超过上限，只回了前 20 条；请给更精确的 query（连接名 / 工具名的一部分 / ref 片段）")
+		res.Notes = append(res.Notes, "Too many hits: only the first 20 were returned. Narrow the query (a connection name, part of a tool name, a ref fragment).")
 	}
 	if len(truncatedGroups) > 0 {
 		res.Notes = append(res.Notes, fmt.Sprintf(
-			"%s 的成员超过 %d 个，只回了前 %d 个（count 仍是真实总数）；要全部成员请用 query 匹配该组名展开",
-			strings.Join(truncatedGroups, "、"), groupMemberPreview, groupMemberPreview))
+			"%s has more than %d members; only the first %d were returned (count is still the real total). To see every member, match that group name with query to expand it.",
+			strings.Join(truncatedGroups, ", "), groupMemberPreview, groupMemberPreview))
 	}
 	if q == "" && len(res.Groups) > 0 {
 		res.Notes = append(res.Notes,
-			"未给 query 时只列组概览（组 ref + 成员数 + 前几个成员 ref）；要看某个组的全部工具，用 query 匹配（如 fs、read_file）")
+			"Without a query only group digests are listed (group ref + member count + the first few member refs); to see every tool of a group, match it with query (e.g. fs, read_file).")
 	}
 	// Zero hits must be said outright, with the cross-language way out right there: matchQuery is a **substring** match (see below), and the
 	// catalog's names / descriptions may be English while the model queries with a Chinese phrase copied from the user (or the reverse).
 	// Returning empty silently would make the model think "this tenant has no such tool", which misleads more than a miss.
 	if q != "" && len(res.Groups) == 0 && len(res.Tools) == 0 {
 		res.Notes = append(res.Notes,
-			"没有匹配项：query 是子串匹配（跨语言不会自动对应），可改用工具名 / ref 片段 / 英文关键词再试一次"+
-				"（如 exec、read_file、mcp:fs）。\n"+
-				"No match — the query is a substring match; retry with a tool name, a ref fragment or an English keyword.")
+			"No match — the query is a substring match (it does not map across languages automatically). "+
+				"Retry with a tool name, a ref fragment or an English keyword (e.g. exec, read_file, mcp:fs).")
 	}
 	return res
 }

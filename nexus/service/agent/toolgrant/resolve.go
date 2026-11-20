@@ -41,7 +41,9 @@ type ResolveResult struct {
 	FinalRefs     []string   `json:"final_refs"`     // the tool refs that take effect
 	FinalNames    []string   `json:"final_names"`    // the corresponding LLM tool names
 	FinalTools    []ToolInfo `json:"final_tools"`
-	Warnings      []string   `json:"warnings"`
+	// Warnings are shown to an operator (admin preview) and relayed by the model; English for the same reason as
+	// AgentGrantView.Note: resolution happens inside a run, with no caller language in hand.
+	Warnings []string `json:"warnings"`
 
 	// The next two are filled in by the admin preview only: with no grants configured (and unrestricted off) the runtime does not use
 	// this result at all - the built-in super agent holds all built-in tools by default, and other agents bind none. The preview has to
@@ -137,7 +139,7 @@ func (r *Resolver) Resolve(agentID string) (*ResolveResult, error) {
 	// to know why.
 	if len(candidates) == 0 && len(allow) > 0 {
 		res.Degraded = true
-		res.Warnings = append(res.Warnings, "该 agent 的 allow 授权本轮全部未生效：没有任何已激活（use_skill）的技能声明工具依赖")
+		res.Warnings = append(res.Warnings, "every allow grant of this agent has no effect in this run: no activated (use_skill) skill declares a tool dependency")
 	}
 
 	// Candidates -> effective: all of them when unrestricted, otherwise filtered by allow.
@@ -165,7 +167,7 @@ func (r *Resolver) Resolve(agentID string) (*ResolveResult, error) {
 	for ref := range finalSet {
 		info, ok := all[ref]
 		if !ok {
-			res.Warnings = append(res.Warnings, "引用的工具已不存在："+ref)
+			res.Warnings = append(res.Warnings, "referenced tool no longer exists: "+ref)
 			continue
 		}
 		if !info.Available {
@@ -174,9 +176,9 @@ func (r *Resolver) Resolve(agentID string) (*ResolveResult, error) {
 			// platform gate as the tenant's own configuration problem.
 			why := info.UnavailableReason
 			if why == "" {
-				why = "工具所属连接/端点未启用"
+				why = "the connection or endpoint that owns this tool is not enabled"
 			}
-			res.Warnings = append(res.Warnings, "本次不绑定："+ref+"（"+why+"）")
+			res.Warnings = append(res.Warnings, "not bound in this run: "+ref+" ("+why+")")
 			continue
 		}
 		finalTools = append(finalTools, info)
@@ -209,7 +211,7 @@ func (r *Resolver) Resolve(agentID string) (*ResolveResult, error) {
 	if max > 0 && len(finalTools) > max {
 		dropped := len(finalTools) - max
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
-			"工具数量超过上限 %d，已按「required 优先、技能声明顺序」截断（丢弃 %d 个）", max, dropped))
+			"tool count exceeds the limit of %d; truncated by \"required first, then skill declaration order\" (dropped %d)", max, dropped))
 		finalTools = finalTools[:max]
 	}
 
@@ -233,16 +235,16 @@ func (r *Resolver) expandToolRefs(refs []string) (map[string]bool, []string, []s
 	warnings := make([]string, 0)
 	for _, ref := range refs {
 		if err := ValidateRef(ref, true); err != nil {
-			warnings = append(warnings, "忽略非法引用 "+ref+"："+err.Error())
+			warnings = append(warnings, "ignoring an invalid ref "+ref+": "+err.Error())
 			continue
 		}
 		list, err := r.Catalog.ToolsOfRef(ref)
 		if err != nil {
-			warnings = append(warnings, "展开引用失败 "+ref+"："+err.Error())
+			warnings = append(warnings, "failed to expand ref "+ref+": "+err.Error())
 			continue
 		}
 		if len(list) == 0 {
-			warnings = append(warnings, "引用无匹配工具（可能已被删除）："+ref)
+			warnings = append(warnings, "ref matches no tools (it may have been deleted): "+ref)
 			continue
 		}
 		for _, t := range list {

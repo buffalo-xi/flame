@@ -2,55 +2,61 @@ package auth
 
 import "flame/nexus/shared/account"
 
-// 用户角色（对应 <schema>.users.role）：
-// 只决定「能不能登录控制台 / 访问后台接口」，与服务凭证无关（凭证不限制角色）。
+// User roles (the <schema>.users.role column):
+// they only decide "may it log into the console / call the admin API", and have nothing to do with service credentials
+// (a credential does not restrict roles).
 const (
-	RoleManage  = "manage"  // 管理用户：可登录
-	RoleService = "service" // 服务用户：不可登录（仅作为 API 调用身份）
+	RoleManage  = "manage"  // management user: may log in
+	RoleService = "service" // service user: may not log in (an API call identity only)
 )
 
-// 用户状态（对应 <schema>.users.status）：
-// 账号是否可用 —— 登录与 API 调用两侧都看它。
-// 词表真源在中立包 shared/account（平台用户 platform.users.status 同用一套），此处仅转发。
+// User statuses (the <schema>.users.status column):
+// whether the account is usable — both login and API calls look at it.
+// The vocabulary's source of truth is the neutral package shared/account (platform.users.status uses the same set); this
+// only re-exports it.
 const (
 	UserStatusActive   = account.StatusActive
 	UserStatusDisabled = account.StatusDisabled
 	UserStatusLocked   = account.StatusLocked
 )
 
-// AuthInfo 认证信息结构体
+// AuthInfo is the authentication information.
 //
-// 注意：这里刻意不带 role —— 角色只在「登录」这一关判定（login.go），
-// 且当前 token 的唯一签发点就是 /login，因此后台接口无需再做角色判定。
-// 服务侧（MCP/RPC）的 AuthInfo 由绑定解析而来，ID 即绑定用户，同样不需要角色。
+// Note: it deliberately carries no role — a role is judged only at the "login" gate (login.go), and the only token
+// issuer right now is /login, so an admin API needs no second role check.
+// On the service side (MCP/RPC) AuthInfo comes from a resolved binding, whose ID is the bound user, and no role is needed
+// there either.
 type AuthInfo struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Schema string `json:"schema"`
 
-	// RestrictTargets / TargetAllow 只对服务侧（MCP / RPC）的绑定身份有意义：
-	// 限制这条凭证能调用哪些**端点目标**（agent / flow）。
+	// RestrictTargets / TargetAllow only mean something for a service-side (MCP / RPC) binding identity:
+	// they restrict which **endpoint targets** (agent / flow) this credential may call.
 	//
-	//   RestrictTargets=false          → 不限制（需显式关闭；存量绑定在迁移时保持 false）
-	//   RestrictTargets=true, 空集合   → 一个都不允许（新建绑定的初始态）
-	//   RestrictTargets=true, 有集合   → 只允许列出的目标
+	//   RestrictTargets=false          -> unrestricted (must be turned off explicitly; existing bindings stay false after
+	//                                     the migration)
+	//   RestrictTargets=true, empty    -> nothing is allowed (the initial state of a new binding)
+	//   RestrictTargets=true, non-empty-> only the listed targets are allowed
 	//
-	// 授权按目标而不是端点：同一个 agent 通常有 rpc / mcp 两条端点，
-	// 按端点授权会出现「只勾了 rpc，MCP 连接就全空」以及「端点重发后授权失效」。
+	// The grant is per target rather than per endpoint: one agent usually has both an rpc and an mcp endpoint, and
+	// granting per endpoint would produce "only rpc was ticked, so the MCP connection is empty" and "the grant is void
+	// after the endpoint is retracted and reopened".
 	//
-	// json:"-"：这两个字段是运行期策略，不该出现在接口响应或被序列化进 token。
+	// json:"-": these two fields are runtime policy and must not appear in an API response or be serialised into a token.
 	RestrictTargets bool                `json:"-"`
 	TargetAllow     map[string]struct{} `json:"-"`
 
-	// ExcludeSupervisor 是「不限制」的中间档：RestrictTargets=false 时，放行全部端点但排除
-	// 超级智能体的端点（supervisor 的端点等于对外开放租户管理能力）。
-	// RestrictTargets=true 时本字段被忽略 —— 白名单已经精确表达范围。
+	// ExcludeSupervisor is the middle setting of "unrestricted": with RestrictTargets=false, every endpoint is allowed but
+	// the super agent's endpoints are excluded (a supervisor's endpoint equals opening the tenant's management capability
+	// to the outside).
+	// It is ignored when RestrictTargets=true — the allowlist already states the scope precisely.
 	ExcludeSupervisor bool `json:"-"`
 }
 
-// TargetAllowed 判断某个端点目标是否在允许范围内。
+// TargetAllowed reports whether an endpoint target is inside the allowed scope.
 //
-// nil 接收者 / 未启用限制时恒为 true —— 调用方（rpc / mcp 的装配层）不需要自己判空。
+// A nil receiver / a disabled restriction is always true — the caller (the rpc / mcp wiring layer) need not nil-check.
 func (a *AuthInfo) TargetAllowed(targetType, targetID string) bool {
 	if a == nil || !a.RestrictTargets {
 		return true
@@ -59,10 +65,10 @@ func (a *AuthInfo) TargetAllowed(targetType, targetID string) bool {
 	return ok
 }
 
-// TargetAllowedWith 在 TargetAllowed 之上再叠一层「排除超级智能体」。
+// TargetAllowedWith layers "exclude the super agent" on top of TargetAllowed.
 //
-// supervisor 由调用方从端点行带出（models.SvcEndpoint.TargetSupervisor），这里不查库：
-// rpc 的 findEndpoint 在每次工具调用上都要判一次，回查 agents 会把热路径翻倍。
+// supervisor is carried out from the endpoint row by the caller (models.SvcEndpoint.TargetSupervisor); it is not looked up
+// here: rpc's findEndpoint runs on every tool call, and querying agents again would double the hot path.
 func (a *AuthInfo) TargetAllowedWith(targetType, targetID string, supervisor bool) bool {
 	if a == nil {
 		return true
@@ -70,7 +76,8 @@ func (a *AuthInfo) TargetAllowedWith(targetType, targetID string, supervisor boo
 	if !a.TargetAllowed(targetType, targetID) {
 		return false
 	}
-	// 白名单档已经精确表达范围，排除档不参与判定（即使库里被人手工写成了两列都为 true）
+	// The allowlist already states the scope precisely, so the exclusion setting takes no part (even if someone wrote both
+	// columns as true by hand in the database)
 	if a.RestrictTargets {
 		return true
 	}

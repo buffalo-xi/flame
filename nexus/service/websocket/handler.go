@@ -21,14 +21,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// upgrader 将 HTTP GET 升级为 WebSocket，与 nexus HTTP 服务共用同一端口。
+// upgrader upgrades an HTTP GET to WebSocket on the same port as the nexus HTTP service.
 var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 }
 
-// Hub 极简广播中心，演示维护 WS 连接集合（后续可扩展为按 channel 分组推送）。
+// Hub is a minimal broadcast centre that keeps track of the WS connection set (it can later be extended
+// to push per channel).
 type Hub struct {
 	clients    map[*websocket.Conn]bool
 	register   chan *websocket.Conn
@@ -36,7 +37,7 @@ type Hub struct {
 	broadcast  chan []byte
 }
 
-// NewHub 创建一个 Hub 实例。
+// NewHub creates a Hub instance.
 func NewHub() *Hub {
 	return &Hub{
 		clients:    make(map[*websocket.Conn]bool),
@@ -46,7 +47,7 @@ func NewHub() *Hub {
 	}
 }
 
-// Run 启动 Hub 的事件循环（在单独 goroutine 中调用）。
+// Run starts the Hub event loop (call it in its own goroutine).
 func (h *Hub) Run() {
 	for {
 		select {
@@ -69,7 +70,7 @@ func (h *Hub) Run() {
 	}
 }
 
-// getAuth 取出 AuthMiddleware 已校验并写入 context 的登录信息。
+// getAuth returns the identity AuthMiddleware validated and wrote into the context.
 func getAuth(c *gin.Context) *auth.AuthInfo {
 	if v, ok := c.Get("authInfo"); ok {
 		if info, ok := v.(*auth.AuthInfo); ok {
@@ -79,44 +80,54 @@ func getAuth(c *gin.Context) *auth.AuthInfo {
 	return &auth.AuthInfo{}
 }
 
-// DebugEvent 是一帧调试输出。
+// DebugEvent is one debug output frame.
 type DebugEvent map[string]interface{}
 
-// ControlRequest 是客户端通过消息发送的控制指令（单步调试用）。
+// ControlRequest is a control command the client sends as a message (used for single-step debugging).
 type ControlRequest struct {
 	Action     string      `json:"action"`     // run/pause/step/stop/setBreakpoint/inspect/inspect_node
-	StepKind   string      `json:"step_kind"`  // step 时有效：over/in/out
-	Breakpoint string      `json:"breakpoint"` // setBreakpoint 时使用（nodeID）
-	On         bool        `json:"on"`         // setBreakpoint 时使用：true=设 false=取消（默认 false）
-	Input      interface{} `json:"input"`      // run 时传入工作流入参
-	Key        string      `json:"key"`        // inspect 时使用（变量名，空表示全部）
-	NodeID     string      `json:"node_id"`    // inspect_node 时使用（要查看数据的节点 id）
-	// FollowDrafts run 时使用：本次调试调起的子流程是跟草稿还是走正式版本。
-	// 用指针是为了区分「前端没传」，缺省按 true（与既有调试语义一致）。
+	StepKind   string      `json:"step_kind"`  // meaningful for step: over/in/out
+	Breakpoint string      `json:"breakpoint"` // used by setBreakpoint (nodeID)
+	On         bool        `json:"on"`         // used by setBreakpoint: true=set false=clear (default false)
+	Input      interface{} `json:"input"`      // the flow input passed on run
+	Key        string      `json:"key"`        // used by inspect (variable name, empty means all)
+	NodeID     string      `json:"node_id"`    // used by inspect_node (the node whose data to show)
+	// FollowDrafts is used by run: whether the child flows started by this debug session follow their
+	// draft or the released version. A pointer distinguishes "the frontend sent nothing", which defaults
+	// to true (consistent with the existing debug semantics).
 	FollowDrafts *bool `json:"follow_drafts"`
 }
 
-// DebugSource 各调试端点（flow/agent）需要实现的内容源。
-// A 部分：Attach 在升级后注入连接与写锁；OnConnect 在拿到身份与对象 id 时调用，可做权限校验与数据源绑定。
-// B 部分：OnMessage 处理客户端发来的单步控制指令，返回要回推的调试帧。
+// DebugSource is the content source every debug endpoint (flow/agent) must implement.
+// Part A: Attach injects the connection and write lock after the upgrade; OnConnect is called once the
+// identity and object id are known and may validate permissions and bind a data source.
+// Part B: OnMessage handles the single-step control commands the client sends and returns the debug
+// frame to push back.
 type DebugSource interface {
-	// Kind 返回调试类型标识，如 "flow" / "agent"
+	// Kind returns the debug kind, such as "flow" / "agent".
 	Kind() string
-	// Attach 注入底层 WebSocket 连接、共享写锁及连接级 context，供源主动推送挂起快照等帧。
-	// writeMu 由 debugConn 创建并持有，所有写入 conn 的操作（包括 debugConn 自身
-	// 和源的事件回调）都须先获取 writeMu，以满足 gorilla/websocket「单写者」约束。
-	// connCtx 在连接断开时被 cancel，源应将其作为执行 goroutine 的父 context。
+	// Attach injects the underlying WebSocket connection, the shared write lock and the connection-level
+	// context, so the source can push frames such as a suspension snapshot on its own.
+	// writeMu is created and owned by debugConn: every write to conn (by debugConn itself and by the
+	// source's event callbacks) must take writeMu first, satisfying the gorilla/websocket single-writer rule.
+	// connCtx is cancelled when the connection drops; the source should use it as the parent context of
+	// its execution goroutine.
 	Attach(conn *websocket.Conn, writeMu *sync.Mutex, connCtx context.Context)
-	// WriteMu 返回共享写锁，供 debugConn 在写响应时与源的事件回调互斥。
+	// WriteMu returns the shared write lock, so debugConn can serialize its response writes against the
+	// source's event callbacks.
 	WriteMu() *sync.Mutex
-	// OnConnect 绑定对象 + 鉴权。返回 error 表示无权限/对象不存在，连接将被拒。
+	// OnConnect binds the object and authenticates. A returned error means no permission / the object
+	// does not exist, and the connection is rejected.
 	OnConnect(info *auth.AuthInfo, objectID string) error
-	// OnMessage 处理单步控制指令，返回调试帧；close 为 true 时关闭连接。
+	// OnMessage handles a single-step control command and returns the debug frame; close == true closes
+	// the connection.
 	OnMessage(info *auth.AuthInfo, objectID string, ctrl ControlRequest) (DebugEvent, bool)
 }
 
-// DebugHandler 薄包装：取路径上的对象 id，进入通用连接循环（鉴权在首条消息完成）。
-// srcFactory 每次连接创建一个新 DebugSource 实例，使连接级状态（如执行引擎、conn）彼此隔离。
+// DebugHandler is a thin wrapper: it takes the object id from the path and enters the generic connection
+// loop (authentication happens with the first message).
+// srcFactory creates a new DebugSource instance per connection, keeping connection-level state (the
+// execution engine, conn) isolated.
 func DebugHandler(srcFactory func() DebugSource, paramName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		objectID := c.Param(paramName)
@@ -124,10 +135,12 @@ func DebugHandler(srcFactory func() DebugSource, paramName string) gin.HandlerFu
 	}
 }
 
-// debugConn 通用连接生命周期：升级 → 首条消息鉴权 → 绑定对象 → 欢迎帧 → 心跳 → 读循环。
-// 鉴权采用首条消息验证（浏览器 WebSocket 无法自定义握手头），即连接建立后客户端第一条
-// 消息须为 {"token":"xxx"} 或 {"auth":"Bearer xxx"}，校验通过才进入调试会话。
-// 差异（调试内容/单步控制）全部委托给 DebugSource。
+// debugConn is the generic connection lifecycle: upgrade → authenticate with the first message → bind the
+// object → welcome frame → heartbeat → read loop.
+// Authentication happens with the first message (a browser WebSocket cannot set handshake headers): the
+// client's first message after connecting must be {"token":"xxx"} or {"auth":"Bearer xxx"}, and only then
+// does the debug session start.
+// Everything that differs (debug content / single-step control) is delegated to DebugSource.
 func debugConn(c *gin.Context, src DebugSource, objectID string) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -136,25 +149,28 @@ func debugConn(c *gin.Context, src DebugSource, objectID string) {
 	}
 	defer conn.Close()
 
-	// 共享写锁：所有 conn.WriteMessage 都须持锁，满足 gorilla/websocket「单写者」约束。
-	// 该锁由 debugConn 创建，通过 Attach 传给 DebugSource，双方共用。
+	// Shared write lock: every conn.WriteMessage must hold it, satisfying the gorilla/websocket
+	// single-writer rule. It is created by debugConn and handed to DebugSource through Attach, so both
+	// sides share it.
 	var writeMu sync.Mutex
 
-	// 连接级 context：断开时 cancel，确保执行 goroutine 不泄漏（Fix #3）。
+	// Connection-level context: cancelled on disconnect so the execution goroutine cannot leak.
 	connCtx, connCancel := context.WithCancel(context.Background())
 	defer connCancel()
 
-	// safeWrite 加锁写一帧文本消息，供 debugConn 自身使用（与源共享 writeMu）。
+	// safeWrite takes the lock and writes one text frame; used by debugConn itself (it shares writeMu
+	// with the source).
 	safeWrite := func(data []byte) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		return conn.WriteMessage(websocket.TextMessage, data)
 	}
 
-	// 注入连接、写锁与连接级 context，供源主动推送挂起快照等帧
+	// Inject the connection, the write lock and the connection-level context, so the source can push
+	// frames such as a suspension snapshot on its own.
 	src.Attach(conn, &writeMu, connCtx)
 
-	// 首条消息鉴权：限时读取第一条文本消息
+	// First-message authentication: read the first text message within a deadline.
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
@@ -185,7 +201,7 @@ func debugConn(c *gin.Context, src DebugSource, objectID string) {
 		return
 	}
 
-	// A 部分：绑定对象 + 权限校验
+	// Part A: bind the object and check permissions.
 	if err := src.OnConnect(info, objectID); err != nil {
 		_ = safeWrite(mustJSON(DebugEvent{
 			"type":  "error",
@@ -194,7 +210,7 @@ func debugConn(c *gin.Context, src DebugSource, objectID string) {
 		return
 	}
 
-	// 欢迎帧
+	// Welcome frame.
 	welcome := map[string]interface{}{
 		"type":      "welcome",
 		"kind":      src.Kind(),
@@ -208,7 +224,8 @@ func debugConn(c *gin.Context, src DebugSource, objectID string) {
 		_ = safeWrite(data)
 	}
 
-	// ready 帧：鉴权 + OnConnect 成功后主动推送，告知前端通道可用（可发控制指令）
+	// ready frame: pushed once authentication and OnConnect succeeded, telling the frontend the channel
+	// is usable (control commands may be sent).
 	if data, err := json.Marshal(DebugEvent{
 		"type":      "debug",
 		"kind":      src.Kind(),
@@ -225,7 +242,8 @@ func debugConn(c *gin.Context, src DebugSource, objectID string) {
 		return nil
 	})
 
-	// 心跳 + 退出信号（Fix #4：ping goroutine 通过 done channel 可靠退出，避免泄漏）
+	// Heartbeat plus an exit signal (the ping goroutine exits reliably through the done channel, so it
+	// cannot leak).
 	pingTicker := time.NewTicker(30 * time.Second)
 	pingDone := make(chan struct{})
 	defer func() {
@@ -257,7 +275,8 @@ func debugConn(c *gin.Context, src DebugSource, objectID string) {
 			break
 		}
 
-		// B 部分：解析客户端控制指令（非文本/非 JSON 时回显原样，便于裸调试）
+		// Part B: parse the client control command (a non-text / non-JSON frame is echoed back as is, which
+		// keeps raw debugging easy).
 		var ctrl ControlRequest
 		if mt == websocket.TextMessage {
 			if err := json.Unmarshal(message, &ctrl); err != nil {
@@ -287,7 +306,8 @@ func debugConn(c *gin.Context, src DebugSource, objectID string) {
 			return
 		}
 	}
-	// 读循环退出 → defer connCancel() 取消执行 context → 执行 goroutine 感知退出
+	// The read loop exited → the deferred connCancel() cancels the execution context → the execution
+	// goroutine notices and exits.
 }
 
 func mustJSON(v interface{}) []byte {
@@ -312,31 +332,31 @@ func msgTypeName(mt int) string {
 	}
 }
 
-// ---------- /debug/flow 的调试源（对接 flow 执行引擎） ----------
+// ---------- the /debug/flow debug source (wired to the flow engine) ----------
 
-// FlowDebugSource 创建 flow 调试源实例（每连接一个新实例，承载连接级状态）。
+// FlowDebugSource creates a flow debug source instance (one per connection, holding connection-level state).
 func FlowDebugSource() DebugSource { return &flowDebugSource{} }
 
-// FlowDebugSource 持有本次 WS 连接的执行引擎与调试控制器。
-// 并发安全：所有字段在 Attach/OnConnect 后可能被两个 goroutine 同时访问
-//   - 读循环 goroutine（OnMessage）
-//   - 执行 goroutine（pushSnapshot / pushFinished）
+// flowDebugSource holds the execution engine and debug controller of this WS connection.
+// Concurrency: after Attach/OnConnect the fields may be accessed by two goroutines at once
+//   - the read-loop goroutine (OnMessage)
+//   - the execution goroutine (pushSnapshot / pushFinished)
 //
-// 写操作通过 writeMu（与 debugConn 共享）串行化；读操作通过 mu 保护。
+// Writes are serialized through writeMu (shared with debugConn); reads are guarded by mu.
 type flowDebugSource struct {
-	mu       sync.Mutex      // 保护 started、execCtx 等共享字段的读写
-	writeMu  *sync.Mutex     // 与 debugConn 共享的 WebSocket 写锁（Fix #1）
-	connCtx  context.Context // 连接级 context，断开时 cancel（Fix #3）
-	conn     *websocket.Conn // 仅在 Attach 时写入，之后只读
-	objectID string          // 仅在 OnConnect 时写入，之后只读
-	authInfo *auth.AuthInfo  // OnConnect 时写入，run 时构造 execCtx 要用 schema
+	mu       sync.Mutex      // guards started, execCtx and the other shared fields
+	writeMu  *sync.Mutex     // the WebSocket write lock shared with debugConn
+	connCtx  context.Context // connection-level context, cancelled on disconnect
+	conn     *websocket.Conn // written only in Attach, read-only afterwards
+	objectID string          // written only in OnConnect, read-only afterwards
+	authInfo *auth.AuthInfo  // written in OnConnect; run needs the schema to build execCtx
 	execCtx  *flow.ExecContext
 	ctrl     *flow.DebugControl
 	started  bool
-	// nodeResults 按 node_id 去重保留最后一次执行的节点数据（mu 保护）。
-	// 运行中点节点（inspect_node）与运行结束（pushFinished）都从这里取。
+	// nodeResults keeps the data of the last execution per node_id (guarded by mu).
+	// Both clicking a node during a run (inspect_node) and the end of the run (pushFinished) read from it.
 	nodeResults map[string]*flow.NodeResult
-	streamWG    sync.WaitGroup // 等待 pumpStream 推完剩余流式消息后再关连接
+	streamWG    sync.WaitGroup // wait for pumpStream to flush the remaining stream messages before closing
 }
 
 func (s *flowDebugSource) Kind() string { return "flow" }
@@ -345,8 +365,9 @@ func (s *flowDebugSource) Attach(conn *websocket.Conn, writeMu *sync.Mutex, conn
 	s.conn = conn
 	s.writeMu = writeMu
 	s.connCtx = connCtx
-	// 连接断开（connCtx 取消）时：唤醒所有挂起点，让挂起的节点能感知取消并正常收尾，
-	// 否则会永久阻塞在 cond.Wait 上（执行 goroutine 泄漏，且无法落库 cancelled 状态）。
+	// On disconnect (connCtx cancelled): wake every suspension point so a suspended node notices the
+	// cancellation and winds down. Otherwise it would block forever on cond.Wait (leaking the execution
+	// goroutine and never persisting the cancelled status).
 	go func() {
 		<-connCtx.Done()
 		s.mu.Lock()
@@ -359,7 +380,7 @@ func (s *flowDebugSource) Attach(conn *websocket.Conn, writeMu *sync.Mutex, conn
 
 func (s *flowDebugSource) WriteMu() *sync.Mutex { return s.writeMu }
 
-// writeJSON 加锁写一帧 JSON 文本消息（供事件回调安全调用）。
+// writeJSON takes the lock and writes one JSON text frame (safe to call from event callbacks).
 func (s *flowDebugSource) writeJSON(v interface{}) {
 	if s.conn == nil || s.writeMu == nil {
 		return
@@ -375,25 +396,27 @@ func (s *flowDebugSource) writeJSON(v interface{}) {
 
 func (s *flowDebugSource) OnConnect(info *auth.AuthInfo, objectID string) error {
 	s.objectID = objectID
-	// 校验 Flow 是否存在且属于该 schema
+	// Check that the flow exists and belongs to this schema.
 	repo := flows.NewRepository()
 	if _, err := repo.GetFlow(info, objectID); err != nil {
-		return fmt.Errorf("flow instance %s 不存在或无权限: %w", objectID, err)
+		return fmt.Errorf("flow instance %s does not exist or access is denied: %w", objectID, err)
 	}
-	// 保存鉴权信息（run 时构造 execCtx 需要 schema）。
+	// Keep the identity (run needs the schema to build execCtx).
 	s.authInfo = info
-	// 连接时创建调试控制器（承接 run 前设置的断点），但【不构造 execCtx、不启动】。
-	// execCtx 推迟到收到 run 指令时构造（见 buildExecCtx），
-	// 以保证运行前自动保存的最新 diagram 能被读到、且每次 run 生成全新 runID。
+	// The debug controller is created on connect (carrying the breakpoints set before run), but execCtx is
+	// neither built nor started here. It is deferred until the run command arrives (see buildExecCtx), so
+	// that the latest diagram saved right before the run is picked up and every run gets a fresh runID.
 	ctrl := flow.NewDebugControl()
 	ctrl.Enabled = true
-	// 注意：连接时保持默认 DebugRun（不挂起）。模式切换推迟到用户操作：
-	// 点运行→run 全速；点暂停/单步→pause/step 才会在节点前挂起。
+	// Note: on connect the default DebugRun is kept (no suspension). The mode switches only on user action:
+	// clicking run runs at full speed; pause / single step switch to pause/step, which is what suspends
+	// before a node.
 	ctrl.SetEventHook(func(snap *flow.DebugSnapshot) {
 		s.pushSnapshot(snap)
 	})
-	// 节点开始执行时标记「已运行」：无论是否挂起都推 node_executing，
-	// 让前端高亮所有执行过的节点（无断点全速跑也能看到执行轨迹）。
+	// Mark nodes as "already run" when they start: node_executing is pushed whether or not the run
+	// suspends, so the frontend can highlight every executed node (even a full-speed run without
+	// breakpoints shows the execution trace).
 	ctrl.SetExecHook(func(nodeID string, nodeName string) {
 		s.pushNodeExecuting(nodeID, nodeName)
 	})
@@ -403,7 +426,8 @@ func (s *flowDebugSource) OnConnect(info *auth.AuthInfo, objectID string) error 
 	ctrl.SetSkipHook(func(nodeID string, nodeName string) {
 		s.pushNodeSkipped(nodeID, nodeName)
 	})
-	// 节点完成时累积最新数据（按 node_id 去重，保留 StartTime 最晚，与落库去重同规则）
+	// Accumulate the latest data when a node finishes (de-duplicated by node_id, keeping the latest
+	// StartTime — the same rule as persistence).
 	ctrl.SetDoneHook(func(nr *flow.NodeResult) {
 		s.mu.Lock()
 		if s.nodeResults == nil {
@@ -421,35 +445,38 @@ func (s *flowDebugSource) OnConnect(info *auth.AuthInfo, objectID string) error 
 	return nil
 }
 
-// buildExecCtx 在收到 run 指令时构造执行上下文（含全新 runID）。
-// 调用时机放在 run 而非 OnConnect，保证读到运行前刚保存的最新 diagram。
+// buildExecCtx builds the execution context (with a fresh runID) when the run command arrives.
+// It runs at run time rather than at OnConnect, so the diagram saved right before the run is picked up.
 func (s *flowDebugSource) buildExecCtx(input map[string]interface{}, runID string, followDrafts bool) (*flow.ExecContext, error) {
 	if s.authInfo == nil {
-		return nil, fmt.Errorf("auth info 缺失")
+		return nil, fmt.Errorf("auth info is missing")
 	}
 	repo := flows.NewRepository()
 	pi, err := repo.GetFlow(s.authInfo, s.objectID)
 	if err != nil {
-		return nil, fmt.Errorf("flow instance %s 不存在或无权限: %w", s.objectID, err)
+		return nil, fmt.Errorf("flow instance %s does not exist or access is denied: %w", s.objectID, err)
 	}
-	// 调试运行的 flow 是本次调用的起点，同样进链（见 shared/callchain）：
-	// 它出站（rpc / mcp / agent 节点）绕回自己时，第一层就能被拒。
-	// WithArguments 返回新 map，不改调用方传进来的 input。
+	// The flow being debugged is the starting point of this call and goes on the chain too (see
+	// shared/callchain): when it loops back to itself through an outbound step (rpc / mcp / agent node),
+	// the loop is rejected at the first level.
+	// WithArguments returns a new map and leaves the caller's input untouched.
 	input = callchain.WithArguments(input,
 		[]string{callchain.Key(callchain.KindFlow, s.objectID)})
 
 	execCtx, err := executors.NewFlow(pi, input, "debug-"+s.objectID, runID, s.authInfo.Schema, s.authInfo.ID, s.connCtx)
 	if err != nil {
-		return nil, fmt.Errorf("构造执行上下文失败: %w", err)
+		return nil, fmt.Errorf("failed to build the execution context: %w", err)
 	}
 	execCtx.Debug = s.ctrl
-	// 调试会话的作用域：followDrafts 决定被调子流程读草稿还是正式版本，跟随过的实体记账。
-	// 主流程自身始终读工作副本（GetFlow），这个开关只管「它调起来的那些」。
-	// 正式入口（MCP/RPC/local__）不设这个字段，因此不存在「漏传一次就上线草稿」的路径。
+	// Scope of the debug session: followDrafts decides whether the child flows it calls read their draft or
+	// the released version, and every entity followed is recorded.
+	// The main flow itself always reads the working copy (GetFlow); this switch only governs "the ones it
+	// calls". Production entry points (MCP/RPC/local__) never set the field, so there is no path where
+	// "forgot to pass it once" ships a draft.
 	execCtx.DebugScope = flow.NewDebugScope(followDrafts)
-	// 流程执行结束后（无论成功/失败/被取消）：
-	// 1) 关闭进度/结果 channel，让 pumpStream 退出；
-	// 2) 回推 finished 事件。
+	// Once the flow ends (success, failure or cancellation):
+	// 1) close the progress/result channels so pumpStream exits;
+	// 2) push the finished event.
 	execCtx.OnFlowDone = func(flowErr error) {
 		execCtx.CloseChans()
 		s.pushFinished(flowErr)
@@ -471,7 +498,7 @@ func (s *flowDebugSource) pushSnapshot(snap *flow.DebugSnapshot) {
 	})
 }
 
-// pushNodeExecuting 节点开始执行时回推，标记「已运行」节点（无论是否挂起）。
+// pushNodeExecuting is pushed when a node starts, marking it as "already run" (whether or not it suspends).
 func (s *flowDebugSource) pushNodeExecuting(nodeID string, nodeName string) {
 	s.writeJSON(DebugEvent{
 		"type":      "debug",
@@ -484,7 +511,7 @@ func (s *flowDebugSource) pushNodeExecuting(nodeID string, nodeName string) {
 	})
 }
 
-// pushNodeFailed 节点执行失败时回推，标记「出错」节点。
+// pushNodeFailed is pushed when a node fails, marking it as "failed".
 func (s *flowDebugSource) pushNodeFailed(nodeID string, nodeName string, errMsg string) {
 	s.writeJSON(DebugEvent{
 		"type":      "debug",
@@ -498,7 +525,7 @@ func (s *flowDebugSource) pushNodeFailed(nodeID string, nodeName string, errMsg 
 	})
 }
 
-// pushNodeSkipped 节点被跳过时回推，标记「跳过」节点。
+// pushNodeSkipped is pushed when a node is skipped, marking it as "skipped".
 func (s *flowDebugSource) pushNodeSkipped(nodeID string, nodeName string) {
 	s.writeJSON(DebugEvent{
 		"type":      "debug",
@@ -511,9 +538,9 @@ func (s *flowDebugSource) pushNodeSkipped(nodeID string, nodeName string) {
 	})
 }
 
-// pumpStream 消费执行上下文的进度/结果 channel，流式推给前端。
-// 进度（ProgressChan）→ progress 事件；结果（ResultChan）→ result_stream 事件。
-// channel 关闭后退出；连接断开（connCtx.Done）时也退出。
+// pumpStream consumes the progress/result channels of the execution context and streams them to the
+// frontend. Progress (ProgressChan) becomes a progress event; results (ResultChan) become a result_stream
+// event. It exits once the channels are closed, and also when the connection drops (connCtx.Done).
 func (s *flowDebugSource) pumpStream(ec *flow.ExecContext) {
 	defer s.streamWG.Done()
 	progressCh := ec.GetProgressChan()
@@ -551,13 +578,13 @@ func (s *flowDebugSource) pumpStream(ec *flow.ExecContext) {
 	}
 }
 
-// pushFinished 流程执行结束后回推终态事件（成功/失败/被取消均会调用）。
+// pushFinished pushes the final event once the flow ended (called on success, failure and cancellation).
 func (s *flowDebugSource) pushFinished(flowErr error) {
 	errMsg := ""
 	if flowErr != nil {
 		errMsg = flowErr.Error()
 	}
-	// 工作流最终返回信息（execCtx.Result，string 累积/设置）
+	// The final result of the flow (execCtx.Result, accumulated / set as a string).
 	resultStr := ""
 	runID := ""
 	s.mu.Lock()
@@ -565,22 +592,24 @@ func (s *flowDebugSource) pushFinished(flowErr error) {
 	if ec != nil {
 		runID = ec.GetRunID()
 	}
-	// 取出本次运行累积的节点数据（按 node_id 去重，保留最后一次执行）
+	// Take the node data accumulated by this run (de-duplicated by node_id, keeping the last execution).
 	snapshots := make([]*flow.NodeResult, 0, len(s.nodeResults))
 	for _, nr := range s.nodeResults {
 		snapshots = append(snapshots, nr)
 	}
-	// 复位 started：本次运行已结束，允许下次 run 重新走首次启动分支（重建 execCtx + 新 runID）。
+	// Reset started: this run is over, so the next run takes the first-start branch again (rebuild execCtx
+	// with a new runID).
 	s.started = false
 	s.execCtx = nil
 	s.mu.Unlock()
 	if ec != nil {
 		resultStr = ec.GetResult()
 	}
-	// 等待 pumpStream 推完 channel 里剩余的进度/结果消息，确保前端先收到流式消息再收到 finished。
+	// Wait for pumpStream to flush the remaining progress/result messages, so the frontend receives the
+	// streamed messages before finished.
 	s.streamWG.Wait()
 
-	// 逐个推送节点快照（避免单个超大帧；每帧仅一个节点的数据）。
+	// Push the node snapshots one by one (avoiding a single oversized frame; one node per frame).
 	for _, nr := range snapshots {
 		s.writeJSON(DebugEvent{
 			"type":      "debug",
@@ -591,8 +620,9 @@ func (s *flowDebugSource) pushFinished(flowErr error) {
 		})
 	}
 
-	// finished 帧只带元信息，不带 nodes 数组（节点数据已通过 node_snapshot 逐个推完）。
-	// 附带完整 run 对象（字段与 flow_run_records 一致），供前端展示/历史查询统一复用。
+	// The finished frame only carries metadata, not the nodes array (node data was pushed one by one
+	// through node_snapshot). It also carries the complete run object (same fields as flow_run_records),
+	// so the frontend can reuse it for display and history queries alike.
 	finished := DebugEvent{
 		"type":       "debug",
 		"kind":       "flow",
@@ -629,8 +659,9 @@ func (s *flowDebugSource) pushFinished(flowErr error) {
 	}
 	s.writeJSON(finished)
 
-	// 运行结束（成功/失败/被取消）后主动关闭调试通道。
-	// 持写锁关闭，避免与正在进行的写操作并发（gorilla/websocket 单写者约束）。
+	// Close the debug channel proactively once the run ended (success, failure or cancellation).
+	// The close is done under the write lock so it cannot race an in-flight write (gorilla/websocket
+	// single-writer rule).
 	if s.writeMu != nil && s.conn != nil {
 		s.writeMu.Lock()
 		_ = s.conn.Close()
@@ -641,21 +672,24 @@ func (s *flowDebugSource) pushFinished(flowErr error) {
 func (s *flowDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrlMsg ControlRequest) (DebugEvent, bool) {
 	switch ctrlMsg.Action {
 	case "run":
-		// 全速运行：无断点则一路跑完；有断点则命中断点挂起。
-		// 首次收到 run 才启动执行（此前 OnConnect 保持 DebugRun，不会无端挂起）。
+		// Full-speed run: without breakpoints it runs to the end; with breakpoints it suspends on a hit.
+		// Execution only starts on the first run command (until then OnConnect keeps DebugRun, so nothing
+		// suspends for no reason).
 		s.mu.Lock()
 		started := s.started
 		s.mu.Unlock()
 
 		if !started {
-			// 全新运行：清空上一轮的节点数据累积
+			// A brand-new run: clear the node data accumulated by the previous one.
 			s.mu.Lock()
 			s.nodeResults = make(map[string]*flow.NodeResult)
 			s.mu.Unlock()
-			// 首次运行：构造执行上下文（读到运行前刚保存的最新 diagram）+ 生成全新 runID。
+			// First run: build the execution context (picking up the diagram saved right before the run)
+			// and generate a fresh runID.
 			input, _ := ctrlMsg.Input.(map[string]interface{})
 			runID := uuid.Must(uuid.NewV7()).String()
-			// 只有「全新运行」这一次能决定作用域：跑起来之后再切开关不该影响这一轮
+			// Only a brand-new run decides the scope: flipping the switch after it started must not affect
+			// this run.
 			followDrafts := true
 			if ctrlMsg.FollowDrafts != nil {
 				followDrafts = *ctrlMsg.FollowDrafts
@@ -672,8 +706,9 @@ func (s *flowDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrlMs
 			s.started = true
 			s.mu.Unlock()
 
-			// 运行启动即回推运行级信息（入参/限额/开始时间），
-			// 供断点挂起时点「开始节点」查看本次运行参数（无需等 finished）。
+			// Push the run-level information as soon as the run starts (arguments / limits / start time),
+			// so that clicking the start node while suspended on a breakpoint shows this run's parameters
+			// (without waiting for finished).
 			s.writeJSON(DebugEvent{
 				"type":       "debug",
 				"kind":       "flow",
@@ -687,11 +722,12 @@ func (s *flowDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrlMs
 
 			s.ctrl.Control(flow.DebugRun, "")
 			go executors.Start(ec)
-			// 消费进度/结果 channel，流式推给前端（并避免缓冲满后 SendProgress 阻塞）。
+			// Consume the progress/result channels and stream them to the frontend (which also keeps
+			// SendProgress from blocking once the buffer fills).
 			s.streamWG.Add(1)
 			go s.pumpStream(ec)
 		} else {
-			// 已启动：run 表示"继续全速"，解除任何挂起
+			// Already started: run means "continue at full speed", releasing any suspension.
 			s.ctrl.Control(flow.DebugRun, "")
 			s.ctrl.Resume()
 		}
@@ -701,7 +737,7 @@ func (s *flowDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrlMs
 		}, false
 
 	case "pause":
-		// 下一节点前暂停
+		// Pause before the next node.
 		s.ctrl.Control(flow.DebugPause, "")
 		s.ctrl.Resume()
 		return DebugEvent{
@@ -710,7 +746,7 @@ func (s *flowDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrlMs
 		}, false
 
 	case "step":
-		// 单步：over/in/out
+		// Single step: over/in/out.
 		kind := flow.DebugStepKind(ctrlMsg.StepKind)
 		if kind != flow.StepOver && kind != flow.StepIn && kind != flow.StepOut {
 			kind = flow.StepOver
@@ -739,7 +775,7 @@ func (s *flowDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrlMs
 		}, true
 
 	case "setBreakpoint":
-		// on 默认 false（取消）；前端设断点发 on:true
+		// on defaults to false (clear); the frontend sends on:true to set a breakpoint.
 		on := ctrlMsg.On
 		if s.ctrl != nil && ctrlMsg.Breakpoint != "" {
 			s.ctrl.SetBreakpoint(ctrlMsg.Breakpoint, on)
@@ -767,7 +803,7 @@ func (s *flowDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrlMs
 		}, false
 
 	case "inspect_node":
-		// 运行中点节点：从累积的最新节点数据里取单个快照回推
+		// Clicking a node during a run: take the single snapshot from the accumulated latest node data.
 		s.mu.Lock()
 		var nr *flow.NodeResult
 		if s.nodeResults != nil {
@@ -794,9 +830,9 @@ func (s *flowDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrlMs
 	}
 }
 
-// ---------- /debug/agent 的调试源（骨架） ----------
+// ---------- the /debug/agent debug source (skeleton) ----------
 
-// AgentDebugSource 创建 agent 调试源实例（每连接一个新实例）。
+// AgentDebugSource creates an agent debug source instance (one per connection).
 func AgentDebugSource() DebugSource { return &agentDebugSource{} }
 
 type agentDebugSource struct {
@@ -814,12 +850,13 @@ func (s *agentDebugSource) Attach(conn *websocket.Conn, writeMu *sync.Mutex, _ c
 func (s *agentDebugSource) WriteMu() *sync.Mutex { return s.writeMu }
 
 func (s *agentDebugSource) OnConnect(info *auth.AuthInfo, objectID string) error {
-	// TODO: 校验 objectID 是否属于 info.Schema，并绑定 service/agent/core 会话
+	// TODO: check that objectID belongs to info.Schema and bind a service/agent/core session.
 	return nil
 }
 
 func (s *agentDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrl ControlRequest) (DebugEvent, bool) {
-	// Fix #8: agent 调试源尚未实现，返回明确的 not-implemented 帧（而非占位数据）
+	// The agent debug source is not implemented yet: return an explicit not-implemented frame instead of
+	// placeholder data.
 	return DebugEvent{
 		"type":      "debug",
 		"kind":      "agent",
@@ -831,12 +868,12 @@ func (s *agentDebugSource) OnMessage(info *auth.AuthInfo, objectID string, ctrl 
 	}, false
 }
 
-// ---------- /ws 业务骨架（与 /debug 鉴权一致） ----------
+// ---------- the /ws business skeleton (same authentication as /debug) ----------
 
-// EchoHandler 通用 WebSocket 接入骨架：echo 回显 + 心跳。
+// EchoHandler is the generic WebSocket entry skeleton: echo plus heartbeat.
 func EchoHandler(hub *Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		info := getAuth(c) // 取登录信息（按需使用，如按租户隔离）
+		info := getAuth(c) // the identity is available for per-tenant isolation when needed
 		_ = info
 
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)

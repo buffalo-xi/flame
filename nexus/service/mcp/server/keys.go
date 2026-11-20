@@ -9,12 +9,12 @@ import (
 	"math/big"
 )
 
-// 解析 JWK 的 base64url 字段
+// b64u decodes a base64url field of a JWK.
 func b64u(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
 }
 
-// buildRSAPublicKey 由 n/e 构造 RSA 公钥
+// buildRSAPublicKey builds an RSA public key from n/e.
 func buildRSAPublicKey(nStr, eStr string) (*rsa.PublicKey, error) {
 	nBytes, err := b64u(nStr)
 	if err != nil {
@@ -36,7 +36,7 @@ func buildRSAPublicKey(nStr, eStr string) (*rsa.PublicKey, error) {
 	return pub, nil
 }
 
-// buildECPublicKey 由 crv/x/y 构造 EC 公钥
+// buildECPublicKey builds an EC public key from crv/x/y.
 func buildECPublicKey(crv, xStr, yStr string) (*ecdsa.PublicKey, error) {
 	var curve elliptic.Curve
 	switch crv {

@@ -151,12 +151,13 @@ func setSliceValue(arr interface{}, index int, value interface{}, name, path str
 	}
 }
 
-// deprecatedEnvVarTypeGlobal 已废弃的环境变量类型。
+// deprecatedEnvVarTypeGlobal is the retired env var type.
 //
-// 「环境变量指向全局变量」（{type: "global", value: 全局变量名}）这条老路已下线：
-// 全局变量改成节点输入变量的一种来源（config.inputs 里 source_type: "global"），
-// 与环境变量平级，不再借道 env_vars。常量留着只为把老数据报成一句能读懂的话，
-// 而不是落到 convertEnvVar 的 "unsupported envVar type"。
+// "An env var pointing at a global variable" ({type: "global", value: <global var name>}) is gone:
+// global variables became one source of node input variables (source_type: "global" inside
+// config.inputs), on a par with env vars, and no longer travel through env_vars. The constant only
+// exists to report legacy data with a readable sentence instead of falling into convertEnvVar's
+// "unsupported envVar type".
 const deprecatedEnvVarTypeGlobal = "global"
 
 func GetEnvVar(envVars map[string]interface{}, path string) (interface{}, error) {
@@ -165,12 +166,12 @@ func GetEnvVar(envVars map[string]interface{}, path string) (interface{}, error)
 		return nil, err
 	}
 	if envVar.Type == deprecatedEnvVarTypeGlobal {
-		return nil, fmt.Errorf("envVar %s 使用了已废弃的类型 global：全局变量请改在节点输入变量里选「全局变量」来源（config.inputs 的 source_type: \"global\"）", path)
+		return nil, fmt.Errorf("envVar %s uses the deprecated type global: pick the global source on the node input variable instead (source_type: \"global\" in config.inputs)", path)
 	}
 	return convertEnvVar(envVar, path)
 }
 
-// parseEnvVar 把 env_vars 里那一项解析成结构体（两种取值路径共用）。
+// parseEnvVar parses one env_vars entry into a struct (shared by both read paths).
 func parseEnvVar(envVars map[string]interface{}, path string) (EnvVar, error) {
 	var envVar EnvVar
 	if envVars == nil {
@@ -193,7 +194,7 @@ func parseEnvVar(envVars map[string]interface{}, path string) (EnvVar, error) {
 	return envVar, nil
 }
 
-// convertEnvVar 内联值的类型转换（原有行为，一行没改）。
+// convertEnvVar converts the inline value by type (existing behaviour, unchanged).
 func convertEnvVar(envVar EnvVar, path string) (interface{}, error) {
 	switch envVar.Type {
 	case "number":
@@ -215,29 +216,31 @@ func convertEnvVar(envVar EnvVar, path string) (interface{}, error) {
 	}
 }
 
-// ResolveGlobalSource 取一个全局变量的值，供节点输入变量的 source_type: "global" 使用。
+// ResolveGlobalSource reads one global variable for a node input variable with source_type: "global".
 //
-// 这是工作流里引用全局变量的**唯一**入口：不注入模板上下文（没有 .global_vars），
-// 也不借道 env_vars —— 全局变量与 argument / env / flow / node / builtin 平级，
-// 都是某个节点的输入来源，模板里一律写 {{ .input.xxx }}。
+// This is the **only** entry point for referencing a global variable from a flow: it does not inject
+// anything into the template context (there is no .global_vars) and does not go through env_vars —
+// global variables sit on a par with argument / env / flow / node / builtin as one input source of a
+// node, and templates always write {{ .input.xxx }}.
 //
-// 失败必须硬报错、不能退回空串或 nil：静默降级会让流程带着空值跑下去，
-// 而这类问题在运行日志里几乎无法定位。三个错误都带足上下文（变量名 / 租户 / 输入名）。
+// Failure must be a hard error, never an empty string or nil: a silent downgrade lets the flow run on
+// with empty values, and such a problem is nearly impossible to locate in the run log. All three errors
+// carry enough context (variable name / tenant / input name).
 func ResolveGlobalSource(schema, name string) (interface{}, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return nil, errors.New("输入变量的来源是 global，但没有填写全局变量名")
+		return nil, errors.New("input variable source is global but no global variable name was given")
 	}
 	if schema == "" {
-		return nil, fmt.Errorf("输入变量引用了全局变量 %s，但当前上下文没有租户 schema", name)
+		return nil, fmt.Errorf("input variable references global variable %s but the current context has no tenant schema", name)
 	}
 	vars, err := globalvars.Resolve(schema)
 	if err != nil {
-		return nil, fmt.Errorf("读取全局变量 %s 失败: %w", name, err)
+		return nil, fmt.Errorf("failed to read global variable %s: %w", name, err)
 	}
 	value, ok := vars[name]
 	if !ok {
-		return nil, fmt.Errorf("全局变量 %q 不存在（请先在「设置 → 全局变量」创建）", name)
+		return nil, fmt.Errorf("global variable %q does not exist (create it under Settings → Global Variables first)", name)
 	}
 	return value, nil
 }
@@ -289,8 +292,9 @@ func SetEnvVar(envVars map[string]interface{}, path string, value interface{}) e
 			return fmt.Errorf("unsupported value type %T for number envVar path %s", value, path)
 		}
 	case deprecatedEnvVarTypeGlobal:
-		// 已下线：全局变量不再借道 env_vars，运行期也没有「指向别处的名字」可赋值。
-		return fmt.Errorf("envVar path %s 使用了已废弃的类型 global：全局变量请改在节点输入变量里选「全局变量」来源（config.inputs 的 source_type: \"global\"）", path)
+		// Retired: global variables no longer travel through env_vars, and at run time there is no
+		// "name pointing elsewhere" to assign to.
+		return fmt.Errorf("envVar path %s uses the deprecated type global: pick the global source on the node input variable instead (source_type: \"global\" in config.inputs)", path)
 	case "string", "secret":
 		switch v := value.(type) {
 		case string:

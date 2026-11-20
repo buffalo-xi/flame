@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"flame/nexus/shared/agentconfig"
@@ -19,40 +20,58 @@ import (
 //   - system row:    /platform/system/agentconfigs              - global default + hard ceiling
 //
 // The only difference from flow_configs: **no -1 (unlimited)**. All four fields are safety valves, and -1 means tearing the
-// guard down, so the value check is >= 1 (see sql/agent_configs.sql).
+// guard down, so the value check is >= 1 (see sql/agent_configs.sql). The rules themselves live in shared/agentconfig, so
+// the tenant-side handler (admin/agentconfigs) cannot drift from this one.
+//
+// The body is a **full replacement**: a field that is absent or null is stored as NULL ("not set"), not left untouched.
+// The desktop forms always submit all four fields; an API caller must do the same or it will clear the ones it omits.
 //
 // A write must be followed by Invalidate / InvalidateAll, otherwise the runtime waits a whole TTL before seeing the new value.
 var agentRepo = agentrepo.NewRepository()
 
-func agentNullable(v sql.NullInt32) any {
-	if v.Valid {
-		return v.Int32
-	}
-	return nil
-}
-
-// agentToJSON turns a config row into the map the frontend expects (NULL -> null).
-func agentToJSON(cfg *agentrepo.AgentConfig) gin.H {
+// agentRowFromStore adapts a stored row; nil stays nil ("no such row").
+func agentRowFromStore(cfg *agentrepo.AgentConfig) *agentconfig.Row {
 	if cfg == nil {
-		return gin.H{}
+		return nil
 	}
-	return gin.H{
-		"max_iterations":   agentNullable(cfg.MaxIterations),
-		"max_call_depth":   agentNullable(cfg.MaxCallDepth),
-		"max_tools":        agentNullable(cfg.MaxTools),
-		"max_output_bytes": agentNullable(cfg.MaxOutputBytes),
+	return &agentconfig.Row{
+		MaxIterations:  cfg.MaxIterations,
+		MaxCallDepth:   cfg.MaxCallDepth,
+		MaxTools:       cfg.MaxTools,
+		MaxOutputBytes: cfg.MaxOutputBytes,
 	}
 }
 
-// agentFallbackJSON is the code fallback (the UI uses it to show where an empty field falls back to).
-func agentFallbackJSON() gin.H {
-	fb := agentconfig.Fallback()
-	return gin.H{
-		"max_iterations":   fb.MaxIterations,
-		"max_call_depth":   fb.MaxCallDepth,
-		"max_tools":        fb.MaxTools,
-		"max_output_bytes": fb.MaxOutputBytes,
+// agentRowFromRequest turns the submitted body into a row to validate / store (nil means "not set", stored as NULL).
+func agentRowFromRequest(req updateAgentConfigsRequest) *agentconfig.Row {
+	return &agentconfig.Row{
+		MaxIterations:  agentNullInt32(req.MaxIterations),
+		MaxCallDepth:   agentNullInt32(req.MaxCallDepth),
+		MaxTools:       agentNullInt32(req.MaxTools),
+		MaxOutputBytes: agentNullInt32(req.MaxOutputBytes),
 	}
+}
+
+// agentStoreFromRow is the reverse: the row goes back to the repository shape for the upsert.
+func agentStoreFromRow(tenantID string, r *agentconfig.Row) *agentrepo.AgentConfig {
+	return &agentrepo.AgentConfig{
+		TenantID:       tenantID,
+		MaxIterations:  r.MaxIterations,
+		MaxCallDepth:   r.MaxCallDepth,
+		MaxTools:       r.MaxTools,
+		MaxOutputBytes: r.MaxOutputBytes,
+	}
+}
+
+// agentErrResponse answers a failed save: a rejected value carries its own code + params (the bundled copy is what the
+// user reads), everything else is an operational failure.
+func agentErrResponse(c *gin.Context, err error) {
+	var fe *agentconfig.FieldError
+	if errors.As(err, &fe) {
+		xhttp.ErrCode(c, fe.Code, fe.Params, fe.Error(), "")
+		return
+	}
+	xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 }
 
 type updateAgentConfigsRequest struct {
@@ -70,35 +89,12 @@ func agentNullInt32(v *int32) sql.NullInt32 {
 	return sql.NullInt32{Int32: *v, Valid: true}
 }
 
-// agentField pairs a field name with the submitted value, shared by the check and its message
-type agentField struct {
-	name  string
-	value *int32
-}
-
-// agentCheckPositive rejects < 1: this table deliberately does not support -1 (a safety valve that does not limit is
-// no valve at all).
-func agentCheckPositive(fields []agentField) error {
-	for _, f := range fields {
-		if f.value != nil && *f.value < 1 {
-			return fmt.Errorf("%s must be an integer >= 1 (this config does not support -1 for unlimited)", f.name)
-		}
-	}
-	return nil
-}
-
-// agentCheckNotExceed: a tenant value must not exceed the system level (an unset system level means unlimited).
-func agentCheckNotExceed(field string, tenantValue, sysValue sql.NullInt32) error {
-	if !sysValue.Valid || !tenantValue.Valid {
-		return nil
-	}
-	if tenantValue.Int32 > sysValue.Int32 {
-		return fmt.Errorf("%s cannot exceed the system value %d", field, sysValue.Int32)
-	}
-	return nil
-}
-
-// loadAgentBundle reads that tenant's config plus the system level (the system level is for comparison only, never written here).
+// loadAgentBundle reads that tenant's config plus the system level (the system level is for comparison only, never written
+// here) and the merged result.
+//
+// "effective" is what a run will really use, which is not always the tenant value: with no system row the code fallback is
+// the ceiling, so a stored value can be silently clamped. Returning it lets the UI show the difference instead of leaving
+// the user with a saved-but-ignored number.
 func loadAgentBundle(schema string) (gin.H, error) {
 	sysCfg, err := agentRepo.Get("")
 	if err != nil {
@@ -108,64 +104,35 @@ func loadAgentBundle(schema string) (gin.H, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tenant config: %w", err)
 	}
+	sys, tenant := agentRowFromStore(sysCfg), agentRowFromStore(tenantCfg)
 	return gin.H{
-		"system":   agentToJSON(sysCfg),
-		"tenant":   agentToJSON(tenantCfg),
-		"fallback": agentFallbackJSON(),
+		"system":    sys.JSON(),
+		"tenant":    tenant.JSON(),
+		"effective": agentconfig.Effective(tenant, sys).JSON(),
+		"fallback":  agentconfig.Fallback().JSON(),
 	}, nil
 }
 
 // saveAgentConfigs validates (value range + must not exceed the system level), writes and invalidates the cache.
+// A rejected value comes back as *agentconfig.FieldError, an operational failure as a plain error.
 func saveAgentConfigs(schema string, req updateAgentConfigsRequest) (gin.H, error) {
-	if err := agentCheckPositive([]agentField{
-		{"max_iterations", req.MaxIterations},
-		{"max_call_depth", req.MaxCallDepth},
-		{"max_tools", req.MaxTools},
-		{"max_output_bytes", req.MaxOutputBytes},
-	}); err != nil {
-		return nil, err
-	}
-
 	// The system config is read-only here and only used for the upper-bound check
 	sysCfg, err := agentRepo.Get("")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load system config: %w", err)
 	}
-	var sys agentrepo.AgentConfig
-	if sysCfg != nil {
-		sys = *sysCfg
+	sys, cfg := agentRowFromStore(sysCfg), agentRowFromRequest(req)
+
+	if err := agentconfig.ValidateTenant(cfg, sys); err != nil {
+		return nil, err
 	}
 
-	cfg := &agentrepo.AgentConfig{
-		TenantID:       schema,
-		MaxIterations:  agentNullInt32(req.MaxIterations),
-		MaxCallDepth:   agentNullInt32(req.MaxCallDepth),
-		MaxTools:       agentNullInt32(req.MaxTools),
-		MaxOutputBytes: agentNullInt32(req.MaxOutputBytes),
-	}
-
-	checks := []struct {
-		field       string
-		tenantValue sql.NullInt32
-		sysValue    sql.NullInt32
-	}{
-		{"max_iterations", cfg.MaxIterations, sys.MaxIterations},
-		{"max_call_depth", cfg.MaxCallDepth, sys.MaxCallDepth},
-		{"max_tools", cfg.MaxTools, sys.MaxTools},
-		{"max_output_bytes", cfg.MaxOutputBytes, sys.MaxOutputBytes},
-	}
-	for _, chk := range checks {
-		if err := agentCheckNotExceed(chk.field, chk.tenantValue, chk.sysValue); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := agentRepo.Upsert(cfg); err != nil {
+	if err := agentRepo.Upsert(agentStoreFromRow(schema, cfg)); err != nil {
 		return nil, fmt.Errorf("failed to save agent config: %w", err)
 	}
 	agentconfig.Invalidate(schema)
 
-	return gin.H{"schema": schema, "tenant": agentToJSON(cfg)}, nil
+	return gin.H{"schema": schema, "tenant": cfg.JSON()}, nil
 }
 
 // GetTenantAgentConfigs GET /platform/tenants/:schema/agentconfigs
@@ -195,7 +162,7 @@ func UpdateTenantAgentConfigs(c *gin.Context) {
 	}
 	data, err := saveAgentConfigs(schema, req)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		agentErrResponse(c, err)
 		return
 	}
 	xhttp.OkJSON(c, "Success", data, "")
@@ -230,14 +197,15 @@ func UpdateMyTenantAgentConfigs(c *gin.Context) {
 	}
 	data, err := saveAgentConfigs(schema, req)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		agentErrResponse(c, err)
 		return
 	}
 	xhttp.OkJSON(c, "Success", data, "")
 }
 
 // GetSystemAgentConfigs GET /platform/system/agentconfigs
-// Returns the system row's raw values plus the code fallback.
+// Returns the system row's raw values plus the code fallback. No "effective" here: on the system level it is the same
+// number as the stored value (or the fallback, which the UI already gets).
 func GetSystemAgentConfigs(c *gin.Context) {
 	cfg, err := agentRepo.Get("")
 	if err != nil {
@@ -245,8 +213,8 @@ func GetSystemAgentConfigs(c *gin.Context) {
 		return
 	}
 	xhttp.OkJSON(c, "Success", gin.H{
-		"config":   agentToJSON(cfg),
-		"fallback": agentFallbackJSON(),
+		"config":   agentRowFromStore(cfg).JSON(),
+		"fallback": agentconfig.Fallback().JSON(),
 	}, "")
 }
 
@@ -259,24 +227,13 @@ func UpdateSystemAgentConfigs(c *gin.Context) {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body: "+err.Error(), "")
 		return
 	}
-	if err := agentCheckPositive([]agentField{
-		{"max_iterations", req.MaxIterations},
-		{"max_call_depth", req.MaxCallDepth},
-		{"max_tools", req.MaxTools},
-		{"max_output_bytes", req.MaxOutputBytes},
-	}); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+	cfg := agentRowFromRequest(req)
+	if err := agentconfig.ValidateValues(cfg); err != nil {
+		agentErrResponse(c, err)
 		return
 	}
 
-	cfg := &agentrepo.AgentConfig{
-		TenantID:       "",
-		MaxIterations:  agentNullInt32(req.MaxIterations),
-		MaxCallDepth:   agentNullInt32(req.MaxCallDepth),
-		MaxTools:       agentNullInt32(req.MaxTools),
-		MaxOutputBytes: agentNullInt32(req.MaxOutputBytes),
-	}
-	if err := agentRepo.Upsert(cfg); err != nil {
+	if err := agentRepo.Upsert(agentStoreFromRow("", cfg)); err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, "failed to save system config: "+err.Error(), "")
 		return
 	}
@@ -284,7 +241,7 @@ func UpdateSystemAgentConfigs(c *gin.Context) {
 	agentconfig.InvalidateAll()
 
 	xhttp.OkJSON(c, "Success", gin.H{
-		"config":   agentToJSON(cfg),
-		"fallback": agentFallbackJSON(),
+		"config":   cfg.JSON(),
+		"fallback": agentconfig.Fallback().JSON(),
 	}, "")
 }

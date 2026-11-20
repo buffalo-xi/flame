@@ -2,9 +2,10 @@ package repository
 
 import "database/sql"
 
-// AgentConfig 对应 platform.agent_configs 一行（NULL 用 sql.NullInt32 表达）。
+// AgentConfig corresponds to one platform.agent_configs row (NULL is expressed with sql.NullInt32).
 //
-// 与 FlowConfig 的差别：这四列**不允许 -1**（都是安全阀，见 sql/agent_configs.sql）。
+// The difference from FlowConfig: these four columns **do not allow -1** (they are all safety valves, see
+// sql/agent_configs.sql).
 type AgentConfig struct {
 	TenantID       string
 	MaxIterations  sql.NullInt32
@@ -13,10 +14,10 @@ type AgentConfig struct {
 	MaxOutputBytes sql.NullInt32
 }
 
-// Repository agent_configs 存储接口
+// Repository is the agent_configs storage interface.
 type Repository interface {
-	// Get 获取指定租户的配置行（tenantID 为空表示系统行），无该行时返回 nil
+	// Get returns the configuration row of a tenant (an empty tenantID means the system row), or nil when there is none.
 	Get(tenantID string) (*AgentConfig, error)
-	// Upsert 插入或更新指定租户的配置行
+	// Upsert inserts or updates the configuration row of a tenant.
 	Upsert(cfg *AgentConfig) error
 }

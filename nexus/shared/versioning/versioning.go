@@ -1,13 +1,14 @@
-// Package versioning 版本化的「跨实体」部分：私有技能快照、租户枚举。
+// Package versioning holds the cross-entity part of versioning: private skill snapshots and tenant enumeration.
 //
-// 单个实体的发布/载入/删除 SQL 留在各自的 admin 包里 —— 版本表的镜像列必须和实体表
-// 逐列对齐，放在一起才好审；这里只放三处都要用、且与具体实体列无关的东西。
+// The release / apply / delete SQL of a single entity stays in its own admin package — the mirror columns of a version
+// table must line up with the entity table column by column, and keeping them together is what makes that reviewable;
+// only the things all three sides need and that are independent of any specific entity column live here.
 //
-// 为什么私有技能要在这里处理：它没有独立版本号，目录在 agent 根目录之内，
-// 随所属 agent 的版本一起冻结（见 nexus/docs/terminology.md）。
-//   - 正文进 agent_versions.files（由快照遍历 skills/ 得到）；
-//   - 元数据进 agent_versions.skills（本包 PrivateSkillsSnapshot）；
-//   - 已废弃（status=3）的技能不进快照（否则正式运行的 /agent 里还能 cat 到它）。
+// Why private skills are handled here: they have no version number of their own, their directory sits inside the agent
+// directory, and they are frozen together with the version of the agent that owns them (see nexus/docs/terminology.md).
+//   - the body goes into agent_versions.files (obtained by walking skills/ during the snapshot);
+//   - the metadata goes into agent_versions.skills (PrivateSkillsSnapshot in this package);
+//   - a deprecated skill (status=3) does not enter the snapshot (otherwise /agent in a production run could still cat it).
 package versioning
 
 import (
@@ -23,7 +24,8 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// DeprecatedPrivateSkillDirs 已废弃私有技能的目录（相对 agent 目录），用于从快照里排除。
+// DeprecatedPrivateSkillDirs are the directories of deprecated private skills (relative to the agent directory), used to
+// exclude them from a snapshot.
 func DeprecatedPrivateSkillDirs(schema, agentID string) ([]string, error) {
 	rows, err := db.DB.Query(`SELECT name FROM `+schema+`.skills
 		WHERE agent_id = $1 AND status = $2`, agentID, models.StatusDeprecated)
@@ -43,10 +45,11 @@ func DeprecatedPrivateSkillDirs(schema, agentID string) ([]string, error) {
 	return out, rows.Err()
 }
 
-// PrivateSkillsSnapshot 冻结私有技能的元数据与工具依赖（正文由文件清单覆盖）。
+// PrivateSkillsSnapshot freezes the metadata and tool dependencies of private skills (the body is covered by the file
+// list).
 //
-// 工具依赖是「声明」，属于定义；授权（agent_tool_grants / skill_tool_grants 的生效面）
-// 是运行时事实，不进快照 —— revoke 必须立即生效。
+// A tool dependency is a "declaration" and part of the definition; a grant (the effective surface of agent_tool_grants /
+// skill_tool_grants) is a runtime fact and does not enter the snapshot — revoke must take effect immediately.
 func PrivateSkillsSnapshot(schema, agentID string) ([]byte, error) {
 	rows, err := db.DB.Query(`SELECT id, name, COALESCE(description,''), COALESCE(metadata,'{}'::jsonb),
 			COALESCE(user_invocable,false), COALESCE(command_dispatch,''), COALESCE(command_tool,''),
@@ -60,7 +63,7 @@ func PrivateSkillsSnapshot(schema, agentID string) ([]byte, error) {
 	defer rows.Close()
 
 	out := make([]SkillMeta, 0, 4)
-	index := map[string]int{} // skill id → out 下标（依赖表按 skill_id 关联）
+	index := map[string]int{} // skill id → index in out (the dependency table is joined by skill_id)
 	for rows.Next() {
 		var id string
 		var s SkillMeta
@@ -104,10 +107,12 @@ func PrivateSkillsSnapshot(schema, agentID string) ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// KeptPrivateSkills 草稿 skills/ 下存在、但该版本快照里没有的私有技能名。
+// KeptPrivateSkills are the private skill names that exist under the draft skills/ but are absent from that version's
+// snapshot.
 //
-// 载入旧 agent 版本时会用到：这些技能是独立实体（skills 表有行），
-// 版本里没有它往往只是「发布之后才建的」，删目录就会变成「有行、没正文」的空技能。
+// It is used when loading an old agent version: those skills are entities of their own (they have rows in the skills
+// table), and their absence from the version usually just means "created after the release"; deleting the directory would
+// leave an empty skill of "a row but no body".
 func KeptPrivateSkills(ctx context.Context, st storage.Storage, draftKey string, rawSkills []byte) ([]string, error) {
 	var snaps []SkillMeta
 	if len(rawSkills) > 0 {
@@ -122,7 +127,7 @@ func KeptPrivateSkills(ctx context.Context, st storage.Storage, draftKey string,
 
 	entries, err := st.List(ctx, path.Join(draftKey, paths.AgentSkillsSubdir))
 	if err != nil {
-		return nil, nil // 没有 skills/ 目录 = 没有要保留的
+		return nil, nil // no skills/ directory = nothing to keep
 	}
 	var kept []string
 	for _, e := range entries {
@@ -134,10 +139,10 @@ func KeptPrivateSkills(ctx context.Context, st storage.Storage, draftKey string,
 	return kept, nil
 }
 
-// RestoreSkillRow 把版本快照里的元数据写回 skills 行（载入版本用）。
+// RestoreSkillRow writes the metadata from a version snapshot back onto the skills row (used when loading a version).
 //
-// 只写「定义」字段：名称 / 归属 / 状态是实体身份，不随版本走
-// （改名、换归属、锁废都不该被一次载入悄悄改掉）。
+// Only the "definition" fields are written: name / ownership / status are the entity's identity and do not travel with a
+// version (a rename, an ownership change or a deprecation must not be silently undone by one load).
 func RestoreSkillRow(tx *sql.Tx, schema, skillID string, m SkillMeta) error {
 	meta := "{}"
 	if len(m.Metadata) > 0 {
@@ -151,9 +156,11 @@ func RestoreSkillRow(tx *sql.Tx, schema, skillID string, m SkillMeta) error {
 	return err
 }
 
-// RestoreSkillDeps 用版本里冻结的依赖声明重建某技能的 skill_tool_grants（载入版本用）。
+// RestoreSkillDeps rebuilds a skill's skill_tool_grants from the dependency declarations frozen in the version (used when
+// loading a version).
 //
-// 只动「声明」表：agent_tool_grants 是运行时授权，revoke 必须立即生效，不在这里回滚。
+// It only touches the "declaration" table: agent_tool_grants is a runtime grant, revoke must take effect immediately, and
+// it is not rolled back here.
 func RestoreSkillDeps(tx *sql.Tx, schema, skillID string, raw []byte) error {
 	var deps []toolDep
 	if len(raw) > 0 {
@@ -173,12 +180,13 @@ func RestoreSkillDeps(tx *sql.Tx, schema, skillID string, raw []byte) error {
 	return nil
 }
 
-// EnsureSkillVisibility 载入版本后的可见性自愈。
+// EnsureSkillVisibility is the visibility self-heal after loading a version.
 //
-// restricted 是「可见性声明」，随版本冻结；白名单（agent_skill_bindings 的 skill 侧）是授权，
-// 永远取当前（revoke 必须立即生效）。两半被拆开回滚后能拼出一个从未真实存在过的状态：
-// restricted=true + 白名单为空 = 谁都发现不了。载入旧版本时它几乎必然出现，
-// 所以这里直接退回「全员可见」，由调用方在 warnings 里点名。
+// restricted is a "visibility declaration" and is frozen with the version; the allowlist (the skill side of
+// agent_skill_bindings) is a grant and is always the current one (revoke must take effect immediately). Rolling the two
+// halves back separately can assemble a state that never really existed: restricted=true with an empty allowlist = nobody
+// can discover it. That state almost inevitably appears when loading an old version, so it falls back to "visible to
+// everyone" here and the caller names it in the warnings.
 func EnsureSkillVisibility(tx *sql.Tx, schema, skillID string) (downgraded bool, err error) {
 	var restricted bool
 	if err := tx.QueryRow(`SELECT restricted FROM `+schema+`.skills WHERE id = $1`, skillID).
@@ -203,9 +211,11 @@ func EnsureSkillVisibility(tx *sql.Tx, schema, skillID string) (downgraded bool,
 	return true, nil
 }
 
-// RestoreAgentPrivateSkills 把版本里冻结的私有技能元数据与依赖写回仍存在的私有技能行。
+// RestoreAgentPrivateSkills writes the private skill metadata and dependencies frozen in a version back onto the private
+// skill rows that still exist.
 //
-// 版本之后新建的私有技能不动（快照里没有它们，不等于要删）；已废弃的本来就不在快照里。
+// A private skill created after that version is left alone (its absence from the snapshot does not mean it should be
+// deleted); deprecated ones were never in the snapshot.
 func RestoreAgentPrivateSkills(tx *sql.Tx, schema, agentID string, raw []byte) error {
 	var snaps []SkillMeta
 	if len(raw) > 0 {
@@ -218,7 +228,7 @@ func RestoreAgentPrivateSkills(tx *sql.Tx, schema, agentID string, raw []byte) e
 		err := tx.QueryRow(`SELECT id FROM `+schema+`.skills
 			WHERE agent_id = $1 AND name = $2`, agentID, m.Name).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
-			continue // 该私有技能已被删除：目录在版本里，行没了就不复活
+			continue // that private skill was deleted: the directory is in the version, but a missing row is not revived
 		}
 		if err != nil {
 			return err
@@ -240,9 +250,9 @@ func RestoreAgentPrivateSkills(tx *sql.Tx, schema, agentID string, raw []byte) e
 	return nil
 }
 
-// TenantSchemas 列出已开通的租户 schema（以是否建了 agents 表为准）。
+// TenantSchemas lists the provisioned tenant schemas (a schema counts when it has an agents table).
 //
-// 回填命令用它遍历；platform / public / 系统 schema 排除在外。
+// The backfill command walks them; platform / public / system schemas are excluded.
 func TenantSchemas() ([]string, error) {
 	rows, err := db.DB.Query(`SELECT s.schema_name
 		FROM information_schema.schemata s

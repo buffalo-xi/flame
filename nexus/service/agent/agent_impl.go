@@ -73,7 +73,7 @@ type agentImpl struct {
 	modelIn  gateway.ModelInput
 
 	// skillDiscovery says whether this agent may discover unbound skills (skill_discovery).
-	// A production run takes the value frozen into the **current version** (versioning.AgentCurrentSwitches); draft mode takes the
+	// A production run takes the value frozen into the **current version** (versioning.AgentCurrentAttributes); draft mode takes the
 	// current value in the agents table.
 	// It only affects the scope of list_skills / read_skill / use_skill; the list injected into the system prompt is always
 	// "private + bound" only.
@@ -83,6 +83,11 @@ type agentImpl struct {
 	// It is deliberately taken once at the start of the run rather than queried every round: the round cap, tool count and output cap
 	// must stay stable for the whole run - a mid-run change would make "why did this run stop at round 40" unexplainable.
 	limits agentconfig.Limits
+
+	// languageChosen says the run's output language was actually decided (pinned by a caller or configured as this
+	// agent's default), rather than falling back to the product default. Only a decided value is carried to the next
+	// hop, so a workflow never reads the fallback as an intent.
+	languageChosen bool
 
 	// Session memory: this run's timing and persistence convention.
 	// startedAt is stamped at the start of Stream and elapsedMs is frozen when the record is written - the value the entry point reads
@@ -151,16 +156,18 @@ func newAgentImpl(instance *models.Agent, schema string, arguments map[string]an
 		}
 		agentVersion = v
 
-		// "Unrestricted tools" and "allow discovering unbound skills" are frozen into the version (see admin/agents/versions.go), and a
-		// production run must read the version's copy - reading the current agents-table value would defeat the release freeze.
+		// "Unrestricted tools", "allow discovering unbound skills" and the default reply language are frozen into the version
+		// (see admin/agents/versions.go), and a production run must read the version's copy - reading the current
+		// agents-table value would defeat the release freeze.
 		// Copy the instance before changing it; never mutate the caller's object in place (the entry layer may reuse it).
-		unrestricted, discovery, serr := versioning.AgentCurrentSwitches(schema, instance.Name)
+		unrestricted, discovery, defaultLanguage, serr := versioning.AgentCurrentAttributes(schema, instance.Name)
 		if serr != nil {
 			return nil, serr
 		}
 		inst := *instance
 		inst.ToolsUnrestricted = unrestricted
 		inst.SkillDiscovery = discovery
+		inst.DefaultLanguage = defaultLanguage
 		instance = &inst
 		a.instance = instance
 	}
@@ -210,40 +217,51 @@ func newAgentImpl(instance *models.Agent, schema string, arguments map[string]an
 		workDir = paths.ResolveRunsDir(rootDir, schema, runID)
 	}
 
+	// Output language: caller-pinned (`_meta.language`) > the agent's own default > the product default. Resolved once here so the
+	// prompt always has something to say; leaving it unsaid was the old behaviour and it left the model guessing between a
+	// Chinese-first rule and an English-first prompt.
+	outputLanguage, outputLanguagePinned := resolveOutputLanguage(arguments, instance)
+	// Whether anybody actually chose this language, as opposed to it being the product fallback. Only a chosen value is
+	// worth handing to the next hop (a workflow exposes it as builtin `language`): telling a flow that a run is "en"
+	// because no one configured anything would read as a decision and steer templates the wrong way.
+	a.languageChosen = outputLanguagePinned || agentDefaultLanguage(instance) != ""
+
 	a.toolCtx = &tools.Context{
-		Schema:           schema,
-		AgentName:        instance.Name,
-		AgentID:          instance.ID,
-		IsSupervisor:     instance.IsSupervisor,
-		UserID:           userID,
-		SessionID:        sessionID,
-		RunID:            runID,
-		WorkKey:          workKey,
-		Workspace:        workDir,
-		AgentRoot:        agentRoot,
-		DefinitionMode:   mode,
-		AgentVersion:     agentVersion,
-		FollowDrafts:     followDrafts,
-		RootDir:          rootDir,
-		SkillRoot:        paths.ResolveSkillsDir(rootDir, schema),
-		CustomTools:      newCustomToolSource(schema, mode),
-		CustomToolsAdmin: newCustomToolAdmin(schema),
-		ToolsRoot:        paths.ResolveToolsDir(rootDir, schema),
-		Storage:          agentStorage,
-		Agents:           NewAgentManager(schema, instance.ID, instance.Name, userID, agentStorage, instance.IsSupervisor),
-		Skills:           NewSkillManager(schema, instance.ID, instance.Name, userID, agentStorage, instance.SkillDiscovery, instance.IsSupervisor, mode),
-		ToolGrants:       NewToolGrantManager(schema, instance.ID, instance.Name, userID, instance.IsSupervisor, mode),
-		ToolCatalog:      newToolCatalogManager(schema, instance.Name, instance.IsSupervisor),
-		Flows:            NewFlowsManager(schema, userID),
-		Relations:        NewAgentRelationsManager(schema, instance.ID, instance.Name, userID, instance.IsSupervisor),
-		Caller:           NewAgentCaller(schema, a.pushEvent, a.limits.MaxCallDepth),
-		Externals:        &externalToolRunner{},
-		Endpoints:        &localEndpointRunner{},
-		CallDepth:        callDepth,
-		CallChain:        callChain,
-		Timeout:          60 * time.Second,
-		MaxOutput:        a.limits.MaxOutputBytes,
-		Sandbox:          tools.CurrentSandbox(),
+		Schema:               schema,
+		AgentName:            instance.Name,
+		AgentID:              instance.ID,
+		IsSupervisor:         instance.IsSupervisor,
+		UserID:               userID,
+		SessionID:            sessionID,
+		RunID:                runID,
+		WorkKey:              workKey,
+		Workspace:            workDir,
+		AgentRoot:            agentRoot,
+		DefinitionMode:       mode,
+		AgentVersion:         agentVersion,
+		FollowDrafts:         followDrafts,
+		RootDir:              rootDir,
+		SkillRoot:            paths.ResolveSkillsDir(rootDir, schema),
+		CustomTools:          newCustomToolSource(schema, mode),
+		CustomToolsAdmin:     newCustomToolAdmin(schema),
+		ToolsRoot:            paths.ResolveToolsDir(rootDir, schema),
+		Storage:              agentStorage,
+		Agents:               NewAgentManager(schema, instance.ID, instance.Name, userID, agentStorage, instance.IsSupervisor),
+		Skills:               NewSkillManager(schema, instance.ID, instance.Name, userID, agentStorage, instance.SkillDiscovery, instance.IsSupervisor, mode),
+		ToolGrants:           NewToolGrantManager(schema, instance.ID, instance.Name, userID, instance.IsSupervisor, mode),
+		ToolCatalog:          newToolCatalogManager(schema, instance.Name, instance.IsSupervisor),
+		Flows:                NewFlowsManager(schema, userID),
+		Relations:            NewAgentRelationsManager(schema, instance.ID, instance.Name, userID, instance.IsSupervisor),
+		Caller:               NewAgentCaller(schema, a.pushEvent, a.limits.MaxCallDepth),
+		Externals:            &externalToolRunner{},
+		Endpoints:            &localEndpointRunner{},
+		CallDepth:            callDepth,
+		CallChain:            callChain,
+		OutputLanguage:       outputLanguage,
+		OutputLanguagePinned: outputLanguagePinned,
+		Timeout:              60 * time.Second,
+		MaxOutput:            a.limits.MaxOutputBytes,
+		Sandbox:              tools.CurrentSandbox(),
 	}
 
 	// 2. Look up the default LLM model
@@ -501,6 +519,16 @@ func (a *agentImpl) Stream(parent context.Context) error {
 	}
 	ctx, cancel := context.WithCancelCause(parent)
 	defer cancel(nil)
+	// Carry the run's output language on ctx (the same mechanism as callchain.With). Everything this run calls -
+	// workflows, sub-agents, remote endpoints - can then read it: a flow exposes it as the builtin variable `language`,
+	// and a pinned value keeps travelling over the wire while a resolved default stops at the process boundary.
+	if c := a.toolCtx; c != nil && c.OutputLanguage != "" && a.languageChosen {
+		if c.OutputLanguagePinned {
+			ctx = core.WithPinnedLanguage(ctx, c.OutputLanguage)
+		} else {
+			ctx = core.WithLanguageHint(ctx, c.OutputLanguage)
+		}
+	}
 	if c := a.toolCtx; c != nil {
 		defer registerRun(runledger.Entry{
 			Kind:       runledger.KindAgent,
@@ -724,7 +752,74 @@ func (a *agentImpl) loadSystemPrompt() (string, error) {
 	// The reply-language rule comes **last**: it constrains everything above it (AGENT.md included), and sitting after the capability /
 	// sandbox notes makes the order the model reads "facts -> convention".
 	prompt += "\n\n" + responseLanguageRule
+	// A language the caller pinned for this call refines that rule and never replaces it. The base rule infers the language from the
+	// input, which works for chat and fails for a programmatic call whose arguments are pure JSON: there the model has nothing but
+	// the prompt's language to go on.
+	if hint := outputLanguageHint(a.toolCtx); hint != "" {
+		prompt += "\n\n" + hint
+	}
 	return prompt, nil
+}
+
+// outputLanguageHint renders the language the caller pinned for this run (AgentGrantView-style: English, because it is
+// model-facing product text, not copy for a user).
+//
+// The precedence sentence is part of the hint on purpose: an agent whose AGENT.md pins a language (a writing tutor for one
+// language, say) must not be overridden by a caller that sends a different tag. Two rules contradicting each other in one prompt
+// is worse than sending no hint at all.
+// defaultOutputLanguage is the last resort when neither the caller nor the agent says anything.
+//
+// English, because the product's primary language is English: AGENT.md, the tool descriptions and the system-entity files are
+// written in it, so "answer in English" is the only default that follows from the prompt itself. A Chinese-first tenant sets
+// agents.default_language (or keeps pinning per call); what this removes is the silent guess between the two.
+const defaultOutputLanguage = "en"
+
+func outputLanguageHint(c *tools.Context) string {
+	if c == nil {
+		return ""
+	}
+	tag, label := core.NormalizeOutputLanguage(c.OutputLanguage)
+	if tag == "" {
+		// Never echo an unvalidated value into the prompt: the field is filled from validated input today, but a future caller
+		// setting it directly must not be able to inject free text this way.
+		return ""
+	}
+	if c.OutputLanguagePinned {
+		return fmt.Sprintf("The caller pinned the output language of this call: %s (%s). Answer in that language whatever language "+
+			"the input and this prompt are written in. If AGENT.md pins a language explicitly, AGENT.md still wins.", label, tag)
+	}
+	return fmt.Sprintf("No output language was specified for this call: reply in the language the input is written in, and when the "+
+		"input carries no language signal (pure JSON, ids, numbers), answer in %s (%s). If AGENT.md pins a language explicitly, "+
+		"AGENT.md still wins.", label, tag)
+}
+
+// resolveOutputLanguage resolves the reply language of one run:
+//
+//	caller-pinned `_meta.language`  >  agents.default_language  >  defaultOutputLanguage
+//
+// The middle step exists because an agent may serve exactly one audience; it is a definition column, so a release freezes
+// it into the version row, and it is validated like any other tag - a bad value falls through instead of being echoed.
+func resolveOutputLanguage(arguments map[string]any, inst *models.Agent) (tag string, pinned bool) {
+	if t, _ := core.OutputLanguage(arguments); t != "" {
+		return t, true
+	}
+	if t := agentDefaultLanguage(inst); t != "" {
+		return t, false
+	}
+	return defaultOutputLanguage, false
+}
+
+// agentDefaultLanguage reads the agent's default reply language (agents.default_language; empty = not configured, or not a
+// valid tag).
+//
+// It reads the definition column rather than an agents.config key: the language has to be frozen into the version row at
+// release time, and a production run reads that copy (see AgentCurrentAttributes).
+func agentDefaultLanguage(inst *models.Agent) string {
+	if inst == nil {
+		return ""
+	}
+	tag, _ := core.NormalizeOutputLanguage(inst.DefaultLanguage)
+	return tag
 }
 
 // responseLanguageRule is the single hard convention for reply language.
@@ -773,11 +868,11 @@ func (a *agentImpl) sandboxNotes() string {
 	// No successful fetch ever: report unknown only, never guess (on a failed fetch Info keeps the last successful snapshot,
 	// so an empty Mode means there has never been a successful record).
 	if info.Mode == "" {
-		return "沙箱环境：未知。尚未从 sandboxd 取到能力快照（它可能没起来），" +
-			"沙箱能否联网、有哪些模块都**不要假设**，需要时先运行命令自行确认。"
+		return "Sandbox environment: unknown. No capability snapshot has been fetched from sandboxd yet (it may be down); " +
+			"do **not** assume whether the sandbox has network access or which modules are installed - run a command to check when you need to know."
 	}
 
-	lines := []string{fmt.Sprintf("沙箱环境（隔离方式 %s；以下为 sandboxd 的声明与启动实测，未必同于其它环境的通用情况）：", info.Mode)}
+	lines := []string{fmt.Sprintf("Sandbox environment (isolation mode %s; the following is sandboxd's declaration plus what it measured at startup, and may differ from other environments):", info.Mode)}
 	// "Configured" and "measured" stay apart: langs is what sandboxd declares it can run, the block below is whether the interpreter is
 	// really there. A mismatch is itself useful information (configured but never measured = the configuration does not match reality);
 	// merged into one sentence they read like two sets of facts.
@@ -785,26 +880,26 @@ func (a *agentImpl) sandboxNotes() string {
 		// The scope has to be nailed down on this line: these are the languages of the exec / single-channel path (command execution,
 		// skill scripts, custom tools), unrelated to the selectable languages of workflow nodes. Merely saying "executable languages"
 		// makes the model treat js as an option for code nodes, and that mistake only surfaces at runtime as unsupported_lang (next line).
-		lines = append(lines, "- 可执行语言（sandboxd 配置；用于命令执行与技能脚本，**不是工作流节点的可选语言**）："+strings.Join(info.Langs, "、"))
+		lines = append(lines, "- Executable languages (configured in sandboxd; used for command execution and skill scripts, **not** the selectable languages of workflow nodes): "+strings.Join(info.Langs, ", "))
 	}
 	// Workflow script languages are **not the same thing** as the line above and must be stated separately: a language in the top-level
 	// langs list may have no duplex pool (a language that only runs skill scripts needs none), and a workflow written against it is
 	// rejected by the sandbox (unsupported_lang) - which again only surfaces at runtime.
 	if langs, ok := sandboxinfo.CodeLangs(); ok {
 		if len(langs) == 0 {
-			lines = append(lines, "- 沙箱没有配置任何**工作流脚本语言**（sandboxd 侧 code.pools 为空）：创建或修改工作流时不要使用脚本节点。")
+			lines = append(lines, "- Sandbox has no **workflow script language** configured (sandboxd's code.pools is empty): do not use script nodes when creating or editing workflows.")
 		} else {
-			lines = append(lines, "- 工作流脚本语言（sandboxd 配置）："+strings.Join(langs, "、")+
-				"。创建/修改工作流时，脚本节点（代码、分支条件、循环条件、handler）的语言只能从这几个里选，其它语言会被沙箱拒绝（unsupported_lang）。")
+			lines = append(lines, "- Workflow script languages (configured in sandboxd): "+strings.Join(langs, ", ")+
+				". When creating or editing a workflow, script nodes (code, branch condition, loop condition, handler) may only use one of these languages; any other language is rejected by the sandbox (unsupported_lang).")
 		}
 	}
 
 	// Probe result: nexus does not parse it, it passes it through verbatim (whoever produced the fact states it - see probe.go in sandboxd).
 	if errText := strings.TrimSpace(info.Environment.Error); errText != "" {
 		// On a failed probe, state "unknown, and why"; do not let the model read an empty list as "nothing is installed".
-		lines = append(lines, "- 沙箱实测失败（"+errText+"），下面没有任何可信的模块清单：要用某个库时先自行确认，别假设它在。")
+		lines = append(lines, "- Sandbox probe failed ("+errText+"), so there is no trustworthy module list below: confirm a library yourself before using it, and do not assume it is there.")
 	} else if text := strings.TrimSpace(info.Environment.Text); text != "" {
-		lines = append(lines, "- 沙箱实测（以下为 sandboxd 探测原文）：", text)
+		lines = append(lines, "- Sandbox probe result (verbatim output from sandboxd):", text)
 	}
 
 	// The network conclusion is phrased as the **effective value**: the deployment ceiling (on-request) must not be handed to the model
@@ -812,23 +907,23 @@ func (a *agentImpl) sandboxNotes() string {
 	// compute "whether you can reach the network right now".
 	switch info.Network.Exec {
 	case sandboxinfo.NetworkOff:
-		lines = append(lines, "- 沙箱内**不能**联网（network=off）：运行期 pip / npm / luarocks 都装不了 —— "+
-			"只能用上面列出的模块（Python 标准库齐全，不在清单里也不代表不可用）。")
+		lines = append(lines, "- The sandbox **cannot** reach the network (network=off): pip / npm / luarocks cannot install anything at runtime - "+
+			"you can only use the modules listed above (the Python standard library is complete; not being on that list does not mean unavailable).")
 	case sandboxinfo.NetworkOn:
-		lines = append(lines, "- 沙箱内**可以**联网（network=on），但 rootfs 只读：全局安装（`pip install` 到系统目录、`npm i -g`）会失败，"+
-			"改用 `--user` 或项目内虚拟环境。")
+		lines = append(lines, "- The sandbox **can** reach the network (network=on), but the rootfs is read-only: global installs (`pip install` into system directories, `npm i -g`) fail; "+
+			"use `--user` or a project-local virtual environment instead.")
 	case sandboxinfo.NetworkOnRequest:
 		// The deployment allows on-demand egress: whether it really works depends on this tenant having net.egress (fail-closed).
 		// Give the **conclusion** here; do not hand on-request out verbatim - the model cannot decide from it whether to go online.
 		if a.capabilities()[capability.Egress] {
-			lines = append(lines, "- 沙箱内**可以**联网（network=on-request）：本租户已开通出网，`exec` 调用要带 `egress: true` "+
-				"才会放行，不带就按断网执行。同样受 rootfs 只读限制（`pip install` 到系统目录会失败，用 `--user`）。")
+			lines = append(lines, "- The sandbox **can** reach the network (network=on-request): this tenant has egress enabled, and an `exec` call must carry `egress: true` "+
+				"to actually get it; without it the call runs offline. The read-only rootfs applies here too (`pip install` into system directories fails; use `--user`).")
 		} else {
-			lines = append(lines, "- 沙箱内**不能**联网（network=on-request 但本租户未开通 net.egress）："+
-				"`exec` 传 egress 也会被拒绝。需要联网请让管理员开通，或改用工作流的 http 节点。")
+			lines = append(lines, "- The sandbox **cannot** reach the network (network=on-request, but this tenant does not have net.egress): "+
+				"passing egress to `exec` is rejected as well. Ask an administrator to enable it, or use the http node of a workflow.")
 		}
 	default:
-		lines = append(lines, "- 能否联网未知（sandboxd 未给出声明）：要联网时先跟用户确认，不要自行假设。")
+		lines = append(lines, "- Whether the sandbox can reach the network is unknown (sandboxd gave no declaration): confirm with the user before writing networked code; do not assume.")
 	}
 
 	// Browser: available or not, both are facts, stated separately.
@@ -839,33 +934,33 @@ func (a *agentImpl) sandboxNotes() string {
 		case !b.Enabled:
 			reason := strings.TrimSpace(b.Error)
 			if reason == "" {
-				reason = "未启用"
+				reason = "disabled"
 			}
-			lines = append(lines, "- 浏览器：**不可用**（"+reason+"）。这是工具能力的问题，不是目标网站的问题。")
+			lines = append(lines, "- Browser: **unavailable** ("+reason+"). This is a tool capability problem, not a problem with the target site.")
 		default:
-			mode := "只能无头（本部署没有显示环境）"
+			mode := "headless only (this deployment has no display environment)"
 			switch {
 			case b.HeadedAvailable && b.HeadlessDefault:
-				mode = "默认无头；需要人看见窗口时 open 传 headed=true（本部署允许）"
+				mode = "headless by default; pass headed=true to open when a human needs to see the window (allowed in this deployment)"
 			case b.HeadedAvailable:
-				mode = "默认有头（可见窗口）"
+				mode = "headed by default (visible window)"
 			}
 			ver := strings.TrimSpace(b.Version)
 			if ver == "" {
 				ver = b.Engine
 			}
-			lines = append(lines, "- 浏览器：可用（"+ver+"；"+mode+"）。"+
-				"看页面用 snapshot（无障碍树 + ref），点/输入用 ref；截图只落盘给人看，你自己读不到图像。")
+			lines = append(lines, "- Browser: available ("+ver+"; "+mode+"). "+
+				"Use snapshot to read a page (accessibility tree + refs) and refs to click/type; screenshots are written to disk for humans - you cannot read images yourself.")
 		}
 	}
 
 	// The snapshot may be stale: say so, so the model knows whether to still trust this environment description.
 	if info.Err != "" {
-		stale := "以上为最近一次成功拉取的快照"
+		stale := "the above is the last successfully fetched snapshot"
 		if !info.FetchedAt.IsZero() {
-			stale = fmt.Sprintf("以上为 %s 的快照", info.FetchedAt.Format(time.RFC3339))
+			stale = fmt.Sprintf("the above is a snapshot from %s", info.FetchedAt.Format(time.RFC3339))
 		}
-		lines = append(lines, fmt.Sprintf("- 注意：最近一次刷新失败（%s），%s，可能已过期。", info.Err, stale))
+		lines = append(lines, fmt.Sprintf("- Note: the latest refresh failed (%s); %s and may be out of date.", info.Err, stale))
 	}
 
 	return strings.Join(lines, "\n")
@@ -933,12 +1028,12 @@ func (a *agentImpl) capabilityNotes() string {
 		// Both kinds can be created, no reminder needed
 	case has("create_own_skill") && !skillWritable:
 		// The tool is there but the owner gate is closed: state the reason, so the model does not keep retrying (matching the gate)
-		lines = append(lines, "- 你**当前不能**改**自己的私有**技能：本 agent 已「废弃」。"+
-			"用户需要改动时，请告知由管理员把该 agent 切回「正常」状态。")
+		lines = append(lines, "- You **currently cannot** modify **your own private** skills: this agent is deprecated. "+
+			"If the user needs a change, ask an administrator to switch the agent back to the normal state.")
 	case has("create_own_skill"):
-		lines = append(lines, "- 你可建/改**自己的私有**技能（create_own_skill）；**没有**共享技能的权限，用户要共享技能时如实说明。")
+		lines = append(lines, "- You may create/modify **your own private** skills (create_own_skill); you do **not** have the shared-skill permission, so say so plainly when the user asks for a shared skill.")
 	default:
-		lines = append(lines, "- 你**没有**创建/修改技能的权限。**不要用文件工具在会话工作区里造 SKILL.md 或 skills/ 目录**——不会被系统登记、也不生效；用户需要新技能，请告知由管理员为其开启 `create_own_skill`。")
+		lines = append(lines, "- You do **not** have permission to create or modify skills. **Do not use file tools to create SKILL.md or a skills/ directory inside the session workspace** - it will not be registered and has no effect; if the user needs a new skill, ask an administrator to enable `create_own_skill` for this agent.")
 	}
 
 	if !has("create_agent") {
@@ -946,9 +1041,9 @@ func (a *agentImpl) capabilityNotes() string {
 			// The supervisor's write gate lets it edit files inside any **normal-state** agent's definition domain (AGENT.md included,
 			// see D6 in tools/gate.go: the boundary follows "entity existence", not file type); here only "create / register" is reminded
 			// to go through the meta tools - do not phrase it as "AGENT.md cannot be edited", which would contradict the gate.
-			lines = append(lines, "- 新建 agent 或改 agent 名要走 `create_agent` / `update_agent`；不要用文件工具凭空造 `agents/` 目录（不会被登记）。改已有 agent 的定义域文件（含 AGENT.md）仍可用文件工具，路径带 `/` 前缀。")
+			lines = append(lines, "- Creating an agent or renaming one goes through `create_agent` / `update_agent`; do not conjure an `agents/` directory with file tools (it will not be registered). Editing the definition-domain files of an existing agent (AGENT.md included) is still fine with file tools - use paths with a `/` prefix.")
 		} else {
-			lines = append(lines, "- 你**不能**创建/修改 agent 定义（AGENT.md），也**不要**用文件工具造 agents/ 目录（不生效）。需要新建/修改 agent，请让管理员或超级智能体操作。")
+			lines = append(lines, "- You **cannot** create or modify agent definitions (AGENT.md), and you must **not** create an agents/ directory with file tools (it has no effect). Ask an administrator or the super agent when an agent needs to be created or changed.")
 		}
 	}
 
@@ -957,16 +1052,16 @@ func (a *agentImpl) capabilityNotes() string {
 	// Phrased as "criterion + closing action" rather than "use with care": the latter makes the model too timid to use them when it
 	// should, and the task fails outright - the point of the reminder is to try one-shot means first, not to avoid resident tools.
 	if has("shell") || has("browser") {
-		lines = append(lines, "- 常驻工具要算成本：`shell` / `browser` 会在沙箱里起**常驻进程**"+
-			"（有会话时跨对话保留，占内存与进程）。默认先用一次性手段（`exec` / `run_skill_script` / 读文件）；"+
-			"只有需要**跨调用的状态**（cwd / 环境变量 / 后台任务 / 登录态 / 多步页面交互）时才开，"+
-			"用完立刻收掉：`shell` 传 `kill: true`，`browser` 传 `action: close`。")
+		lines = append(lines, "- Resident tools cost something: `shell` / `browser` start a **resident process** in the sandbox "+
+			"(kept across conversations while a session lives, holding memory and a process). Prefer one-shot means first (`exec` / `run_skill_script` / reading files); "+
+			"open them only when you need **state across calls** (cwd / environment variables / background jobs / a logged-in session / multi-step page interaction), "+
+			"and close them as soon as you are done: pass `kill: true` to `shell`, `action: close` to `browser`.")
 	}
 
 	if len(lines) == 0 {
 		return ""
 	}
-	return "能力边界（按你当前授权生成，勿凭猜测承诺）：\n" + strings.Join(lines, "\n")
+	return "Capability boundaries (generated from your current grants; never promise beyond them):\n" + strings.Join(lines, "\n")
 }
 
 // skillCatalog builds the skill list text injected into this agent (name + ownership + description).
@@ -989,25 +1084,25 @@ func (a *agentImpl) skillCatalog() string {
 	// it has no skill to inject and can only find them through list_skills (which is what the switch is for).
 	if len(list) == 0 {
 		if a.skillDiscovery {
-			return "你还未绑定任何技能。如需其它技能，可用 list_skills 查看全部可见技能；要用某个技能请 use_skill（只查看内容用 read_skill）。"
+			return "No skill is bound to you yet. To find others, use list_skills to see every visible skill; to work by a skill use use_skill (use read_skill to only read its body)."
 		}
 		return ""
 	}
 
 	var b strings.Builder
-	b.WriteString("已绑定给本 agent 的 skills（这里只有名字与描述，正文与工具都按需取）：\n" +
-		"  - 要按某个技能做事：先 use_skill <名> —— 它返回正文，并让该技能声明的工具从下一轮起可用；\n" +
-		"  - 只想看看内容：用 read_skill <名> —— 不会激活任何工具。\n")
+	b.WriteString("Skills bound to this agent (names and descriptions only; bodies and tools are fetched on demand):\n" +
+		"  - To work by a skill: use use_skill <name> first - it returns the body and makes the tools that skill declares available from the next round on;\n" +
+		"  - To only read it: use read_skill <name> - no tool is activated.\n")
 	truncated := false
 	for _, s := range list {
-		scope := "私有"
+		scope := "private"
 		if s.Scope == tools.SkillScopeTenant {
-			scope = "共享"
+			scope = "shared"
 		}
 		// Note: deprecated skills never appear here - ListInjected already filters status=3.
 		desc := strings.TrimSpace(s.Description)
 		if desc == "" {
-			desc = "无描述"
+			desc = "(no description)"
 		}
 		line := fmt.Sprintf("- %s [%s]: %s\n", s.Name, scope, desc)
 		if b.Len()+len(line) > maxSkillPromptChars {
@@ -1017,12 +1112,12 @@ func (a *agentImpl) skillCatalog() string {
 		b.WriteString(line)
 	}
 	if truncated {
-		b.WriteString("...（更多已绑定 skill 已省略，可用 list_skills 查看全部）")
+		b.WriteString("...(more bound skills omitted; use list_skills to see them all)")
 	}
 	// With discovery on, tell the model plainly that "there are other skills to look up", otherwise it will not call list_skills.
 	// The truncation branch already mentioned list_skills once, so do not repeat it.
 	if a.skillDiscovery && !truncated {
-		b.WriteString("\n如需其它技能，可用 list_skills 查看全部可见技能。")
+		b.WriteString("\nTo find other skills, use list_skills to see every visible one.")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -1040,15 +1135,15 @@ func (a *agentImpl) callableCatalog() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("可调用协作的 agent（需要时用 call_agent，参数 agent_name）：\n")
+	b.WriteString("Agents you may call for collaboration (use call_agent with the agent_name argument when needed):\n")
 	for _, info := range list {
 		desc := strings.TrimSpace(info.Description)
 		if desc == "" {
-			desc = "无描述"
+			desc = "(no description)"
 		}
 		line := fmt.Sprintf("- %s: %s\n", info.Name, desc)
 		if b.Len()+len(line) > maxAgentPromptChars {
-			b.WriteString("...（更多可调用 agent 已省略）")
+			b.WriteString("...(more callable agents omitted)")
 			break
 		}
 		b.WriteString(line)
@@ -1057,7 +1152,7 @@ func (a *agentImpl) callableCatalog() string {
 }
 
 func (a *agentImpl) defaultSystemPrompt() string {
-	return fmt.Sprintf("你是 agent %s，请根据用户需求，调用可用工具完成任务。", a.instance.Name)
+	return fmt.Sprintf("You are agent %s. Call the available tools to complete the task the user asks for.", a.instance.Name)
 }
 
 // Session memory caps: read the latest 50 rounds, 256 KiB in total at most; keep only the latest 100 rounds on write

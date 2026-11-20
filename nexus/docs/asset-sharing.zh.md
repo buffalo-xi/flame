@@ -45,8 +45,8 @@ P0 规则：
 - **几乎任何实体都能上架 / 导出**：受保护名（`main` / `skill-authoring` / `agent-authoring` /
   `custom-tool-authoring`）、超权智能体、废弃态一概不阻断，只以 `warnings` 提示。
   内容与身份分开处理 —— `agent_relations` 不随包走（跨租户无法重映射）；而
-  `is_supervisor` / `tools_unrestricted` / `skill_discovery` 三个开关**随包走**（见 §7、§12.1）：
-  它们描述「这个智能体怎么跑」，装完按包生效并在 `warnings` 里点名，不静默降权。
+  `is_supervisor` / `tools_unrestricted` / `skill_discovery` 三个开关与默认回复语言 `default_language` **随包走**
+  （见 §7、§12.1）：它们描述「这个智能体怎么跑」，装完按包生效并在 `warnings` 里点名，不静默降权。
 - **私有技能**（`tenants/<schema>/agents/<agent>/skills/<name>/`）**只能随所属智能体上架 / 导出**：
   - 随智能体走时保留归属 —— `skills/` 整棵目录进包，元数据进 `payload.private_skills`，
     安装时为每个技能重建一行（新 id、`agent_id` = 新 agent），连同它自己的 `skill_tool_grants`；
@@ -199,7 +199,7 @@ P0 规则：
    - **随包附带的工具**（`_deps/custom_tools/**`）：智能体 / 技能装完再装它们，同样是启用态；
      目标已有同名工具则**不覆盖**（保留本地脚本与配置），缺 `sandbox.exec` / `net.egress` 则跳过，
      全部只进 `warnings`，不让整次安装失败
-   - `agent`：`is_supervisor` / `tools_unrestricted` / `skill_discovery` **按包设置**（老资产没这些字段 → 取 `false`；覆盖导入则沿用目标既有值），`status` 默认 1（只接受 1 / 3）
+   - `agent`：`is_supervisor` / `tools_unrestricted` / `skill_discovery` **按包设置**（老资产没这些字段 → 取 `false`；覆盖导入则沿用目标既有值），`default_language` 同样按包设置（BCP-47 字符串，空串表示「未配置」，老资产没有该字段时覆盖导入沿用目标既有值），`status` 默认 1（只接受 1 / 3）
    - 授权重写：`skill_tool_grants` / `agent_tool_grants` 逐条重建；`agent_skill_bindings` 只绑「目标租户里同名且未废弃的租户级技能」，其余丢弃（私有技能天然属于它的 agent，不需要绑定）
    - `agent_relations` **P0 不复制**（它表达「谁能调谁」，跨租户无法重映射）
    - 智能体与工作流共用一个名字空间：目标租户已有同名 workflow 时同样按重名处理（409 + 建议名）
@@ -305,6 +305,10 @@ files/<rel>    快照里的每个文件（相对路径原样）
 会在目标租户装出一个行为不同的副本。导入时按包设置，`warnings` 里会明说「已按包设为超级
 智能体」；老版本的包没有这些字段时，覆盖导入沿用目标既有值、新建取 `false`（不能断言成
 `false`，否则一次覆盖就静默降权）。
+
+`payload.default_language` 同理：它是智能体定义的一部分（发布时随版本冻结），不带出去就会在
+目标租户装出一个「作者配了中文、装上却回英文」的副本。它是 BCP-47 字符串而不是布尔值 ——
+空串表示「未配置」；老版本的包整段没有这个字段时，覆盖导入沿用目标既有值。
 
 ### 12.2 导入端（不信上游）
 

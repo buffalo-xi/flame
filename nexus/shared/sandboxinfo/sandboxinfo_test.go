@@ -218,10 +218,10 @@ func TestOS(t *testing.T) {
 		env  Environment
 		want string
 	}{
-		{"linux os-release", Environment{Text: "系统: Debian GNU/Linux 12\nPython 版本: 3.13"}, "linux"},
-		{"windows host", Environment{Text: "系统: windows/amd64"}, "windows"},
-		{"probe failed -> unknown", Environment{Text: "系统: windows/amd64", Error: "boom"}, ""},
-		{"no system line -> unknown", Environment{Text: "Python 版本: 3.13"}, ""},
+		{"linux os-release", Environment{Text: "OS: Debian GNU/Linux 12\nPython version: 3.13"}, "linux"},
+		{"windows host", Environment{Text: "OS: windows/amd64"}, "windows"},
+		{"probe failed -> unknown", Environment{Text: "OS: windows/amd64", Error: "boom"}, ""},
+		{"no system line -> unknown", Environment{Text: "Python version: 3.13"}, ""},
 		{"empty -> unknown", Environment{}, ""},
 	}
 	for _, c := range cases {

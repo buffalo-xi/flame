@@ -15,8 +15,9 @@ func digest(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// DraftChanged 是「当前版本 + 是否有未发布改动」的判据：口径错一个方向就会说反话 ——
-// 说「已发布」而线上是旧的（危险），或说「有改动」而其实一致（只是让人白点一次发布）。
+// DraftChanged is the criterion for "the current version + whether the draft has unreleased changes": getting the rule
+// backwards in one direction speaks a lie — saying "released" while production runs the old one (dangerous), or saying
+// "changed" when it actually matches (which only makes someone click release for nothing).
 func TestDraftChanged(t *testing.T) {
 	ctx := context.Background()
 	st := storage.NewFilesystemStorage(t.TempDir())
@@ -41,38 +42,38 @@ func TestDraftChanged(t *testing.T) {
 		t.Fatalf("DraftChanged = %v", err)
 	}
 	if changed {
-		t.Fatal("草稿与清单一致时应为 false")
+		t.Fatal("draft matching the file list should be false")
 	}
 
-	// 内容不同 → 有改动
+	// Different content -> changed
 	write("docs/spec.md", "b2")
 	if changed, _ = DraftChanged(ctx, st, dir, files, nil); !changed {
-		t.Fatal("文件内容变了必须是 true（否则界面会谎称已发布）")
+		t.Fatal("changed file content must be true (otherwise the UI claims it is released)")
 	}
 	write("docs/spec.md", "b")
 
-	// 多一个文件 → 有改动
+	// One extra file -> changed
 	write("docs/extra.md", "x")
 	if changed, _ = DraftChanged(ctx, st, dir, files, nil); !changed {
-		t.Fatal("草稿多出文件必须是 true")
+		t.Fatal("an extra file in the draft must be true")
 	}
 	if err := st.Delete(ctx, dir+"/docs/extra.md"); err != nil {
 		t.Fatal(err)
 	}
 
-	// 少一个文件（清单里有、草稿里没有）→ 有改动
+	// One missing file (in the list, not in the draft) -> changed
 	removed := files[:1]
 	if changed, _ = DraftChanged(ctx, st, dir, removed, nil); !changed {
-		t.Fatal("版本里有、草稿里没有的文件必须是 true")
+		t.Fatal("a file listed in the version but missing from the draft must be true")
 	}
 
-	// 空清单 + 空目录 → 一致
+	// Empty list + empty directory -> matching
 	empty := storage.NewFilesystemStorage(t.TempDir())
 	if changed, _ = DraftChanged(ctx, empty, "tenants/t0/tools/none", nil, nil); changed {
-		t.Fatal("两边都空应为 false")
+		t.Fatal("both sides empty should be false")
 	}
 
-	// skipDirs：被排除的目录既不参与比较、也不算多文件
+	// skipDirs: an excluded directory neither takes part in the comparison nor counts as an extra file
 	write("skills/old/SKILL.md", "deprecated")
 	withSkip := append([]assetpack.FileEntry{}, files...)
 	changed, err = DraftChanged(ctx, st, dir, withSkip, []string{"skills/old"})
@@ -80,6 +81,6 @@ func TestDraftChanged(t *testing.T) {
 		t.Fatalf("DraftChanged = %v", err)
 	}
 	if changed {
-		t.Fatal("被排除的目录不应算改动（否则废弃私有技能会让 agent 永远显示「有改动」）")
+		t.Fatal("an excluded directory must not count as changed (otherwise a deprecated private skill keeps the agent showing unreleased changes forever)")
 	}
 }

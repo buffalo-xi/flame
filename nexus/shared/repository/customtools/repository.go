@@ -1,11 +1,11 @@
-// Package customtools 租户自定义自定义工具的存取（表 {schema}.custom_tools）。
+// Package customtools stores tenant-defined custom tools (table {schema}.custom_tools).
 //
-// 与 plugins 仓储的分工：
-//   - plugins：磁盘上发现的实现 + 每租户一份配置（代码不在库里）
-//   - customtools：租户自己的工具定义（元数据在库里、代码在盘上 tools/<name>/）
+// Division of labour with the plugins repository:
+//   - plugins: implementations discovered on disk plus one configuration per tenant (the code is not in the database)
+//   - customtools: the tenant's own tool definitions (metadata in the database, code on disk under tools/<name>/)
 //
-// 所有方法都以 schema 定位表：这张表在**租户库**里（与 skills / plugins 同级），
-// 不是平台库 —— 自定义工具是租户自己的业务逻辑，不是平台能力。
+// Every method locates the table by schema: this table lives in the **tenant database** (alongside skills / plugins), not
+// the platform one — a custom tool is the tenant's own business logic, not a platform capability.
 package customtools
 
 import (
@@ -20,11 +20,11 @@ import (
 
 const tableName = "custom_tools"
 
-// normalizeRequiredJSON 把 NOT NULL 的 jsonb 列补成合法空值。
+// normalizeRequiredJSON fills the NOT NULL jsonb columns with a valid empty value.
 //
-// nil 会被 xsql.JSONB 写成 SQL NULL，直接撞 NOT NULL 约束；报错是数据库层的
-// 「null value in column ...」，看的人根本不知道是「TOOL.json 少写一个键」。
-// 写库前统一兜一次：参数 schema / 配置声明 / 配置值三列都不允许 NULL。
+// A nil is written as SQL NULL by xsql.JSONB and trips the NOT NULL constraint directly; the error is the database-level
+// "null value in column ...", from which a reader cannot tell that "a key was missing in TOOL.json". Normalise once
+// before writing: none of the three columns (argument schema / config declaration / config values) may be NULL.
 func normalizeRequiredJSON(t *models.CustomTool) {
 	if t.Parameters.Data == nil {
 		t.Parameters = xsql.JSONB{Data: []byte(`{"type":"object","properties":{}}`)}
@@ -37,27 +37,27 @@ func normalizeRequiredJSON(t *models.CustomTool) {
 	}
 }
 
-// columns 列清单集中一处：顺序与 scan 一一对应，改表时只动这里。
+// columns is the column list in one place: its order maps one-to-one onto scan, and a table change only touches here.
 const columns = `id, name, display_name, description, parameters, output, lang, entry,
 	timeout_ms, max_output_bytes, egress, config_fields, configs, status, created_by, created_at, updated_at`
 
-// Repository 自定义工具仓储。
+// Repository is the custom tool repository.
 type Repository interface {
-	// List 列出本租户全部自定义工具（含非正常态），按 name 升序。
+	// List lists every custom tool of the tenant (abnormal states included), by name ascending.
 	List(schema string) ([]models.CustomTool, error)
-	// ListEnabled 只列 status=1 的（目录/执行用）。
+	// ListEnabled lists only status=1 (for the catalogue / execution).
 	ListEnabled(schema string) ([]models.CustomTool, error)
-	// Get 按 name 取；不存在返回 sql.ErrNoRows。
+	// Get fetches by name; missing returns sql.ErrNoRows.
 	Get(schema, name string) (*models.CustomTool, error)
-	// Create 插入一行；ID 为空时自动生成。
+	// Create inserts one row; an empty ID is generated.
 	Create(schema string, t *models.CustomTool) error
-	// Update 按 name 覆盖可编辑列（不动 created_*）。
+	// Update overwrites the editable columns by name (created_* is untouched).
 	Update(schema string, t *models.CustomTool) error
-	// Delete 按 name 删除元数据（盘上的代码由调用方决定是否一并删）。
+	// Delete deletes the metadata by name (whether the code on disk goes with it is the caller's decision).
 	Delete(schema, name string) error
 }
 
-// NewRepository 创建仓储。
+// NewRepository creates the repository.
 func NewRepository() Repository { return &postgresRepository{} }
 
 type postgresRepository struct{}
@@ -159,14 +159,16 @@ func (r *postgresRepository) Delete(schema, name string) error {
 	return err
 }
 
-// newID 生成 UUIDv4。
+// newID generates a UUIDv4.
 //
-// 自建而不是引依赖：全项目只此一处需要随机 id，加一个 uuid 包不划算。
+// Hand-rolled rather than taking a dependency: this is the only place in the project that needs a random id, and pulling
+// in a uuid package is not worth it.
 func newID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// 随机源失败时退回时间无关的常量会让主键冲突；这里直接 panic 更诚实：
-		// 加密随机源不可用的进程本来也不该继续提供写服务。
+		// Falling back to a time-unrelated constant when the random source fails would collide on the primary key;
+		// panicking here is more honest: a process whose cryptographic random source is unusable should not be serving
+		// writes anyway.
 		panic(fmt.Sprintf("customtools: generate id: %v", err))
 	}
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4

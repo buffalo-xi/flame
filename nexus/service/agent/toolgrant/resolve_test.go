@@ -105,7 +105,7 @@ func TestResolveGrantSemantics(t *testing.T) {
 			},
 			want:         []string{"read_file"},
 			wantDegraded: true,
-			wantWarn:     "allow 授权本轮全部未生效",
+			wantWarn:     "no effect in this run",
 		},
 		{
 			name: "skill has no dependencies + unrestricted: still required only (the switch does not look at allow either)",
@@ -116,7 +116,7 @@ func TestResolveGrantSemantics(t *testing.T) {
 			unrestricted: true,
 			want:         []string{"read_file"},
 			wantDegraded: true,
-			wantWarn:     "allow 授权本轮全部未生效",
+			wantWarn:     "no effect in this run",
 		},
 		{
 			name: "with dependencies: required ∪ (candidates ∩ allow) - idleAllow was not declared, so it stays out",
@@ -321,7 +321,7 @@ func TestResolveTruncationPrefersRequired(t *testing.T) {
 	if !reflect.DeepEqual(res.FinalNames, want) {
 		t.Errorf("tools after truncation = %v, want %v", res.FinalNames, want)
 	}
-	if !strings.Contains(strings.Join(res.Warnings, "\n"), "截断") {
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "truncated") {
 		t.Errorf("truncation should warn, got %v", res.Warnings)
 	}
 }
@@ -349,8 +349,8 @@ func TestResolveInjectsCustomTool(t *testing.T) {
 		t.Fatalf("effective tools = %v, want %v (a required grant on a custom tool is always injected)", res.FinalNames, want)
 	}
 	for _, w := range res.Warnings {
-		if strings.Contains(w, "已不存在") {
-			t.Errorf("it must not report \"已不存在\" (that means AllTools is missing custom tools again): %s", w)
+		if strings.Contains(w, "no longer exists") {
+			t.Errorf("it must not report \"no longer exists\" (that means AllTools is missing custom tools again): %s", w)
 		}
 	}
 }

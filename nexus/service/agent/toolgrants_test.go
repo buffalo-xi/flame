@@ -189,7 +189,7 @@ func TestGrantExplicitRequiredOverridesAuto(t *testing.T) {
 	if kind != models.GrantKindRequired {
 		t.Fatalf("an explicit required must not be auto-judged as allow, got %q", kind)
 	}
-	if !strings.Contains(reason, "未降级") {
+	if !strings.Contains(reason, "not downgraded") {
 		t.Errorf("the reason should say it stays resident and was not downgraded: %q", reason)
 	}
 }
@@ -376,7 +376,7 @@ func TestGrantViewsMarksEffectiveness(t *testing.T) {
 		t.Errorf("required should always be effective and not pending: %+v", views[2])
 	}
 	// 4) deny: it must not be marked pending even when a skill declares it - it is "explicitly forbidden", not "waiting to take effect"
-	if views[3].Effective || views[3].Pending || !strings.Contains(views[3].Note, "拒绝") {
+	if views[3].Effective || views[3].Pending || !strings.Contains(views[3].Note, "Explicit deny") {
 		t.Errorf("deny should be non-effective, non-pending, and state that it is an explicit refusal: %+v", views[3])
 	}
 }

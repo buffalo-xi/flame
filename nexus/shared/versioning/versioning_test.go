@@ -8,9 +8,9 @@ import (
 	"flame/nexus/shared/storage"
 )
 
-// 载入旧 agent 版本时，草稿里有、版本里没有的私有技能必须被点名保留。
-// 漏掉它们就会被当成「版本外的多余文件」删掉 —— 而它们是独立实体（skills 表有行），
-// 删了目录就变成「有行、没正文」的空技能。
+// When loading an old agent version, a private skill that exists in the draft but not in the version must be called out
+// and kept. Missing it would let it be deleted as "an extra file outside the version" — while it is an entity of its own
+// (it has a row in the skills table), and deleting the directory turns it into an empty skill of "a row but no body".
 func TestKeptPrivateSkills(t *testing.T) {
 	st := storage.NewFilesystemStorage(t.TempDir())
 	ctx := context.Background()
@@ -19,27 +19,27 @@ func TestKeptPrivateSkills(t *testing.T) {
 	for _, name := range []string{"verse", "lyric"} {
 		key := draft + "/skills/" + name + "/SKILL.md"
 		if err := st.WriteFile(ctx, key, []byte("# "+name)); err != nil {
-			t.Fatalf("准备 %s 失败: %v", key, err)
+			t.Fatalf("prepare %s: %v", key, err)
 		}
 	}
 
-	// 版本里只冻结了 verse
+	// Only verse was frozen into the version
 	got, err := KeptPrivateSkills(ctx, st, draft, []byte(`[{"name":"verse"}]`))
 	if err != nil {
-		t.Fatalf("KeptPrivateSkills 失败: %v", err)
+		t.Fatalf("KeptPrivateSkills: %v", err)
 	}
 	if want := []string{"lyric"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("KeptPrivateSkills = %v, want %v", got, want)
 	}
 
-	// skills 为空快照：两个都算「版本里没有」
+	// Empty skills snapshot: both count as "not in the version"
 	got, _ = KeptPrivateSkills(ctx, st, draft, []byte(`[]`))
 	if want := []string{"lyric", "verse"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("空快照 KeptPrivateSkills = %v, want %v", got, want)
+		t.Fatalf("empty snapshot KeptPrivateSkills = %v, want %v", got, want)
 	}
 
-	// 草稿压根没有 skills/ 目录：没有要保留的，也不该报错
+	// The draft has no skills/ directory at all: nothing to keep, and it must not fail
 	if got, err := KeptPrivateSkills(ctx, st, "tenants/t0/agents/none", []byte(`[]`)); err != nil || got != nil {
-		t.Fatalf("无 skills 目录应返回 (nil, nil)，实际 (%v, %v)", got, err)
+		t.Fatalf("no skills directory should return (nil, nil), got (%v, %v)", got, err)
 	}
 }

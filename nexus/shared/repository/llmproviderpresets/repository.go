@@ -2,26 +2,28 @@ package repository
 
 import "flame/nexus/shared/models"
 
-// LLMProviderPresetRepository LLM服务商预设仓库接口。
+// LLMProviderPresetRepository is the LLM provider preset repository interface.
 //
-// 预设是**系统级全局共享**数据（platform.llm_provider_presets），由平台管理员维护；
-// 租户侧只是读取并"复制填充"到自己的服务商记录里，不存在外键引用。
+// A preset is **system-level global shared** data (platform.llm_provider_presets) maintained by the platform admin; the
+// tenant side only reads it and "copies it over" into its own provider record, with no foreign key in between.
 type LLMProviderPresetRepository interface {
-	// ListAll 获取所有LLM服务商预设
+	// ListAll lists every LLM provider preset.
 	ListAll() ([]models.LLMProviderPreset, error)
-	// Create 新增预设，返回生成的 id（程序生成 uuid，表上无 DB 默认值）
+	// Create adds a preset and returns the generated id (the uuid is generated in the program; the table has no database
+	// default).
 	Create(in *PresetInput) (string, error)
-	// Update 按 id 覆盖可编辑字段，返回受影响行数（0 = 该预设不存在）
+	// Update overwrites the editable fields by id, returning the number of rows affected (0 = no such preset).
 	Update(id string, in *PresetInput) (int64, error)
-	// Delete 按 id 删除，返回受影响行数（0 = 该预设不存在）
+	// Delete deletes by id, returning the number of rows affected (0 = no such preset).
 	Delete(id string) (int64, error)
 }
 
-// PresetInput 可写入字段。
+// PresetInput holds the writable fields.
 //
-// 与 models.LLMProviderPreset 分开：那个用 xsql.String/xsql.Bool，是"读"用的模型；
-// 写侧只需要普通 Go 值，icon / description 传空串表示写 NULL。
-// extra_params 不在其中：模型与读取都没用到它，新增走表默认 {}，编辑不动该列。
+// Kept apart from models.LLMProviderPreset: that one uses xsql.String/xsql.Bool and is the model for "reading"; the write
+// side only needs plain Go values, and an empty icon / description means writing NULL.
+// extra_params is not among them: neither the model nor the reads use it, so a new row takes the table default {} and an
+// edit leaves the column alone.
 type PresetInput struct {
 	Name        string
 	Icon        string

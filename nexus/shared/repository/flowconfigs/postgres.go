@@ -7,23 +7,23 @@ import (
 	"flame/nexus/shared/db"
 )
 
-// PostgresRepository PostgreSQL 实现的 flow_configs 存储
+// PostgresRepository is the PostgreSQL implementation of flow_configs storage.
 type PostgresRepository struct{}
 
-// NewPostgresRepository 创建 PostgreSQL 存储实例
+// NewPostgresRepository creates a PostgreSQL storage instance.
 func NewPostgresRepository() *PostgresRepository {
 	return &PostgresRepository{}
 }
 
-// tableName 返回 platform.flow_configs 全名
+// tableName returns the full name of platform.flow_configs.
 func tableName() string {
 	return config.Cfg.Database.PlatformSchema + ".flow_configs"
 }
 
-// columns 查询列（不含 tenant_id）
+// columns are the selected columns (tenant_id excluded).
 const columns = "max_timeout, max_recursion_depth, max_node_count, max_exec_count, max_loop_times, max_run_records, max_session_records"
 
-// Get 获取指定租户的配置行，无该行时返回 nil
+// Get returns the configuration row of a tenant, or nil when there is none.
 func (r *PostgresRepository) Get(tenantID string) (*FlowConfig, error) {
 	var cfg FlowConfig
 	err := db.DB.QueryRow(
@@ -43,7 +43,7 @@ func (r *PostgresRepository) Get(tenantID string) (*FlowConfig, error) {
 	return &cfg, nil
 }
 
-// Upsert 插入或更新指定租户的配置行
+// Upsert inserts or updates the configuration row of a tenant.
 func (r *PostgresRepository) Upsert(cfg *FlowConfig) error {
 	_, err := db.DB.Exec(
 		`INSERT INTO `+tableName()+` (

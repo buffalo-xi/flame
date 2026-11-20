@@ -2,7 +2,7 @@ package repository
 
 import "database/sql"
 
-// flowconfig 对应 platform.flow_configs 一行（NULL 用 sql.NullInt32 表达）
+// FlowConfig corresponds to one platform.flow_configs row (NULL is expressed with sql.NullInt32).
 type FlowConfig struct {
 	TenantID          string
 	MaxTimeout        sql.NullInt32
@@ -14,10 +14,10 @@ type FlowConfig struct {
 	MaxSessionRecords sql.NullInt32
 }
 
-// Repository flow_configs 存储接口
+// Repository is the flow_configs storage interface.
 type Repository interface {
-	// Get 获取指定租户的配置行，无该行时返回 nil
+	// Get returns the configuration row of a tenant, or nil when there is none.
 	Get(tenantID string) (*FlowConfig, error)
-	// Upsert 插入或更新指定租户的配置行
+	// Upsert inserts or updates the configuration row of a tenant.
 	Upsert(cfg *FlowConfig) error
 }

@@ -200,11 +200,11 @@ func ReleaseAgentVersion(c *gin.Context) {
 	var createdAt xsql.Time
 	err = tx.QueryRow(`INSERT INTO `+agentVersionTable(info.Schema)+`
 		(agent_id, version, name, description, config, tools_unrestricted, skill_discovery,
-		 files, skills, is_current, note, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10,NULLIF($11,'')::uuid)
+		 default_language, files, skills, is_current, note, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,true,$11,NULLIF($12,'')::uuid)
 		RETURNING created_at`,
 		inst.ID, next, inst.Name, inst.Description, inst.Config, inst.ToolsUnrestricted,
-		inst.SkillDiscovery, rawFiles, privates, note, info.ID).Scan(&createdAt)
+		inst.SkillDiscovery, inst.DefaultLanguage, rawFiles, privates, note, info.ID).Scan(&createdAt)
 	if err != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
@@ -283,12 +283,14 @@ func ApplyAgentVersion(c *gin.Context) {
 		rawFiles, rawSkills, rawConfig []byte
 		desc                           string
 		toolsUnrestricted, discovery   bool
+		defaultLanguage                string
 	)
 	err = tx.QueryRow(`SELECT files, COALESCE(skills,'[]'::jsonb), COALESCE(description,''),
-			COALESCE(config,'{}'::jsonb), COALESCE(tools_unrestricted,false), COALESCE(skill_discovery,false)
+			COALESCE(config,'{}'::jsonb), COALESCE(tools_unrestricted,false), COALESCE(skill_discovery,false),
+			COALESCE(default_language,'')
 		FROM `+agentVersionTable(info.Schema)+`
 		WHERE agent_id = $1 AND version = $2`, inst.ID, target).
-		Scan(&rawFiles, &rawSkills, &desc, &rawConfig, &toolsUnrestricted, &discovery)
+		Scan(&rawFiles, &rawSkills, &desc, &rawConfig, &toolsUnrestricted, &discovery, &defaultLanguage)
 	if errors.Is(err, sql.ErrNoRows) {
 		xhttp.ErrCode(c, "version.not_found", nil, "version not found", "")
 		return
@@ -327,9 +329,9 @@ func ApplyAgentVersion(c *gin.Context) {
 	// Metadata write-back: with the bodies alone the UI would still show "modified", because the description / config / private skill metadata would still differ.
 	if _, err := tx.Exec(`UPDATE `+info.Schema+`.agents
 		SET description = $2, config = $3, tools_unrestricted = $4, skill_discovery = $5,
-		    updated_at = now()
+		    default_language = NULLIF($6,''), updated_at = now()
 		WHERE id = $1`,
-		inst.ID, desc, rawConfig, toolsUnrestricted, discovery); err != nil {
+		inst.ID, desc, rawConfig, toolsUnrestricted, discovery, defaultLanguage); err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, "failed to write the agent metadata back: "+err.Error(), "")
 		return
 	}

@@ -100,6 +100,11 @@ func (c *agentCaller) Call(ctx context.Context, req tools.CallRequest) (string, 
 	if req.SessionID != "" {
 		sub["session_id"] = req.SessionID
 	}
+	// The caller's pinned output language travels with the chain: the callee's input is the JSON argument map above, which carries
+	// no language of its own, so dropping this here is exactly how a three-hop chain ends up answering in the wrong language.
+	if req.OutputLanguage != "" {
+		sub[core.OutputLanguageKey] = req.OutputLanguage
+	}
 	// The definition mode follows the parent: a production parent -> the child reads the released version; a debugging parent -> the child
 	// reads the draft. Without passing it through, a child agent runs the live version while debugging, which easily misleads during triage.
 	if req.DefinitionMode.IsCurrent() {

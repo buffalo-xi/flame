@@ -1,6 +1,6 @@
 package repository
 
-// NewRepository 创建服务端点仓库实例
+// NewRepository creates the service endpoint repository instance.
 func NewRepository() SvcEndpointRepository {
 	return NewPostgresRepository()
 }

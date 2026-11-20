@@ -5,14 +5,14 @@ import (
 	"time"
 )
 
-// LastActivity 估算某个目录的「最后活动时间」，供按时间清理的清扫逻辑使用。
+// LastActivity estimates the "last activity time" of a directory, for sweep logic that cleans up by age.
 //
-// 优先用目录自身的 ModTime；S3 的「目录」没有这个属性（Entry.ModTime 为零值，
-// 见 Entry 的注释），此时退回「子条目里最新的 ModTime」—— 对象存储上文件带
-// LastModified。两者都拿不到返回 false：调用方应据此**不删**，
-// 而不是把零值当成 1970 年，把整棵树当过期数据清掉。
+// It prefers the directory's own ModTime; an S3 "directory" has no such property (Entry.ModTime is the zero value, see the
+// Entry comment), in which case it falls back to the newest ModTime among the children — on object storage files do carry
+// LastModified. When neither is available it returns false, and the caller must therefore **not delete**, rather than
+// treating the zero value as 1970 and sweeping the whole tree away as expired data.
 //
-// self 必须是调用方 List(父目录) 时拿到的该目录条目（避免多一次 Stat）。
+// self must be the directory's own entry as returned by the caller's List(parent), saving one Stat.
 func LastActivity(ctx context.Context, st Storage, dir string, self Entry) (time.Time, bool) {
 	if !self.ModTime.IsZero() {
 		return self.ModTime, true

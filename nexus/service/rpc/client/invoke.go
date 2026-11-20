@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	agentcore "flame/nexus/service/agent/core"
 	"flame/nexus/service/flow/core"
 	"flame/nexus/shared/callchain"
 	"flame/nexus/shared/models"
@@ -14,7 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// InvokeError 携带 flow 错误码的调用错误，便于上层按类型分类处理。
+// InvokeError carries a flow error code so callers can dispatch on the category.
 type InvokeError struct {
 	Code string // flow.ErrCodeTimeout / ErrCodeCancel / ErrCodeAuth / ErrCodeConfig / ErrCodeConnection / ErrCodeOther
 	Err  error
@@ -23,15 +24,16 @@ type InvokeError struct {
 func (e *InvokeError) Error() string { return e.Err.Error() }
 func (e *InvokeError) Unwrap() error { return e.Err }
 
-// classifyInvokeError 将 Invoke 返回的错误映射到 flow 错误码。
-// 优先级：cancel > timeout > auth > config > connection > other；已分类的 InvokeError 透传。
+// classifyInvokeError maps an error returned by Invoke to a flow error code.
+// Priority: cancel > timeout > auth > config > connection > other; an already classified
+// InvokeError passes through unchanged.
 func classifyInvokeError(err error) error {
 	if err == nil {
 		return nil
 	}
 	var ie *InvokeError
 	if errors.As(err, &ie) {
-		return err // 已分类，透传
+		return err // already classified, pass through
 	}
 	msg := err.Error()
 	switch {
@@ -80,20 +82,21 @@ func isConnectionError(msg string) bool {
 	return false
 }
 
-// ToolResult 工具调用结果（已展平）
+// ToolResult is a flattened tool call result.
 type ToolResult struct {
-	// Content 文本形式的合并结果
+	// Content is the merged textual result.
 	Content string
-	// Structured 结构化结果（若 server 返回 structuredContent）
+	// Structured is the structured result (when the server returns structuredContent).
 	Structured any
-	// IsError 调用是否以错误结束
+	// IsError reports whether the call ended with an error.
 	IsError bool
 }
 
-// Invoke 高层调用入口：根据连接配置调用远端 RPC 工具。
-// - stdio：有状态子进程，复用进程池（sessionPool）以减少频繁启停开销。
-// - streamable_http：无状态短连接，使用一次性建连。
-// arguments 应为可 JSON 化的 map[string]any。
+// Invoke is the high-level entry point: it calls a remote RPC tool according to the connection config.
+//   - stdio: a stateful child process, reusing the process pool (sessionPool) to avoid start/stop churn;
+//   - streamable_http: a stateless short-lived connection, opened per call.
+//
+// arguments must be a JSON-serializable map[string]any.
 func Invoke(ctx context.Context, conn *models.RpcConnection, toolName string, arguments map[string]any) (*ToolResult, error) {
 	var session *ClientSession
 	var err error
@@ -122,16 +125,16 @@ func Invoke(ctx context.Context, conn *models.RpcConnection, toolName string, ar
 	return result, nil
 }
 
-// InvokeWithProgress 调用远端 RPC 工具，并订阅执行期间的 progress 通知。
-// onProgress 会被边推边调多次触发（与阻塞在 tools/call 上的主协程并发）。
+// InvokeWithProgress calls a remote RPC tool and subscribes to its progress notifications.
+// onProgress fires repeatedly while the call runs (concurrently with the main goroutine blocked on tools/call).
 //
-// 订阅的方式与 MCP 一致：在 params._meta.progressToken 里放一个本次调用唯一的 token，
-// 服务端据此决定是否推 notifications/progress（没有 token 就一帧都不该推）。
-// stdio 会话本身串行（一次一个 in-flight 请求），所以收到通知即可直接透传回调，
-// 不需要像 MCP stdio 那样按 token 建路由表。
+// Subscription works the way MCP does it: params._meta.progressToken carries a token unique to this call,
+// and the server uses it to decide whether to push notifications/progress (without a token it must push
+// nothing at all). A stdio session is serialized (one in-flight request), so a received notification can
+// be passed straight to the callback without the token-keyed routing table MCP stdio needs.
 //
-// 注意 onProgress 可能一次都不被调用：对端可能是尚未实现该字段的旧服务端
-// （它会忽略 _meta），也可能执行太快没推送。这不是错误。
+// Note that onProgress may never be called: the peer may be an older server that does not implement the
+// field yet (it ignores _meta), or the execution may finish too fast to push anything. Neither is an error.
 func InvokeWithProgress(ctx context.Context, conn *models.RpcConnection, toolName string, arguments map[string]any, onProgress func(*ProgressNotificationParams)) (*ToolResult, error) {
 	if arguments == nil {
 		arguments = map[string]any{}
@@ -155,7 +158,7 @@ func InvokeWithProgress(ctx context.Context, conn *models.RpcConnection, toolNam
 	}
 
 	raw, err := session.CallWithProgress(ctx, "tools/call",
-		callParams(toolName, arguments, uuid.NewString(), callchain.From(ctx)), onProgress)
+		callParams(toolName, arguments, uuid.NewString(), callchain.From(ctx), pinnedLanguage(ctx)), onProgress)
 	if closeSession {
 		_ = session.Close()
 	}
@@ -165,14 +168,31 @@ func InvokeWithProgress(ctx context.Context, conn *models.RpcConnection, toolNam
 	return flattenResult(raw)
 }
 
-// callParams 构造 tools/call 的 params（与 MCP 同一形状）。
+// pinnedLanguage returns the language to send as params._meta.language, or "".
 //
-// _meta 只承载控制意图，不承载业务参数：
-//   - progressToken 非空时放进 params._meta —— 订阅进度只由这一个字段表达，
-//     不再有 arguments.stream 之类的开关（它会把控制意图混进业务入参）；
-//   - callChain 是本进程的祖先链（ctx 携带），**原样带出、不追加自身**：
-//     对端据此判断「自己是否已在链上」，入站那一侧才负责追加。
-func callParams(toolName string, arguments map[string]any, progressToken any, callChain []string) map[string]any {
+// Only a **pinned** value travels: that field means "the caller demands this language", so forwarding a resolved default
+// would override the callee's own default (an English-default agent would pin every downstream agent to English). The
+// informational variant stays inside the process, where a flow reads it as the builtin `language`.
+func pinnedLanguage(ctx context.Context) string {
+	if !agentcore.LanguagePinnedFrom(ctx) {
+		return ""
+	}
+	tag, _ := agentcore.NormalizeOutputLanguage(agentcore.LanguageHintFrom(ctx))
+	return tag
+}
+
+// callParams builds the params of tools/call (same shape as MCP).
+//
+// _meta carries control intent only, never business arguments:
+//   - a non-empty progressToken goes into params._meta — progress subscription is expressed by that
+//     single field, there is no switch such as arguments.stream any more (it mixed control intent into
+//     the business input);
+//   - callChain is the ancestor chain of this process (carried by ctx) and is **passed through as is,
+//     without appending ourselves**: the peer uses it to tell whether it is already on the chain, and
+//     the inbound side is the one that appends;
+//   - language is the caller-pinned output language (see pinnedLanguage); the peer treats it as a pin,
+//     the same way an MCP / JSON-RPC client would.
+func callParams(toolName string, arguments map[string]any, progressToken any, callChain []string, language string) map[string]any {
 	if arguments == nil {
 		arguments = map[string]any{}
 	}
@@ -180,12 +200,15 @@ func callParams(toolName string, arguments map[string]any, progressToken any, ca
 		"name":      toolName,
 		"arguments": arguments,
 	}
-	meta := make(map[string]any, 2)
+	meta := make(map[string]any, 3)
 	if progressToken != nil {
 		meta["progressToken"] = progressToken
 	}
 	if len(callChain) > 0 {
 		meta[callchain.MetaKey] = callChain
+	}
+	if language != "" {
+		meta[agentcore.MetaLanguageKey] = language
 	}
 	if len(meta) > 0 {
 		p["_meta"] = meta
@@ -193,17 +216,17 @@ func callParams(toolName string, arguments map[string]any, progressToken any, ca
 	return p
 }
 
-// callTool 在会话上调用 tools/call 并展平结果（不订阅进度）。
+// callTool calls tools/call on the session and flattens the result (no progress subscription).
 func callTool(ctx context.Context, session *ClientSession, toolName string, arguments map[string]any) (*ToolResult, error) {
-	raw, err := session.Call(ctx, "tools/call", callParams(toolName, arguments, nil, callchain.From(ctx)))
+	raw, err := session.Call(ctx, "tools/call", callParams(toolName, arguments, nil, callchain.From(ctx), pinnedLanguage(ctx)))
 	if err != nil {
-		return nil, fmt.Errorf("调用工具 %s 失败: %w", toolName, err)
+		return nil, fmt.Errorf("failed to call tool %s: %w", toolName, err)
 	}
 	return flattenResult(raw)
 }
 
-// flattenResult 将 tools/call 的 result 展平为文本与结构化内容。
-// result 结构对齐 MCP CallToolResult：content 恒为数组 [{type,text}] + isError。
+// flattenResult flattens the tools/call result into text and structured content.
+// The result follows MCP CallToolResult: content is always an array of {type,text} plus isError.
 func flattenResult(raw json.RawMessage) (*ToolResult, error) {
 	var r struct {
 		Content           []json.RawMessage `json:"content"`
@@ -211,7 +234,7 @@ func flattenResult(raw json.RawMessage) (*ToolResult, error) {
 		StructuredContent json.RawMessage   `json:"structuredContent"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return nil, fmt.Errorf("解析工具结果失败: %w", err)
+		return nil, fmt.Errorf("failed to parse the tool result: %w", err)
 	}
 
 	out := &ToolResult{IsError: r.IsError}

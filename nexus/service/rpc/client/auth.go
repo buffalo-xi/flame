@@ -8,38 +8,38 @@ import (
 	"flame/tools/xsql"
 )
 
-// AuthConfig 对应 rpc_connections.auth JSONB 的结构
-// 示例：
+// AuthConfig mirrors the structure of the rpc_connections.auth JSONB column.
+// Examples:
 //
 //	{"type":"none"}
 //	{"type":"bearer","token":"xxxx"}
 //	{"type":"oauth","client_id":"...","client_secret":"..."}
 type AuthConfig struct {
 	Type         string            `json:"type"`          // none | bearer | oauth
-	Token        string            `json:"token"`         // bearer 用
-	ClientID     string            `json:"client_id"`     // oauth 用
-	ClientSecret string            `json:"client_secret"` // oauth 用
-	TokenURL     string            `json:"token_url"`     // oauth 用，token endpoint
-	Headers      map[string]string `json:"headers"`       // 自定义请求头
+	Token        string            `json:"token"`         // used by bearer
+	ClientID     string            `json:"client_id"`     // used by oauth
+	ClientSecret string            `json:"client_secret"` // used by oauth
+	TokenURL     string            `json:"token_url"`     // used by oauth, the token endpoint
+	Headers      map[string]string `json:"headers"`       // custom request headers
 }
 
-// parseAuthConfig 解析连接上的 auth JSONB
+// parseAuthConfig parses the auth JSONB of a connection.
 func parseAuthConfig(raw xsql.JSONB) (*AuthConfig, error) {
 	if raw.Data == nil {
 		return &AuthConfig{Type: "none"}, nil
 	}
 	rawBytes, ok := raw.Data.(json.RawMessage)
 	if !ok {
-		// 若 Data 非 RawMessage（如已被解析为 map），先回序列化
+		// When Data is not a RawMessage (it may already have been decoded into a map), re-serialize it first.
 		b, err := json.Marshal(raw.Data)
 		if err != nil {
-			return nil, fmt.Errorf("解析 auth 配置失败: %w", err)
+			return nil, fmt.Errorf("failed to parse the auth config: %w", err)
 		}
 		rawBytes = b
 	}
 	var cfg AuthConfig
 	if err := json.Unmarshal(rawBytes, &cfg); err != nil {
-		return nil, fmt.Errorf("解析 auth 配置失败: %w", err)
+		return nil, fmt.Errorf("failed to parse the auth config: %w", err)
 	}
 	if cfg.Type == "" {
 		cfg.Type = "none"
@@ -47,8 +47,8 @@ func parseAuthConfig(raw xsql.JSONB) (*AuthConfig, error) {
 	return &cfg, nil
 }
 
-// buildAuthorizationHeader 根据 auth 配置构造 Authorization 请求头。
-// 返回空字符串表示无需鉴权（type=none）。
+// buildAuthorizationHeader builds the Authorization header from the auth config.
+// An empty string means no authentication is needed (type=none).
 func buildAuthorizationHeader(raw xsql.JSONB) (string, error) {
 	cfg, err := parseAuthConfig(raw)
 	if err != nil {
@@ -61,13 +61,13 @@ func buildAuthorizationHeader(raw xsql.JSONB) (string, error) {
 
 	case "bearer":
 		if cfg.Token == "" {
-			return "", fmt.Errorf("bearer 鉴权需要 token")
+			return "", fmt.Errorf("bearer auth requires a token")
 		}
 		return "Bearer " + cfg.Token, nil
 
 	case "oauth":
 		if cfg.ClientID == "" || cfg.ClientSecret == "" {
-			return "", fmt.Errorf("oauth 鉴权需要 client_id 与 client_secret")
+			return "", fmt.Errorf("oauth auth requires client_id and client_secret")
 		}
 		token, err := fetchOAuthToken(cfg)
 		if err != nil {
@@ -76,11 +76,11 @@ func buildAuthorizationHeader(raw xsql.JSONB) (string, error) {
 		return "Bearer " + token, nil
 
 	default:
-		return "", fmt.Errorf("不支持的 auth type: %s", cfg.Type)
+		return "", fmt.Errorf("unsupported auth type: %s", cfg.Type)
 	}
 }
 
-// customHeaders 从 auth 配置中解析自定义请求头
+// customHeaders reads the custom request headers from the auth config.
 func customHeaders(raw xsql.JSONB) map[string]string {
 	cfg, err := parseAuthConfig(raw)
 	if err != nil || len(cfg.Headers) == 0 {

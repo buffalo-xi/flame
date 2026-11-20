@@ -48,9 +48,9 @@ P0 rules:
 - **almost any entity can be listed / exported**: protected names (`main` / `skill-authoring` / `agent-authoring` /
   `custom-tool-authoring`), over-privileged agents and deprecated state are never blocked, only surfaced as `warnings`.
   Content and identity are handled separately — `agent_relations` do not travel with the package (they cannot be remapped
-  across tenants), while the three switches `is_supervisor` / `tools_unrestricted` / `skill_discovery` **do** (see §7, §12.1):
-  they describe "how this agent runs", they take effect per package after install and are named in `warnings` rather than
-  silently downgraded.
+  across tenants), while the agent's definition attributes `is_supervisor` / `tools_unrestricted` / `skill_discovery` /
+  `default_language` **do** (see §7, §12.1): they describe "how this agent runs", they take effect per package after install
+  and are named in `warnings` rather than silently downgraded.
 - **private skills** (`tenants/<schema>/agents/<agent>/skills/<name>/`) can **only** be listed / exported together with their
   owning agent:
   - travelling with the agent preserves ownership — the whole `skills/` directory goes into the package, metadata goes into
@@ -237,7 +237,9 @@ The review page lays out five checks:
      target already has a tool with that name it is **not overwritten** (local script and config win), and if `sandbox.exec` /
      `net.egress` is missing it is skipped — all of this only produces `warnings`, never a failed install
    - `agent`: `is_supervisor` / `tools_unrestricted` / `skill_discovery` are **set from the package** (old assets without those
-     fields → `false`; an overwrite import keeps the target's existing values), `status` defaults to 1 (only 1 / 3 accepted)
+     fields → `false`; an overwrite import keeps the target's existing values), and so is `default_language` (a BCP-47 string;
+     an empty string means "not configured", and an old asset without the field keeps the target's existing value), `status`
+     defaults to 1 (only 1 / 3 accepted)
    - grant rewrite: `skill_tool_grants` / `agent_tool_grants` are rebuilt entry by entry; `agent_skill_bindings` bind only
      "tenant-level skills with the same name in the target tenant that are not deprecated", the rest are dropped (private
      skills belong to their agent by construction and need no binding)
@@ -361,6 +363,11 @@ in `payload`, always written as explicit booleans): they describe "how this agen
 target tenant would get a copy that behaves differently. Import applies them from the package and says so in `warnings` ("set as
 supervisor per package"); when an older package lacks these fields, an overwrite import keeps the target's existing values and a
 fresh install uses `false` (you cannot assert `false`, or one overwrite would silently downgrade).
+
+`payload.default_language` travels the same way and for the same reason: it is part of the agent's definition (frozen into a
+release), so a copy installed without it would answer in a different language than the author configured. It is a BCP-47 string
+rather than a boolean — an empty string means "not configured", and an older package that lacks the field entirely keeps the
+target's existing value on an overwrite.
 
 ### 12.2 The import side (trust nothing upstream)
 

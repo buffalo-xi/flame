@@ -8,26 +8,27 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// Upsert 必须拒绝空 kind。
+// Upsert must refuse an empty kind.
 //
-// DB 的 DEFAULT 'tools' 只在**不显式传该列**时生效；一旦把空串写进 kind 列，
-// 那一行就再也匹配不上任何按 kind 过滤的查询 —— 表现是「保存成功，但插件凭空消失」，
-// 属于最难查的一类故障。这条校验发生在碰 DB 之前，所以不需要连库就能测。
+// The database's DEFAULT 'tools' only applies when the column is **not passed explicitly**; once an empty string lands in
+// the kind column, that row can never match any kind-filtered query again — it shows up as "the save succeeded but the
+// plugin vanished", one of the hardest failures to diagnose. The check happens before touching the database, so this test
+// needs no connection.
 func TestUpsertRejectsEmptyKind(t *testing.T) {
 	err := NewRepository().Upsert(&auth.AuthInfo{Schema: "t0"}, &models.Plugin{
 		Kind: "   ",
 		Name: "web_search",
 	})
 	if err == nil {
-		t.Fatal("空 kind 应当报错，实际返回 nil（会落库成 kind=''）")
+		t.Fatal("an empty kind should error, but nil was returned (it would be stored as an empty kind)")
 	}
 	if !strings.Contains(err.Error(), "kind") {
-		t.Fatalf("错误信息应提到 kind 便于定位，实际：%v", err)
+		t.Fatalf("the error should mention kind so it can be located, got: %v", err)
 	}
 }
 
 func TestUpsertRejectsNilPlugin(t *testing.T) {
 	if err := NewRepository().Upsert(&auth.AuthInfo{Schema: "t0"}, nil); err == nil {
-		t.Fatal("nil plugin 应当报错")
+		t.Fatal("a nil plugin should error")
 	}
 }

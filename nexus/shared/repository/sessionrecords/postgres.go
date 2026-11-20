@@ -10,22 +10,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// PostgresRepository PostgreSQL 实现的会话记录存储
+// PostgresRepository is the PostgreSQL implementation of session record storage.
 type PostgresRepository struct{}
 
-// sessionRecordColumns 读取时的列清单，顺序必须与下方 rows.Scan 一一对应。
+// sessionRecordColumns is the read column list; the order must match the rows.Scan below one to one.
 //
-// output / run_type / error / owner_type 在库里都允许 NULL（见 provision 模板的
-// session_records 建表语句：只有 id / owner_id / session_id / run_id / created_at /
-// duration_ms / status 带 NOT NULL）。而 models.SessionRecord 里这几个字段是 string，
-// 直接 Scan 一条 NULL 就报 `converting NULL to string is unsupported` ——
-// 整个历史接口 500，前端只看到「暂无对话」，像是记录被删了。
-// 在 SQL 侧折成空串：比给每个字段配 *string 或 sql.NullString 再逐条转更好维护，
-// 也让「NULL 与空串同义」这个既有语义（见 models.SessionRecord 注释）在读取处显式化。
+// output / run_type / error / owner_type are all nullable in the database (see the session_records table in the
+// provision template: only id / owner_id / session_id / run_id / created_at / duration_ms / status are NOT
+// NULL). The corresponding fields in models.SessionRecord are plain strings, and scanning a NULL straight into
+// one fails with `converting NULL to string is unsupported` — which turns the whole history endpoint into a 500
+// and the frontend just shows "no conversation yet", as if the records had been deleted.
+// Folding it to the empty string in SQL is easier to maintain than a *string or sql.NullString per field with a
+// per-row conversion, and it makes the existing "NULL and empty string are synonymous" semantics (see the
+// models.SessionRecord comment) explicit at the read site.
 const sessionRecordColumns = `id, COALESCE(owner_type, ''), owner_id, session_id, run_id, input,
 	COALESCE(output, ''), COALESCE(run_type, ''), duration_ms, status, COALESCE(error, ''), created_at`
 
-// Append 在事务内：插入一条记录 → 裁剪该 session 超出 maxN 的旧记录。
+// Append runs in one transaction: insert a record, then trim this session's records beyond maxN.
 func (r *PostgresRepository) Append(schema string, rec *models.SessionRecord, maxN int) error {
 	if rec == nil {
 		return nil
@@ -44,11 +45,12 @@ func (r *PostgresRepository) Append(schema string, rec *models.SessionRecord, ma
 		rec.ID = uuid.NewString()
 	}
 
-	// run_id 是 uuid NOT NULL（见 provision 模板）。原先这里是「为空就写 NULL」，
-	// 但 NULL 同样违反约束，只是把错误推迟到 INSERT 变成一句
-	// `null value in column "run_id"`，调用方看不出是哪个字段没传。这里提前拦下。
+	// run_id is uuid NOT NULL (see the provision template). This used to write NULL when it was empty, but NULL
+	// violates the same constraint and merely defers the failure to an INSERT error reading
+	// `null value in column "run_id"`, leaving the caller unable to tell which field was missing. So it is caught
+	// here.
 	if rec.RunID == "" {
-		return fmt.Errorf("会话记录缺少 run_id（owner=%s/%s session=%s）", rec.OwnerType, rec.OwnerID, rec.SessionID)
+		return fmt.Errorf("session record is missing run_id (owner=%s/%s session=%s)", rec.OwnerType, rec.OwnerID, rec.SessionID)
 	}
 	runID := rec.RunID
 
@@ -79,8 +81,9 @@ func (r *PostgresRepository) Append(schema string, rec *models.SessionRecord, ma
 	return tx.Commit()
 }
 
-// normalizeStatus 兜底：调用方没给 status 时按 ok 写。
-// 注意不能依赖列默认值 —— 默认值只在「不写这一列」时生效，显式传空串会存成 ”。
+// normalizeStatus is the fallback: when the caller gives no status, write ok.
+// Note that the column default cannot be relied on — a default only applies when the column is not written, and
+// passing an empty string stores "".
 func normalizeStatus(s string) string {
 	if s == "" {
 		return models.SessionStatusOK
@@ -88,7 +91,7 @@ func normalizeStatus(s string) string {
 	return s
 }
 
-// ListBySession 读取某 owner + session 的历史记录（旧→新）。
+// ListBySession reads one owner + session's history (oldest first).
 func (r *PostgresRepository) ListBySession(schema, ownerType, ownerID, sessionID string, limit int, since *time.Time) ([]models.SessionRecord, error) {
 	where := "WHERE owner_type = $1 AND owner_id = $2 AND session_id = $3"
 	args := []interface{}{ownerType, ownerID, sessionID}
@@ -123,7 +126,8 @@ func (r *PostgresRepository) ListBySession(schema, ownerType, ownerID, sessionID
 	return records, rows.Err()
 }
 
-// ListBySessionPage 分页读取历史记录：取 created_at < before 的最近 limit 条，返回旧→新。
+// ListBySessionPage pages through the history: the latest limit records with created_at < before, returned
+// oldest first.
 func (r *PostgresRepository) ListBySessionPage(schema, ownerType, ownerID, sessionID string, limit int, before *time.Time) ([]models.SessionRecord, error) {
 	where := "WHERE owner_type = $1 AND owner_id = $2 AND session_id = $3"
 	args := []interface{}{ownerType, ownerID, sessionID}
@@ -159,17 +163,19 @@ func (r *PostgresRepository) ListBySessionPage(schema, ownerType, ownerID, sessi
 		return nil, err
 	}
 
-	// 倒序取回后反转为旧→新
+	// Fetched newest first, so reverse into oldest first
 	for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
 		records[i], records[j] = records[j], records[i]
 	}
 	return records, nil
 }
 
-// RecordFilter 管理端查询历史运行的条件：全部字段可选，零值 = 不过滤。
+// RecordFilter is the admin console's criteria for querying past runs: every field is optional and a zero value
+// means "no filter".
 //
-// 为什么不复用 ListBySession：那组方法把 owner / session 写死在 where 里，服务的是
-// 「某个会话读自己的记忆」；管理端要回答的是「整个租户跑过什么」，两个条件都必须可选。
+// Why ListBySession is not reused: that set hard-codes owner / session in the where clause, serving "one
+// session reading its own memory"; the admin console asks "what has this whole tenant run", where both criteria
+// must be optional.
 type RecordFilter struct {
 	OwnerType string
 	OwnerID   string
@@ -179,7 +185,8 @@ type RecordFilter struct {
 	To        *time.Time
 }
 
-// clause 生成 WHERE 子句（含前导空格）与参数；start 是第一个占位符的序号。
+// clause builds the WHERE clause (with its leading space) and the arguments; start is the number of the first
+// placeholder.
 func (f RecordFilter) clause(start int) (string, []interface{}) {
 	conds := make([]string, 0, 6)
 	args := make([]interface{}, 0, 6)
@@ -218,7 +225,7 @@ func (f RecordFilter) clause(start int) (string, []interface{}) {
 	return where, args
 }
 
-// ListRecords 跨 agent / 会话查询历史运行（管理端），按时间倒序分页，返回总数。
+// ListRecords queries past runs across agents and sessions (admin console), paged newest first, with the total.
 func (r *PostgresRepository) ListRecords(schema string, f RecordFilter, limit, offset int) ([]models.SessionRecord, int, error) {
 	where, args := f.clause(1)
 
@@ -249,14 +256,15 @@ func (r *PostgresRepository) ListRecords(schema string, f RecordFilter, limit, o
 	return records, total, rows.Err()
 }
 
-// DeleteRecords 按条件删除历史运行，返回删除条数。
+// DeleteRecords deletes past runs by criteria and returns the number removed.
 //
-// 无条件直接拒绝：管理端的「批量清理」必须带筛选，否则一次误调用就是清库。
-// 调用方在真正删除前应当先 ListRecords 拿到 total 让用户确认。
+// Unconditional deletion is refused outright: the admin console's "bulk clean-up" must carry a filter, otherwise
+// one mistaken call wipes the table. The caller should first call ListRecords to show the user the total to
+// confirm.
 func (r *PostgresRepository) DeleteRecords(schema string, f RecordFilter) (int64, error) {
 	where, args := f.clause(1)
 	if where == "" {
-		return 0, fmt.Errorf("拒绝无条件删除会话运行记录：请至少指定一个筛选条件")
+		return 0, fmt.Errorf("refusing to delete session run records without a filter: specify at least one criterion")
 	}
 	res, err := db.DB.Exec(`DELETE FROM `+schema+`.session_records`+where, args...)
 	if err != nil {

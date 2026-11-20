@@ -26,37 +26,38 @@ import (
 	"github.com/google/uuid"
 )
 
-// JSON-RPC 2.0 错误码
+// JSON-RPC 2.0 error codes.
 const (
 	errCodeParseError     = -32700
 	errCodeInvalidRequest = -32600
 	errCodeInvalidParams  = -32602
 	errCodeInternalError  = -32603
-	// errCodeQuotaExceeded 配额不足（会话数上限等）：JSON-RPC 留给实现自定义的 -32000..-32099，
-	// 与控制台 507 对应，客户端据此提示「去清理」而不是当成服务端故障。
+	// errCodeQuotaExceeded means the quota is exhausted (session count limit etc.): JSON-RPC reserves
+	// -32000..-32099 for implementation-defined errors, matching console 507, so the client can say
+	// "go clean up" instead of reading it as a server fault.
 	errCodeQuotaExceeded = -32000
-	// errCodeCallLoop 检测到循环调用（f → a → f）：链路本身成环，重试不会成功，
-	// 客户端应据此报「配置成环」而不是当服务端故障。
+	// errCodeCallLoop means a call loop was detected (f → a → f): the chain itself is cyclic, retrying
+	// cannot succeed, and the client should report "misconfigured cycle" rather than a server fault.
 	errCodeCallLoop = -32001
 )
 
-// rpcRequest 客户端发来的 JSON-RPC 请求
+// rpcRequest is the JSON-RPC request sent by the client.
 type rpcRequest struct {
 	Jsonrpc string      `json:"jsonrpc"`
-	Version int         `json:"version"` // 协议主版本号；缺省按 MinSupportedVersion
+	Version int         `json:"version"` // protocol major version; absent means MinSupportedVersion
 	Method  string      `json:"method"`
 	Params  interface{} `json:"params"`
 	ID      interface{} `json:"id"`
 }
 
-// rpcError JSON-RPC 错误对象
+// rpcError is the JSON-RPC error object.
 type rpcError struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// rpcResponse JSON-RPC 响应信封，result 与 error 二选一
+// rpcResponse is the JSON-RPC response envelope; result and error are mutually exclusive.
 type rpcResponse struct {
 	Jsonrpc string      `json:"jsonrpc"`
 	ID      interface{} `json:"id"`
@@ -64,54 +65,59 @@ type rpcResponse struct {
 	Error   *rpcError   `json:"error,omitempty"`
 }
 
-// rpcToolContent 工具结果中的一段文本内容（对齐 MCP TextContent）
+// rpcToolContent is one text segment of a tool result (aligned with MCP TextContent).
 type rpcToolContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
 
-// rpcToolResultMsg 工具调用结果：content 恒为文本段数组（对齐 MCP CallToolResult）
+// rpcToolResultMsg is a tool call result: content is always an array of text segments
+// (aligned with MCP CallToolResult).
 type rpcToolResultMsg struct {
 	Content []rpcToolContent `json:"content"`
 	IsError bool             `json:"isError,omitempty"`
 }
 
-// rpcProgressMsg 进度通知参数（字段位置对齐 MCP 2026-07-28 的 notifications/progress）。
+// rpcProgressMsg holds the parameters of a progress notification (field layout aligned with
+// notifications/progress of MCP 2026-07-28).
 //
-// progressToken 在 params 顶层（它标识「本次调用的哪一条订阅」），_meta 是 params 内的一个键。
-// Progress 是「第几条通知」，只保证单调递增，不代表完成度 —— 总量未知时 Total 省略。
+// progressToken sits at the top level of params (it identifies which subscription of this call the
+// frame belongs to); _meta is a key inside params. Progress is "which notification this is" and is
+// only guaranteed to increase monotonically — it does not express completion, and Total is omitted
+// when the total is unknown.
 type rpcProgressMsg struct {
 	ProgressToken any     `json:"progressToken"`
 	Progress      float64 `json:"progress"`
 	Total         float64 `json:"total,omitempty"`
 	Message       string  `json:"message"`
-	// Meta 用 map[string]any：agent 事件（tool_call/tool_result）要在 _meta 里带
-	// call_id / ok / duration_ms 这类非字符串字段。
+	// Meta is a map[string]any: agent events (tool_call / tool_result) carry non-string fields such as
+	// call_id / ok / duration_ms inside _meta.
 	Meta map[string]any `json:"_meta,omitempty"`
 }
 
-// rpcProgress 进度通知（notifications/progress）
+// rpcProgress is a progress notification (notifications/progress).
 type rpcProgress struct {
 	Jsonrpc string         `json:"jsonrpc"`
 	Method  string         `json:"method"`
 	Params  rpcProgressMsg `json:"params"`
 }
 
-// rpcTool 工具定义（对齐 MCP tools/list 返回的 Tool 结构）
+// rpcTool is a tool definition (aligned with the Tool structure returned by MCP tools/list).
 type rpcTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
-// rpcListToolsResult tools/list 的 result 结构（对齐 MCP ListToolsResult）
+// rpcListToolsResult is the result structure of tools/list (aligned with MCP ListToolsResult).
 type rpcListToolsResult struct {
 	Tools         []rpcTool `json:"tools"`
-	ServerVersion int       `json:"serverVersion"` // 服务端当前协议版本，供客户端对齐
+	ServerVersion int       `json:"serverVersion"` // current protocol version of the server, for client alignment
 }
 
-// NewRPCHandler 返回 RPC 处理函数：先做租户识别 + 认证（Bearer 分流），
-// 再解析 JSON-RPC 请求，按 svc_endpoints（protocol=rpc）的 name 分发到 agent / flow。
+// NewRPCHandler returns the RPC handler: it resolves the tenant and authenticates first (Bearer
+// dispatch), then parses the JSON-RPC request and dispatches by svc_endpoints name (protocol=rpc)
+// to the agent or flow domain.
 func NewRPCHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authInfo, err := resolveTenant(r)
@@ -129,7 +135,7 @@ func NewRPCHandler() http.HandlerFunc {
 			return
 		}
 
-		// 解析 JSON-RPC 请求体
+		// Parse the JSON-RPC request body.
 		var req rpcRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			xhttpErr(w, http.StatusBadRequest, "invalid request body: %s", err.Error())
@@ -140,80 +146,88 @@ func NewRPCHandler() http.HandlerFunc {
 			return
 		}
 
-		// 版本归一 + 校验（复用公共包，避免散落硬编码）
+		// Normalize and validate the version (through the shared package, so nothing is hardcoded here).
 		req.Version = protocol.NormalizeVersion(req.Version)
 		if !protocol.IsVersionSupported(req.Version) {
 			writeVersionError(w, req.Version)
 			return
 		}
 
-		// tools/list：返回本租户 protocol=rpc 且 exposed 的工具列表（对齐 MCP）
+		// tools/list: return this tenant's protocol=rpc and exposed tools (aligned with MCP).
 		if req.Method == "tools/list" {
 			writeToolsList(w, req.ID, ai)
 			return
 		}
 
-		// 从 params 提取 name / arguments（参数格式错：对齐 MCP 的 InvalidParams(-32602)，HTTP 保持 200）
+		// Extract name / arguments from params (a bad argument shape: MCP InvalidParams(-32602), HTTP stays 200).
 		name, err := extractName(req.Params)
 		if err != nil {
-			writeRPCError(w, req.ID, errCodeInvalidParams, "获取服务名称错误: %s", err.Error())
+			writeRPCError(w, req.ID, errCodeInvalidParams, "failed to read the service name: %s", err.Error())
 			return
 		}
 		arguments, err := extractArguments(req.Params)
 		if err != nil {
-			writeRPCError(w, req.ID, errCodeInvalidParams, "获取参数错误: %s", err.Error())
+			writeRPCError(w, req.ID, errCodeInvalidParams, "failed to read the arguments: %s", err.Error())
 			return
 		}
 
-		// 已废弃的 arguments.stream 就地剥掉：它既不该被当成 flow / agent 的业务变量，
-		// 也不该再影响判定（判定只看下面的 progressToken）。静默失效更难查，故留日志。
+		// Strip the deprecated arguments.stream in place: it must not be treated as a flow / agent
+		// business variable, and it must no longer influence the decision (which only looks at
+		// progressToken below). A silent no-op is harder to diagnose, hence the log line.
 		if core.StripLegacyStream(arguments) {
-			xlog.Info("忽略已废弃的 arguments.stream（改用 params._meta.progressToken 订阅进度）")
+			xlog.Info("ignoring the deprecated arguments.stream (subscribe to progress through params._meta.progressToken instead)")
 		}
-		// 进度订阅：客户端在 params._meta.progressToken 里表达，与 MCP 同一位置。
+		// Progress subscription: the client expresses it in params._meta.progressToken, the same place as MCP.
 		pump := core.NewProgressPump(extractProgressToken(req.Params))
 
-		// 按 name 查 svc_endpoints（protocol=rpc）
+		// Look up the svc_endpoints row (protocol=rpc) by name.
 		ep, err := findEndpoint(ai, name)
 		if err != nil {
-			// 工具不存在：资源名（params.name）指向无效，对齐 MCP 的 InvalidParams(-32602)
+			// The tool does not exist: the resource name (params.name) is invalid, so MCP InvalidParams(-32602).
 			writeRPCErrorCode(w, req.ID, errCodeInvalidParams, "endpoint.not_found",
 				map[string]string{"name": name}, "%s", err.Error())
 			return
 		}
-		// 凭证无权调用该端点：与「不存在」用完全相同的措辞**和编码**，不泄漏「存在但未授权」。
-		// 编码也必须一致 —— 只对齐文案而编码不同，前端翻译后又会把两者区分开。
-		// 放在 exposed 检查之前 —— 连「未对外开放」这个事实都不该被无权调用方探到。
+		// The credential may not call this endpoint: use exactly the same wording **and code** as
+		// "does not exist", so "exists but unauthorized" never leaks.
+		// The code has to match too — aligning only the wording lets the frontend tell the two apart
+		// once it translates them.
+		// This check comes before the exposed check — not even the fact "not exposed" may be probed by
+		// an unauthorized caller.
 		if !ai.TargetAllowedWith(ep.TargetType, ep.TargetID, ep.TargetSupervisor) {
 			writeRPCErrorCode(w, req.ID, errCodeInvalidParams, "endpoint.not_found",
-				map[string]string{"name": name}, "服务端点不存在: %s", name)
+				map[string]string{"name": name}, "service endpoint does not exist: %s", name)
 			return
 		}
 		if !ep.Exposed.Bool() {
-			// 端点未对外开放：资源不可用（参数指向一个仅内部端点），对齐 MCP 归为 InvalidParams
+			// The endpoint is not exposed: the resource is unavailable (the argument points at an
+			// internal-only endpoint), which MCP classifies as InvalidParams.
 			writeRPCErrorCode(w, req.ID, errCodeInvalidParams, "endpoint.not_exposed",
-				map[string]string{"name": name}, "服务端点未对外开放: %s", name)
+				map[string]string{"name": name}, "service endpoint is not exposed: %s", name)
 			return
 		}
 
-		// 调用链：拒绝重入（f → a → f），并把本实体追加后下传给执行层。
-		// 检查放在 exposed 之后：无权 / 未开放的端点连「链上有没有它」都不该被探到。
-		// 链是调用方自报的，不传就检测不到 —— 所以深度上限（max_call_depth /
-		// max_recursion_depth）必须继续留着兜底，这里只做精确拦截。
+		// Call chain: reject re-entry (f → a → f) and pass the entity appended to it down to the
+		// execution layer. The check comes after the exposed one: an unauthorized / non-exposed
+		// endpoint must not even reveal "is it on the chain".
+		// The chain is reported by the caller, so without it nothing is detected — which is why the
+		// depth cap (max_call_depth / max_recursion_depth) must stay as the backstop; this only
+		// catches precise loops.
 		chain, chainTooLong := callchain.ParseParams(req.Params)
 		if chainTooLong {
 			writeRPCError(w, req.ID, errCodeInvalidParams,
-				"call_chain 超过上限 %d 段", callchain.MaxLen)
+				"call_chain exceeds the limit of %d entries", callchain.MaxLen)
 			return
 		}
 		self := callchain.Key(ep.TargetType, ep.TargetID)
 		if callchain.Contains(chain, self) {
-			xlog.Info("检测到循环调用 schema=%s endpoint=%s chain=%s", ai.Schema, ep.Name, callchain.Format(chain))
+			xlog.Info("detected a call loop schema=%s endpoint=%s chain=%s", ai.Schema, ep.Name, callchain.Format(chain))
 			writeRPCError(w, req.ID, errCodeCallLoop,
-				"检测到循环调用：%s 已在本调用链中（%s）", self, callchain.Format(chain))
+				"detected a call loop: %s is already on this call chain (%s)", self, callchain.Format(chain))
 			return
 		}
-		// 追加后下传：兄弟分支各自从父链派生，互不影响（f 的两个并列节点都调 a 仍然放行）
+		// Append before passing down: sibling branches each derive from the parent chain and do not
+		// affect each other (two parallel nodes of f both calling a are still allowed).
 		chain = callchain.Append(chain, self)
 
 		reqID := req.ID
@@ -227,13 +241,13 @@ func NewRPCHandler() http.HandlerFunc {
 		case "flow":
 			runFlow(w, r, ai, ep.TargetID, req.Params, arguments, reqID, pump, chain)
 		default:
-			// 不支持的 target_type：参数指向的 target 非法，对齐 MCP 的 InvalidParams(-32602)
+			// Unsupported target_type: the target the argument points at is invalid, so MCP InvalidParams(-32602).
 			writeRPCError(w, reqID, errCodeInvalidParams, "unsupported target_type %q for endpoint %s", ep.TargetType, ep.Name)
 		}
 	}
 }
 
-// extractName 从 params 中取出 "name" 字段（string）
+// extractName pulls the "name" field (string) out of params.
 func extractName(params interface{}) (string, error) {
 	mp, ok := params.(map[string]interface{})
 	if !ok {
@@ -243,7 +257,7 @@ func extractName(params interface{}) (string, error) {
 	return name, err
 }
 
-// extractArguments 从 params 中取出 "arguments" 字段（map）
+// extractArguments pulls the "arguments" field (map) out of params.
 func extractArguments(params interface{}) (map[string]interface{}, error) {
 	mp, ok := params.(map[string]interface{})
 	if !ok {
@@ -260,28 +274,28 @@ func extractArguments(params interface{}) (map[string]interface{}, error) {
 	return arguments, nil
 }
 
-// findEndpoint 按 name 精确查本租户 protocol=rpc 的 svc_endpoints（大小写不敏感）。
-// 用精确查询而非 List 的 ILIKE，避免 "order" 命中 "order-v2" 这类歧义。
+// findEndpoint looks up this tenant's protocol=rpc svc_endpoints by exact name (case-insensitive).
+// It uses an exact query rather than the ILIKE of List, so that "order" cannot hit "order-v2".
 func findEndpoint(authInfo *auth.AuthInfo, name string) (*models.SvcEndpoint, error) {
 	ep, err := svcendpoints.NewRepository().FindByName(authInfo, "rpc", name)
 	if err != nil {
-		return nil, fmt.Errorf("获取服务端点错误: %w", err)
+		return nil, fmt.Errorf("failed to read the service endpoint: %w", err)
 	}
 	if ep == nil {
-		return nil, fmt.Errorf("服务端点不存在: %s", name)
+		return nil, fmt.Errorf("service endpoint does not exist: %s", name)
 	}
 	return ep, nil
 }
 
-// listTools 返回本租户 protocol=rpc 且 exposed=true 的端点列表，映射为工具定义。
-// 逻辑对齐 MCP 的 NewMCPServer + buildTool：input_schema 作为工具的 InputSchema。
+// listTools returns this tenant's protocol=rpc endpoints with exposed=true, mapped to tool definitions.
+// The logic mirrors NewMCPServer + buildTool of MCP: input_schema becomes the tool InputSchema.
 func listTools(authInfo *auth.AuthInfo) ([]rpcTool, error) {
 	repo := svcendpoints.NewRepository()
 	listReq := &svcendpoints.ListSvcEndpointsRequest{
 		Protocol: "rpc",
 		Exposed:  boolPtr(true),
 	}
-	// 必须用 ListAll：List 有默认 limit=10，会把第 11 个端点起静默截掉
+	// ListAll is required: List defaults to limit=10 and would silently cut off the 11th endpoint onwards.
 	endpoints, err := repo.ListAll(authInfo, listReq)
 	if err != nil {
 		return nil, fmt.Errorf("list rpc endpoints: %w", err)
@@ -290,8 +304,9 @@ func listTools(authInfo *auth.AuthInfo) ([]rpcTool, error) {
 	tools := make([]rpcTool, 0, len(endpoints))
 	for i := range endpoints {
 		ep := endpoints[i]
-		// 凭证的端点访问范围：无权目标连列表里都不出现
-		// （调用侧还会再拦一次 —— 只过滤列表的话，手写 JSON-RPC 按 name 直调就能绕过）
+		// Endpoint scope of the credential: unauthorized targets do not even appear in the list
+		// (the call side checks again — filtering the list alone could be bypassed by a hand-written
+		// JSON-RPC call that addresses the name directly).
 		if !authInfo.TargetAllowedWith(ep.TargetType, ep.TargetID, ep.TargetSupervisor) {
 			continue
 		}
@@ -299,8 +314,9 @@ func listTools(authInfo *auth.AuthInfo) ([]rpcTool, error) {
 			Name:        ep.Name,
 			Description: ep.Description,
 		}
-		// input_schema 直接作为工具的 InputSchema（JSON Schema object）
-		// 仅当 schema 合法（解析成功且顶层 type=object）才采用，否则回退开放 object
+		// input_schema is used directly as the tool InputSchema (a JSON Schema object).
+		// It is only adopted when the schema is valid (it parses and its top-level type is object),
+		// otherwise an open object is used.
 		if !ep.InputSchema.IsNil() {
 			var raw json.RawMessage
 			if err := ep.InputSchema.Unmarshal(&raw); err == nil && len(raw) > 0 {
@@ -317,7 +333,7 @@ func listTools(authInfo *auth.AuthInfo) ([]rpcTool, error) {
 	return tools, nil
 }
 
-// writeToolsList 写 tools/list 响应（JSON-RPC 2.0 标准响应，非流式）
+// writeToolsList writes the tools/list response (a standard JSON-RPC 2.0 response, not streamed).
 func writeToolsList(w http.ResponseWriter, reqID interface{}, authInfo *auth.AuthInfo) {
 	tools, err := listTools(authInfo)
 	if err != nil {
@@ -335,7 +351,7 @@ func writeToolsList(w http.ResponseWriter, reqID interface{}, authInfo *auth.Aut
 	})
 }
 
-// isObjectSchema 校验 JSON Schema 顶层为 object 类型（与 MCP server 一致）
+// isObjectSchema checks that the top-level JSON Schema type is object (consistent with the MCP server).
 func isObjectSchema(raw json.RawMessage) bool {
 	var s struct {
 		Type string `json:"type"`
@@ -346,59 +362,73 @@ func isObjectSchema(raw json.RawMessage) bool {
 	return s.Type == "object"
 }
 
-// boolPtr 返回指向 b 的指针
+// boolPtr returns a pointer to b.
 func boolPtr(b bool) *bool {
 	return &b
 }
 
-// runFlow 执行 flow 类型目标，返回 JSON-RPC 响应。
-// 客户端没订阅进度（无 progressToken）：同步执行，回单条 JSON。
-// 订阅了进度：后台执行 + SSE 推 notifications/progress，最终结果仍是流里那条带 id 的响应。
-// params 原样传进来只为读 _meta（会话 id 的正位），业务入参仍是 input。
+// runFlow executes a flow-typed target and writes the JSON-RPC response.
+// When the client did not subscribe to progress (no progressToken): run synchronously and answer with a
+// single JSON body. When it did: run in the background and push notifications/progress over SSE, with
+// the final result still being the response carrying the id inside the stream.
+// params is passed through only to read _meta (the proper place for the session id); the business input
+// remains input.
 func runFlow(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, flowId string, params any, input map[string]interface{}, reqID interface{}, pump *core.ProgressPump, chain []string) {
 	repo := flows.NewRepository()
-	// 正式入口：只运行已发布的正式版本；没有正式版本就拒绝，不退回草稿
+	// Production entry point: only the released version runs; refuse when there is none, never fall back to the draft.
 	Instance, err := repo.GetCurrentFlowVersion(authInfo, flowId)
 	if err != nil {
 		if errors.Is(err, flows.ErrNoReleasedVersion) {
 			writeRPCErrorCode(w, reqID, errCodeInvalidParams, "flow.not_released",
 				map[string]string{"name": flowId},
-				"flow %s 尚未发布正式版本，请先在编辑页发布后再调用", flowId)
+				"flow %s has no released version yet; release it from the editor before calling it", flowId)
 			return
 		}
-		// 实例不存在/查询失败：参数指向的资源不存在，对齐 MCP 的 InvalidParams(-32602)
+		// The instance does not exist / the query failed: the resource the argument points at is
+		// missing, so MCP InvalidParams(-32602).
 		writeRPCError(w, reqID, errCodeInvalidParams, "get flow instance %s: %v", flowId, err)
 		return
 	}
-	// 废弃的 flow 不可运行：status 在实体行、版本快照里没有，外部入口必须自己判一次，
-	// 不能只靠「切废弃时收回端点」这个 best-effort 动作（失败只记日志）。
+	// A deprecated flow cannot run: status lives on the entity row and not in the version snapshot, so
+	// an external entry point has to check it itself; it cannot rely on the best-effort act of
+	// retracting the endpoint when deprecating (a failure there is only logged).
 	if !models.IsRunnable(int(Instance.Status)) {
 		writeRPCErrorCode(w, reqID, errCodeInvalidParams, "flow.deprecated",
-			map[string]string{"name": Instance.Name}, "flow %s 已废弃，不可调用", Instance.Name)
+			map[string]string{"name": Instance.Name}, "flow %s is deprecated and cannot be called", Instance.Name)
 		return
 	}
 
-	// 会话 id 只认 params._meta 一处（与 progressToken 同一处）。
-	// 归属校验放在这里，NewFlow 里不做 —— 它还要服务「agent 调 flow 时共用调用方会话」的内部路径。
+	// The session id is only recognized in params._meta (the same place as progressToken).
+	// The ownership check lives here rather than in NewFlow — that one also serves the internal path
+	// where an agent calls a flow and shares the caller's session.
 	sid := core.MetaSessionID(params)
 	if sid != "" {
-		// 格式与可见性一次判完（会话归属用户，owner 只记录创建者）；不存在则用该 id 建档 ——
-		// 协议端点没有独立的「新建会话」接口，调用方自带 UUID 即表示首次创建。
-		// 错误码按类别收敛：客户端传错是 InvalidParams，配额不足 / 存储故障另有映射。
+		// Format and visibility are checked in one go (a session belongs to a user; owner only records
+		// the creator); when it does not exist the id is used to create it — the protocol endpoint has
+		// no separate "create session" call, so a caller-supplied UUID means the first creation.
+		// Error codes are narrowed by category: a bad client value is InvalidParams, while quota and
+		// storage failures map elsewhere.
 		if _, serr := sessions.ResolveOrCreateForUser(
 			authInfo.Schema, sid, models.SessionOwnerTypeFlow, Instance.ID, authInfo.ID, "",
 		); serr != nil {
 			writeRPCError(w, reqID, sessionErrCode(serr), "session %s: %v", sid, serr)
 			return
 		}
-		input = core.WithSessionID(input, sid) // NewFlow 会再把它剥离出业务入参
+		input = core.WithSessionID(input, sid) // NewFlow strips it out of the business input again
 	}
-	// 调用链走保留键，NewFlow 会剥离（与 _call_depth 同一套机制），不进业务变量
+	// The output language sits in the same slot and takes the same route (the reserved key is stripped by NewFlow):
+	// params._meta.language is a pin, so the flow run carries it as its builtin `language` and forwards it to whatever
+	// it calls next. A malformed tag counts as "not supplied" - _meta is advisory.
+	if lang, _ := core.NormalizeOutputLanguage(core.OutputLanguageFromMeta(params)); lang != "" {
+		input = core.WithOutputLanguage(input, lang)
+	}
+	// The call chain travels through the reserved key and is stripped by NewFlow (the same mechanism
+	// as _call_depth), so it never becomes a business variable.
 	input = callchain.WithArguments(input, chain)
 
 	execCtx, err := executors.NewFlow(Instance, input, conv.ToString(reqID), uuid.Must(uuid.NewV7()).String(), authInfo.Schema, authInfo.ID, r.Context())
 	if err != nil {
-		// 初始化失败：协议层 InternalError（对齐 MCP return error -> -32603）
+		// Initialization failed: protocol-level InternalError (MCP return error -> -32603).
 		writeRPCError(w, reqID, errCodeInternalError, "init flow exec: %v", err)
 		return
 	}
@@ -409,8 +439,9 @@ func runFlow(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, fl
 		return
 	}
 
-	// 订阅了进度：后台执行，主协程消费 progress/result channel 并写 SSE
-	// （两个通道都按 category=text 推送；最终结果只认响应里的 result）
+	// Progress subscribed: run in the background and let the main goroutine consume the progress and
+	// result channels into SSE (both channels are pushed with category=text; the final result is only
+	// the result inside the response).
 	writeSSEHeaders(w)
 	errCh := make(chan error, 1)
 	go func() {
@@ -441,7 +472,8 @@ loop:
 				notifyProgress(w, pump, core.CategoryText, xjson.SanitizeJSON(chunk), nil)
 			}
 		case <-errCh:
-			// 后台执行结束：业务错误已双写进 execCtx.Error，统一交给 writeFlowResult 包装
+			// The background execution ended: the business error is already mirrored into execCtx.Error
+			// and is wrapped uniformly by writeFlowResult.
 			break loop
 		case <-r.Context().Done():
 			execCtx.CloseChans()
@@ -452,7 +484,7 @@ loop:
 	writeFlowResult(w, reqID, execCtx)
 }
 
-// writeFlowResult 写 flow 最终结果（检查 execCtx.GetError）
+// writeFlowResult writes the final flow result (checking execCtx.GetError).
 func writeFlowResult(w http.ResponseWriter, reqID interface{}, execCtx *flow.ExecContext) {
 	if e := execCtx.GetError(); e != "" {
 		writeToolError(w, reqID, e)
@@ -461,28 +493,35 @@ func writeFlowResult(w http.ResponseWriter, reqID interface{}, execCtx *flow.Exe
 	writeResult(w, reqID, execCtx.GetResult())
 }
 
-// runAgent 执行 agent 类型目标，返回 JSON-RPC 响应。
-// 客户端没订阅进度：同步执行，回单条 JSON。
-// 订阅了进度：后台执行 + SSE 推 notifications/progress，最终结果仍是流里那条带 id 的响应。
-// params 原样传进来只为读 _meta（会话 id 的正位），业务入参仍是 input。
+// runAgent executes an agent-typed target and writes the JSON-RPC response.
+// When the client did not subscribe to progress: run synchronously and answer with a single JSON body.
+// When it did: run in the background and push notifications/progress over SSE, with the final result
+// still being the response carrying the id inside the stream.
+// params is passed through only to read _meta (the proper place for the session id); the business input
+// remains input.
 func runAgent(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, agentID string, params any, input map[string]interface{}, reqID interface{}, pump *core.ProgressPump, chain []string) {
 	repo := agents.NewRepository()
 	agentInst, err := repo.GetAgent(authInfo, agentID)
 	if err != nil {
-		// 实例不存在/查询失败：参数指向的资源不存在，对齐 MCP 的 InvalidParams(-32602)
+		// The instance does not exist / the query failed: the resource the argument points at is
+		// missing, so MCP InvalidParams(-32602).
 		writeRPCError(w, reqID, errCodeInvalidParams, "get agent instance %s: %v", agentID, err)
 		return
 	}
 
-	// 会话 id 只认 params._meta 一处（与 progressToken 同一处）。
+	// The session id is only recognized in params._meta (the same place as progressToken).
 	sid := core.MetaSessionID(params)
-	// 业务入参里的同名键一律剥掉：它会变成模型可见的 {{args.session_id}}。
-	// 这里不再拿它当会话开关，只是防止误传把控制字段漏进提示词。
+	// A key of the same name in the business input is stripped: it would become the model-visible
+	// {{args.session_id}}. It is no longer a session switch here, only protection against the control
+	// field leaking into the prompt by mistake.
 	input = core.StripSessionID(input)
+	// The same protection for the language hint (supplied through _meta, see the block below).
+	input = core.StripOutputLanguage(input)
 
-	// 会话归属：给了 session_id 就必须是这个用户的会话（与 HTTP chat 同一口径）。
-	// owner 只记录创建者：父子 agent 共用同一 session 时 owner 必然对不上，用 owner 收口
-	// 会把 call_agent 的合法级联整体拒掉，所以按 user 收口；不存在则用该 id 建档。
+	// Session ownership: when a session_id is given, the session must belong to this user (the same
+	// rule as HTTP chat). owner only records the creator: a parent and child agent sharing a session
+	// would necessarily disagree on owner, and closing on owner would reject every legitimate
+	// call_agent cascade, so the check closes on the user; a missing session is created with that id.
 	if sid != "" {
 		if _, serr := sessions.ResolveOrCreateForUser(
 			authInfo.Schema, sid, models.SessionOwnerTypeAgent, agentInst.ID, authInfo.ID, "",
@@ -492,9 +531,11 @@ func runAgent(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, a
 		}
 	}
 
-	// user_id 恒定注入：verifyAPIKey / verifyOAuth 只放行绑定了用户的凭证（见 auth.go），
-	// RPC 没有租户级/无主身份 —— 运行域隔离、会话归属与会话记忆全都以它为归属依据。
-	// session_id 由调用方自带（已从业务入参剥离）：给了就是会话调用，不给则单轮、不记记忆。
+	// user_id is always injected: verifyAPIKey / verifyOAuth only accept credentials bound to a user
+	// (see auth.go), RPC has no tenant-level or anonymous identity — run-domain isolation, session
+	// ownership and session memory all key off it.
+	// session_id comes from the caller (already stripped from the business input): when given it is a
+	// session call, otherwise a single turn that records no memory.
 	agentArguments := map[string]interface{}{
 		"args":      input,
 		"user_id":   authInfo.ID,
@@ -503,33 +544,40 @@ func runAgent(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, a
 	if sid != "" {
 		agentArguments["session_id"] = sid
 	}
-	// 链放顶层保留键，不放 args 内部：args 是模型可见的业务入参，
-	// 控制字段混进去会变成 {{args._call_chain}}。
+	// The chain goes into a top-level reserved key, not inside args: args are the model-visible
+	// business input, and a control field there would become {{args._call_chain}}.
 	if len(chain) > 0 {
 		agentArguments[callchain.ArgumentKey] = chain
 	}
-	// 正式入口：读已发布的当前版本。没有当前版本时 NewAgent 直接报
-	// ErrNoReleasedVersion —— 不退回草稿，否则「正式运行」名不副实。
+	// params._meta.language pins the reply language for this call. Same top-level reserved key as the chain: a
+	// programmatic call whose arguments are pure JSON otherwise leaves the model no language signal at all.
+	if lang, _ := core.NormalizeOutputLanguage(core.OutputLanguageFromMeta(params)); lang != "" {
+		agentArguments[core.OutputLanguageKey] = lang
+	}
+	// Production entry point: read the released current version. Without one NewAgent reports
+	// ErrNoReleasedVersion — it never falls back to the draft, otherwise "production run" would be a lie.
 	agent.SetReleaseMode(agentArguments)
 	inst, err := agent.NewAgent(agentInst, authInfo.Schema, agentArguments)
 	if err != nil {
-		// 初始化失败：协议层 InternalError（对齐 MCP return error -> -32603）
+		// Initialization failed: protocol-level InternalError (MCP return error -> -32603).
 		writeRPCError(w, reqID, errCodeInternalError, "init agent: %v", err)
 		return
 	}
 	if inst == nil {
-		// 实例不支持/不存在：参数指向的资源不存在，对齐 MCP 的 InvalidParams(-32602)
+		// The instance is unsupported / missing: the resource the argument points at is missing, so
+		// MCP InvalidParams(-32602).
 		writeRPCError(w, reqID, errCodeInvalidParams, "agent %s not supported or not found", agentID)
 		return
 	}
 	defer inst.Close()
 
 	if !pump.Enabled() {
-		// 用请求 ctx：客户端关连接 / 断流即在同一条 ctx 上取消本次运行，
-		// 不必等它把 LLM 轮次和沙箱调用跑完（与 HTTP 试聊同一口径）。
+		// Use the request ctx: a closed connection / dropped stream cancels this run on the same ctx,
+		// without waiting for it to finish its LLM turns and sandbox calls (the same rule as HTTP chat).
 		if runErr := inst.Stream(r.Context()); runErr != nil {
-			// 客户端断开导致的终止：连接已经没了，别再往上写一条 500；
-			// 终止原因已随本轮落库（recordSessionRound 的 status / error）。
+			// Termination caused by the client disconnecting: the connection is gone, so do not write
+			// another 500; the reason is already stored with this round (status / error of
+			// recordSessionRound).
 			if r.Context().Err() != nil {
 				return
 			}
@@ -541,8 +589,9 @@ func runAgent(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, a
 		return
 	}
 
-	// 订阅了进度：后台执行，主协程消费「结构化事件」channel 并写 SSE。
-	// 思考（EventThinking）与工具调用只在这里出现，早先的纯文本进度通道已删除。
+	// Progress subscribed: run in the background and let the main goroutine consume the "structured
+	// event" channel into SSE. Thinking (EventThinking) and tool calls only appear here; the earlier
+	// plain-text progress channel has been removed.
 	writeSSEHeaders(w)
 	errCh := make(chan error, 1)
 	go func() {
@@ -551,9 +600,10 @@ func runAgent(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, a
 	}()
 
 	eventCh := inst.GetEventChan()
-	// 客户端断开后不再写 SSE，但仍把事件通道读干净：运行与本次请求共用同一条 ctx，
-	// 已随断开取消 —— 等它自行收尾（落库、杀常驻进程）再返回。直接 return 会让
-	// defer inst.Close() 在 Stream 还没退出时跑，与它抢同一个一次性工作目录。
+	// After the client disconnects, stop writing SSE but keep draining the event channel: the run
+	// shares the request ctx and has already been cancelled by the disconnect — wait for it to wind
+	// down (persistence, killing resident processes) before returning. Returning directly would let
+	// defer inst.Close() run while Stream is still active, fighting over the same one-shot working directory.
 	gone := r.Context().Done()
 
 loop:
@@ -565,29 +615,31 @@ loop:
 				continue
 			}
 			if gone == nil {
-				continue // 已断开：只读不写
+				continue // already disconnected: read only, never write
 			}
 			if item, ok := ev.ToProgress(); ok {
 				notifyProgress(w, pump, item.Category, xjson.SanitizeJSON(item.Message), item.Meta)
 			}
 		case <-errCh:
-			// 后台执行结束：业务错误已双写进 inst.Error，统一交给 writeAgentResult 包装
+			// The background execution ended: the business error is already mirrored into inst.Error
+			// and is wrapped uniformly by writeAgentResult.
 			break loop
 		case <-gone:
-			gone = nil // 置 nil 后该分支永久阻塞，避免空转
+			gone = nil // nil blocks that branch for good, avoiding a busy loop
 		}
 	}
 
 	if r.Context().Err() != nil {
-		return // 客户端已断开：结果无人接收，也不再写响应
+		return // the client disconnected: nobody receives the result, so no response either
 	}
 	writeAgentResult(w, reqID, inst)
 }
 
-// notifyProgress 写一条 notifications/progress（SSE 帧）。
+// notifyProgress writes one notifications/progress frame (SSE).
 //
-// 只有客户端订阅过（pump 拿到 token）才会走到这里；message 与 extra 都为空时不发，
-// 避免推空帧 —— 也因此不会白白消耗一个序号。序号由 pump 单调分配（规范 MUST）。
+// Only reached when the client subscribed (the pump got a token); nothing is sent when both message and
+// extra are empty, which avoids pushing empty frames — and therefore avoids burning a sequence number.
+// Sequence numbers are assigned monotonically by the pump (a MUST of the spec).
 func notifyProgress(w http.ResponseWriter, pump *core.ProgressPump, category, message string, extra map[string]any) {
 	if !pump.Enabled() {
 		return
@@ -607,7 +659,7 @@ func notifyProgress(w http.ResponseWriter, pump *core.ProgressPump, category, me
 	})
 }
 
-// withCategory 把 category 合并进 _meta（不改动传入的 map）。
+// withCategory merges category into _meta (without mutating the map passed in).
 func withCategory(category string, extra map[string]any) map[string]any {
 	meta := make(map[string]any, len(extra)+1)
 	for k, v := range extra {
@@ -617,7 +669,7 @@ func withCategory(category string, extra map[string]any) map[string]any {
 	return meta
 }
 
-// writeAgentResult 写 agent 最终结果（检查 inst.GetError）
+// writeAgentResult writes the final agent result (checking inst.GetError).
 func writeAgentResult(w http.ResponseWriter, reqID interface{}, inst core.Agent) {
 	if e := inst.GetError(); e != "" {
 		writeToolError(w, reqID, e)
@@ -626,10 +678,12 @@ func writeAgentResult(w http.ResponseWriter, reqID interface{}, inst core.Agent)
 	writeResult(w, reqID, inst.GetResult())
 }
 
-// extractProgressToken 取客户端在 params._meta.progressToken 里表达的订阅意愿（与 MCP 同一位置）。
+// extractProgressToken reads the subscription the client expressed in params._meta.progressToken
+// (the same place as MCP).
 //
-// 返回 nil 表示没订阅 —— 这时一帧进度都不能发：规范要求 notifications/progress
-// 只引用活跃请求里提供过的 token。类型不合规（非 string / 非整数）同样视为未提供。
+// nil means "not subscribed" — and then not a single progress frame may be sent: the spec requires
+// notifications/progress to reference only a token supplied by an active request. A value of the wrong
+// type (neither string nor integer) counts as not supplied as well.
 func extractProgressToken(params interface{}) any {
 	mp, ok := params.(map[string]interface{})
 	if !ok {
@@ -646,7 +700,7 @@ func extractProgressToken(params interface{}) any {
 	return t
 }
 
-// writeSSEHeaders 设置 SSE 响应头
+// writeSSEHeaders sets the SSE response headers.
 func writeSSEHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -654,7 +708,7 @@ func writeSSEHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Accel-Buffering", "no")
 }
 
-// writeSSE 以 SSE 事件格式写一条消息
+// writeSSE writes one message in SSE event format.
 func writeSSE(w http.ResponseWriter, payload interface{}) {
 	data, _ := json.Marshal(payload)
 	w.Write([]byte("event: message\ndata: " + string(data) + "\n\n"))
@@ -663,7 +717,7 @@ func writeSSE(w http.ResponseWriter, payload interface{}) {
 	}
 }
 
-// writeResult 写最终结果（流式场景用 SSE，非流式用单条 JSON）
+// writeResult writes the final result (SSE when streaming, a single JSON body otherwise).
 func writeResult(w http.ResponseWriter, reqID interface{}, content string) {
 	content = xjson.SanitizeJSON(content)
 	result := rpcToolResultMsg{
@@ -685,7 +739,8 @@ func writeResult(w http.ResponseWriter, reqID interface{}, content string) {
 	})
 }
 
-// writeToolError 写业务错误结果（isError 标记；流式用 SSE，非流式用单条 JSON）
+// writeToolError writes a business error result (flagged with isError; SSE when streaming, a single
+// JSON body otherwise).
 func writeToolError(w http.ResponseWriter, reqID interface{}, message string) {
 	message = xjson.SanitizeJSON(message)
 	result := rpcToolResultMsg{
@@ -708,12 +763,12 @@ func writeToolError(w http.ResponseWriter, reqID interface{}, message string) {
 	})
 }
 
-// isSSE 判断当前响应是否为流式（已写 SSE 头）
+// isSSE reports whether the current response is streaming (SSE headers already written).
 func isSSE(w http.ResponseWriter) bool {
 	return w.Header().Get("Content-Type") == "text/event-stream"
 }
 
-// writeVersionError 协议版本不支持时返回结构化错误（对齐 MCP）。
+// writeVersionError returns a structured error when the protocol version is unsupported (aligned with MCP).
 func writeVersionError(w http.ResponseWriter, requested int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
@@ -730,11 +785,11 @@ func writeVersionError(w http.ResponseWriter, requested int) {
 	})
 }
 
-// sessionErrCode 把会话解析错误映射成 JSON-RPC 错误码。
+// sessionErrCode maps a session resolution error to a JSON-RPC error code.
 //
-// 缺失 / 非 UUID / 不属于本实体，都是调用方给错了参数 → InvalidParams；
-// 只有存储层故障才是 InternalError。原先一律 InternalError，
-// 客户端因此无从分辨「我传错了」和「服务端坏了」。
+// A missing session, a non-UUID one, or one not belonging to this entity all mean the caller passed
+// bad arguments → InvalidParams; only a storage failure is InternalError. Everything used to be
+// InternalError, leaving the client unable to tell "I passed something wrong" from "the server broke".
 func sessionErrCode(err error) int {
 	switch {
 	case errors.Is(err, sessions.ErrSessionRequired),
@@ -742,27 +797,29 @@ func sessionErrCode(err error) int {
 		errors.Is(err, sessions.ErrSessionForbidden):
 		return errCodeInvalidParams
 	case errors.As(err, new(*quota.ExceededError)):
-		// 会话不存在 + 自动建会话时撞上配额上限：这是可解释的业务拒绝，不是服务端故障
+		// A missing session is auto-created and hits the quota cap: an explainable business rejection,
+		// not a server fault.
 		return errCodeQuotaExceeded
 	default:
 		return errCodeInternalError
 	}
 }
 
-// rpcErrorData 协议错误里的业务编码（放在 error.data，不动 error.code）。
+// rpcErrorData holds the business code of a protocol error (inside error.data, leaving error.code alone).
 //
-// 为什么不把业务编码塞进 error.code：JSON-RPC 的 code 有标准语义（-32602 / -32603 等），
-// 外部 MCP 宿主按它区分「协议错 / 业务错」；塞业务值会让它们当成协议故障。
-// 规范见 nexus/docs/error-codes.md。
+// Why the business code does not go into error.code: JSON-RPC codes have standard semantics
+// (-32602 / -32603 etc.) and external MCP hosts rely on them to tell "protocol error" from "business
+// error"; putting a business value there makes them read it as a protocol fault. See
+// nexus/docs/error-codes.md.
 type rpcErrorData struct {
 	Error  string            `json:"error"`
 	Params map[string]string `json:"params,omitempty"`
 }
 
-// writeRPCErrorCode 同 writeRPCError，但额外带上机器可读的业务编码与渲染参数。
+// writeRPCErrorCode is writeRPCError plus the machine-readable business code and rendering parameters.
 //
-// message 仍然是中文原文：curl、日志、以及未升级的客户端表现完全不变，
-// 翻译只发生在按 data.error 查表的消费方。
+// The message is English like every other diagnostic string; the display copy of the end user comes
+// from data.error through the frontend locale bundle, and msg is only the fallback for an unmapped code.
 func writeRPCErrorCode(w http.ResponseWriter, reqID interface{}, code int, errCode string, params map[string]string, format string, args ...interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rpcResponse{
@@ -776,11 +833,13 @@ func writeRPCErrorCode(w http.ResponseWriter, reqID interface{}, code int, errCo
 	})
 }
 
-// writeRPCError 写协议层错误：HTTP 始终 200，错误置于 JSON-RPC 响应体的 error 字段，
-// 与 MCP server 的工具错误返回方式对齐（MCP 中 return error 即被 SDK 包成协议 error）。
-// 仅用于「已解析为合法 JSON-RPC 请求之后」的业务错误；传输层错误仍用 xhttpErr 给 HTTP 状态码。
+// writeRPCError writes a protocol-level error: HTTP always stays 200 and the error goes into the error
+// field of the JSON-RPC response body, aligned with how an MCP server returns tool errors (in MCP a
+// returned error is wrapped into a protocol error by the SDK).
+// It is only for business errors "after the request has been parsed as valid JSON-RPC"; transport-level
+// errors still use xhttpErr with an HTTP status code.
 //
-// 需要给前端 / 客户端一个可翻译的编码时用 writeRPCErrorCode。
+// Use writeRPCErrorCode when the frontend / client needs a translatable code.
 func writeRPCError(w http.ResponseWriter, reqID interface{}, code int, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	w.Header().Set("Content-Type", "application/json")
@@ -794,7 +853,7 @@ func writeRPCError(w http.ResponseWriter, reqID interface{}, code int, format st
 	})
 }
 
-// xhttpErr 写简单 JSON 错误（传输层错误：HTTP 状态码 + 协议体 error 并存）
+// xhttpErr writes a plain JSON error (a transport-level error: HTTP status code plus a protocol body error).
 func xhttpErr(w http.ResponseWriter, code int, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	w.Header().Set("Content-Type", "application/json")

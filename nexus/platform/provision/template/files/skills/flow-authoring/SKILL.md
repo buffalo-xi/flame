@@ -138,7 +138,7 @@ After creation the returned `nodes` carry `position`; if you dislike it, move a 
 | `env` | flow environment variables (`flows.env_vars`) | `source_key` = variable name |
 | `global` | tenant-level global variables ("Settings → Global variables") | `source_key` = variable name |
 | `flow` | flow variables (writable at runtime) | `source_key` = variable name |
-| `builtin` | run context (read-only) | `session_id` / `run_id` / `user_id` / `schema` / `flow_id` |
+| `builtin` | run context (read-only) | `session_id` / `run_id` / `user_id` / `schema` / `flow_id` / `language` (the run's output language, empty when the caller specified none) |
 
 A missing value **fails outright** (the node fails); it never silently yields empty — when debugging, first check whether
 `source_key` is misspelled.

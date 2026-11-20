@@ -75,12 +75,12 @@ Three rules that differ from workflows; align before changing code:
    data and must survive a backup). Putting it inside the entity directory would break the sentence "the draft directory
    holds drafts only", and snapshots would nest inside each other.
 3. **Grants are never frozen, declarations are.** What a version freezes is the definition (body + description / visibility /
-   tool dependency declarations / the agent's two switches `tools_unrestricted` and `skill_discovery` — they set the runtime
-   contract, so they are definition); grants such as `agent_tool_grants` / `agent_skill_bindings` / `agent_relations` always
-   read the current row — `revoke` must take effect immediately, so `rollback` leaves them alone and `apply` does not write
-   them back.
-   Corollary: production runs read those two switches from the **current version**
-   (`versioning.AgentCurrentSwitches`), not from the current value in the `agents` table; loading an old version writes both
+   tool dependency declarations / the agent's two switches `tools_unrestricted` and `skill_discovery` plus its default reply
+   language `default_language` — they set the runtime contract, so they are definition); grants such as `agent_tool_grants` /
+   `agent_skill_bindings` / `agent_relations` always read the current row — `revoke` must take effect immediately, so
+   `rollback` leaves them alone and `apply` does not write them back.
+   Corollary: production runs read those frozen attributes from the **current version**
+   (`versioning.AgentCurrentAttributes`), not from the current value in the `agents` table; loading an old version writes those
    columns back according to that version.
 
    Custom tools behave the same: the production tool catalog and contract (`TOOL.json`: arguments / entry / language /

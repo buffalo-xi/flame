@@ -2,24 +2,25 @@ package pluginpolicy
 
 import "testing"
 
-// 缺省必须是开放（2026-11-02 产品决定）：插件本体是平台放进磁盘的可信代码，
-// 凭证与成本都在租户侧（{schema}.plugins.configs 里是租户自己的 key），
-// 逐租户开通只是运营负担。要收紧就写一行 is_allowed=false。
+// The default must be open (a product decision of 2026-11-02): the plugin itself is trusted code the platform put on
+// disk, the credentials and the cost sit on the tenant side (the keys in {schema}.plugins.configs are the tenant's own),
+// and enabling tenants one by one is pure operational overhead. To tighten it, write one is_allowed=false row.
 //
-// 注意：Policy 的**零值**仍然是 Allowed=false —— 缺省语义只由 Default() 表达，
-// 读表拿不到行时必须显式调 Default()，不能依赖零值。这条也是防止将来有人
-// 把 `map[name]` 查不到时的零值直接当策略用、悄悄把缺省变回拒绝（或反过来）。
+// Note: the **zero value** of Policy is still Allowed=false — the default semantics are expressed by Default() alone, and
+// whoever reads the table without a row must call Default() explicitly rather than rely on the zero value. This also
+// keeps anyone from later using the zero value of a failed `map[name]` lookup as the policy and silently turning the
+// default back into "refused" (or the other way round).
 func TestDefaultAllows(t *testing.T) {
 	p := Default()
 	if !p.Allowed {
-		t.Fatalf("缺省策略应为「开放」，实际 Allowed=false")
+		t.Fatalf("the default policy should be \"open\", got Allowed=false")
 	}
 	if p.Blocked {
-		t.Fatalf("缺省不应被全局闸拦下")
+		t.Fatalf("the default should not be blocked by the global gate")
 	}
 
 	var zero Policy
 	if zero.Allowed {
-		t.Fatalf("Policy 零值应保持 false（缺省语义只由 Default() 表达）")
+		t.Fatalf("the zero value of Policy should stay false (the default semantics live in Default() only)")
 	}
 }

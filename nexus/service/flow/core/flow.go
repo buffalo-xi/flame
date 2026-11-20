@@ -20,11 +20,11 @@ type Node struct {
 	Data       *NodeData `json:"data"`
 	Position   Position  `json:"position"`
 	ParentNode string    `json:"parent_node,omitempty"`
-	InEdges    []*Edge   // 上游，常规仅1个，预留多上游能力
-	OutEdges   []*Edge   // 下游，支持多个,分支节点使用多个下游节点
+	InEdges    []*Edge   // upstream: normally exactly one, multi-upstream is reserved for later
+	OutEdges   []*Edge   // downstream: several are allowed, branch nodes use more than one
 }
 
-// Label 返回节点显示名：唯一来源是 data.label，缺失时回退到节点 id。
+// Label returns the display name of the node: data.label is the only source, with the node id as fallback.
 func (n *Node) Label() string {
 	if n == nil {
 		return ""

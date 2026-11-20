@@ -1,16 +1,20 @@
 package versioning
 
-// 运行时读「技能元数据」的当前版本快照。
+// Reading the "skill metadata" snapshot of the current version at runtime.
 //
-// 为什么元数据也要读版本：描述是渐进式披露里给模型看的那一行，可见性决定它出不出现，
-// 工具依赖决定读完之后多出哪些工具。只冻正文不冻这几项，就会出现「改一句描述、
-// 不用发布」也改变了模型看到的清单口径 —— 版本就说不清「当时模型看到什么」。
+// Why the metadata is read from the version too: the description is the one line shown to the model in progressive
+// disclosure, the visibility decides whether it appears at all, and the tool dependencies decide which extra tools exist
+// once it has been read. Freezing only the body and not these items would mean "edit one description line, no release
+// needed" still changes the catalogue the model sees — and then the version can no longer say "what the model saw at that
+// time".
 //
-// 三条口径：
-//   - 私有技能：元数据在所属 agent 的版本行 skills 列（私有技能没有独立版本号）；
-//   - 租户级技能：元数据在 skill_versions 当前行（含 tool_deps）；
-//   - 读取失败（比如实体从未发布）不 panic、不退回草稿：返回 ErrNoReleasedVersion，
-//     由调用方降级成「只有名字，没有正文/描述」—— 见 skills.go 的处理。
+// Three rules:
+//   - private skills: the metadata is in the skills column of the owning agent's version row (a private skill has no
+//     version number of its own);
+//   - tenant-level skills: the metadata is in the current row of skill_versions (including tool_deps);
+//   - a failed read (for example the entity was never released) neither panics nor falls back to the draft: it returns
+//     ErrNoReleasedVersion and the caller degrades to "just the name, no body / description" — see the handling in
+//     skills.go.
 
 import (
 	"database/sql"
@@ -21,7 +25,7 @@ import (
 	"flame/nexus/shared/versions"
 )
 
-// SkillMeta 一条技能的元数据快照（正文不在这里，走文件清单）。
+// SkillMeta is the metadata snapshot of one skill (the body is not here, it comes from the file list).
 type SkillMeta struct {
 	Name            string          `json:"name"`
 	Description     string          `json:"description"`
@@ -33,7 +37,7 @@ type SkillMeta struct {
 	ToolDeps        []toolDep       `json:"tool_deps,omitempty"`
 }
 
-// ToolRefs 声明的工具依赖 ref 列表（复制一份，避免调用方改到快照）。
+// ToolRefs is the declared tool dependency ref list (copied, so a caller cannot mutate the snapshot).
 func (m SkillMeta) ToolRefs() []string {
 	if len(m.ToolDeps) == 0 {
 		return nil
@@ -50,10 +54,10 @@ type toolDep struct {
 	Ref  string `json:"ref"`
 }
 
-// AgentPrivateSkillMeta 读 agent 当前版本里的私有技能元数据（name → meta）。
+// AgentPrivateSkillMeta reads the private skill metadata in the agent's current version (name → meta).
 //
-// 没有当前版本时返回 ErrNoReleasedVersion —— 正式运行时这个 agent 本身就起不来，
-// 这里极少真的走到；返回错误而不是空 map，是为了不把「未发布」伪装成「没有技能」。
+// With no current version it returns ErrNoReleasedVersion — in a production run the agent itself would not start, so this
+// is rarely reached; it returns an error rather than an empty map so "unreleased" is never disguised as "has no skills".
 func AgentPrivateSkillMeta(schema, agentName string) (map[string]SkillMeta, error) {
 	var raw []byte
 	err := db.DB.QueryRow(`SELECT v.skills FROM `+schema+`.agent_versions v
@@ -78,10 +82,10 @@ func AgentPrivateSkillMeta(schema, agentName string) (map[string]SkillMeta, erro
 	return out, nil
 }
 
-// TenantSkillMeta 批量读租户级技能当前版本的元数据（skill id → meta）。
+// TenantSkillMeta batch-reads the current version metadata of tenant-level skills (skill id → meta).
 //
-// 返回的 map 只含**有当前版本**的技能；调用方对缺失项降级为「只给名字」，
-// 不要拿草稿描述顶上去（那正是要堵的洞）。
+// The returned map contains only the skills that **have a current version**; the caller degrades a missing one to "just
+// the name" — it must not substitute the draft description (that is exactly the hole being plugged).
 func TenantSkillMeta(schema string, skillIDs []string) (map[string]SkillMeta, error) {
 	if len(skillIDs) == 0 {
 		return map[string]SkillMeta{}, nil
@@ -115,9 +119,11 @@ func TenantSkillMeta(schema string, skillIDs []string) (map[string]SkillMeta, er
 	return out, rows.Err()
 }
 
-// SkillToolDepsSnapshot 冻结某租户级技能声明的工具依赖（发布 / 回填时写入 skill_versions）。
+// SkillToolDepsSnapshot freezes the tool dependencies declared by a tenant-level skill (written to skill_versions at
+// release / backfill time).
 //
-// 依赖是「声明」，属于定义；授权（能不能真的调到）永远取当前 —— revoke 必须立即生效。
+// A dependency is a "declaration" and part of the definition; a grant (whether it can really be called) is always the
+// current one — revoke must take effect immediately.
 func SkillToolDepsSnapshot(schema, skillID string) ([]byte, error) {
 	rows, err := db.DB.Query(`SELECT item_type, ref FROM `+schema+`.skill_tool_grants
 		WHERE skill_id = $1 ORDER BY ref`, skillID)
@@ -140,9 +146,10 @@ func SkillToolDepsSnapshot(schema, skillID string) ([]byte, error) {
 	return json.Marshal(deps)
 }
 
-// pgUUIDArray 把 uuid 列表转成 lib/pq 认的数组字面量。
+// pgUUIDArray turns a uuid list into an array literal lib/pq accepts.
 //
-// 用 text[] 再 ::uuid[] 转：pq 对 []string 走的是 {a,b} 字面量，不能直接当 uuid[] 参数。
+// Pass it as text[] and cast with ::uuid[]: pq renders []string as a {a,b} literal, which cannot be passed as a uuid[]
+// argument directly.
 func pgUUIDArray(ids []string) string {
 	b := make([]byte, 0, len(ids)*40+2)
 	b = append(b, '{')

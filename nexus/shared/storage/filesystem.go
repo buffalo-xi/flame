@@ -10,13 +10,13 @@ import (
 	"time"
 )
 
-// FilesystemStorage 本地文件系统存储（local / nfs 共用）。
-// NFS 挂载后对操作系统而言就是一个本地路径，读写方式与本地盘一致。
+// FilesystemStorage is local filesystem storage (shared by local / nfs).
+// Once mounted, NFS is just a local path to the operating system, read and written the same way as a local disk.
 type FilesystemStorage struct {
 	Root string
 }
 
-// NewFilesystemStorage 创建文件系统存储实例。
+// NewFilesystemStorage creates a filesystem storage instance.
 func NewFilesystemStorage(root string) *FilesystemStorage {
 	return &FilesystemStorage{Root: root}
 }
@@ -70,7 +70,7 @@ func (f *FilesystemStorage) Exists(_ context.Context, p string) (bool, error) {
 	return false, err
 }
 
-// Stat 返回单个文件的元信息（目录视为错误，下载只针对文件）。
+// Stat returns the metadata of a single file (a directory counts as an error; downloads target files only).
 func (f *FilesystemStorage) Stat(_ context.Context, p string) (int64, time.Time, error) {
 	fi, err := os.Stat(f.fullPath(p))
 	if err != nil {
@@ -82,9 +82,9 @@ func (f *FilesystemStorage) Stat(_ context.Context, p string) (int64, time.Time,
 	return fi.Size(), fi.ModTime(), nil
 }
 
-// OpenSeekCloser 打开可随机读的句柄，供 http.ServeContent 处理 Range / 206。
+// OpenSeekCloser opens a randomly readable handle for http.ServeContent to handle Range / 206.
 func (f *FilesystemStorage) OpenSeekCloser(_ context.Context, p string) (io.ReadSeekCloser, error) {
-	return os.Open(f.fullPath(p)) // *os.File 天然满足 io.ReadSeekCloser
+	return os.Open(f.fullPath(p)) // *os.File satisfies io.ReadSeekCloser natively
 }
 
 func (f *FilesystemStorage) List(_ context.Context, dir string) ([]Entry, error) {
@@ -105,7 +105,7 @@ func (f *FilesystemStorage) List(_ context.Context, dir string) ([]Entry, error)
 	return out, nil
 }
 
-// DeletePrefix 递归删除目录及其全部子孙（目录不存在时返回 nil）。
+// DeletePrefix recursively deletes a directory and all of its descendants (returns nil when it is missing).
 func (f *FilesystemStorage) DeletePrefix(_ context.Context, dir string) error {
 	err := os.RemoveAll(f.fullPath(dir))
 	if os.IsNotExist(err) {
@@ -114,8 +114,9 @@ func (f *FilesystemStorage) DeletePrefix(_ context.Context, dir string) error {
 	return err
 }
 
-// Rename 重命名/移动文件或目录（源不存在时返回 nil）。
-// os.Rename 对两者通用且在同一条文件系统内是原子的 —— 不存在 S3 那种「复制完再删」的中间态。
+// Rename renames / moves a file or a directory (returns nil when the source is missing).
+// os.Rename works for both and is atomic within one filesystem — there is no S3-style intermediate state of "copied, not
+// yet deleted".
 func (f *FilesystemStorage) Rename(_ context.Context, oldPath, newPath string) error {
 	old := f.fullPath(oldPath)
 	if _, err := os.Stat(old); os.IsNotExist(err) {
@@ -128,18 +129,19 @@ func (f *FilesystemStorage) Rename(_ context.Context, oldPath, newPath string) e
 	return os.Rename(old, dst)
 }
 
-// PresignedGetURL 本地文件没有「外部可达的临时链接」：返回空串，由 nexus 自己发字节。
+// PresignedGetURL: a local file has no "externally reachable temporary link", so it returns an empty string and nexus
+// sends the bytes itself.
 func (f *FilesystemStorage) PresignedGetURL(_ context.Context, _ string, _ time.Duration, _ string) (string, error) {
 	return "", nil
 }
 
-// WalkPrefix 递归枚举目录下的全部文件（跳过 `.` 开头的名字）。
-// 顺序是 filepath.WalkDir 的字典序，需要「最旧优先」的调用方自行排序。
+// WalkPrefix recursively enumerates every file under a directory (skipping names starting with `.`).
+// The order is filepath.WalkDir's lexical order; a caller that needs oldest-first sorts itself.
 func (f *FilesystemStorage) WalkPrefix(ctx context.Context, dir string, fn func(rel string, size int64, mod time.Time) error) error {
 	root := f.fullPath(dir)
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			if os.IsNotExist(err) { // 并发删除：跳过即可，不是异常
+			if os.IsNotExist(err) { // deleted concurrently: skip it, that is not an anomaly
 				return nil
 			}
 			return err

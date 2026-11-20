@@ -7,7 +7,7 @@ import (
 	"flame/tools/xsql"
 )
 
-// LLMProvider LLM服务商结构体
+// LLMProvider is an LLM provider.
 type LLMProvider struct {
 	ID          string      `json:"id"`
 	Name        string      `json:"name"`
@@ -19,7 +19,7 @@ type LLMProvider struct {
 	ExtraConfig xsql.JSONB  `json:"extra_config"`
 }
 
-// LLMProviderPreset LLM服务商预设结构体（系统级，全局共享，存在 platform schema）
+// LLMProviderPreset is an LLM provider preset: system-level, globally shared, stored in the platform schema.
 type LLMProviderPreset struct {
 	ID          string      `json:"id"`
 	Name        string      `json:"name"`
@@ -31,13 +31,14 @@ type LLMProviderPreset struct {
 	SortOrder   int         `json:"sort_order"`
 }
 
-// LLMModel LLM模型结构体
+// LLMModel is an LLM model.
 type LLMModel struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
 	ContextWindow xsql.Int `json:"context_window"`
-	// 基础生成参数（jsonb）。键存在=使用该参数，键不存在=未使用；无多余包装结构。
-	// 仅允许以下键：max_tokens(int)、temperature(float64)、top_p(float64)
+	// Base generation parameters (jsonb). A key being present means that parameter is used, a missing key means it is
+	// not; there is no extra wrapper structure.
+	// Only these keys are allowed: max_tokens(int), temperature(float64), top_p(float64)
 	BaseParams   xsql.JSONB  `json:"base_params"`
 	ProviderID   string      `json:"provider_id"`
 	GatewayID    xsql.String `json:"gateway_id"`
@@ -49,8 +50,8 @@ type LLMModel struct {
 	UpdatedAt    xsql.Time   `json:"updated_at"`
 }
 
-// bpFloat 从 jsonb 解析出的 map 中读取 float64 类型的参数值。
-// 键不存在或类型不匹配时返回 (0, false)。
+// bpFloat reads a float64 parameter value from the map decoded out of jsonb.
+// A missing key or a type mismatch returns (0, false).
 func bpFloat(bp map[string]any, key string) (float64, bool) {
 	v, ok := bp[key]
 	if !ok {
@@ -74,7 +75,8 @@ func bpFloat(bp map[string]any, key string) (float64, bool) {
 	}
 }
 
-// GetTemperature 返回基础参数中的 temperature；未配置时返回缺省值 0.7，ok=false。
+// GetTemperature returns temperature from the base parameters; when it is not configured it returns the default 0.7
+// with ok=false.
 func (m *LLMModel) GetTemperature() (float64, bool) {
 	if m.BaseParams.IsNil() {
 		return 0.7, false
@@ -89,7 +91,8 @@ func (m *LLMModel) GetTemperature() (float64, bool) {
 	return 0.7, false
 }
 
-// GetMaxTokens 返回基础参数中的 max_tokens；未配置时返回缺省值 40960，ok=false。
+// GetMaxTokens returns max_tokens from the base parameters; when it is not configured it returns the default 40960 with
+// ok=false.
 func (m *LLMModel) GetMaxTokens() (int, bool) {
 	if m.BaseParams.IsNil() {
 		return 40960, false
@@ -104,7 +107,7 @@ func (m *LLMModel) GetMaxTokens() (int, bool) {
 	return 40960, false
 }
 
-// GetTopP 返回基础参数中的 top_p；未配置时返回缺省值 0.6，ok=false。
+// GetTopP returns top_p from the base parameters; when it is not configured it returns the default 0.6 with ok=false.
 func (m *LLMModel) GetTopP() (float64, bool) {
 	if m.BaseParams.IsNil() {
 		return 0.6, false
@@ -119,203 +122,228 @@ func (m *LLMModel) GetTopP() (float64, bool) {
 	return 0.6, false
 }
 
-// Agent 智能体结构体
+// Agent is an agent.
 type Agent struct {
 	ID          string      `json:"id"`
 	Name        string      `json:"name"`
 	Description xsql.String `json:"description"`
 	Config      xsql.JSONB  `json:"config"`
-	Status      xsql.Int    `json:"status"` // 1:正常 3:废弃（见 StatusNormal/StatusDeprecated；agent 不设「锁定」）
+	Status      xsql.Int    `json:"status"` // 1: normal, 3: deprecated (see StatusNormal/StatusDeprecated; agents have no "locked" state)
 	Endpoints   xsql.JSONB  `json:"endpoints"`
-	// 两个 agent 级开关（列均为 NOT NULL DEFAULT false）：
+	// Two agent-level switches (both columns are NOT NULL DEFAULT false):
 	//
-	//	ToolsUnrestricted：不限制工具 —— 该 agent 接受其可见 skill 声明的工具
-	//	                   （跳过授权检查，显式 deny 仍生效）
-	//	SkillDiscovery   ：允许发现未绑定的技能 —— 可见范围额外含「全员可见」的租户级技能（渐进式披露）
+	//	ToolsUnrestricted: do not restrict tools — this agent accepts the tools declared by the skills it can see
+	//	                  (the grant check is skipped; an explicit deny still applies)
+	//	SkillDiscovery  : allow discovering unbound skills — the visible scope additionally includes tenant-level skills
+	//	                  visible to everyone (progressive disclosure)
 	//
-	// 注意：system prompt 的注入清单**始终**只列「私有 + 已绑定」，与这些开关无关。
+	// Note: the system prompt's injected catalogue **always** lists only "private + bound", regardless of these switches.
 	ToolsUnrestricted bool `json:"tools_unrestricted"`
 	SkillDiscovery    bool `json:"skill_discovery"`
-	// IsSupervisor 超级权限身份（agents.is_supervisor）。
+	// IsSupervisor is the super-privilege attribute (agents.is_supervisor).
 	//
-	// 取代了过去的「名字等于 main」判据：main 只是建租户时预置的一个 supervisor，
-	// 租户可以再配出同等权限的 agent（允许多个）。判据见 models.IsSupervisor。
+	// It replaces the old "name equals main" criterion: main is merely the supervisor preinstalled when a tenant is
+	// provisioned, and a tenant may configure another agent with the same privileges (several are allowed). The
+	// criterion is models.IsSupervisor.
 	//
-	// 它决定：缺省 core 工具集、管理类工具可用性、跨域写文件、不可被其它 agent 调用、
-	// 授权目录走全量视角。它**不**决定删除保护 —— 那由 IsProtectedAgent（名字名单）管，
-	// 两者语义正交。
-	IsSupervisor  bool        `json:"is_supervisor"`
+	// It decides: the default core tool set, the availability of management tools, cross-domain file writes, "cannot be
+	// called by another agent", and the grants catalogue's full view. It does **not** decide the delete protection — that
+	// is IsProtectedAgent (a name list), and the two semantics are orthogonal.
+	IsSupervisor bool `json:"is_supervisor"`
+	// DefaultLanguage is the agent's default reply language (agents.default_language, a BCP-47 tag; empty = not
+	// configured).
+	//
+	// It is a **definition** column, not free-form config: it is frozen into agent_versions on release, travels with an
+	// asset pack, and is what the runtime reads when the caller pins no language. It is the machine-readable half of
+	// "what language this agent speaks" — the wording and the exceptions stay in AGENT.md, which still wins.
+	DefaultLanguage string `json:"default_language"`
 	CreatedBy     xsql.UUID   `json:"created_by"`
 	UpdatedBy     xsql.UUID   `json:"updated_by"`
-	UpdatedByName xsql.String `json:"updated_by_name"` // 修改人姓名（查询时关联 users 填充，非 DB 列）
+	UpdatedByName xsql.String `json:"updated_by_name"` // the editor's name (joined from users at query time, not a DB column)
 	CreatedAt     xsql.Time   `json:"created_at"`
 	UpdatedAt     xsql.Time   `json:"updated_at"`
 }
 
-// 生命周期状态取值（agents / flows / skills 三张表的 status 列共用，列类型 int2）。
+// Lifecycle state values (shared by the status column of agents / flows / skills; the column type is int2).
 //
-//	正常(1)：可修改、可运行 —— 新建默认值
-//	废弃(3)：**不可修改、不可运行** —— 只由手工设置
+//	normal(1): modifiable and runnable — the default for new rows
+//	deprecated(3): **not modifiable, not runnable** — only ever set by hand
 //
-// agent / flows / skills 都是两态（CHECK (1,3)）。历史上的「锁定(2)：不可修改、
-// 可运行」已全部取消：工作流由版本模型表达线上冻结，agent / skill 的「先解锁才能
-// 发修复版」反而把想防的风险让了回来（解锁那一刻定义又可改）。
+// agents / flows / skills all have two states (CHECK (1,3)). The historical "locked(2): not modifiable, runnable" has
+// been removed everywhere: a workflow expresses the production freeze through the version model, while for agents / skills
+// "unlock before you can ship a fix" handed the very risk it was meant to prevent right back (the definition became
+// editable the moment it was unlocked).
 //
-// 唯一保留 status=2 的地方是**自定义工具**：它沿用「启用(1)/停用(2)」的老口径，
-// 语义是「停用」而非「锁定」。StatusLocked 常量由此保留，agent / skill 不要再用它。
+// The only place that keeps status=2 is **custom tools**: they keep the old "enabled(1) / disabled(2)" rule, where the
+// meaning is "disabled", not "locked". The StatusLocked constant is kept for that; agents / skills must not use it again.
 //
-// 唯一自动联动（实现分别在 shared/repository/svcendpoints 与各 Set*Status handler）：
+// The only automatic coupling (implemented in shared/repository/svcendpoints and each Set*Status handler):
 //
-//	状态切「废弃」→ 自动收回其全部端点的对外（exposed=false，**端点记录保留**）。
+//	switch the state to "deprecated" -> automatically retract all of its endpoints (exposed=false, **the endpoint records
+//	are kept**).
 //
-// 刻意**没有**的联动：端点对外开放不改状态。「对外提供入口」与「定义能不能改」
-// 是两件事 —— 早期把两者绑死（对外即锁定），代价是改一行提示词要先解锁、而解锁又会收回
-// 端点、断一下流量。现在端点对外后仍可编辑，改动由编辑界面在保存时提醒（有端点对外开放时二次确认）。
+// The coupling that is deliberately **absent**: exposing an endpoint does not change the state. "Offering an entrance to
+// the outside" and "may the definition change" are two different things — binding them together early on (exposed means
+// locked) cost a prompt edit the price of unlocking first, and unlocking retracted the endpoint and cut the traffic. Now an
+// endpoint may stay editable after it is exposed, and the editor warns at save time (a second confirmation while an
+// endpoint is exposed).
 const (
-	// StatusNormal 正常：可修改、可运行
+	// StatusNormal is normal: modifiable and runnable.
 	StatusNormal = 1
-	// StatusLocked 不可修改、可运行。agent / flows / skills 均已取消该态；
-	// 只剩**自定义工具**用它表示「停用」（老口径，不是冻结定义的「锁定」）。
+	// StatusLocked is not modifiable but runnable. agents / flows / skills have all dropped this state; only **custom
+	// tools** still use it for "disabled" (the old rule, not the definition-freezing "locked").
 	StatusLocked = 2
-	// StatusDeprecated 废弃：不可修改、不可运行
+	// StatusDeprecated is deprecated: not modifiable, not runnable.
 	StatusDeprecated = 3
 )
 
-// IsModifiable 只有「正常」允许改定义：废弃不允许（自定义工具的「停用」同样不允许）。
-// 守卫统一用它判定，别再写 `status == 1` 这类字面量。
+// IsModifiable allows changing the definition only in the "normal" state: a deprecated entity may not (a custom tool's
+// "disabled" may not either). Guards must all use it — do not write literals such as `status == 1`.
 func IsModifiable(status int) bool { return status == StatusNormal }
 
-// IsRunnable 是否允许被运行/调用：只有「废弃」被拦。
+// IsRunnable allows being run / called: only "deprecated" is blocked.
 func IsRunnable(status int) bool { return status != StatusDeprecated }
 
-// 三个实体的状态判定（包一层，调用方不必再写 int(x.Status) 转换）。
-// IsModifiable：允许改定义（只有「正常」允许）。
+// Status checks for the three entities (a thin wrapper so callers do not have to write int(x.Status)).
+// IsModifiable: changing the definition is allowed (only "normal" allows it).
 
-// IsModifiable 该 agent 是否允许改定义（含它名下的私有 skill：非正常态整片冻结）。
+// IsModifiable: whether this agent's definition may change (including the private skills it owns: a non-normal state
+// freezes all of them).
 func (a *Agent) IsModifiable() bool { return IsModifiable(int(a.Status)) }
 
-// IsModifiable 该 flow 是否允许改定义。
+// IsModifiable: whether this flow's definition may change.
 func (f *Flow) IsModifiable() bool { return IsModifiable(int(f.Status)) }
 
-// IsModifiable 该 skill 是否允许改定义。
+// IsModifiable: whether this skill's definition may change.
 func (s *Skill) IsModifiable() bool { return IsModifiable(int(s.Status)) }
 
-// 说明：原先的 HasEnabledEndpoint（"有没有 exposed 端点"）已下线 —— 定义守卫只看 status
-// （见 IsModifiable），与端点对外**无关**：端点对外不改状态，也有端点对外开放却仍可编辑的实体。
-// 需要「有对外开放端点」这个事实的地方（编辑界面保存前提醒、本地端点目录）各自从
-// entities.endpoints / svc_endpoints 读，不要拿 status 反推。
+// Note: the former HasEnabledEndpoint ("has an exposed endpoint") is gone — the definition guard looks only at status
+// (see IsModifiable) and is **independent** of endpoint exposure: exposing an endpoint does not change the state, and an
+// entity may have an exposed endpoint and still be editable. Where "it has an exposed endpoint" is really needed (a
+// warning before saving in the editor, the local endpoint catalogue), read it from entities.endpoints / svc_endpoints;
+// never infer it back from status.
 
-// Skill skill 定义（agent_id 为 NULL 表示租户级，非 NULL 表示该 agent 私有）。
-// 元数据与归属存本表，内容存文件（路径由 skill name 与归属推导）。
+// Skill is a skill definition (agent_id NULL means tenant-level, non-NULL means private to that agent).
+// The metadata and ownership live in this table, the content lives in files (the path is derived from the skill name and
+// its owner).
 type Skill struct {
 	ID              string      `json:"id"`
 	Name            string      `json:"name"`
 	Description     xsql.String `json:"description"`
 	CreatedBy       xsql.UUID   `json:"created_by"`
 	UpdatedBy       xsql.UUID   `json:"updated_by"`
-	UpdatedByName   xsql.String `json:"updated_by_name"`  // 修改人姓名（查询时关联 users 填充，非 DB 列）
-	AgentName       xsql.String `json:"agent_name"`       // 所属智能体名字（查询时关联 agents 填充，非 DB 列；agent_id 为空时为空）
-	Metadata        xsql.JSONB  `json:"metadata"`         // 扩展元数据（DB 列 metadata）
-	UserInvocable   xsql.Bool   `json:"user_invocable"`   // OpenClaw user-invocable：是否暴露为用户可直接调用的命令
-	CommandDispatch xsql.String `json:"command_dispatch"` // OpenClaw command-dispatch：'tool' = 绕过模型直接分发
-	CommandTool     xsql.String `json:"command_tool"`     // OpenClaw command-tool：命令分发到的目标工具名
+	UpdatedByName   xsql.String `json:"updated_by_name"`  // the editor's name (joined from users at query time, not a DB column)
+	AgentName       xsql.String `json:"agent_name"`       // the owning agent's name (joined from agents at query time, not a DB column; empty when agent_id is empty)
+	Metadata        xsql.JSONB  `json:"metadata"`         // extended metadata (DB column metadata)
+	UserInvocable   xsql.Bool   `json:"user_invocable"`   // OpenClaw user-invocable: whether it is exposed as a command the user can call directly
+	CommandDispatch xsql.String `json:"command_dispatch"` // OpenClaw command-dispatch: 'tool' = dispatch straight to the tool, bypassing the model
+	CommandTool     xsql.String `json:"command_tool"`     // OpenClaw command-tool: the target tool name the command dispatches to
 	Status          xsql.Int    `json:"status"`
-	Restricted      xsql.Bool   `json:"restricted"` // 可见性收窄：false=全员可见(默认)；true=仅授权 agent 可见（仅对租户级 skill 生效）
+	Restricted      xsql.Bool   `json:"restricted"` // narrowed visibility: false = visible to everyone (default); true = visible only to granted agents (tenant-level skills only)
 	CreatedAt       xsql.Time   `json:"created_at"`
 	UpdatedAt       xsql.Time   `json:"updated_at"`
 	AgentID         xsql.UUID   `json:"agent_id"`
 }
 
-// ===== 工具授权体系（tool_groups / agent_tool_grants / skill_tool_grants） =====
+// ===== tool grant system (tool_groups / agent_tool_grants / skill_tool_grants) =====
 
-// 引用类型（tool_group_items.item_type / *_tool_grants.item_type）。
+// Reference kinds (tool_group_items.item_type / *_tool_grants.item_type).
 const (
-	GrantItemGroup = "group" // 组：天然组（builtin:* / mcp:* / rpc:* / local:rpc）或工具组（group:*）
-	GrantItemTool  = "tool"  // 单个工具：builtin:<tool> / mcp:<conn>:<tool> / rpc:<conn>:<tool> / local:rpc:<name>
-	// 注：local:rpc 只收 target_type='flow' 的本地端点（agent 端点走 call_agent，不进工具目录）。
+	GrantItemGroup = "group" // group: a native group (builtin:* / mcp:* / rpc:* / local:rpc) or a tool group (group:*)
+	GrantItemTool  = "tool"  // a single tool: builtin:<tool> / mcp:<conn>:<tool> / rpc:<conn>:<tool> / local:rpc:<name>
+	// Note: local:rpc only takes local endpoints with target_type='flow' (agent endpoints go through call_agent and do
+	// not enter the tool catalogue).
 )
 
-// 授权种类（agent_tool_grants.grant_kind）。
+// Grant kinds (agent_tool_grants.grant_kind).
 const (
-	GrantKindRequired = "required" // 必须导入：恒注入，不受 deny 影响
-	GrantKindAllow    = "allow"    // 可使用：被 deny 覆盖
-	GrantKindDeny     = "deny"     // 显式拒绝：只对 allow 生效
+	GrantKindRequired = "required" // must import: always injected, unaffected by deny
+	GrantKindAllow    = "allow"    // may use: overridden by deny
+	GrantKindDeny     = "deny"     // explicitly refused: applies to allow only
 )
 
-// GrantRefBuiltinPrefix ref 前缀：单个内置工具（builtin:<tool>）。
-// 与 service/agent/toolgrant.ScopeBuiltin 同值（有测试守住）—— 共享层不反向依赖服务层。
+// GrantRefBuiltinPrefix is the ref prefix of a single built-in tool (builtin:<tool>).
+// The same value as service/agent/toolgrant.ScopeBuiltin (a test guards it) — the shared layer never depends on the
+// service layer.
 const GrantRefBuiltinPrefix = "builtin:"
 
-// DefaultAgentTools 新建 agent 缺省获得的工具名（单一真源）。
+// DefaultAgentTools are the tool names a new agent gets by default (single source of truth).
 //
-// 口径：只读元信息 + 文件读写，默认限于 agent 自己的会话工作区；另可用 "/" 前缀
-// 根寻址**读自己的定义目录**（agents/{self}/**，含 AGENT.md）、**写自己的私有 skill**
-// （agents/{self}/skills/{skill}/**，见 tools/gate.go 的 checkReadOwn / checkWriteOwn），
-// 其余跨域路径一律不可达。
-// 不含 exec（黑盒 shell + os.Environ 外泄面）；call_agent 因「工具 ≠ 权限」而包含
-// —— 它的真正闸门是 agent_relations（无行即拒绝）。
+// Rule: read-only metadata + file read/write, by default limited to the agent's own session workspace; in addition the
+// "/" prefix may address the root to **read its own definition directory** (agents/{self}/**, including AGENT.md) and
+// **write its own private skill** (agents/{self}/skills/{skill}/**, see checkReadOwn / checkWriteOwn in tools/gate.go);
+// every other cross-domain path is unreachable.
+// It does not include exec (a black-box shell plus the os.Environ leak surface); call_agent is included because
+// "a tool is not a permission" — its real gate is agent_relations (no row = refused).
 //
-// **不含 create/update/delete_own_skill**：自建私有 skill 等于把自己的提示词变成可写面
-// （写进去的 name/description 下次调用即常驻 system prompt），被输入诱导时可形成持久化注入。
-// 故默认不给，由管理员按 agent 显式授权；授权时用 `required` 物化（恒注入，避开 allow 被
-// skill 依赖收窄的坑），代价是 `deny` 收不回来 —— 要收回得做全量替换（把这三行删掉）。
+// It does **not** include create/update/delete_own_skill: letting an agent build its own private skill turns its prompt
+// into a writable surface (the name / description written there sits in the system prompt on the next call), which under
+// input-induced pressure becomes a persistent injection. So it is not granted by default and an admin grants it per agent
+// explicitly; when granting, materialise it as `required` (always injected, avoiding the trap of allow being narrowed by
+// skill dependencies), at the cost that `deny` cannot take it back — revoking needs a wholesale replace (delete these
+// three lines).
 //
-// 两处消费：① agents.CreateAgent 物化成 required 授权；② toolgrant 的 preset:default 组。
-// 改这里即同时改两处，避免漂移（有测试守住）；另需同步 sql/agent_default_tool_grants.sql。
+// Two consumers: 1) agents.CreateAgent materialises it into required grants; 2) the preset:default group in toolgrant.
+// Changing it changes both, which keeps them from drifting (a test guards it); sql/agent_default_tool_grants.sql must be
+// synced as well.
 var DefaultAgentTools = []string{
-	// 只读文件
+	// read-only files
 	"read_file", "list_files", "file_exists",
-	// 自己的会话工作区内读写
+	// read/write inside its own session workspace
 	"write_file", "edit_file", "delete_file",
-	// 只读元信息 + 用技能
-	// use_skill 必须在这里：绑定只让技能出现在提示词清单，工具要 use_skill 激活才会出现；
-	// 缺了它，普通 agent 就没有任何入口点亮 allow 授权（read_skill 是纯查看，不带工具）。
+	// read-only metadata + use skills
+	// use_skill must be here: a binding only puts the skill into the prompt catalogue, and the tools appear only after
+	// use_skill activates it; without it an ordinary agent has no way at all to light up its allow grants (read_skill is
+	// read-only and brings no tools).
 	"list_agents", "read_agent", "list_skills", "read_skill", "use_skill",
-	// 协作（实际权限由 agent_relations 决定）
+	// collaboration (the actual permission is decided by agent_relations)
 	"call_agent",
 }
 
-// DefaultAgentToolGrants 返回新建 agent 的缺省授权项（item_type=tool / ref=builtin:<name>）。
-// CreateAgent 用它物化授权行，toolgrant 的 preset:default 用它生成成员。
+// DefaultAgentToolGrants returns the default grants of a new agent (item_type=tool / ref=builtin:<name>).
+// CreateAgent materialises the grant rows with it, and toolgrant's preset:default builds its members from it.
 func DefaultAgentToolGrants() []ToolGroupItem {
 	return toolGrantsOf(DefaultAgentTools)
 }
 
-// SupervisorCoreGrantRefs 超级智能体常驻的**组**（core 集，单一真源）。
+// SupervisorCoreGrantRefs are the **groups** the super agent always has (the core set, single source of truth).
 //
-// 六组，展开后 20 个工具：
+// Six groups, 20 tools once expanded:
 //
-//	builtin:file         文件读写（6）
-//	builtin:exec         一次性进程（2）
-//	builtin:shell        常驻会话（1）
-//	builtin:agent        看 / 调 agent（3）
-//	builtin:skill        看 / 用技能（3：list_skills / read_skill / use_skill）
-//	builtin:agent-admin  建 / 改 / 删 agent + 绑定技能（5）
+//	builtin:file         file read/write (6)
+//	builtin:exec         one-shot processes (2)
+//	builtin:shell        resident session (1)
+//	builtin:agent        look at / call agents (3)
+//	builtin:skill        look at / use skills (3: list_skills / read_skill / use_skill)
+//	builtin:agent-admin  create / change / delete agents + bind skills (5)
 //
-// 背景：超级智能体过去是「代码里全开」的特权（toolgrant.BuiltinTools 全量），
-// 「超级智能体手里有什么」只有代码知道、库里查不到、也没法按租户调整。
-// 现在这份基线搬进 agent_tool_grants 的 required 行，超级智能体与其它 agent 用同一套语言：
-// **常驻 = 表里有 required 行**，而不是「因为你是超级智能体」。
+// Background: the super agent used to be a privilege "all on, in code" (toolgrant.BuiltinTools in full), so "what the
+// super agent holds" was known only to the code, invisible in the database and impossible to adjust per tenant.
+// That baseline now lives in the required rows of agent_tool_grants, and the super agent speaks the same language as any
+// other agent: **always on = there is a required row**, not "because you are the super agent".
 //
-// 为什么是组而不是逐个工具：组是原子的 —— 误删一个 = 少一整类，面板上一眼能看出来；
-// 而 33 条单工具行里删掉 `read_file`，系统不会报错，只是静默少一个工具。
-// 代价是组内新增工具会自动进 core，这正是「core = 系统能力基线」该有的语义。
+// Why groups rather than individual tools: a group is atomic — deleting one by mistake loses a whole class, which is
+// obvious on the panel; among 33 single-tool rows, deleting `read_file` raises no error, it just silently loses one tool.
+// The cost is that a tool added to a group automatically enters core, which is exactly the meaning "core = the system
+// capability baseline" should have.
 //
-// 不在 core 里的（按需）：
-//   - builtin:browser —— 自称「能用 exec 拿到内容就不要开」、schema 全场最大（14 action /
-//     18 参数）、唯一「出网 + 读任意页面 + 带登录态」的组合，属任务能力。
-//     它**不跟随任何技能**，所以不能用 allow 按需（allow 只是候选的过滤器，没候选就空转）；
-//     要就由管理员直接加一条 required，用完删掉。
-//   - skill-own / skill-admin / tool-grant / custom-tool / flow-admin —— 跟随技能：
-//     use_skill 激活 skill-authoring 后得前两组，激活 agent-authoring 得 tool-grant（+ skill-admin），
-//     激活 custom-tool-authoring 得 custom-tool，激活 flow-authoring 得 flow-admin。
-//     绑定只让技能出现在提示词清单里，不直接给工具。
-//     超级智能体**不常驻激活**这些技能，需要时 use_skill 读正文，run 结束自动收 ——
-//     默认上下文因此少一整套管理工具的 schema（用一次工具调用换）。
+// Not in core (on demand):
+//   - builtin:browser — the guidance is "if exec can fetch the content, do not enable it", its schema is the largest
+//     (14 actions / 18 parameters), and it is the only combination of "goes out to the network + reads arbitrary pages +
+//     carries a login state", so it is a task capability.
+//     It **follows no skill**, so allow cannot be used to make it on-demand (allow only filters candidates; with no
+//     candidate it does nothing); an admin who wants it adds a required row directly and deletes it afterwards.
+//   - skill-own / skill-admin / tool-grant / custom-tool / flow-admin — they follow skills: activating skill-authoring
+//     through use_skill brings the first two groups, agent-authoring brings tool-grant (+ skill-admin), custom-tool-authoring
+//     brings custom-tool, flow-authoring brings flow-admin.
+//     A binding only puts the skill into the prompt catalogue; it does not hand over the tools directly.
+//     The super agent does **not** keep these skills activated, it reads the body with use_skill when needed and the
+//     activation is reclaimed when the run ends — so the default context saves a whole set of management tool schemas (at
+//     the price of one tool call).
 //
-// 三处消费：① agents.CreateAgent（supervisor 分支）物化成 required；
-// ② sql/main_core_tool_grants.sql 给存量回填；③ 管理端预览与文档。
-// 改这里要同步 ② 的硬编码数组（有测试守住）。
+// Three consumers: 1) agents.CreateAgent (the supervisor branch) materialises them as required;
+// 2) sql/main_core_tool_grants.sql backfills existing tenants; 3) admin previews and documentation.
+// Changing it requires syncing the hard-coded array in 2 (a test guards it).
 var SupervisorCoreGrantRefs = []string{
 	GrantRefBuiltinPrefix + "file",
 	GrantRefBuiltinPrefix + "exec",
@@ -325,7 +353,7 @@ var SupervisorCoreGrantRefs = []string{
 	GrantRefBuiltinPrefix + "agent-admin",
 }
 
-// SupervisorCoreGrants 返回超级智能体的 core 授权项（item_type=group / ref=builtin:<组名>）。
+// SupervisorCoreGrants returns the super agent's core grants (item_type=group / ref=builtin:<group>).
 func SupervisorCoreGrants() []ToolGroupItem {
 	items := make([]ToolGroupItem, 0, len(SupervisorCoreGrantRefs))
 	for _, ref := range SupervisorCoreGrantRefs {
@@ -334,16 +362,19 @@ func SupervisorCoreGrants() []ToolGroupItem {
 	return items
 }
 
-// SupervisorSeedSkills 授予超级权限时自动绑定的技能（supervisor 起步套件的一部分）。
+// SupervisorSeedSkills are the skills bound automatically when the super privilege is granted (part of the supervisor's
+// starter kit).
 //
-// 语义与 protectedSkills 正交：那边回答「哪些不许删 / 不许改名」，这里回答
-// 「一个新 supervisor 应该拿到哪些说明书」。两者当前取值相同，但**不要合并** ——
-// 将来出现「不可删但不必默认绑定」的基石技能时，合并的写法就没法表达。
+// Orthogonal to protectedSkills in meaning: that one answers "which ones may not be deleted / renamed", this one answers
+// "which manuals should a new supervisor get". They currently hold the same values, but **do not merge them** — when a
+// foundational skill appears that must not be deleted yet need not be bound by default, a merged form could not express
+// it.
 //
-// 为什么是这四个：五类管理工具（agent-admin / skill-admin / tool-grant / custom-tool /
-// flow-admin）都跟随技能按需注入（见 SupervisorCoreGrantRefs 注释的「不在 core 里的（按需）」段），
-// 绑定只让技能进提示词清单；不绑的话新 supervisor 手里只有常驻的 6 个组，
-// 「建技能」「改授权」「写自定义工具」「建工作流」那几组永远点不亮 —— 有身份、没手脚。
+// Why these four: the five classes of management tools (agent-admin / skill-admin / tool-grant / custom-tool / flow-admin)
+// are all injected on demand with their skill (see the "Not in core (on demand)" paragraph of the SupervisorCoreGrantRefs
+// comment), and a binding only puts the skill into the prompt catalogue; without the binding a new supervisor holds only
+// the six resident groups, and "create a skill" / "change a grant" / "write a custom tool" / "build a workflow" can never
+// light up — an identity without hands.
 var SupervisorSeedSkills = []string{
 	"agent-authoring",
 	"skill-authoring",
@@ -351,7 +382,7 @@ var SupervisorSeedSkills = []string{
 	"flow-authoring",
 }
 
-// toolGrantsOf 工具名列表 → 授权项列表（DefaultAgentToolGrants 用）。
+// toolGrantsOf turns a tool name list into a grant item list (used by DefaultAgentToolGrants).
 func toolGrantsOf(names []string) []ToolGroupItem {
 	items := make([]ToolGroupItem, 0, len(names))
 	for _, name := range names {
@@ -360,19 +391,19 @@ func toolGrantsOf(names []string) []ToolGroupItem {
 	return items
 }
 
-// 注：这里曾有一个「core 回填是否跑过」的判据（MainCoreMigrationMarker = agent-admin +
-// MainCoreMigrationPending）。存量租户迁移完成后已整体移除：
+// Note: there used to be a criterion for "whether the core backfill has run" here (MainCoreMigrationMarker = agent-admin +
+// MainCoreMigrationPending). It was removed entirely once the existing tenants had migrated:
 //
-//   - 它唯一的用途是让**未迁移**的 supervisor 回落「缺省全开」，而那条暗路径本身就是
-//     长期排查负担（表里说没有、实际全给）；
-//   - 删除后 supervisor 的常驻集只剩一条真源：表里的 required 行；
-//   - 「零授权行」的保险丝**没有**跟着删 —— 那不是迁移机制，是自举安全
-//     （见 agent_impl 的零行兜底与 admin/toolgrants 预览的同名分支）。
+//   - its only purpose was to let an **unmigrated** supervisor fall back to "everything on by default", and that hidden
+//     path was itself a long-term debugging burden (the table said there was nothing, the reality gave everything);
+//   - after the removal the supervisor's resident set has exactly one source of truth: the required rows in the table;
+//   - the "zero grant rows" fuse was **not** removed along with it — that is not a migration mechanism but bootstrap
+//     safety (see the zero-row fallback in agent_impl and the same-named branch in the admin/toolgrants preview).
 //
-// 重建这段逻辑前先确认：还有没有「授权表只有零散行、没有 core 组」的存量租户。
-// 核查 SQL 见 sql/main_core_tool_grants.sql 文件头。
+// Before rebuilding this logic, confirm: are there still tenants whose grant table holds only scattered rows and no core
+// group? The SQL for that check is at the top of sql/main_core_tool_grants.sql.
 
-// ToolGroup 工具组（成员只能是天然组或单个工具，不允许嵌套工具组）。
+// ToolGroup is a tool group (members may only be native groups or single tools; nested tool groups are not allowed).
 type ToolGroup struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
@@ -384,13 +415,13 @@ type ToolGroup struct {
 	UpdatedAt   xsql.Time       `json:"updated_at"`
 }
 
-// ToolGroupItem 工具组成员。
+// ToolGroupItem is a tool group member.
 type ToolGroupItem struct {
 	ItemType string `json:"item_type"` // group | tool
 	Ref      string `json:"ref"`
 }
 
-// AgentToolGrant agent 的工具授权（required / allow / deny）。
+// AgentToolGrant is an agent's tool grant (required / allow / deny).
 type AgentToolGrant struct {
 	AgentID   string    `json:"agent_id"`
 	GrantKind string    `json:"grant_kind"` // required | allow | deny
@@ -400,50 +431,53 @@ type AgentToolGrant struct {
 	UpdatedAt xsql.Time `json:"updated_at"`
 }
 
-// SkillToolGrant skill 的工具依赖（只表达「需要」，不产生授权）。
+// SkillToolGrant is a skill's tool dependency (it expresses a "need" only; it grants nothing).
 type SkillToolGrant struct {
 	SkillID  string `json:"skill_id"`
 	ItemType string `json:"item_type"` // group | tool
 	Ref      string `json:"ref"`
 }
 
-// Skill 的 status 与 agents 共用两态取值（见上方 StatusNormal/StatusDeprecated）：
-// 只有「正常」可改、「废弃」不可改不可运行。skill 没有端点，所以「废弃自动收回端点」不涉及它。
+// A skill's status shares the two-state values with agents (see StatusNormal/StatusDeprecated above): only "normal" may
+// be changed, "deprecated" may not be changed or run. A skill has no endpoint, so "deprecating automatically retracts the
+// endpoints" does not apply to it.
 
-// AgentSkillBinding agent 与 skill 的授权关联（对应 agent_skill_bindings 表，纯白名单）。
-// 仅当 skills.restricted = true 时生效：该 skill 只对本表列出的 agent 可见。
+// AgentSkillBinding is the grant relation between an agent and a skill (the agent_skill_bindings table, a pure
+// allowlist).
+// It only takes effect when skills.restricted = true: that skill is then visible only to the agents listed in this table.
 type AgentSkillBinding struct {
 	AgentID   string      `json:"agent_id"`
 	SkillID   string      `json:"skill_id"`
 	CreatedBy xsql.UUID   `json:"created_by"`
 	CreatedAt xsql.Time   `json:"created_at"`
-	AgentName xsql.String `json:"agent_name"` // 关联查询填充（非 DB 列）
+	AgentName xsql.String `json:"agent_name"` // filled by a joined query (not a DB column)
 }
 
-// AgentRelation agent 之间的调用授权（对应 agent_relations 表）。
-// 语义：无行 = caller 不可调用 callee（默认拒绝）；有行 = 允许。
+// AgentRelation is a call grant between agents (the agent_relations table).
+// Semantics: no row = the caller may not call the callee (deny by default); a row = allowed.
 type AgentRelation struct {
 	CallerID   string      `json:"caller_id"`
 	CalleeID   string      `json:"callee_id"`
 	CreatedBy  xsql.UUID   `json:"created_by"`
 	CreatedAt  xsql.Time   `json:"created_at"`
-	CallerName xsql.String `json:"caller_name"` // 关联查询填充（非 DB 列）
-	CalleeName xsql.String `json:"callee_name"` // 关联查询填充（非 DB 列）
+	CallerName xsql.String `json:"caller_name"` // filled by a joined query (not a DB column)
+	CalleeName xsql.String `json:"callee_name"` // filled by a joined query (not a DB column)
 }
 
-// CallableAgent 可被调用的 agent 摘要（system prompt 的「可调用 agent 清单」用）。
-// 一次 JOIN（agent_relations ⋈ agents）取回，避免逐目标二次查询。
+// CallableAgent is a summary of an agent that may be called (used by the system prompt's "callable agents" list).
+// It comes back from one JOIN (agent_relations ⋈ agents), avoiding a second query per target.
 type CallableAgent struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Status      int    `json:"status"`
-	// IsSupervisor 目标是否带超权属性。supervisor 可被调用（被调起时仍读草稿），
-	// 是否放行由 agent_relations 授权行决定；这里带出来只为展示与审计，不做业务判定。
+	// IsSupervisor is whether the target carries the super-privilege attribute. A supervisor may be called (it still
+	// reads its draft when invoked), and whether the call is let through is decided by the agent_relations grant row;
+	// this is carried out for display and auditing only, never for a business decision.
 	IsSupervisor bool `json:"is_supervisor"`
 }
 
-// SvcEndpoint 服务端点结构体
+// SvcEndpoint is a service endpoint.
 type SvcEndpoint struct {
 	ID          string     `json:"id"`
 	Name        string     `json:"name"`
@@ -451,27 +485,28 @@ type SvcEndpoint struct {
 	CreatedAt   xsql.Time  `json:"created_at"`
 	UpdatedAt   xsql.Time  `json:"updated_at"`
 	TargetID    string     `json:"target_id"`
-	TargetType  string     `json:"target_type"`  // "agent" 或 "flow"
-	Protocol    string     `json:"protocol"`     // "mcp" | "rpc"（llm 仅建库校验放行，无运行时）
-	InputSchema xsql.JSONB `json:"input_schema"` // 工具入参 JSON Schema：flow 端点恒等于 flows.arguments
-	Exposed     xsql.Bool  `json:"exposed"`      // 对外开关：true=租户外可用（外部凭证 / MCP 注册），false=仅租户内部可用（新建默认 false）
+	TargetType  string     `json:"target_type"`  // "agent" or "flow"
+	Protocol    string     `json:"protocol"`     // "mcp" | "rpc" (llm passes the schema check only; there is no runtime)
+	InputSchema xsql.JSONB `json:"input_schema"` // the tool argument JSON Schema: a flow endpoint always equals flows.arguments
+	Exposed     xsql.Bool  `json:"exposed"`      // exposed switch: true = usable outside the tenant (external credentials / MCP registration), false = inside the tenant only (the default for new rows)
 
-	// TargetName 目标实体名（非 DB 列）：列表查询时 JOIN agents / flows 填充，避免前端再做 id→名称映射
+	// TargetName is the target entity's name (not a DB column): filled by joining agents / flows in list queries, so the
+	// frontend does not map id → name again.
 	TargetName xsql.String `json:"target_name"`
 
-	// TargetSupervisor 目标是不是超级智能体（非 DB 列，查询时带出）。
-	// 凭证的「除超级智能体外」范围要靠它判定 —— 判定点只有 target_type + target_id，
-	// 再回查一次 agents 会把热路径（每次工具调用）变成两次查询。
+	// TargetSupervisor is whether the target is the super agent (not a DB column; carried out by the query).
+	// A credential's "everyone except the super agent" scope is decided by it — the decision point only has target_type +
+	// target_id, and querying agents again would turn the hot path (every tool call) into two queries.
 	TargetSupervisor bool `json:"target_supervisor"`
 }
 
-// EndpointProtocol 端点协议信息（agents / flows 的 endpoints jsonb 数组元素）
+// EndpointProtocol is endpoint protocol information (an element of the endpoints jsonb array on agents / flows).
 type EndpointProtocol struct {
 	Protocol string `json:"protocol"`
 	Exposed  bool   `json:"exposed"`
 }
 
-// Flow 工作流定义结构体（沿用 flows 表存储）
+// Flow is a workflow definition (stored in the flows table).
 type Flow struct {
 	ID                string             `json:"id"`
 	Name              string             `json:"name"`
@@ -479,10 +514,10 @@ type Flow struct {
 	Description       xsql.String        `json:"description"`
 	CreatedAt         xsql.Time          `json:"created_at"`
 	UpdatedAt         xsql.Time          `json:"updated_at"`
-	CreatedBy         xsql.UUID          `json:"created_by"`      // 创建人用户ID（uuid）
-	UpdatedBy         xsql.UUID          `json:"updated_by"`      // 修改人用户ID（uuid）
-	CreatedByName     xsql.String        `json:"created_by_name"` // 创建人姓名（查询时关联 users 填充，非 DB 列）
-	UpdatedByName     xsql.String        `json:"updated_by_name"` // 修改人姓名（查询时关联 users 填充，非 DB 列）
+	CreatedBy         xsql.UUID          `json:"created_by"`      // the creator's user id (uuid)
+	UpdatedBy         xsql.UUID          `json:"updated_by"`      // the editor's user id (uuid)
+	CreatedByName     xsql.String        `json:"created_by_name"` // the creator's name (joined from users at query time, not a DB column)
+	UpdatedByName     xsql.String        `json:"updated_by_name"` // the editor's name (joined from users at query time, not a DB column)
 	Arguments         xsql.JSONB         `json:"arguments"`
 	Outputs           xsql.JSONB         `json:"outputs"`
 	EnvVars           xsql.JSONB         `json:"env_vars"`
@@ -493,31 +528,32 @@ type Flow struct {
 	MaxExecCount      xsql.Int           `json:"max_exec_count"`
 	MaxRunRecords     xsql.Int           `json:"max_run_records"`
 	MaxSessionRecords xsql.Int           `json:"max_session_records"`
-	Status            xsql.Int           `json:"status"`      // 1:正常 3:废弃（工作流不设锁定，见 StatusNormal/StatusDeprecated）
-	Endpoints         []EndpointProtocol `json:"endpoints"`   // 端点协议+对外状态（jsonb 列）
-	Breakpoints       []string           `json:"breakpoints"` // 断点 node_id 列表（非 DB 列，保存时全量覆盖 flow_breakpoints）
+	Status            xsql.Int           `json:"status"`      // 1: normal, 3: deprecated (workflows have no locked state, see StatusNormal/StatusDeprecated)
+	Endpoints         []EndpointProtocol `json:"endpoints"`   // endpoint protocols + exposed state (a jsonb column)
+	Breakpoints       []string           `json:"breakpoints"` // breakpoint node_id list (not a DB column; a save replaces flow_breakpoints wholesale)
 
-	// 版本状态（非 DB 列，查询时计算）：
-	//   CurrentVersion = 0 → 尚未发布（正式调用不可用，只能调试）
-	//   Dirty = 工作副本与当前版本的定义不一致（改名不算：名字不是版本内容）
+	// Version state (not a DB column; computed at query time):
+	//   CurrentVersion = 0 -> never released (production calls are unavailable; only the debugger works)
+	//   Dirty = the working copy differs from the current version's definition (a rename does not count: the name is not
+	//   part of the version content)
 	CurrentVersion int  `json:"current_version"`
 	Dirty          bool `json:"dirty"`
 }
 
-// FlowRunRecord 工作流运行记录（对应 flow_run_records 表）
+// FlowRunRecord is a workflow run record (the flow_run_records table).
 type FlowRunRecord struct {
 	ID         string     `json:"id"`
 	FlowID     string     `json:"flow_id"`
 	Status     string     `json:"status"`   // success/failed/cancelled
-	RunType    string     `json:"run_type"` // debug（调试器）/ preview（试跑）/ task / call
+	RunType    string     `json:"run_type"` // debug (the debugger) / preview (a trial run) / task / call
 	Result     string     `json:"result"`
-	Progress   []byte     `json:"progress"` // jsonb，{"progress":[...],"result":[...]}
+	Progress   []byte     `json:"progress"` // jsonb, {"progress":[...],"result":[...]}
 	ErrMsg     string     `json:"err_msg"`
 	NodeCount  int        `json:"node_count"`
 	DurationMs int64      `json:"duration_ms"`
 	StartedAt  xsql.Time  `json:"started_at"`
 	FinishedAt *xsql.Time `json:"finished_at"`
-	// 运行配置快照
+	// Snapshot of the run configuration
 	RunArgs              []byte `json:"run_args"`
 	RunLimits            []byte `json:"run_limits"`
 	RunFlowVars          []byte `json:"run_flow_vars"`
@@ -525,36 +561,38 @@ type FlowRunRecord struct {
 	RunFlowVarsSize      int    `json:"run_flow_vars_size"`
 	ProgressTruncated    bool   `json:"progress_truncated"`
 	ProgressSize         int    `json:"progress_size"`
-	// Drafts 本次运行跟随过的草稿（jsonb 数组，空数组 = 纯正式运行）。
-	// 调试跑的是工作副本，内容会变，这份清单是「当时跑的是哪几份」的唯一凭据。
+	// Drafts are the drafts this run followed (a jsonb array; an empty array = a pure production run).
+	// The debugger runs the working copy, whose content changes, so this list is the only evidence of "which ones it
+	// actually ran".
 	Drafts []byte `json:"drafts"`
 }
 
-// SessionOwnerType 会话记忆的属主类型
+// SessionOwnerType is the owner type of session memory.
 const (
-	SessionOwnerTypeFlow  = "flow"  // 工作流
-	SessionOwnerTypeAgent = "agent" // 智能体
+	SessionOwnerTypeFlow  = "flow"  // workflow
+	SessionOwnerTypeAgent = "agent" // agent
 )
 
-// Session 会话（对应 sessions 表，泛化：agent + flow）
+// Session is a session (the sessions table, generalised over agent + flow).
 type Session struct {
 	ID        string    `json:"id"`
 	OwnerType string    `json:"owner_type"` // flow / agent
 	OwnerID   string    `json:"owner_id"`
-	UserID    string    `json:"user_id"` // 会话归属用户（可空，NULL=租户/系统级）
+	UserID    string    `json:"user_id"` // the user the session belongs to (nullable; NULL = tenant / system level)
 	Title     string    `json:"title"`
 	CreatedAt xsql.Time `json:"created_at"`
 	UpdatedAt xsql.Time `json:"updated_at"`
 }
 
-// VisibleToUser 会话是否对该用户可见 —— 外部入口（HTTP chat / MCP / RPC）的统一判据。
+// VisibleToUser reports whether the session is visible to that user — the single criterion for the external entries
+// (HTTP chat / MCP / RPC).
 //
-// 会话归属的是「用户」，owner_type / owner_id 只记录创建者（谁建的会话、记录挂谁名下），
-// 不再参与访问控制：子 agent 与父 agent 共用同一个 session 时，owner 必然对不上，
-// 用 owner 收口会把合法的级联调用全部拒掉。
+// A session belongs to a **user**; owner_type / owner_id only record the creator (who opened the session, whose name the
+// record is filed under) and no longer take part in access control: when a child agent shares a session with its parent,
+// the owner can never match, and closing access on owner would reject every legitimate cascading call.
 //
-// userID 为空（身份缺失）一律判否；会话 user_id 为空表示租户级会话（列表里从不出现），
-// 它不存在「别人」，放行。
+// An empty userID (missing identity) is always refused; an empty session user_id means a tenant-level session (it never
+// appears in a list), where there is no "someone else", so it is allowed.
 func (s *Session) VisibleToUser(userID string) bool {
 	if s == nil || userID == "" {
 		return false
@@ -565,10 +603,11 @@ func (s *Session) VisibleToUser(userID string) bool {
 	return s.UserID == userID
 }
 
-// OwnedBy 会话是否由 (ownerType, ownerID) 这个实体创建。
+// OwnedBy reports whether the session was created by the entity (ownerType, ownerID).
 //
-// 仅用于「记录归属 / 展示 / 审计」：session_records 按 owner 分组，父子 agent 共用
-// 同一 session 时各自的行互不可见。**不要**拿它做访问控制，那是 VisibleToUser 的职责。
+// It is only for "record ownership / display / auditing": session_records are grouped by owner, so when a parent and a
+// child agent share one session their rows are invisible to each other. Do **not** use it for access control — that is
+// VisibleToUser's job.
 func (s *Session) OwnedBy(ownerType, ownerID string) bool {
 	if s == nil || ownerID == "" {
 		return false
@@ -576,57 +615,59 @@ func (s *Session) OwnedBy(ownerType, ownerID string) bool {
 	return s.OwnerType == ownerType && s.OwnerID == ownerID
 }
 
-// SessionRecord 会话记录（对应 session_records 表）
-// 按 (owner_type, owner_id, session_id) 分组，每个 session 保留最近 max_session_records 条。
+// SessionRecord is a session record (the session_records table).
+// Grouped by (owner_type, owner_id, session_id); each session keeps the latest max_session_records rows.
 type SessionRecord struct {
 	ID         string    `json:"id"`
 	OwnerType  string    `json:"owner_type"` // flow / agent
 	OwnerID    string    `json:"owner_id"`
 	SessionID  string    `json:"session_id"`
 	RunID      string    `json:"run_id"`
-	Input      []byte    `json:"input"`       // jsonb，本轮入参 arguments
-	Output     string    `json:"output"`      // text，本轮最终结果
+	Input      []byte    `json:"input"`       // jsonb, this round's arguments
+	Output     string    `json:"output"`      // text, this round's final result
 	RunType    string    `json:"run_type"`    // call / debug
-	DurationMs int64     `json:"duration_ms"` // 本轮执行耗时（毫秒）；0=未记录（存量行 / flow 侧记忆写入）
-	Status     string    `json:"status"`      // ok / stopped / failed；存量行由列默认值补成 ok
-	Error      string    `json:"error"`       // 失败或终止的人话原因；status=ok 时为空
+	DurationMs int64     `json:"duration_ms"` // this round's duration (ms); 0 = not recorded (legacy rows / memory writes from the flow side)
+	Status     string    `json:"status"`      // ok / stopped / failed; legacy rows are filled in as ok by the column default
+	Error      string    `json:"error"`       // the plain-language reason for a failure or a stop; empty when status=ok
 	CreatedAt  xsql.Time `json:"created_at"`
 }
 
-// 会话记录 status 取值（对应 session_records.status，DB 里是 varchar(16)）。
+// Session record status values (the session_records.status column; varchar(16) in the database).
 //
-// 为什么单独记一列而不是把错误混进 output：历史里一行空白回答，用户无法区分
-// 「我点了停止」「模型挂了」「工具报错」，只能来问人。
+// Why a separate column rather than mixing errors into output: with a blank answer in the history a user cannot tell "I
+// pressed stop" from "the model died" or "a tool errored", and can only come and ask.
 const (
-	SessionStatusOK      = "ok"      // 正常完成
-	SessionStatusStopped = "stopped" // 被主动终止（用户停止 / 会话关闭 / 运行超时）
-	SessionStatusFailed  = "failed"  // 出错（原因见 error）
+	SessionStatusOK      = "ok"      // completed normally
+	SessionStatusStopped = "stopped" // actively terminated (the user stopped it / the session was closed / the run timed out)
+	SessionStatusFailed  = "failed"  // an error occurred (the reason is in error)
 )
 
-// SvcAuthBinding 服务端认证身份绑定（对应 svc_auth_bindings 表，MCP/RPC 共用）
-// 把外部认证身份映射到系统用户：apikey 用明文 secret，oauth 用 iss + sub。
+// SvcAuthBinding is a service-side authentication identity binding (the svc_auth_bindings table, shared by MCP / RPC).
+// It maps an external identity onto a system user: apikey uses the plaintext secret, oauth uses iss + sub.
 type SvcAuthBinding struct {
 	ID              string `json:"id"`
 	AuthType        string `json:"auth_type"`        // apikey | oauth
-	ExternalIssuer  string `json:"external_issuer"`  // oauth: token.iss；apikey: ''
-	ExternalSubject string `json:"external_subject"` // oauth: token.sub；apikey: 明文 secret
+	ExternalIssuer  string `json:"external_issuer"`  // oauth: token.iss; apikey: ''
+	ExternalSubject string `json:"external_subject"` // oauth: token.sub; apikey: the plaintext secret
 	UserID          string `json:"user_id"`          // users.id
 	IsActive        bool   `json:"is_active"`
-	// RestrictTargets=true 时，该凭证只能调用白名单里的端点目标（见 svc_auth_binding_targets）；
-	// 白名单为空表示一个都不允许。新建绑定默认 true（安全默认：忘了配 = 一个都调不到），
-	// false 表示不限制，需显式关闭；存量绑定在迁移时保持 false。
+	// With RestrictTargets=true this credential may only call the endpoint targets in the allowlist (see
+	// svc_auth_binding_targets); an empty allowlist means none at all. A new binding defaults to true (a safe default:
+	// forgetting to configure means nothing is callable), while false means unrestricted and has to be turned off
+	// explicitly; existing bindings stay false after the migration.
 	RestrictTargets bool `json:"restrict_targets"`
-	// ExcludeSupervisor 只在 RestrictTargets=false 时有意义：不限制全部端点，但**排除超级智能体**
-	// （supervisor 的端点等于对外开放租户管理能力）。是「不限制」的中间档，不用维护白名单。
-	// RestrictTargets=true 时忽略本字段（白名单已经精确表达）。
+	// ExcludeSupervisor only means something when RestrictTargets=false: do not restrict all endpoints, but **exclude the
+	// super agent** (a supervisor's endpoint equals opening the tenant's management capability to the outside). It is the
+	// middle setting of "unrestricted" that needs no allowlist. It is ignored when RestrictTargets=true (the allowlist
+	// already states it precisely).
 	ExcludeSupervisor bool `json:"exclude_supervisor"`
-	// TargetCount 白名单条数（列表展示用，不参与鉴权判定）。
+	// TargetCount is the allowlist size (for display in a list; it takes no part in authorization).
 	TargetCount int       `json:"target_count"`
 	CreatedAt   xsql.Time `json:"created_at"`
 	UpdatedAt   xsql.Time `json:"updated_at"`
 }
 
-// FlowNodeRecord 工作流节点运行记录（对应 flow_node_records 表）
+// FlowNodeRecord is a workflow node run record (the flow_node_records table).
 type FlowNodeRecord struct {
 	ID                  string     `json:"id"`
 	RunID               string     `json:"run_id"`
@@ -654,43 +695,45 @@ type FlowNodeRecord struct {
 	StartTime           *xsql.Time `json:"start_time"`
 	EndTime             *xsql.Time `json:"end_time"`
 	DurationMs          int64      `json:"duration_ms"`
-	Extra               []byte     `json:"extra"` // jsonb，节点类型特有的运行结果
+	Extra               []byte     `json:"extra"` // jsonb, run results specific to the node type
 }
 
-// McpConnection MCP 客户端连接配置
-// 对应数据库表 t0.mcp_connections。
+// McpConnection is an MCP client connection configuration.
+// It maps to the database table t0.mcp_connections.
 type McpConnection struct {
 	ID          string     `json:"id"`
-	Name        string     `json:"name"`         // 机器标识，作为工具名前缀，仅含英文字母和数字，全局唯一
-	DisplayName string     `json:"display_name"` // 展示名，可含中文/空格；为空时回退为 Name
+	Name        string     `json:"name"`         // machine identifier, used as the tool name prefix, ASCII letters and digits only, globally unique
+	DisplayName string     `json:"display_name"` // display name, may contain Chinese / spaces; falls back to Name when empty
 	Description string     `json:"description"`
-	URL         string     `json:"url"`       // streamable_http 用；stdio 为空
-	Command     string     `json:"command"`   // stdio 用；本地可执行命令
-	Args        xsql.JSONB `json:"args"`      // stdio 用；命令参数数组
-	WorkDir     string     `json:"work_dir"`  // stdio 用；子进程工作目录，对应 cmd.Dir
-	Env         xsql.JSONB `json:"env"`       // stdio 用；环境变量数组 ["K=V", ...]，继承并追加到 os.Environ()
+	URL         string     `json:"url"`       // for streamable_http; empty for stdio
+	Command     string     `json:"command"`   // for stdio; the local executable command
+	Args        xsql.JSONB `json:"args"`      // for stdio; the command argument array
+	WorkDir     string     `json:"work_dir"`  // for stdio; the child process working directory, mapped to cmd.Dir
+	Env         xsql.JSONB `json:"env"`       // for stdio; environment array ["K=V", ...], appended to the inherited os.Environ()
 	Transport   string     `json:"transport"` // "streamable_http" | "stdio"
-	Auth        xsql.JSONB `json:"auth"`      // 鉴权配置（none/bearer/oauth）；stdio 下语义忽略，凭证走 env
+	Auth        xsql.JSONB `json:"auth"`      // auth configuration (none/bearer/oauth); ignored for stdio, where credentials go through env
 	IsActive    bool       `json:"is_active"`
 	CreatedAt   xsql.Time  `json:"created_at"`
 	UpdatedAt   xsql.Time  `json:"updated_at"`
 }
 
-// Plugin 某租户对某个磁盘插件的启用与实现配置。
-// 对应数据库表 t0.plugins。
+// Plugin is one tenant's enablement and implementation configuration for an on-disk plugin.
+// It maps to the database table t0.plugins.
 //
-// 插件本体在磁盘（{root_dir}/plugins），这里只记「本租户用哪个实现、key 是多少」：
-//   - Kind      插件类型（当前恒为 tools；与唯一键 (kind, name) 一起构成行标识）
-//   - Name      插件名（= 插件目录名 = 授权 ref 的 subject），如 web_search
-//   - Impl      主实现名（tavily / searxng / bing_rss ...），必须存在于 manifest
-//   - Fallbacks 兜底链（有序数组）：主实现失败时按顺序再试
-//   - Configs   按实现分键存配置：{"tavily":{"api_key":"..."},"searxng":{"endpoint":"..."}}
-//     分键是刻意的 —— 切换主实现不该把另一家的 key 洗掉
+// The plugin itself lives on disk ({root_dir}/plugins); this only records "which implementation this tenant uses and what
+// the keys are":
+//   - Kind      the plugin type (currently always tools; together with the unique key (kind, name) it identifies the row)
+//   - Name      the plugin name (= the plugin directory name = the grant ref's subject), such as web_search
+//   - Impl      the primary implementation name (tavily / searxng / bing_rss ...), which must exist in the manifest
+//   - Fallbacks the fallback chain (an ordered array): when the primary implementation fails, try these in order
+//   - Configs   configuration stored per implementation: {"tavily":{"api_key":"..."},"searxng":{"endpoint":"..."}}
+//     per-implementation keys are deliberate — switching the primary implementation must not wipe the other vendor's key
 //
-// 没有 「是否安装」这回事：磁盘上有的插件都会出现在管理端，这里的一行代表「已启用」。
+// There is no such thing as "installed or not": every plugin on disk appears in the admin side, and one row here means
+// "enabled".
 type Plugin struct {
 	ID        string     `json:"id"`
-	Kind      string     `json:"kind"` // 插件类型；写库时必须显式给出（空值会被仓储拒绝）
+	Kind      string     `json:"kind"` // plugin type; it must be given explicitly when writing (the repository rejects an empty value)
 	Name      string     `json:"name"`
 	Impl      string     `json:"impl"`
 	Fallbacks xsql.JSONB `json:"fallbacks"`
@@ -699,14 +742,16 @@ type Plugin struct {
 	CreatedAt xsql.Time  `json:"created_at"`
 	UpdatedAt xsql.Time  `json:"updated_at"`
 
-	// 以下三列是可观测信息，与「配置」无关：调用不会碰 updated_at
-	// （那列表示配置版本，被调用频率污染就没法判断「配置什么时候改过」）。
-	LastUsedAt  *time.Time `json:"last_used_at"`  // 最近一次成功调用
-	LastError   string     `json:"last_error"`    // 最近一次失败的一句话原因（已截断）
-	LastErrorAt *time.Time `json:"last_error_at"` // 上述错误发生的时刻
+	// The next three columns are observability, unrelated to "configuration": a call never touches updated_at
+	// (that column is the configuration version, and polluting it with call frequency would make "when was the
+	// configuration changed" impossible to answer).
+	LastUsedAt  *time.Time `json:"last_used_at"`  // the last successful call
+	LastError   string     `json:"last_error"`    // a one-line reason for the last failure (already truncated)
+	LastErrorAt *time.Time `json:"last_error_at"` // when that error happened
 }
 
-// FallbackImpls 兜底实现链；JSON 解析失败按空链处理（不让脏数据中断调用）。
+// FallbackImpls is the fallback implementation chain; a JSON decode failure is treated as an empty chain (bad data must
+// not break a call).
 func (p *Plugin) FallbackImpls() []string {
 	raw := jsonbRaw(p.Fallbacks)
 	if raw == nil {
@@ -719,7 +764,8 @@ func (p *Plugin) FallbackImpls() []string {
 	return out
 }
 
-// ImplConfig 取某实现的配置；不存在时返回空 map（不是 nil，调用方可直接读 key）。
+// ImplConfig returns one implementation's configuration; a missing one returns an empty map (not nil, so the caller can
+// read keys directly).
 func (p *Plugin) ImplConfig(impl string) map[string]any {
 	out := map[string]any{}
 	raw := jsonbRaw(p.Configs)
@@ -736,7 +782,8 @@ func (p *Plugin) ImplConfig(impl string) map[string]any {
 	return out
 }
 
-// AllConfigs 全部实现的配置（按实现分键）。管理端据此渲染「切实现时保留另一家 key」。
+// AllConfigs returns every implementation's configuration (keyed per implementation). The admin side uses it to keep the
+// other vendor's key when switching implementations.
 func (p *Plugin) AllConfigs() map[string]map[string]any {
 	out := map[string]map[string]any{}
 	raw := jsonbRaw(p.Configs)
@@ -754,7 +801,7 @@ func (p *Plugin) AllConfigs() map[string]map[string]any {
 	return out
 }
 
-// jsonbRaw 把 xsql.JSONB 的内部值还原成 JSON 字节；空值返回 nil。
+// jsonbRaw restores the internal value of an xsql.JSONB back to JSON bytes; an empty value returns nil.
 func jsonbRaw(j xsql.JSONB) []byte {
 	switch v := j.Data.(type) {
 	case nil:
@@ -774,9 +821,9 @@ func jsonbRaw(j xsql.JSONB) []byte {
 	}
 }
 
-// McpConnectionTool MCP 连接下的工具
-// 对应数据库表 t0.mcp_connection_tools。工具列表在启用连接时从远端发现并持久化，
-// 供工作流画布等本地节点配置使用。
+// McpConnectionTool is a tool under an MCP connection.
+// It maps to the database table t0.mcp_connection_tools. The tool list is discovered from the remote side and persisted
+// when the connection is enabled, for local node configuration such as the workflow canvas.
 type McpConnectionTool struct {
 	ID           string     `json:"id"`
 	ConnectionID string     `json:"connection_id"`
@@ -786,28 +833,29 @@ type McpConnectionTool struct {
 	UpdatedAt    xsql.Time  `json:"updated_at"`
 }
 
-// RpcConnection RPC 客户端连接配置
-// 对应数据库表 t0.rpc_connections。用于连接外部 RPC server（JSON-RPC 2.0）。
+// RpcConnection is an RPC client connection configuration.
+// It maps to the database table t0.rpc_connections and is used to reach an external RPC server (JSON-RPC 2.0).
 type RpcConnection struct {
 	ID          string     `json:"id"`
-	Name        string     `json:"name"`         // 机器标识，作为工具名前缀，仅含英文字母和数字，全局唯一
-	DisplayName string     `json:"display_name"` // 展示名，可含中文/空格；为空时回退为 Name
+	Name        string     `json:"name"`         // machine identifier, used as the tool name prefix, ASCII letters and digits only, globally unique
+	DisplayName string     `json:"display_name"` // display name, may contain Chinese / spaces; falls back to Name when empty
 	Description string     `json:"description"`
-	URL         string     `json:"url"`       // streamable_http 用；stdio 为空
-	Command     string     `json:"command"`   // stdio 用；本地可执行命令
-	Args        xsql.JSONB `json:"args"`      // stdio 用；命令参数数组
-	WorkDir     string     `json:"work_dir"`  // stdio 用；子进程工作目录，对应 cmd.Dir
-	Env         xsql.JSONB `json:"env"`       // stdio 用；环境变量数组 ["K=V", ...]，继承并追加到 os.Environ()
+	URL         string     `json:"url"`       // for streamable_http; empty for stdio
+	Command     string     `json:"command"`   // for stdio; the local executable command
+	Args        xsql.JSONB `json:"args"`      // for stdio; the command argument array
+	WorkDir     string     `json:"work_dir"`  // for stdio; the child process working directory, mapped to cmd.Dir
+	Env         xsql.JSONB `json:"env"`       // for stdio; environment array ["K=V", ...], appended to the inherited os.Environ()
 	Transport   string     `json:"transport"` // "streamable_http" | "stdio"
-	Auth        xsql.JSONB `json:"auth"`      // 鉴权配置（none/bearer/oauth）；stdio 下语义忽略，凭证走 env
+	Auth        xsql.JSONB `json:"auth"`      // auth configuration (none/bearer/oauth); ignored for stdio, where credentials go through env
 	IsActive    bool       `json:"is_active"`
 	CreatedAt   xsql.Time  `json:"created_at"`
 	UpdatedAt   xsql.Time  `json:"updated_at"`
 }
 
-// RpcConnectionTool RPC 连接下的工具
-// 对应数据库表 t0.rpc_connection_tools。工具列表在启用连接时从远端 RPC server
-// 通过 JSON-RPC tools/list 发现并持久化，供工作流画布等本地节点配置使用。
+// RpcConnectionTool is a tool under an RPC connection.
+// It maps to the database table t0.rpc_connection_tools. The tool list is discovered from the remote RPC server via
+// JSON-RPC tools/list and persisted when the connection is enabled, for local node configuration such as the workflow
+// canvas.
 type RpcConnectionTool struct {
 	ID           string     `json:"id"`
 	ConnectionID string     `json:"connection_id"`

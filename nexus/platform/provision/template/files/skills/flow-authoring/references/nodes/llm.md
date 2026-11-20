@@ -53,6 +53,11 @@ Global variables enter the prompt through input variables: declare `{"source_typ
 `config.inputs` and write `{{ .input.xxx }}` in `messages[].content`. **There is no** `{{ .global_vars.X }}` form (it was
 removed; leaving it in the config makes the flow fail at load time instead of rendering `<no value>`).
 
+The run's output language arrives the same way: declare `{"source_type": "builtin", "source_key": "language"}` and use
+`{{ .input.xxx }}`. It is a BCP-47 tag such as `zh-CN`, and an **empty string** when no caller specified one. The node does
+**not** append an "answer in X" rule by itself — whether the prompt says so is the author's decision, and a prompt that
+should follow the language has to spell it out.
+
 Referencing a `secret` global variable is **not blocked**, but a warning is logged: the value enters the model context, and
 also `session_records` and SSE. Prefer using secrets in connection / tool configuration (`http.headers`, `mcp` / `rpc`
 connection parameters) rather than in prompts.

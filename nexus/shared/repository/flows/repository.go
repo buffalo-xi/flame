@@ -6,7 +6,7 @@ import (
 	"flame/tools/xsql"
 )
 
-// ListFlowsRequest 工作流实例列表请求参数
+// ListFlowsRequest holds the workflow instance list request parameters.
 type ListFlowsRequest struct {
 	Page      int      `json:"page"`
 	Limit     int      `json:"limit"`
@@ -15,45 +15,51 @@ type ListFlowsRequest struct {
 	SortOrder []string `json:"sort_order"`
 }
 
-// Repository 工作流实例存储接口
+// Repository is the workflow instance storage interface.
 type Repository interface {
-	// ListFlows 获取所有工作流实例
+	// ListFlows lists every workflow instance.
 	ListFlows(authInfo *auth.AuthInfo, req *ListFlowsRequest) ([]models.Flow, int, error)
-	// GetFlow 根据ID获取工作流实例
+	// GetFlow returns one workflow instance by id.
 	GetFlow(authInfo *auth.AuthInfo, id string) (*models.Flow, error)
-	// ExistsFlowName 判断同租户下是否已存在同名工作流（agent 重名校验用）
+	// ExistsFlowName reports whether a workflow of the same name already exists in the tenant (used by the agent name
+	// check).
 	ExistsFlowName(authInfo *auth.AuthInfo, name string) (bool, error)
-	// FindByName 按名字取一行（重名判断与「同名覆盖安装」用）。不存在返回 (nil, nil)。
+	// FindByName returns one row by name (for the duplicate-name check and for "install over the same name"). Missing
+	// returns (nil, nil).
 	FindByName(authInfo *auth.AuthInfo, name string) (*models.Flow, error)
-	// CreateFlow 创建工作流实例
+	// CreateFlow creates a workflow instance.
 	CreateFlow(authInfo *auth.AuthInfo, Instance *models.Flow) (string, error)
-	// UpdateFlow 更新工作流实例
+	// UpdateFlow updates a workflow instance.
 	UpdateFlow(authInfo *auth.AuthInfo, id string, Instance *models.Flow) error
-	// UpdateFlowDiagram 只替换 diagram（边工具用）：不碰名称/描述/限额/断点
+	// UpdateFlowDiagram replaces only diagram (used by the edge tool): name/description/limits/breakpoints are untouched.
 	UpdateFlowDiagram(authInfo *auth.AuthInfo, id string, diagram xsql.JSONB) error
-	// UpdateFlowArguments 只替换 arguments（入口参数声明）：不碰名称/描述/diagram/限额/断点，
-	// 并在同一事务里把 svc_endpoints.input_schema 同步过去
+	// UpdateFlowArguments replaces only arguments (the entry argument declaration): name/description/diagram/limits/
+	// breakpoints are untouched, and svc_endpoints.input_schema is synced in the same transaction.
 	UpdateFlowArguments(authInfo *auth.AuthInfo, id string, arguments xsql.JSONB) error
-	// DeleteFlow 删除工作流实例
+	// DeleteFlow deletes a workflow instance.
 	DeleteFlow(authInfo *auth.AuthInfo, id string) error
-	// ListBreakpoints 查询工作流断点 node_id 列表
+	// ListBreakpoints lists a workflow's breakpoint node_ids.
 	ListBreakpoints(authInfo *auth.AuthInfo, flowId string) ([]string, error)
-	// SetBreakpoint 单条增删断点（运行中即时落库，防刷新丢失）
+	// SetBreakpoint sets or clears one breakpoint (persisted immediately while running, so a refresh does not lose it).
 	SetBreakpoint(authInfo *auth.AuthInfo, flowId string, nodeID string, on bool) error
-	// UpdateStatus 仅更新 status（1=active 启用 | 2=disabled 停用）
+	// UpdateStatus updates status only (1=active enabled | 2=disabled).
 	UpdateStatus(authInfo *auth.AuthInfo, id string, status int) error
 
-	// ListFlowVersions 版本历史（新到旧，不含 diagram）
+	// ListFlowVersions is the version history (newest first, without diagram).
 	ListFlowVersions(authInfo *auth.AuthInfo, flowID string) ([]FlowVersion, error)
-	// ReleaseFlowVersion 把当前工作副本冻结成新版本并设为当前
+	// ReleaseFlowVersion freezes the current working copy into a new version and makes it current.
 	ReleaseFlowVersion(authInfo *auth.AuthInfo, flowID string, note string) (*FlowVersion, error)
-	// RollbackFlowVersion 把「正在使用的版本」切到历史版本（纯指针，不发新版本，不动草稿）
+	// RollbackFlowVersion switches "the version in use" to a historical one (a pure pointer change: no new version is
+	// released and the draft is untouched).
 	RollbackFlowVersion(authInfo *auth.AuthInfo, flowID string, version int) (*FlowVersion, error)
-	// ApplyFlowVersionToDraft 把历史版本内容载入工作副本（不发布，线上不变）
+	// ApplyFlowVersionToDraft loads a historical version's content into the working copy (no release; production is
+	// unchanged).
 	ApplyFlowVersionToDraft(authInfo *auth.AuthInfo, flowID string, version int) error
-	// DeleteFlowVersion 删除历史版本（当前版本不可删，线上与草稿都不动）
+	// DeleteFlowVersion deletes a historical version (the current one cannot be deleted; production and the draft are both
+	// untouched).
 	DeleteFlowVersion(authInfo *auth.AuthInfo, flowID string, version int) error
-	// GetCurrentFlowVersion 取正式版本的定义：正式入口（MCP/RPC/端点/flow 直调）走这里；
-	// 没有正式版本返回 ErrNoReleasedVersion，调用方应拒绝执行而不是退回草稿
+	// GetCurrentFlowVersion returns the definition of the released version: the production entry points (MCP / RPC / an
+	// endpoint / a direct flow call) come through here; with no released version it returns ErrNoReleasedVersion and the
+	// caller should refuse to execute rather than fall back to the draft.
 	GetCurrentFlowVersion(authInfo *auth.AuthInfo, id string) (*models.Flow, error)
 }

@@ -4,31 +4,32 @@ import (
 	"sync"
 )
 
-// DebugMode 调试运行模式
+// DebugMode is the debug run mode.
 type DebugMode string
 
 const (
-	// DebugRun 一路跑完，节点前不挂起
+	// DebugRun runs straight through, suspending before no node.
 	DebugRun DebugMode = "run"
-	// DebugPause 每个节点进入前都挂起（等待 resume）
+	// DebugPause suspends before entering every node (waiting for resume).
 	DebugPause DebugMode = "pause"
-	// DebugStep 按 stepKind 决定挂起点（over/in/out）
+	// DebugStep suspends at the points selected by stepKind (over/in/out).
 	DebugStep DebugMode = "step"
 )
 
-// DebugStepKind 单步类型
+// DebugStepKind is the single-step type.
 type DebugStepKind string
 
 const (
-	// StepOver 执行完当前节点后，在同级下一节点前挂起
+	// StepOver suspends before the next sibling node, after the current node finished.
 	StepOver DebugStepKind = "over"
-	// StepIn 进入子 process 的第一个节点前挂起
+	// StepIn suspends before the first node of a child process.
 	StepIn DebugStepKind = "in"
-	// StepOut 跑到当前子 process 结束回到父 process 后，在父下一节点前挂起
+	// StepOut suspends before the parent's next node, once the current child process ended.
 	StepOut DebugStepKind = "out"
 )
 
-// DebugSnapshot 挂起时回推的快照，供前端高亮节点 + 展示变量
+// DebugSnapshot is the snapshot pushed back on suspension, used by the frontend to highlight the
+// node and show its variables.
 type DebugSnapshot struct {
 	NodeID   string                 `json:"node_id"`
 	NodeType string                 `json:"node_type"`
@@ -38,48 +39,53 @@ type DebugSnapshot struct {
 	Stack    []string               `json:"stack,omitempty"`
 }
 
-// DebugControl 工作流执行调试控制器。
-// 在 execute() 递归进入每个节点前调用 SuspendIfNeeded 决定是否挂起；
-// 挂起时通过 eventHook 回推快照，并阻塞在 resume channel 直到收到控制信号。
+// DebugControl is the debug controller of a flow execution.
+// execute() calls SuspendIfNeeded before descending into every node to decide whether to suspend;
+// on suspension a snapshot is pushed back through eventHook and the run blocks on the resume
+// condition until a control signal arrives.
 type DebugControl struct {
 	mu sync.Mutex
 
-	// Enabled 是否启用调试模式（OnConnect 校验通过后置 true）
+	// Enabled reports whether debugging is on (set to true once OnConnect has been validated).
 	Enabled bool
-	// mode 当前运行模式
+	// mode is the current run mode.
 	mode DebugMode
-	// stepKind 当 mode=step 时生效
+	// stepKind only applies when mode is step.
 	stepKind DebugStepKind
-	// cond 挂起/唤醒的条件变量（mu 为其 Locker）
+	// cond is the suspend/resume condition variable (mu is its Locker).
 	cond *sync.Cond
-	// suspended 当前是否处于挂起（等待放行）。替代一次性 chan，避免信号丢失。
+	// suspended reports whether the run currently waits for a release. A condition variable rather
+	// than a one-shot channel, so signals cannot be lost.
 	suspended bool
-	// stopFlag 收到 stop，放行后由调用方靠 StdCtx 取消收尾
+	// stopFlag is set when stop arrives; after the release the caller finishes via StdCtx cancellation.
 	stopFlag bool
-	// stepOutDepth step out 时等待回退到的深度（>=该深度才允许再次挂起）
+	// stepOutDepth is the depth step-out waits to fall back to (suspend only at or above it).
 	stepOutDepth int
-	// stepOverDepth step over 时记录的当前深度，仅在 == 该深度时挂起一次；
-	// process 内部更深层（子流程）不挂起，从而“步过”直接跑完整节点
+	// stepOverDepth is the depth recorded by step-over; it suspends once, only at that depth.
+	// Deeper levels inside a process (child flows) do not suspend, so "step over" really runs the
+	// whole node.
 	stepOverDepth int
-	// breakpoints 命中的断点 nodeID 集合
+	// breakpoints is the set of node IDs whose breakpoint is hit.
 	breakpoints map[string]bool
-	// eventHook 挂起时回调（由 WS 调试源注入，向客户端推送快照）
+	// eventHook is called on suspension (injected by the WS debug source, pushing the snapshot).
 	eventHook func(*DebugSnapshot)
-	// execHook 节点开始执行时回调（由 WS 调试源注入，向前端标记「已运行」节点）。
-	// 无论是否挂起都会调用，用于让前端高亮所有已执行过的节点。
+	// execHook is called when a node starts (injected by the WS debug source, marking the node as
+	// "already run" for the frontend). It is called whether or not the run suspends, so the frontend
+	// can highlight every node that executed.
 	execHook func(nodeID string, nodeName string)
-	// failHook 节点执行失败时回调（由 WS 调试源注入，向前端标记「出错」节点）。
+	// failHook is called when a node fails (injected by the WS debug source, marking it as "failed").
 	failHook func(nodeID string, nodeName string, errMsg string)
-	// skipHook 节点被跳过时回调（由 WS 调试源注入，向前端标记「跳过」节点）。
+	// skipHook is called when a node is skipped (injected by the WS debug source, marking it "skipped").
 	skipHook func(nodeID string, nodeName string)
-	// doneHook 节点执行完成时回调（由 WS 调试源注入，用于累积该节点最新数据）。
+	// doneHook is called when a node finishes (injected by the WS debug source, accumulating the
+	// latest data of that node).
 	doneHook func(nr *NodeResult)
 
-	// stack 当前调用栈（processID 链），仅调试模式下维护
+	// stack is the current call stack (the chain of process IDs), maintained in debug mode only.
 	stack []string
 }
 
-// NewDebugControl 创建调试控制器（默认 run 模式，不挂起）
+// NewDebugControl creates a debug controller (run mode by default, never suspending).
 func NewDebugControl() *DebugControl {
 	d := &DebugControl{
 		mode:        DebugRun,
@@ -89,42 +95,42 @@ func NewDebugControl() *DebugControl {
 	return d
 }
 
-// SetEventHook 注入快照回推回调
+// SetEventHook injects the snapshot push callback.
 func (d *DebugControl) SetEventHook(hook func(*DebugSnapshot)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.eventHook = hook
 }
 
-// SetExecHook 注入节点开始执行的回调（用于标记「已运行」节点）
+// SetExecHook injects the node-start callback (marks "already run" nodes).
 func (d *DebugControl) SetExecHook(hook func(nodeID string, nodeName string)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.execHook = hook
 }
 
-// SetFailHook 注入节点执行失败的回调（用于标记「出错」节点）
+// SetFailHook injects the node-failure callback (marks "failed" nodes).
 func (d *DebugControl) SetFailHook(hook func(nodeID string, nodeName string, errMsg string)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.failHook = hook
 }
 
-// SetSkipHook 注入节点被跳过的回调（用于标记「跳过」节点）
+// SetSkipHook injects the node-skipped callback (marks "skipped" nodes).
 func (d *DebugControl) SetSkipHook(hook func(nodeID string, nodeName string)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.skipHook = hook
 }
 
-// SetDoneHook 注入节点执行完成的回调（用于累积节点最新数据）
+// SetDoneHook injects the node-finished callback (accumulates the latest node data).
 func (d *DebugControl) SetDoneHook(hook func(nr *NodeResult)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.doneHook = hook
 }
 
-// SetBreakpoint 增删断点
+// SetBreakpoint adds or removes a breakpoint.
 func (d *DebugControl) SetBreakpoint(nodeID string, on bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -135,7 +141,7 @@ func (d *DebugControl) SetBreakpoint(nodeID string, on bool) {
 	}
 }
 
-// pushStack / popStack 维护调用栈（调试模式）
+// PushStack / PopStack maintain the call stack (debug mode).
 func (d *DebugControl) PushStack(processID string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -156,11 +162,12 @@ func (d *DebugControl) CurrentDepth() int {
 	return len(d.stack)
 }
 
-// shouldSuspend 纯逻辑判断：当前节点是否应在执行前挂起。
-// 不修改状态、不加锁（调用方持锁）。
+// shouldSuspend decides whether the current node must suspend before executing.
+// It only evaluates: no state change, no locking (the caller holds the lock).
 func (d *DebugControl) shouldSuspend(nodeID string, depth int) bool {
-	// 断点优先：任何模式下命中断点都挂起（与主流调试器一致）。
-	// 步出期间遇到断点 → 停在断点；resume 后 mode 已被切回 run，继续普通运行。
+	// Breakpoints win: in any mode a hit suspends (as in mainstream debuggers).
+	// Hitting a breakpoint during step-out stops at the breakpoint; after resume the mode is back to
+	// run and execution continues normally.
 	if d.breakpoints[nodeID] {
 		return true
 	}
@@ -171,13 +178,13 @@ func (d *DebugControl) shouldSuspend(nodeID string, depth int) bool {
 	case DebugStep:
 		switch d.stepKind {
 		case StepOver:
-			// 仅在当前深度挂起一次（process 内部更深层不挂，直接跑完本节点）
+			// Suspend once, at the current depth only (deeper levels inside a process run through).
 			return depth == d.stepOverDepth
 		case StepIn:
-			// 进入任意深度（含 process 内部第一个节点）都挂起一次
+			// Suspend once at any depth, including the first node inside a process.
 			return true
 		case StepOut:
-			// 仅在深度回到 stepOutDepth（或更浅）时才挂起
+			// Suspend only once the depth is back at stepOutDepth or shallower.
 			return depth <= d.stepOutDepth
 		}
 	case DebugRun:
@@ -186,27 +193,27 @@ func (d *DebugControl) shouldSuspend(nodeID string, depth int) bool {
 	return false
 }
 
-// SuspendIfNeeded 在节点执行前调用。返回时表示已获得继续执行许可。
-// node: 即将执行的节点；processID: 当前 process；depth: 当前递归深度。
+// SuspendIfNeeded is called before a node executes. Returning means the permission to continue was granted.
+// node: the node about to execute; processID: the current process; depth: the current recursion depth.
 func (d *DebugControl) SuspendIfNeeded(node *Node, processID string, depth int) {
 	d.mu.Lock()
 	if !d.Enabled {
 		d.mu.Unlock()
 		return
 	}
-	// start（流程根入口）、entry（容器内入口）与 layout（纯占位）都不真正执行：
-	// 跳过（不标记已运行、不挂起、不命中断点）。
+	// start (flow root entry), entry (container entry) and layout (pure placeholder) never really
+	// execute: skip them (no "already run" mark, no suspension, no breakpoint hit).
 	if node != nil && (node.Type == string(NodeTypeStart) ||
 		node.Type == string(NodeTypeEntry) ||
 		node.Type == string(NodeTypeLayout)) {
 		d.mu.Unlock()
 		return
 	}
-	// 取出节点开始执行的回调，先 unlock 再调用（hook 会写 WS，不宜持锁）。
+	// Grab the start callback and unlock before calling it (the hook writes to the WS, no lock wanted).
 	execHook := d.execHook
 	d.mu.Unlock()
 
-	// 无论是否挂起，都标记该节点已开始执行（前端据此高亮「已运行」节点）
+	// Regardless of suspension, mark the node as started (the frontend highlights "already run" nodes).
 	if execHook != nil {
 		if node != nil {
 			execHook(node.ID, node.Label())
@@ -214,9 +221,9 @@ func (d *DebugControl) SuspendIfNeeded(node *Node, processID string, depth int) 
 	}
 
 	d.mu.Lock()
-	// run 模式的断点命中
+	// A breakpoint hit in run mode.
 	if d.shouldSuspend(node.ID, depth) {
-		// 准备快照
+		// Prepare the snapshot.
 		snap := &DebugSnapshot{
 			NodeID:   node.ID,
 			NodeType: node.Type,
@@ -225,25 +232,25 @@ func (d *DebugControl) SuspendIfNeeded(node *Node, processID string, depth int) 
 			Stack:    append([]string{}, d.stack...),
 		}
 		hook := d.eventHook
-		// step 模式下挂起一次后恢复 run（over/in）：下一次进入直接放行
+		// In step mode, suspend once and return to run (over/in): the next entry passes straight through.
 		if d.mode == DebugStep {
 			if d.stepKind == StepOver || d.stepKind == StepIn {
 				d.mode = DebugRun
 			}
-			// step out 在挂起后被 resume，恢复 run
+			// step out is resumed after the suspension and returns to run as well.
 			if d.stepKind == StepOut {
 				d.mode = DebugRun
 			}
 		}
-		// 标记挂起，交给下面的 cond 等待循环统一处理（信号不会丢失）
+		// Mark the suspension and let the condition-variable loop below handle it (no lost signal).
 		d.suspended = true
 		d.mu.Unlock()
 
 		if hook != nil {
 			hook(snap)
 		}
-		// 阻塞等待放行：用 cond 循环等待，唤醒后重新检查状态位，
-		// 避免「unlock 后、<-chan 前」Resume/Stop 到达导致信号丢失的竞态。
+		// Block until released: wait on the condition variable in a loop and re-check the state bits
+		// after waking, so a Resume/Stop arriving between "unlock" and "wait" cannot lose the signal.
 		d.mu.Lock()
 		for d.suspended && !d.stopFlag {
 			d.cond.Wait()
@@ -255,10 +262,11 @@ func (d *DebugControl) SuspendIfNeeded(node *Node, processID string, depth int) 
 	d.mu.Unlock()
 }
 
-// WaitIfGloballySuspended 全停屏障：若有节点已触发挂起（suspended=true），
-// 当前节点（无论自身是否命中断点）在此阻塞，直到 Resume/Stop 广播唤醒。
-// 用于实现 all-stop：断点命中后冻结所有并发分支，避免多挂起点同时等待的竞态。
-// 检查与阻塞在同一把锁下原子完成，避免「同时检查、同时通过」的竞态。
+// WaitIfGloballySuspended is the all-stop barrier: once any node has suspended (suspended == true),
+// the current node blocks here — whether or not it hit a breakpoint — until Resume/Stop broadcasts.
+// It implements all-stop: a breakpoint hit freezes every concurrent branch, avoiding the race of
+// several suspension points waiting at once. The check and the block happen atomically under the
+// same lock, so "everyone checks, everyone passes" cannot happen.
 func (d *DebugControl) WaitIfGloballySuspended() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -267,7 +275,7 @@ func (d *DebugControl) WaitIfGloballySuspended() {
 	}
 }
 
-// Resume 唤醒挂起（run/pause 模式下持续放行；step 模式下仅放行一次）
+// Resume wakes a suspension (keeps releasing in run/pause mode; releases once in step mode).
 func (d *DebugControl) Resume() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -275,7 +283,7 @@ func (d *DebugControl) Resume() {
 	d.cond.Broadcast()
 }
 
-// Control 接收控制指令（来自 WS）
+// Control applies a control signal (coming from the WS).
 func (d *DebugControl) Control(mode DebugMode, stepKind DebugStepKind) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -284,20 +292,22 @@ func (d *DebugControl) Control(mode DebugMode, stepKind DebugStepKind) {
 	if mode == DebugStep {
 		switch stepKind {
 		case StepOut:
-			// step out：记录当前深度 -1（父 process 深度），待回退到父层级后才挂起。
-			// 注意：在并发子流程场景下，同深度的兄弟 process 中的节点也可能触发挂起，
-			// 因为判断条件仅基于 depth 而非具体 processID。这是可接受的折中：
-			// 调试器在并发场景下 step-out 会停在同层级的最近一个节点。
+			// step out: record the current depth - 1 (the parent process depth) and suspend only once
+			// execution fell back to the parent level.
+			// Note: with concurrent child flows, a node of a sibling process at the same depth can
+			// suspend too, because the check looks at depth only, not at the concrete process ID.
+			// That is an acceptable trade-off: in concurrent scenarios step-out stops at the nearest
+			// node of the same level.
 			d.stepOutDepth = len(d.stack) - 1
 		case StepOver:
-			// step over：记录当前深度，仅在该深度挂起一次；
-			// process 内部更深层直接放行，实现“步过=跑完整节点”。
+			// step over: record the current depth and suspend once at that depth only; deeper levels
+			// inside a process pass straight through, so "step over" means "run the whole node".
 			d.stepOverDepth = len(d.stack)
 		}
 	}
 }
 
-// Stop 停止执行（置 stopFlag 并广播，唤醒阻塞中的挂起点）
+// Stop stops the execution (sets stopFlag and broadcasts, waking every blocked suspension point).
 func (d *DebugControl) Stop() {
 	d.mu.Lock()
 	defer d.mu.Unlock()

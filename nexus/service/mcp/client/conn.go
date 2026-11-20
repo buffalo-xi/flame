@@ -17,11 +17,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// ClientImpl 本 MCP 客户端的实现信息（用于握手 Initialize 请求）
+// ClientImpl is the implementation info of this MCP client (sent in the Initialize handshake).
 var ClientImpl = &mcp.Implementation{Name: "flame-nexus", Version: "1.0.0"}
 
-// NewClientSession 根据连接配置建立与远端 MCP server 的会话（已完成 Connect）。
-// 调用方负责在会话使用完毕后调用返回的 session.Close()。
+// NewClientSession opens a session with the remote MCP server according to the connection config
+// (already connected). The caller is responsible for calling session.Close() once it is done.
 func NewClientSession(ctx context.Context, conn *models.McpConnection) (*mcp.ClientSession, error) {
 	authHandler, err := BuildOAuthHandler(conn.Auth)
 	if err != nil {
@@ -36,18 +36,20 @@ func NewClientSession(ctx context.Context, conn *models.McpConnection) (*mcp.Cli
 	return connectSession(ctx, client, transport, conn)
 }
 
-// connectSession 统一建连：只请求 mcpspec.ProtocolVersion，并校验最终协商结果。
+// connectSession connects uniformly: it only requests mcpspec.ProtocolVersion and verifies the
+// negotiated result.
 //
-// 注意 SDK 客户端的 ProtocolVersion 只是"首选版本"：对端不认新协议时会退回
-// initialize 协商并接受对端给的旧版本（ClientSessionOptions 注释也写明
-// "The server may negotiate a different mutually supported version"）。
-// 那等于把老协议引回 nexus，所以这里在会话建立后硬校验一次版本。
+// Mind that the SDK client's ProtocolVersion is only a "preferred version": when the peer does not know
+// the new protocol it falls back to initialize negotiation and accepts the old version the peer offers
+// (the ClientSessionOptions comment says so as well: "The server may negotiate a different mutually
+// supported version"). That would drag the old protocol back into nexus, so the version is checked hard
+// once the session exists.
 func connectSession(ctx context.Context, client *mcp.Client, transport mcp.Transport, conn *models.McpConnection) (*mcp.ClientSession, error) {
 	session, err := client.Connect(ctx, transport, &mcp.ClientSessionOptions{
 		ProtocolVersion: mcpspec.ProtocolVersion,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("连接 MCP server（%s）失败: %w", conn.Name, err)
+		return nil, fmt.Errorf("failed to connect to the MCP server (%s): %w", conn.Name, err)
 	}
 	got := ""
 	if init := session.InitializeResult(); init != nil {
@@ -55,13 +57,14 @@ func connectSession(ctx context.Context, client *mcp.Client, transport mcp.Trans
 	}
 	if got != mcpspec.ProtocolVersion {
 		_ = session.Close()
-		return nil, fmt.Errorf("MCP server（%s）协议版本不匹配: 对端协商为 %q，nexus 只支持 %q（老协议 server 需经 mcp-bridge 代理）",
+		return nil, fmt.Errorf("MCP server (%s) protocol version mismatch: the peer negotiated %q, nexus only supports %q (an old-protocol server needs an mcp-bridge proxy)",
 			conn.Name, got, mcpspec.ProtocolVersion)
 	}
 	return session, nil
 }
 
-// NewTransport 根据连接配置构造对应的传输层。authHandler 用于 HTTP 传输的鉴权。
+// NewTransport builds the transport matching the connection config. authHandler authenticates the
+// HTTP transport.
 func NewTransport(_ context.Context, conn *models.McpConnection, authHandler auth.OAuthHandler) (mcp.Transport, error) {
 	switch strings.ToLower(conn.Transport) {
 	case "", "streamable_http":
@@ -69,45 +72,45 @@ func NewTransport(_ context.Context, conn *models.McpConnection, authHandler aut
 	case "stdio":
 		return newCommandTransport(conn)
 	default:
-		return nil, fmt.Errorf("不支持的 transport: %s", conn.Transport)
+		return nil, fmt.Errorf("unsupported transport: %s", conn.Transport)
 	}
 }
 
-// newStreamableHTTPTransport 构造 HTTP 流式传输
+// newStreamableHTTPTransport builds the streaming HTTP transport.
 func newStreamableHTTPTransport(conn *models.McpConnection, authHandler auth.OAuthHandler) (mcp.Transport, error) {
 	if conn.URL == "" {
-		return nil, fmt.Errorf("streamable_http 传输需要 url")
+		return nil, fmt.Errorf("the streamable_http transport requires a url")
 	}
 	transport := &mcp.StreamableClientTransport{
 		Endpoint:     conn.URL,
 		OAuthHandler: authHandler,
 	}
-	// 注入自定义请求头（如自定义鉴权头、租户标识等）
+	// Inject the custom request headers (custom auth headers, tenant identifiers, ...).
 	if headers := customHeaders(conn); len(headers) > 0 {
 		transport.HTTPClient = newHTTPClientWithHeaders(headers)
 	}
 	return transport, nil
 }
 
-// newCommandTransport 构造本地 stdio 传输（exec 子进程）
+// newCommandTransport builds the local stdio transport (an exec child process).
 func newCommandTransport(conn *models.McpConnection) (mcp.Transport, error) {
 	if conn.Command == "" {
-		return nil, fmt.Errorf("stdio 传输需要 command")
+		return nil, fmt.Errorf("the stdio transport requires a command")
 	}
 	args := parseArgs(conn.Args)
 	cmd := exec.Command(conn.Command, args...)
-	// stdio 专属：工作目录与环境变量
+	// stdio only: working directory and environment variables.
 	if conn.WorkDir != "" {
 		cmd.Dir = conn.WorkDir
 	}
 	if env := parseEnv(conn.Env); len(env) > 0 {
-		// 继承父进程环境变量并追加连接级 env
+		// Inherit the parent environment and append the connection-level env.
 		cmd.Env = append(os.Environ(), env...)
 	}
 	return &mcp.CommandTransport{Command: cmd}, nil
 }
 
-// customHeaders 从 auth 配置中解析自定义请求头
+// customHeaders reads the custom request headers from the auth config.
 func customHeaders(conn *models.McpConnection) map[string]string {
 	cfg, err := parseAuthConfig(conn.Auth)
 	if err != nil || len(cfg.Headers) == 0 {
@@ -116,7 +119,7 @@ func customHeaders(conn *models.McpConnection) map[string]string {
 	return cfg.Headers
 }
 
-// newHTTPClientWithHeaders 返回一个注入了默认请求头的 *http.Client
+// newHTTPClientWithHeaders returns an *http.Client with the given default headers injected.
 func newHTTPClientWithHeaders(headers map[string]string) *http.Client {
 	base := http.DefaultClient
 	return &http.Client{
@@ -128,7 +131,7 @@ func newHTTPClientWithHeaders(headers map[string]string) *http.Client {
 	}
 }
 
-// headerRoundTripper 在每次请求前注入自定义头
+// headerRoundTripper injects custom headers on every request.
 type headerRoundTripper struct {
 	base   http.RoundTripper
 	header map[string]string
@@ -145,7 +148,7 @@ func (rt *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	return base.RoundTrip(req)
 }
 
-// parseArgs 将 JSONB 参数数组解析为字符串切片
+// parseArgs parses a JSONB argument array into a string slice.
 func parseArgs(args xsql.JSONB) []string {
 	var arr []string
 	if args.Data == nil {
@@ -157,7 +160,7 @@ func parseArgs(args xsql.JSONB) []string {
 	return arr
 }
 
-// parseEnv 将 JSONB 环境变量数组（["K=V", ...]）解析为字符串切片
+// parseEnv parses a JSONB environment array (["K=V", ...]) into a string slice.
 func parseEnv(env xsql.JSONB) []string {
 	var arr []string
 	if env.Data == nil {

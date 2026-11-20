@@ -5,8 +5,10 @@ import (
 	"testing"
 )
 
-// 本地实现的重命名：文件与目录都要能搬，且「同名前缀」的兄弟文件不许被牵连。
-// 这条用例同时钉住了 S3 分支的设计前提 —— 单文件靠精确 key 判定，不按前缀扫。
+// Rename in the local implementation: both files and directories must move, and a sibling whose name shares the prefix
+// must not be dragged along.
+// This case also pins down the design premise of the S3 branch — a single file is identified by its exact key, never by
+// scanning the prefix.
 func TestFilesystemRename(t *testing.T) {
 	st := NewFilesystemStorage(t.TempDir())
 	ctx := context.Background()
@@ -18,19 +20,19 @@ func TestFilesystemRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.Rename(ctx, "ws/a.md", "ws/b.md"); err != nil {
-		t.Fatalf("单文件重命名失败: %v", err)
+		t.Fatalf("renaming a single file failed: %v", err)
 	}
 	if data, err := st.ReadFile(ctx, "ws/b.md"); err != nil || string(data) != "A" {
-		t.Errorf("新路径内容 = %q, err = %v", data, err)
+		t.Errorf("new path content = %q, err = %v", data, err)
 	}
 	if ex, _ := st.Exists(ctx, "ws/a.md"); ex {
-		t.Error("旧路径仍然存在")
+		t.Error("the old path still exists")
 	}
 	if data, err := st.ReadFile(ctx, "ws/a.md.bak"); err != nil || string(data) != "BAK" {
-		t.Errorf("同前缀的兄弟文件被牵连: %q, err = %v", data, err)
+		t.Errorf("a sibling sharing the prefix was dragged along: %q, err = %v", data, err)
 	}
 
-	// 目录：整棵搬走，旧位置不留残。
+	// Directory: the whole tree moves and nothing is left behind.
 	if err := st.WriteFile(ctx, "ws/dir/x.md", []byte("X")); err != nil {
 		t.Fatal(err)
 	}
@@ -38,25 +40,25 @@ func TestFilesystemRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.Rename(ctx, "ws/dir", "ws/moved"); err != nil {
-		t.Fatalf("目录重命名失败: %v", err)
+		t.Fatalf("renaming a directory failed: %v", err)
 	}
 	if data, err := st.ReadFile(ctx, "ws/moved/sub/y.md"); err != nil || string(data) != "Y" {
-		t.Errorf("子目录未跟着搬: %q, err = %v", data, err)
+		t.Errorf("a subdirectory did not move along: %q, err = %v", data, err)
 	}
 	if entries, _ := st.List(ctx, "ws/dir"); len(entries) != 0 {
-		t.Errorf("旧目录还留着 %d 个条目", len(entries))
+		t.Errorf("the old directory still holds %d entries", len(entries))
 	}
 
-	// 目标父目录不存在时自动建出（与新建条目的语义一致）。
+	// A missing target parent is created automatically (the same semantics as creating an entry).
 	if err := st.Rename(ctx, "ws/b.md", "ws/deep/er/c.md"); err != nil {
-		t.Fatalf("搬到不存在的父目录失败: %v", err)
+		t.Fatalf("moving into a missing parent failed: %v", err)
 	}
 	if ex, _ := st.Exists(ctx, "ws/deep/er/c.md"); !ex {
-		t.Error("多层落点未建出")
+		t.Error("the multi-level destination was not created")
 	}
 
-	// 源不存在：幂等返回 nil（接口层自己用 entryExists 报 404，不靠这里）。
+	// A missing source: idempotently nil (the API layer reports 404 through its own entryExists, not from here).
 	if err := st.Rename(ctx, "ws/nope", "ws/other"); err != nil {
-		t.Errorf("源不存在应返回 nil, got %v", err)
+		t.Errorf("a missing source should return nil, got %v", err)
 	}
 }

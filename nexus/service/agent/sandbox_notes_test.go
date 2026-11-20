@@ -42,7 +42,7 @@ func TestSandboxNotes(t *testing.T) {
 	// write a pile of offline fallback code, exactly the lie this mechanism exists to avoid.
 	sandboxinfo.Set(sandboxinfo.Info{Err: "dial tcp 127.0.0.1:27081: connect: connection refused"})
 	unknown := a.sandboxNotes()
-	if !strings.Contains(unknown, "未知") {
+	if !strings.Contains(unknown, "environment: unknown") {
 		t.Errorf("should say it is unknown when no snapshot was ever fetched, got %q", unknown)
 	}
 	if strings.Contains(unknown, "network=off") || strings.Contains(unknown, "network=on") {
@@ -56,7 +56,7 @@ func TestSandboxNotes(t *testing.T) {
 		Network: netInfo(sandboxinfo.NetworkOff),
 		Langs:   []string{"python", "js"},
 		Environment: sandboxinfo.Environment{
-			Text:     "Python 版本: 3.13.5\n已装 Python 包: openpyxl==3.1.5",
+			Text:     "Python version: 3.13.5\nInstalled Python packages: openpyxl==3.1.5",
 			ProbedAt: time.Now(),
 		},
 		FetchedAt: time.Now(),
@@ -64,11 +64,11 @@ func TestSandboxNotes(t *testing.T) {
 	off := a.sandboxNotes()
 	for _, want := range []string{
 		"docker",
-		"可执行语言（sandboxd 配置；用于命令执行与技能脚本，**不是工作流节点的可选语言**）：python、js",
-		"沙箱实测（以下为 sandboxd 探测原文）",
-		"已装 Python 包: openpyxl==3.1.5",
+		"Executable languages (configured in sandboxd; used for command execution and skill scripts, **not** the selectable languages of workflow nodes): python, js",
+		"Sandbox probe result (verbatim output from sandboxd)",
+		"Installed Python packages: openpyxl==3.1.5",
 		"network=off",
-		"不能",
+		"cannot",
 	} {
 		if !strings.Contains(off, want) {
 			t.Errorf("the off-state copy is missing %q:\n%s", want, off)
@@ -88,13 +88,13 @@ func TestSandboxNotes(t *testing.T) {
 
 	stubCapabilities(t, map[string]bool{capability.Egress: true})
 	egressOn := a.sandboxNotes()
-	if !strings.Contains(egressOn, "egress: true") || !strings.Contains(egressOn, "可以") {
+	if !strings.Contains(egressOn, "egress: true") || !strings.Contains(egressOn, "can") {
 		t.Errorf("when egress is granted the model must be told how to use it (egress: true):\n%s", egressOn)
 	}
 
 	stubCapabilities(t, nil)
 	egressOff := a.sandboxNotes()
-	if !strings.Contains(egressOff, "未开通") || strings.Contains(egressOff, "egress: true") {
+	if !strings.Contains(egressOff, "does not have net.egress") || strings.Contains(egressOff, "egress: true") {
 		t.Errorf("without egress the model must not believe it can go online:\n%s", egressOff)
 	}
 
@@ -106,10 +106,10 @@ func TestSandboxNotes(t *testing.T) {
 		FetchedAt: time.Now(),
 	})
 	on := a.sandboxNotes()
-	if !strings.Contains(on, "network=on") || !strings.Contains(on, "可以") {
+	if !strings.Contains(on, "network=on") || !strings.Contains(on, "can") {
 		t.Errorf("the on-state copy should say networking is possible:\n%s", on)
 	}
-	if !strings.Contains(on, "只读") {
+	if !strings.Contains(on, "read-only") {
 		t.Errorf("the on state must still warn that the rootfs is read-only (no global installs):\n%s", on)
 	}
 
@@ -125,7 +125,7 @@ func TestSandboxNotes(t *testing.T) {
 	if !strings.Contains(stale, "network=off") {
 		t.Errorf("a failed refresh must not drop the last successful snapshot:\n%s", stale)
 	}
-	if !strings.Contains(stale, "可能已过期") || !strings.Contains(stale, "http 502") {
+	if !strings.Contains(stale, "may be out of date") || !strings.Contains(stale, "http 502") {
 		t.Errorf("a failed refresh must mark staleness and the reason:\n%s", stale)
 	}
 
@@ -157,10 +157,10 @@ func TestSandboxNotes(t *testing.T) {
 		FetchedAt: time.Now(),
 	})
 	bothLangs := a.sandboxNotes()
-	if !strings.Contains(bothLangs, "可执行语言（sandboxd 配置；用于命令执行与技能脚本，**不是工作流节点的可选语言**）：js、lua、python、ruby") {
+	if !strings.Contains(bothLangs, "Executable languages (configured in sandboxd; used for command execution and skill scripts, **not** the selectable languages of workflow nodes): js, lua, python, ruby") {
 		t.Errorf("the executable-languages line is missing:\n%s", bothLangs)
 	}
-	if !strings.Contains(bothLangs, "工作流脚本语言（sandboxd 配置）：lua、python") {
+	if !strings.Contains(bothLangs, "Workflow script languages (configured in sandboxd): lua, python") {
 		t.Errorf("the workflow-script-languages line is missing:\n%s", bothLangs)
 	}
 	if !strings.Contains(bothLangs, "unsupported_lang") {
@@ -174,7 +174,7 @@ func TestSandboxNotes(t *testing.T) {
 		CodeLangs: []string{},
 		FetchedAt: time.Now(),
 	})
-	if got := a.sandboxNotes(); !strings.Contains(got, "没有配置任何**工作流脚本语言**") {
+	if got := a.sandboxNotes(); !strings.Contains(got, "no **workflow script language** configured") {
 		t.Errorf("an empty set must be stated explicitly:\n%s", got)
 	}
 
@@ -185,7 +185,7 @@ func TestSandboxNotes(t *testing.T) {
 		Langs:     []string{"lua"},
 		FetchedAt: time.Now(),
 	})
-	if got := a.sandboxNotes(); strings.Contains(got, "工作流脚本语言") {
+	if got := a.sandboxNotes(); strings.Contains(got, "Workflow script languages") {
 		t.Errorf("workflow script languages must not be mentioned when the peer reports no such field:\n%s", got)
 	}
 
@@ -194,7 +194,7 @@ func TestSandboxNotes(t *testing.T) {
 	sandboxinfo.Set(sandboxinfo.Info{
 		Mode: "docker", Network: netInfo(sandboxinfo.NetworkOn), FetchedAt: time.Now(),
 	})
-	if got := a.sandboxNotes(); strings.Contains(got, "浏览器") {
+	if got := a.sandboxNotes(); strings.Contains(got, "Browser") {
 		t.Errorf("the browser must not be mentioned when the peer reports no browser field:\n%s", got)
 	}
 
@@ -203,7 +203,7 @@ func TestSandboxNotes(t *testing.T) {
 		Browser: &sandboxinfo.BrowserInfo{Enabled: false, Error: "no browser in image"},
 	})
 	disabled := a.sandboxNotes()
-	if !strings.Contains(disabled, "不可用") || !strings.Contains(disabled, "no browser in image") {
+	if !strings.Contains(disabled, "unavailable") || !strings.Contains(disabled, "no browser in image") {
 		t.Errorf("an unavailable browser must come with the reason:\n%s", disabled)
 	}
 
@@ -214,7 +214,7 @@ func TestSandboxNotes(t *testing.T) {
 		},
 	})
 	headless := a.sandboxNotes()
-	if !strings.Contains(headless, "只能无头") || !strings.Contains(headless, "snapshot") {
+	if !strings.Contains(headless, "headless only") || !strings.Contains(headless, "snapshot") {
 		t.Errorf("headless-only must state the fact and how to observe:\n%s", headless)
 	}
 
@@ -254,7 +254,7 @@ func TestSandboxNotes(t *testing.T) {
 	// Any one of the two entry points being granted counts as "can touch the sandbox".
 	for _, tool := range []string{"exec", "run_skill_script", "shell", "browser"} {
 		withTool := &agentImpl{toolCtx: &tools.Context{AllowedTools: map[string]bool{tool: true}}}
-		if got := withTool.sandboxNotes(); !strings.Contains(got, "沙箱环境（隔离方式 docker") {
+		if got := withTool.sandboxNotes(); !strings.Contains(got, "Sandbox environment (isolation mode docker") {
 			t.Errorf("granting %s should inject the sandbox notes, got:\n%s", tool, got)
 		}
 	}

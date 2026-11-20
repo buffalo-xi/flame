@@ -1,6 +1,6 @@
 package repository
 
-// NewRepository 创建 agent_configs 存储实例
+// NewRepository creates the agent_configs storage instance.
 func NewRepository() Repository {
 	return NewPostgresRepository()
 }

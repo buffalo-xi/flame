@@ -7,8 +7,9 @@ import (
 	"flame/nexus/shared/db"
 )
 
-// FlowLimits 最终生效的 flow 配置（租户/系统两级硬顶 + 回退 + 截断）
-// 语义：每个 max_* 既是「硬顶」也是「实例未设置时的兜底值」。
+// FlowLimits are the effective flow configuration (two-level hard ceiling for tenant / system, plus fallback and
+// clamping).
+// Semantics: every max_* is both "a hard ceiling" and "the fallback when the instance does not set it".
 type FlowLimits struct {
 	MaxTimeout        int
 	MaxRecursionDepth int
@@ -19,8 +20,9 @@ type FlowLimits struct {
 	MaxSessionRecords int
 }
 
-// fallback 硬编码兜底上限值（flow_configs 未配置时的系统级缺省）
-// 语义约定：NULL=未设置（回退下级）；-1=不限制（无限大，有效值不回退）
+// fallback holds the hard-coded default limits (the system-level default while flow_configs is not configured).
+// Semantic convention: NULL = not set (fall back to the next level); -1 = unlimited (infinity, the effective value never
+// falls back).
 var fallback = FlowLimits{
 	MaxTimeout:        300,
 	MaxRecursionDepth: 10,
@@ -31,7 +33,7 @@ var fallback = FlowLimits{
 	MaxSessionRecords: 50,
 }
 
-// row 对应 flow_configs 一行，NULL 用 sql.NullInt32 表达
+// row maps one flow_configs row, with NULL expressed through sql.NullInt32.
 type row struct {
 	MaxTimeout        sql.NullInt32
 	MaxRecursionDepth sql.NullInt32
@@ -42,20 +44,21 @@ type row struct {
 	MaxSessionRecords sql.NullInt32
 }
 
-// tableName 返回 flow_configs 的带 schema 全名
+// tableName returns the schema-qualified name of flow_configs.
 func tableName() string {
 	return config.Cfg.Database.PlatformSchema + ".flow_configs"
 }
 
-// Resolve 返回指定租户最终生效的 flow 配置（租户/系统两级回退 + 截断）。
-// 数据来源：Redis 共享缓存（见 cache.go），Redis 未启用/不可用时直连数据库。
-// 本函数不做进程内缓存：调用方按需自行快照（运行期见 flow.ExecContext.Limits）。
-// tenantID 为空字符串表示系统级。
+// Resolve returns the effective flow configuration of a tenant (two-level tenant / system fallback plus clamping).
+// The source is the shared Redis cache (see cache.go); while Redis is unavailable it queries the database directly.
+// This function keeps no in-process cache: the caller snapshots it as needed (at runtime see flow.ExecContext.Limits).
+// An empty tenantID means system level.
 func Resolve(tenantID string) FlowLimits {
 	return merge(loadRowCached(tenantID), loadRowCached(""))
 }
 
-// Fallback 返回代码内置兜底值（系统行未设置时用），供管理界面展示"不填会退到哪"。
+// Fallback returns the built-in code defaults (used while the system row is not set), so the admin UI can show "what it
+// falls back to when left empty".
 func Fallback() FlowLimits {
 	return fallback
 }
@@ -78,7 +81,7 @@ func loadRow(tenantID string) (*row, error) {
 	return &r, nil
 }
 
-// pick 两级回退：tenant -> sys -> fallback。只有 NULL（未设置）才回退下级。
+// pick is the two-level fallback: tenant -> sys -> fallback. Only NULL (not set) falls back to the next level.
 func pick(tenant, sys sql.NullInt32, fb int) int {
 	if tenant.Valid {
 		return int(tenant.Int32)
@@ -89,12 +92,12 @@ func pick(tenant, sys sql.NullInt32, fb int) int {
 	return fb
 }
 
-// clampMax 上限截断：tenantVal 相对 ceiling 取 min，-1 视为无限大。
+// clampMax clamps to the ceiling: tenantVal takes min against ceiling, and -1 counts as infinity.
 func clampMax(v, ceiling int) int {
-	if ceiling == -1 { // 系统本身不限制
+	if ceiling == -1 { // the system itself is unlimited
 		return v
 	}
-	if v == -1 { // 租户不限制（无限大），但系统有限制
+	if v == -1 { // the tenant is unlimited (infinity), but the system is limited
 		return ceiling
 	}
 	if v > ceiling {
@@ -137,7 +140,7 @@ func merge(tenant, sys *row) FlowLimits {
 	return l
 }
 
-// field 安全取指定字段，r 为 nil（无该行）时返回空 NullInt32
+// field safely reads the named field, returning an empty NullInt32 when r is nil (no such row).
 func field(r *row, name string) sql.NullInt32 {
 	if r == nil {
 		return sql.NullInt32{}

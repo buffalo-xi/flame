@@ -6,8 +6,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 单工 / 代码片段端点由同一份基地址按用途拼出。
-// 覆盖：常规、结尾斜杠、wss、旧「完整端点」写法、前后空白、未配置。
+// The simplex / code snippet endpoints are assembled from one base address by purpose.
+// Covered: the normal form, a trailing slash, wss, the old "full endpoint" form, surrounding whitespace, unconfigured.
 func TestSandboxEndpoints(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -15,21 +15,22 @@ func TestSandboxEndpoints(t *testing.T) {
 		wantExec string
 		wantCode string
 	}{
-		{"基地址", "ws://127.0.0.1:27081", "ws://127.0.0.1:27081/v1/exec", "ws://127.0.0.1:27081/v1/code"},
-		{"结尾斜杠", "ws://127.0.0.1:27081/", "ws://127.0.0.1:27081/v1/exec", "ws://127.0.0.1:27081/v1/code"},
+		{"base address", "ws://127.0.0.1:27081", "ws://127.0.0.1:27081/v1/exec", "ws://127.0.0.1:27081/v1/code"},
+		{"trailing slash", "ws://127.0.0.1:27081/", "ws://127.0.0.1:27081/v1/exec", "ws://127.0.0.1:27081/v1/code"},
 		{"wss", "wss://sandboxd:443", "wss://sandboxd:443/v1/exec", "wss://sandboxd:443/v1/code"},
-		{"旧写法：完整 exec 端点", "ws://h:8080/v1/exec", "ws://h:8080/v1/exec", "ws://h:8080/v1/code"},
-		{"旧写法：完整 code 端点", "ws://h:8080/v1/code", "ws://h:8080/v1/exec", "ws://h:8080/v1/code"},
-		// /v1/script 是 code 端点 2026-10 之前的名字。它出现在剥壳列表里，是因为
-		// 端点可以写进 config.yaml（编译期外），老配置里确实会带这一截。
-		{"旧写法：更名前 /v1/script", "ws://h:8080/v1/script", "ws://h:8080/v1/exec", "ws://h:8080/v1/code"},
-		// /v1/session 已废弃，刻意不做剥壳 —— 于是这里拼出双路径。
-		// 这是**期望行为**：配置写错了就该连不上，而不是被静默「修正」成能连。
-		{"已废弃：完整 session 端点", "ws://h:8080/v1/session", "ws://h:8080/v1/session/v1/exec", "ws://h:8080/v1/session/v1/code"},
-		{"前后空白", "  ws://h:8080  ", "ws://h:8080/v1/exec", "ws://h:8080/v1/code"},
-		{"未配置", "", "", ""},
-		{"只有空白", "   ", "", ""},
-		{"只有斜杠", "/", "", ""},
+		{"old form: full exec endpoint", "ws://h:8080/v1/exec", "ws://h:8080/v1/exec", "ws://h:8080/v1/code"},
+		{"old form: full code endpoint", "ws://h:8080/v1/code", "ws://h:8080/v1/exec", "ws://h:8080/v1/code"},
+		// /v1/script is the name the code endpoint had before 2026-10. It is in the strip list because the endpoint can be
+		// written into config.yaml (outside compile time), and old configurations really do carry that segment.
+		{"old form: /v1/script before the rename", "ws://h:8080/v1/script", "ws://h:8080/v1/exec", "ws://h:8080/v1/code"},
+		// /v1/session is deprecated and deliberately not stripped — so the path is doubled here.
+		// That is **expected**: a wrong configuration should fail to connect rather than be silently "corrected" into one
+		// that works.
+		{"deprecated: full session endpoint", "ws://h:8080/v1/session", "ws://h:8080/v1/session/v1/exec", "ws://h:8080/v1/session/v1/code"},
+		{"surrounding whitespace", "  ws://h:8080  ", "ws://h:8080/v1/exec", "ws://h:8080/v1/code"},
+		{"not configured", "", "", ""},
+		{"whitespace only", "   ", "", ""},
+		{"slash only", "/", "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,8 +45,8 @@ func TestSandboxEndpoints(t *testing.T) {
 	}
 }
 
-// 钉住配置键名：基地址是 sandbox.url（不是旧的 exec_url / session_url）。
-// 键名漂移时端点会算出空串，启动即被 main 拦下，这里提前守住。
+// Pin the configuration key names: the base address is sandbox.url (not the old exec_url / session_url).
+// If the key drifts the endpoints compute to empty strings and main refuses to start, so this guards it early.
 func TestSandboxConfigYAMLKey(t *testing.T) {
 	var c Config
 	src := "sandbox:\n  url: ws://h:8080\n  token: tok\n"

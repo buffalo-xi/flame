@@ -16,54 +16,57 @@ import (
 	"github.com/google/uuid"
 )
 
-// PostgresRepository PostgreSQL实现的服务端点存储
+// PostgresRepository is the PostgreSQL implementation of service endpoint storage.
 type PostgresRepository struct{}
 
-// NewPostgresRepository 创建PostgreSQL存储实例
+// NewPostgresRepository creates a PostgreSQL storage instance.
 func NewPostgresRepository() *PostgresRepository {
 	return &PostgresRepository{}
 }
 
-// ErrManagedEndpoint 托管端点不能单独删除。
+// ErrManagedEndpoint means a managed endpoint cannot be deleted on its own.
 //
-// flow 的 rpc 端点是建流程时自动补的（见 CreateManagedRPC）：名字 / 描述 / input_schema
-// 全部派生自实体，唯一独立状态是 exposed。删掉它不是「清理历史」，而是把
-// local:rpc:<name> 这类引用（存在授权表、技能依赖、工具组里）变成死引用，
-// 同时让流程按名字不可调用。要停用它，用流程状态（停用 / 废弃）或收回对外。
-var ErrManagedEndpoint = errors.New("RPC 端点随流程自动管理，不能单独删除；要停用请停用或废弃流程")
+// A flow's rpc endpoint is added automatically when the flow is created (see CreateManagedRPC): its name / description /
+// input_schema are all derived from the entity, and the only independent state is exposed. Deleting it is not "cleaning
+// up history" but turning references such as local:rpc:<name> (held in the grant tables, skill dependencies and tool
+// groups) into dangling ones, and making the flow uncallable by name at the same time. To disable it, use the flow
+// status (disabled / deprecated) or retract it.
+var ErrManagedEndpoint = errors.New("the RPC endpoint is managed with its flow and cannot be deleted on its own; to disable it, disable or deprecate the flow")
 
-// ErrEndpointExposed 端点仍在对外开放时不能删除。
+// ErrEndpointExposed means an endpoint that is still exposed cannot be deleted.
 //
-// 对外端点此刻可能正被租户外的调用方使用，静默删掉等于服务直接消失；先「收回对外」。
-var ErrEndpointExposed = errors.New("端点仍在对外开放，请先「收回对外」再删除")
+// An exposed endpoint may be in use by callers outside the tenant right now, so deleting it silently is the same as the
+// service disappearing; retract it first.
+var ErrEndpointExposed = errors.New("the endpoint is still exposed; retract it first, then delete")
 
-// columns svc_endpoints 表查询列
+// columns are the columns selected from svc_endpoints.
 const columns = "id, name, description, created_at, updated_at, target_id, target_type, protocol, input_schema, exposed"
 
-// listColumns 列表查询列（带 e. 前缀：JOIN agents / flows 后 name 等同名列会歧义）
+// listColumns are the columns for a list query (prefixed with e.: after joining agents / flows, same-named columns such as
+// name would be ambiguous).
 const listColumns = "e.id, e.name, e.description, e.created_at, e.updated_at, e.target_id, e.target_type, e.protocol, e.input_schema, e.exposed"
 
-// scanEndpoint 扫描行到 SvcEndpoint
+// scanEndpoint scans a row into SvcEndpoint.
 func scanEndpoint(scanner interface{ Scan(...interface{}) error }, e *models.SvcEndpoint) error {
 	return scanner.Scan(&e.ID, &e.Name, &e.Description, &e.CreatedAt, &e.UpdatedAt, &e.TargetID, &e.TargetType, &e.Protocol, &e.InputSchema, &e.Exposed)
 }
 
-// scopeColumns 单行查询列：比 columns 多一个「目标是否超级智能体」的子查询。
+// scopeColumns are the columns for a single-row query: columns plus one subquery for "is the target the super agent".
 //
-// 用子查询而不是 JOIN：GetByID / FindByName 只按主键 / 名字命中，本身不带 JOIN；
-// 而凭证的「除超级智能体外」范围判定需要这个标记（rpc 的 findEndpoint 就在热路径上）。
+// A subquery rather than a JOIN: GetByID / FindByName match by primary key / name and carry no JOIN of their own, while
+// the credential scope rule "everyone except the super agent" needs this flag (rpc's findEndpoint sits on a hot path).
 func scopeColumns(schema string) string {
 	return columns + fmt.Sprintf(`, CASE WHEN target_type = 'agent'
 		THEN COALESCE((SELECT is_supervisor FROM %s.agents WHERE id = svc_endpoints.target_id), false)
 		ELSE false END`, schema)
 }
 
-// scanEndpointScoped 扫描「端点 + 目标是否 supervisor」。
+// scanEndpointScoped scans "endpoint + is the target a supervisor".
 func scanEndpointScoped(scanner interface{ Scan(...interface{}) error }, e *models.SvcEndpoint) error {
 	return scanner.Scan(&e.ID, &e.Name, &e.Description, &e.CreatedAt, &e.UpdatedAt, &e.TargetID, &e.TargetType, &e.Protocol, &e.InputSchema, &e.Exposed, &e.TargetSupervisor)
 }
 
-// GetByID 根据ID获取服务端点
+// GetByID returns one service endpoint by id.
 func (r *PostgresRepository) GetByID(authInfo *auth.AuthInfo, id string) (*models.SvcEndpoint, error) {
 	var svcEndpoint models.SvcEndpoint
 	err := scanEndpointScoped(db.DB.QueryRow(
@@ -75,12 +78,15 @@ func (r *PostgresRepository) GetByID(authInfo *auth.AuthInfo, id string) (*model
 	return &svcEndpoint, nil
 }
 
-// ensureExposableTarget 把端点对外开放前的目标状态校验：**只拒「废弃」**。
+// ensureExposableTarget validates the target's state before the endpoint is exposed: it **refuses only "deprecated"**.
 //
-// 「对外提供入口」与「定义能不能改」是两件事：正常态当然可以对外。
+// "Offering an entrance to the outside" and "may the definition change" are two different things: the normal state can of
+// course be exposed.
 //
-// 历史：这里曾把编辑态自动置为锁定（对外即锁定）。副作用太大 —— 改一行提示词要先解锁，
-// 而解锁会顺带收回端点、断一下流量。现在改为「端点对外开放不改状态；定义被改动时由编辑器提醒」。
+// History: this used to switch the editing state to locked automatically (exposing meant locking). The side effects were
+// too large — changing one line of a prompt required unlocking first, and unlocking retracted the endpoint and cut the
+// traffic on the way. It now works as "exposing an endpoint does not change the state; the editor warns when the
+// definition has changed".
 func ensureExposableTarget(schema, targetType, targetID string) error {
 	targetTable := "flows"
 	if targetType == "agent" {
@@ -96,34 +102,35 @@ func ensureExposableTarget(schema, targetType, targetID string) error {
 		return err
 	}
 	if status == models.StatusDeprecated {
-		return fmt.Errorf("%s 已废弃（status=%d），不能对外开放端点", targetType, status)
+		return fmt.Errorf("%s is deprecated (status=%d) and cannot expose an endpoint", targetType, status)
 	}
 	return nil
 }
 
-// Create 创建服务端点
+// Create creates a service endpoint.
 func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, svcEndpoint *models.SvcEndpoint) (string, error) {
-	// 验证 TargetType
+	// Validate TargetType
 	if svcEndpoint.TargetType != "agent" && svcEndpoint.TargetType != "flow" {
 		return "", fmt.Errorf("target_type must be either 'agent' or 'flow'")
 	}
 
-	// 验证 Protocol
+	// Validate Protocol
 	if svcEndpoint.Protocol != "mcp" && svcEndpoint.Protocol != "rpc" && svcEndpoint.Protocol != "llm" {
 		return "", fmt.Errorf("protocol must be one of 'mcp', 'rpc', 'llm'")
 	}
 
-	// 验证 TargetID 不为空
+	// Validate that TargetID is not empty
 	if svcEndpoint.TargetID == "" {
 		return "", fmt.Errorf("target_id cannot be empty")
 	}
 
-	// 验证目标存在
+	// Validate that the target exists
 	targetTable := "agents"
 	if svcEndpoint.TargetType == "flow" {
 		targetTable = "flows"
 	}
-	// 端点名恒等于目标实体名（对外名 = 实体名，避免两套名字不一致）
+	// The endpoint name always equals the target entity name (the public name is the entity name, so the two can never
+	// disagree)
 	var targetName string
 	err := db.DB.QueryRow(
 		fmt.Sprintf(`SELECT name FROM %s.%s WHERE id = $1`, authInfo.Schema, targetTable),
@@ -135,29 +142,32 @@ func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, svcEndpoint *models
 		}
 		return "", fmt.Errorf("error checking target: %v", err)
 	}
-	// 传入 name 时必须与实体名一致（端点名恒等于实体名，不允许另起名字）
+	// A name passed in must equal the entity name (the endpoint name always equals the entity name; a separate name is not
+	// allowed)
 	if svcEndpoint.Name != "" && !strings.EqualFold(svcEndpoint.Name, targetName) {
 		return "", fmt.Errorf("endpoint name must equal the %s name %q", svcEndpoint.TargetType, targetName)
 	}
 	svcEndpoint.Name = targetName
 
-	// 工作流端点对外就是工具名（MCP tool.name / agent 侧 local__<name> / 授权 ref
-	// local:rpc:<name>），这三个消费方都只认 ASCII 字母数字横线。名字不合法时
-	// 这里直接拒绝对外开放 —— 否则会静默产出一个「对外了但授权不了、模型也调不到」的端点
-	// （存量中文名工作流就是这么漏出去的）。
+	// A workflow endpoint is the tool name on the outside (MCP tool.name / local__<name> on the agent side / the grant ref
+	// local:rpc:<name>), and all three consumers accept only ASCII letters, digits and hyphens. An invalid name is refused
+	// here outright — otherwise it would silently produce an endpoint that "is exposed but cannot be granted and cannot be
+	// called by the model" (that is how workflows with legacy Chinese names leaked out).
 	if svcEndpoint.TargetType == "flow" && !paths.ValidName(targetName) {
-		return "", fmt.Errorf("工作流名 %q 不能作为端点名：只能用字母、数字与横线（不能以横线开头，≤64）；"+
-			"请先在编辑器里改名，再对外开放端点", targetName)
+		return "", fmt.Errorf("workflow name %q cannot be used as an endpoint name: only letters, digits and hyphens are allowed "+
+			"(no leading hyphen, at most 64); rename it in the editor first, then expose the endpoint", targetName)
 	}
 
-	// 创建即对外：先校验目标状态（只有废弃被拒）；默认 exposed=false，通常不会走到这里
+	// Created already exposed: validate the target state first (only "deprecated" is refused); exposed defaults to false,
+	// so this is usually not reached
 	if svcEndpoint.Exposed.Bool() {
 		if err := ensureExposableTarget(authInfo.Schema, svcEndpoint.TargetType, svcEndpoint.TargetID); err != nil {
 			return "", err
 		}
 	}
 
-	// 建 flow 端点时，input_schema 始终覆盖为 flows.arguments（与 UpdateFlow 同步逻辑一致）
+	// When creating a flow endpoint, input_schema is always overwritten with flows.arguments (matching the sync logic in
+	// UpdateFlow)
 	if svcEndpoint.TargetType == "flow" {
 		var args xsql.JSONB
 		err = db.DB.QueryRow(
@@ -170,7 +180,7 @@ func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, svcEndpoint *models
 		svcEndpoint.InputSchema = args
 	}
 
-	// 检查同 target + protocol 是否已存在
+	// Check whether the same target + protocol already exists
 	var dupCount int
 	err = db.DB.QueryRow(
 		fmt.Sprintf(`SELECT COUNT(*) FROM %s.svc_endpoints WHERE target_id = $1 AND target_type = $2 AND protocol = $3`, authInfo.Schema),
@@ -183,10 +193,10 @@ func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, svcEndpoint *models
 		return "", fmt.Errorf("endpoint already exists for %s '%s' with protocol '%s'", svcEndpoint.TargetType, svcEndpoint.TargetID, svcEndpoint.Protocol)
 	}
 
-	// 生成独立 UUID
+	// Generate a standalone UUID
 	endpointID := uuid.NewString()
 
-	// 开始事务
+	// Open the transaction
 	tx, err := db.DB.Begin()
 	if err != nil {
 		return "", err
@@ -199,8 +209,9 @@ func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, svcEndpoint *models
 		err = tx.Commit()
 	}()
 
-	// 插入 svc_endpoints（新建端点 exposed 默认 false，需手动对外开放才对租户外服务）
-	// 显式写入 created_at/updated_at = NOW()，避免依赖数据库列默认值导致为空
+	// Insert into svc_endpoints (a new endpoint defaults to exposed=false; it must be exposed explicitly to serve outside
+	// the tenant)
+	// created_at / updated_at are written explicitly as NOW() so they never end up empty by relying on column defaults
 	_, err = tx.Exec(
 		fmt.Sprintf(`INSERT INTO %s.svc_endpoints (id, name, description, created_at, updated_at, target_id, target_type, protocol, input_schema, exposed) VALUES ($1, $2, $3, NOW(), NOW(), $4, $5, $6, $7, $8)`, authInfo.Schema),
 		endpointID, svcEndpoint.Name, svcEndpoint.Description, svcEndpoint.TargetID, svcEndpoint.TargetType, svcEndpoint.Protocol, svcEndpoint.InputSchema, svcEndpoint.Exposed,
@@ -209,7 +220,7 @@ func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, svcEndpoint *models
 		return "", err
 	}
 
-	// 同步 endpoints（端点名不写回实体；名称已在开头强制取实体名）
+	// Sync the mirror (the endpoint name is not written back to the entity; the name was forced to the entity name above)
 	if err := syncEndpoints(tx, authInfo.Schema, svcEndpoint.TargetType, svcEndpoint.TargetID); err != nil {
 		return "", err
 	}
@@ -218,14 +229,17 @@ func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, svcEndpoint *models
 	return endpointID, nil
 }
 
-// CreateManagedRPC 在调用方的事务里给实体补一条 RPC 端点（exposed=false），并同步镜像。
+// CreateManagedRPC adds an RPC endpoint (exposed=false) to an entity inside the caller's transaction, and syncs the
+// mirror.
 //
-// 流程要被别的流程按端点名调用（rpc 节点存的就是端点名）、要出现在工具目录里，
-// 都依赖这一行；而端点名 / 描述 / input_schema 全部派生自实体 —— 所以它是实体的
-// 一个协议槽位，不是用户手工资产（单独删除见 ErrManagedEndpoint）。
+// A flow being callable by other flows through the endpoint name (an rpc node stores the endpoint name) and appearing in
+// the tool catalogue both depend on this row; and its name / description / input_schema are all derived from the entity —
+// so it is a protocol slot of the entity rather than a user-made asset (deleting it on its own is covered by
+// ErrManagedEndpoint).
 //
-// 名字不合法的实体（中文名等）不建：端点名同时是工具名与授权 ref local:rpc:<name>，
-// 建出来只会是模型调不到、也授权不了的死端点（Create 里拦的是同一件事）。
+// An entity whose name is invalid (a Chinese name and the like) gets none: the endpoint name is also the tool name and
+// the grant ref local:rpc:<name>, so what it would produce is a dead endpoint the model cannot call and nobody can grant
+// (Create refuses the very same thing).
 func CreateManagedRPC(tx *sql.Tx, schema, targetType, targetID, name, description string, inputSchema xsql.JSONB) error {
 	if !paths.ValidName(name) {
 		return nil
@@ -240,8 +254,8 @@ func CreateManagedRPC(tx *sql.Tx, schema, targetType, targetID, name, descriptio
 	return syncEndpoints(tx, schema, targetType, targetID)
 }
 
-// FindByName 按 protocol + name 精确查端点（对外调用按名定位用，大小写不敏感）；
-// 不存在返回 (nil, nil)。不过滤 exposed：本租户直调允许调用未对外开放的端点。
+// FindByName looks an endpoint up exactly by protocol + name (used to locate one by name from outside, case insensitive);
+// missing returns (nil, nil). exposed is not filtered: a direct call inside the tenant may use a not-exposed endpoint.
 func (r *PostgresRepository) FindByName(authInfo *auth.AuthInfo, protocol, name string) (*models.SvcEndpoint, error) {
 	var e models.SvcEndpoint
 	err := scanEndpointScoped(db.DB.QueryRow(
@@ -257,9 +271,9 @@ func (r *PostgresRepository) FindByName(authInfo *auth.AuthInfo, protocol, name 
 	return &e, nil
 }
 
-// UpdateExposed 更新端点的对外状态（不影响其他字段）
+// UpdateExposed updates the endpoint's exposed state (no other field is affected).
 func (r *PostgresRepository) UpdateExposed(authInfo *auth.AuthInfo, id string, exposed bool) error {
-	// 先查 target_type / target_id
+	// Read target_type / target_id first
 	var targetType, targetID string
 	if err := db.DB.QueryRow(
 		fmt.Sprintf(`SELECT target_type, target_id FROM %s.svc_endpoints WHERE id = $1`, authInfo.Schema), id,
@@ -267,7 +281,7 @@ func (r *PostgresRepository) UpdateExposed(authInfo *auth.AuthInfo, id string, e
 		return err
 	}
 
-	// 对外开放前校验目标状态（收回不校验：任何状态都可以关）
+	// Validate the target state before exposing (retracting is not validated: any state may be turned off)
 	if exposed {
 		if err := ensureExposableTarget(authInfo.Schema, targetType, targetID); err != nil {
 			return err
@@ -304,9 +318,10 @@ func (r *PostgresRepository) UpdateExposed(authInfo *auth.AuthInfo, id string, e
 	return tx.Commit()
 }
 
-// Update 更新服务端点
+// Update updates a service endpoint.
 func (r *PostgresRepository) Update(authInfo *auth.AuthInfo, id string, svcEndpoint *models.SvcEndpoint) error {
-	// 名称不参与更新：端点名恒等于目标实体名（改名走实体改名流程 + repo 层同步）
+	// The name does not take part in an update: the endpoint name always equals the target entity name (a rename goes
+	// through the entity rename flow plus the repository-level sync)
 	result, err := db.DB.Exec(
 		fmt.Sprintf(`UPDATE %s.svc_endpoints SET description = $1, input_schema = $2, updated_at = NOW() WHERE id = $3`, authInfo.Schema),
 		svcEndpoint.Description, svcEndpoint.InputSchema, id,
@@ -326,13 +341,13 @@ func (r *PostgresRepository) Update(authInfo *auth.AuthInfo, id string, svcEndpo
 	return nil
 }
 
-// Delete 根据ID删除单个服务端点
+// Delete deletes one service endpoint by id.
 //
-// 两条拒绝（DeleteByTarget 不受影响：那是实体删除时的级联清理）：
-//   - flow 的 rpc 端点由流程托管，见 ErrManagedEndpoint；
-//   - 仍对外开放的端点先收回，见 ErrEndpointExposed。
+// Two refusals (DeleteByTarget is unaffected: that is the cascade when the entity is deleted):
+//   - a flow's rpc endpoint is managed by its flow, see ErrManagedEndpoint;
+//   - an endpoint that is still exposed must be retracted first, see ErrEndpointExposed.
 func (r *PostgresRepository) Delete(authInfo *auth.AuthInfo, id string) error {
-	// 先获取该端点的 target_type / target_id / protocol / exposed
+	// Read this endpoint's target_type / target_id / protocol / exposed first
 	var targetType, targetID string
 	var protocol sql.NullString
 	var exposed bool
@@ -365,13 +380,13 @@ func (r *PostgresRepository) Delete(authInfo *auth.AuthInfo, id string) error {
 		err = tx.Commit()
 	}()
 
-	// 删除该端点
+	// Delete the endpoint
 	_, err = tx.Exec(fmt.Sprintf(`DELETE FROM %s.svc_endpoints WHERE id = $1`, authInfo.Schema), id)
 	if err != nil {
 		return err
 	}
 
-	// 同步目标的 endpoints（agent/flow 同一套机制）
+	// Sync the target's endpoints (the same mechanism for agent and flow)
 	if err := syncEndpoints(tx, authInfo.Schema, targetType, targetID); err != nil {
 		return err
 	}
@@ -379,7 +394,7 @@ func (r *PostgresRepository) Delete(authInfo *auth.AuthInfo, id string) error {
 	return nil
 }
 
-// DeleteByTarget 删除指定目标的所有协议端点，并清除目标上的端点标记
+// DeleteByTarget deletes every protocol endpoint of a target and clears the endpoint marker on the target.
 func (r *PostgresRepository) DeleteByTarget(authInfo *auth.AuthInfo, targetType string, targetID string) error {
 	if targetType != "agent" && targetType != "flow" {
 		return fmt.Errorf("target_type must be either 'agent' or 'flow'")
@@ -397,7 +412,7 @@ func (r *PostgresRepository) DeleteByTarget(authInfo *auth.AuthInfo, targetType 
 		err = tx.Commit()
 	}()
 
-	// 删除该 target 的所有端点
+	// Delete every endpoint of the target
 	_, err = tx.Exec(
 		fmt.Sprintf(`DELETE FROM %s.svc_endpoints WHERE target_id = $1 AND target_type = $2`, authInfo.Schema),
 		targetID, targetType,
@@ -406,7 +421,7 @@ func (r *PostgresRepository) DeleteByTarget(authInfo *auth.AuthInfo, targetType 
 		return err
 	}
 
-	// 清除目标的端点记录：清空 endpoints（agent/flow 同一套机制）
+	// Clear the target's endpoint record: empty endpoints (the same mechanism for agent and flow)
 	targetTable := "flows"
 	if targetType != "flow" {
 		targetTable = "agents"
@@ -422,7 +437,8 @@ func (r *PostgresRepository) DeleteByTarget(authInfo *auth.AuthInfo, targetType 
 	return nil
 }
 
-// RetractByTarget 收回指定目标所有协议端点的对外（仅置 exposed=false，端点记录与配置保留）
+// RetractByTarget retracts every protocol endpoint of a target (only exposed=false; the endpoint records and their
+// configuration are kept).
 func (r *PostgresRepository) RetractByTarget(authInfo *auth.AuthInfo, targetType string, targetID string) error {
 	if targetType != "agent" && targetType != "flow" {
 		return fmt.Errorf("target_type must be either 'agent' or 'flow'")
@@ -449,8 +465,9 @@ func (r *PostgresRepository) RetractByTarget(authInfo *auth.AuthInfo, targetType
 	return tx.Commit()
 }
 
-// endpointWhere 按过滤条件拼 WHERE 子句与参数（不含分页与排序）。
-// 列名统一带 e. 前缀：JOIN agents / flows 后 name 等同名列会歧义。
+// endpointWhere builds the WHERE clause and its arguments from the filters (no paging or ordering).
+// Column names always carry the e. prefix: after joining agents / flows, same-named columns such as name would be
+// ambiguous.
 func endpointWhere(req *ListSvcEndpointsRequest) (string, []interface{}) {
 	whereClause := ""
 	args := []interface{}{}
@@ -481,7 +498,7 @@ func endpointWhere(req *ListSvcEndpointsRequest) (string, []interface{}) {
 	return whereClause, args
 }
 
-// endpointOrderBy 拼 ORDER BY 子句（默认按名称升序），返回值自带前导空格。
+// endpointOrderBy builds the ORDER BY clause (name ascending by default); the result carries its own leading space.
 func endpointOrderBy(req *ListSvcEndpointsRequest) string {
 	sortClauses := []string{}
 	if len(req.SortBy) == 0 {
@@ -498,8 +515,8 @@ func endpointOrderBy(req *ListSvcEndpointsRequest) string {
 	return " ORDER BY " + strings.Join(sortClauses, ", ")
 }
 
-// endpointSelectSQL 拼查询主体：LEFT JOIN 目标实体取名称（实体已删除时为空串）。
-// whereClause 为空表示不带 WHERE；排序与分页由调用方自行追加。
+// endpointSelectSQL builds the body of the query: a LEFT JOIN onto the target entity for its name (empty when the entity
+// is gone). An empty whereClause means no WHERE; the caller appends ordering and paging itself.
 func endpointSelectSQL(schema, whereClause string) string {
 	return fmt.Sprintf(`SELECT %s, COALESCE(a.name, f.name, '') AS target_name,
 			COALESCE(a.is_supervisor, false) AS target_supervisor
@@ -509,7 +526,7 @@ func endpointSelectSQL(schema, whereClause string) string {
 		listColumns, schema, schema, schema) + whereClause
 }
 
-// scanEndpointRows 扫描「端点 + target_name」结果集
+// scanEndpointRows scans the "endpoint + target_name" result set.
 func scanEndpointRows(rows *sql.Rows) ([]models.SvcEndpoint, error) {
 	var results []models.SvcEndpoint
 	for rows.Next() {
@@ -525,11 +542,11 @@ func scanEndpointRows(rows *sql.Rows) ([]models.SvcEndpoint, error) {
 	return results, rows.Err()
 }
 
-// List 获取服务端点列表（LEFT JOIN 目标实体，附带 target_name）
+// List lists service endpoints (LEFT JOIN onto the target entity, carrying target_name).
 func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListSvcEndpointsRequest) ([]models.SvcEndpoint, int, error) {
 	whereClause, args := endpointWhere(req)
 
-	// 计算总数
+	// Total
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.svc_endpoints e", authInfo.Schema) + whereClause
 	var total int
 	err := db.DB.QueryRow(countQuery, args...).Scan(&total)
@@ -537,7 +554,7 @@ func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListSvcEndpoints
 		return nil, 0, err
 	}
 
-	// 处理分页
+	// Paging
 	page := req.Page
 	if page < 1 {
 		page = 1
@@ -566,11 +583,11 @@ func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListSvcEndpoints
 	return results, total, nil
 }
 
-// ListAll 取出满足条件的全部端点（不分页、不统计总数）。
+// ListAll takes every endpoint matching the filters (no paging, no total count).
 //
-// 与 List 的唯一区别就是没有分页：List 的默认 limit=10 会静默截断，
-// 凡是「要把整份目录装进内存」的场景（MCP / RPC 的工具注册）都必须走这里，
-// 否则第 11 个端点起就会凭空消失。
+// The only difference from List is the absence of paging: List's default limit=10 silently truncates, so every scenario
+// that "loads the whole catalogue into memory" (tool registration for MCP / RPC) must come through here, otherwise
+// everything from the 11th endpoint on vanishes for no reason.
 func (r *PostgresRepository) ListAll(authInfo *auth.AuthInfo, req *ListSvcEndpointsRequest) ([]models.SvcEndpoint, error) {
 	whereClause, args := endpointWhere(req)
 	query := endpointSelectSQL(authInfo.Schema, whereClause) + endpointOrderBy(req)
@@ -584,8 +601,8 @@ func (r *PostgresRepository) ListAll(authInfo *auth.AuthInfo, req *ListSvcEndpoi
 	return scanEndpointRows(rows)
 }
 
-// syncEndpoints 从 svc_endpoints 重新聚合目标的端点协议，写回其 endpoints jsonb 列。
-// agent 与 flow 共用同一套机制（target_type 决定目标表）。
+// syncEndpoints re-aggregates a target's endpoint protocols from svc_endpoints and writes them back to its endpoints
+// jsonb column. agent and flow share the mechanism (target_type picks the table).
 func syncEndpoints(tx *sql.Tx, schema, targetType, targetID string) error {
 	targetTable := "flows"
 	if targetType == "agent" {
@@ -618,9 +635,10 @@ func syncEndpoints(tx *sql.Tx, schema, targetType, targetID string) error {
 		return err
 	}
 
-	// 只写回 endpoints 列，**不动 status**：端点对外与「定义能不能改」已解耦。
-	// 旧口径「有端点对外 ⇒ 自动锁定」已取消（改一行提示词就得先解锁、解锁又收回端点，
-	// 代价与收益不成比例）。锁定态已从工作流 / agent / skill 全部取消。
+	// Only the endpoints column is written back, **status is left alone**: exposing an endpoint and "may the definition
+	// change" are decoupled now. The old rule "an exposed endpoint implies locking" is gone (changing one line of a
+	// prompt required unlocking, and unlocking retracted the endpoint — the cost outweighed the benefit). The locked
+	// state has been removed from flows / agents / skills alike.
 	_, err = tx.Exec(
 		fmt.Sprintf(`UPDATE %s.%s SET endpoints = $2 WHERE id = $1`, schema, targetTable),
 		targetID, endpointsJSON,

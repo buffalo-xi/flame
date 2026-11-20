@@ -1,9 +1,10 @@
-// Package peers 跨服务器市场的两端配置：
+// Package peers holds both ends of the cross-server marketplace configuration:
 //
-//	platform.peer_servers  —— 我去拉的那一端（地址 + 出站 token + 是否自动通过）
-//	platform.market_tokens —— 允许谁来拉我（只存 sha256，明文只在创建时回一次）
+//	platform.peer_servers  — the end I pull from (address + outbound token + whether review is skipped)
+//	platform.market_tokens — who may pull from me (only the sha256 is stored; the plaintext is returned once, at creation)
 //
-// 两张表都在平台侧，与租户数据无关；导入落库复用 shared/repository/sharedassets。
+// Both tables sit on the platform side and have nothing to do with tenant data; persisting an import reuses
+// shared/repository/sharedassets.
 package peers
 
 import (
@@ -19,41 +20,44 @@ import (
 func peerTable() string  { return config.Cfg.Database.PlatformSchema + ".peer_servers" }
 func tokenTable() string { return config.Cfg.Database.PlatformSchema + ".market_tokens" }
 
-// 安装策略（租户点「安装」时，拉下来的资产怎么处理）。
+// Install policies (what happens to a pulled asset when a tenant clicks "install").
 const (
-	// InstallPolicyReview 拉下来先进待审，平台通过后租户才能装（默认：跨环境不互相放行）。
+	// InstallPolicyReview puts pulled assets into pending review first; the tenant may install only after the platform
+	// approves (the default: environments do not wave each other through).
 	InstallPolicyReview = "review"
-	// InstallPolicyAuto 拉下来直接上架（listed）并立刻装到发起租户（只建议给自己完全掌控的测试源）。
+	// InstallPolicyAuto lists a pulled asset (listed) and installs it into the initiating tenant right away (recommended
+	// only for a test source you fully control).
 	InstallPolicyAuto = "auto"
 )
 
-// 可见范围（哪些租户能在自己的资产市场里看见这个对端）。
+// Visibility scopes (which tenants can see this peer in their own asset marketplace).
 const (
 	VisibleAll       = "all"
 	VisibleAllowlist = "allowlist"
 )
 
-// 出站认证方式（我拉对端时带不带令牌）。
+// Outbound auth mode (whether a token is sent when I pull from a peer).
 //
-// 不落库：token 为空串就是 none —— 「有没有令牌」本身就是唯一事实，再加一列
-// 就可能出现「方式是 token 但令牌是空的」这种自相矛盾的行。
+// Not stored: an empty token string already means none — "is there a token" is the only fact, and one more column would
+// allow a self-contradictory row of "the mode is token but the token is empty".
 const (
-	// AuthModeToken 带 Bearer 令牌（对端市场要求令牌，默认）。
+	// AuthModeToken sends a Bearer token (the peer marketplace requires one; the default).
 	AuthModeToken = "token"
-	// AuthModeNone 不带令牌（对端开了 market.open，公开市场）。
+	// AuthModeNone sends no token (the peer enabled market.open, an open marketplace).
 	AuthModeNone = "none"
 )
 
-// Peer 一个对端站点（我去拉它）。
+// Peer is one peer site (I pull from it).
 type Peer struct {
 	ID        string
 	Name      string
 	BaseURL   string
-	Token     string // 出站令牌（明文；只在管理员接口返回）
+	Token     string // outbound token (plaintext; only returned by the admin endpoint)
 	Enabled   bool
 	VisibleTo string   // all | allowlist
-	Tenants   []string // allowlist 名单（visible_to=allowlist 时生效）
-	// InstallPolicy 决定租户点了「安装」之后：review = 先导入待审；auto = 直接装。
+	Tenants   []string // the allowlist (takes effect when visible_to=allowlist)
+	// InstallPolicy decides what happens after a tenant clicks "install": review = import into pending review first;
+	// auto = install directly.
 	InstallPolicy string
 	LastSyncAt    sql.NullTime
 	LastError     string
@@ -61,7 +65,7 @@ type Peer struct {
 	UpdatedAt     time.Time
 }
 
-// AuthMode 这个对端要不要带令牌（推导自 Token，见 AuthModeToken / AuthModeNone）。
+// AuthMode reports whether this peer needs a token (derived from Token, see AuthModeToken / AuthModeNone).
 func (p *Peer) AuthMode() string {
 	if strings.TrimSpace(p.Token) != "" {
 		return AuthModeToken
@@ -86,10 +90,11 @@ func scanPeer(sc interface{ Scan(...any) error }, p *Peer) error {
 	return nil
 }
 
-// VisibleToTenant 该对端是否对某租户开放（停用的对端一律不可见，由调用方先判 enabled）。
+// VisibleToTenant reports whether a peer is open to a tenant (a disabled peer is never visible; the caller checks enabled
+// first).
 //
-// 这是「租户能不能在市场里看见这个远端」的唯一判据：平台配了可见范围，
-// 租户侧接口就必须按它过滤，否则 allowlist 等于没写。
+// This is the single criterion for "may a tenant see this remote in the marketplace": the platform configures the
+// visibility scope, and the tenant-side endpoints must filter by it, otherwise the allowlist may as well not exist.
 func VisibleToTenant(p *Peer, schema string) bool {
 	if p == nil || !p.Enabled || schema == "" {
 		return false
@@ -105,7 +110,7 @@ func VisibleToTenant(p *Peer, schema string) bool {
 	return false
 }
 
-// TenantsJSON 把名单序列化成 jsonb 文本（写库用）。
+// TenantsJSON serialises the allowlist into jsonb text (for writing to the database).
 func (p *Peer) TenantsJSON() string {
 	if len(p.Tenants) == 0 {
 		return "[]"
@@ -117,7 +122,7 @@ func (p *Peer) TenantsJSON() string {
 	return string(b)
 }
 
-// ListPeers 全部对端（按名字排）。
+// ListPeers lists every peer (sorted by name).
 func ListPeers() ([]Peer, error) {
 	rows, err := db.DB.Query(`SELECT ` + peerColumns + ` FROM ` + peerTable() + ` ORDER BY name`)
 	if err != nil {
@@ -135,7 +140,7 @@ func ListPeers() ([]Peer, error) {
 	return out, rows.Err()
 }
 
-// GetPeer 按 id 取；不存在返回 (nil, nil)。
+// GetPeer fetches by id; missing returns (nil, nil).
 func GetPeer(id string) (*Peer, error) {
 	var p Peer
 	err := scanPeer(db.DB.QueryRow(`SELECT `+peerColumns+` FROM `+peerTable()+` WHERE id = $1::uuid`, id), &p)
@@ -148,7 +153,7 @@ func GetPeer(id string) (*Peer, error) {
 	return &p, nil
 }
 
-// ExistsPeerName 名字是否已被占用（excludeID 用于更新时排除自己）。
+// ExistsPeerName reports whether a name is taken (excludeID excludes the row itself on update).
 func ExistsPeerName(name, excludeID string) (bool, error) {
 	var n int
 	err := db.DB.QueryRow(`SELECT count(*) FROM `+peerTable()+
@@ -156,7 +161,7 @@ func ExistsPeerName(name, excludeID string) (bool, error) {
 	return n > 0, err
 }
 
-// InsertPeer 新建对端。
+// InsertPeer creates a peer.
 func InsertPeer(p *Peer) error {
 	_, err := db.DB.Exec(`INSERT INTO `+peerTable()+`
 		(id, name, base_url, token, enabled, visible_to, tenant_schemas, install_policy)
@@ -166,7 +171,7 @@ func InsertPeer(p *Peer) error {
 	return err
 }
 
-// UpdatePeer 改配置。
+// UpdatePeer changes the configuration.
 func UpdatePeer(p *Peer) error {
 	_, err := db.DB.Exec(`UPDATE `+peerTable()+`
 		SET name = $2, base_url = $3, token = $4, enabled = $5,
@@ -177,13 +182,13 @@ func UpdatePeer(p *Peer) error {
 	return err
 }
 
-// DeletePeer 删除对端（已导入的资产不受影响：它们只保留 origin_server 字符串）。
+// DeletePeer deletes a peer (assets already imported are unaffected: they only keep the origin_server string).
 func DeletePeer(id string) error {
 	_, err := db.DB.Exec(`DELETE FROM `+peerTable()+` WHERE id = $1::uuid`, id)
 	return err
 }
 
-// TouchPeer 记录一次同步结果（ok 时清空 last_error）。
+// TouchPeer records one sync result (clears last_error when errMsg is empty).
 func TouchPeer(id string, errMsg string) error {
 	_, err := db.DB.Exec(`UPDATE `+peerTable()+`
 		SET last_sync_at = now(), last_error = $2, updated_at = now() WHERE id = $1::uuid`, id, errMsg)
@@ -191,10 +196,10 @@ func TouchPeer(id string, errMsg string) error {
 }
 
 // ============================================================================
-// 市场出口令牌
+// Marketplace export tokens
 // ============================================================================
 
-// MarketToken 一个只读市场令牌（库里只有 sha256）。
+// MarketToken is one read-only market token (the database holds the sha256 only).
 type MarketToken struct {
 	ID         string
 	Name       string
@@ -211,7 +216,7 @@ func scanToken(sc interface{ Scan(...any) error }, t *MarketToken) error {
 	return sc.Scan(&t.ID, &t.Name, &t.TokenHash, &t.Enabled, &t.CreatedBy, &t.CreatedAt, &t.LastUsedAt)
 }
 
-// ListMarketTokens 全部令牌（不回明文，明文只在创建时出现过一次）。
+// ListMarketTokens lists every token (never the plaintext, which only existed once at creation).
 func ListMarketTokens() ([]MarketToken, error) {
 	rows, err := db.DB.Query(`SELECT ` + tokenColumns + ` FROM ` + tokenTable() + ` ORDER BY created_at DESC`)
 	if err != nil {
@@ -229,7 +234,7 @@ func ListMarketTokens() ([]MarketToken, error) {
 	return out, rows.Err()
 }
 
-// InsertMarketToken 新建令牌。
+// InsertMarketToken creates a token.
 func InsertMarketToken(t *MarketToken) error {
 	_, err := db.DB.Exec(`INSERT INTO `+tokenTable()+`
 		(id, name, token_hash, enabled, created_by) VALUES ($1::uuid,$2,$3,$4,$5::uuid)`,
@@ -237,19 +242,19 @@ func InsertMarketToken(t *MarketToken) error {
 	return err
 }
 
-// DeleteMarketToken 吊销令牌。
+// DeleteMarketToken revokes a token.
 func DeleteMarketToken(id string) error {
 	_, err := db.DB.Exec(`DELETE FROM `+tokenTable()+` WHERE id = $1::uuid`, id)
 	return err
 }
 
-// SetMarketTokenEnabled 启用/停用（吊销的软方式：保留审计）。
+// SetMarketTokenEnabled enables / disables a token (the soft way to revoke: the audit trail is kept).
 func SetMarketTokenEnabled(id string, enabled bool) error {
 	_, err := db.DB.Exec(`UPDATE `+tokenTable()+` SET enabled = $2 WHERE id = $1::uuid`, id, enabled)
 	return err
 }
 
-// FindMarketTokenByHash 入站鉴权：按 sha256 找启用的令牌；命中后顺手刷 last_used_at。
+// FindMarketTokenByHash does inbound authentication: find the enabled token by sha256, and refresh last_used_at on a hit.
 func FindMarketTokenByHash(hash string) (*MarketToken, error) {
 	var t MarketToken
 	err := scanToken(db.DB.QueryRow(`SELECT `+tokenColumns+` FROM `+tokenTable()+
@@ -260,25 +265,25 @@ func FindMarketTokenByHash(hash string) (*MarketToken, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 尽力而为：刷不到不影响本次请求
+	// Best effort: a failed refresh does not affect this request
 	_, _ = db.DB.Exec(`UPDATE `+tokenTable()+` SET last_used_at = now() WHERE id = $1::uuid`, t.ID)
 	return &t, nil
 }
 
 // ============================================================================
-// 市场出口策略（单行表：要不要校验令牌）
+// Marketplace export policy (single-row table: whether tokens are checked)
 // ============================================================================
 
 func settingsTable() string { return config.Cfg.Database.PlatformSchema + ".market_settings" }
 
-// MarketSetting 出口策略现状（没有行时 Open=false）。
+// MarketSetting is the current export policy (Open=false when there is no row).
 type MarketSetting struct {
 	Open      bool
 	UpdatedAt sql.NullTime
 	UpdatedBy sql.NullString
 }
 
-// GetMarketSetting 读出口策略（含「谁在什么时候改的」）。
+// GetMarketSetting reads the export policy (including who changed it and when).
 func GetMarketSetting() (*MarketSetting, error) {
 	var s MarketSetting
 	err := db.DB.QueryRow(`SELECT open, updated_at, updated_by FROM `+settingsTable()+` WHERE id = 1`).
@@ -292,11 +297,13 @@ func GetMarketSetting() (*MarketSetting, error) {
 	return &s, nil
 }
 
-// MarketOpen 市场是否允许匿名访问。没有行 = 不允许（fail closed：忘配置绝不等于全开）。
+// MarketOpen reports whether the marketplace allows anonymous access. No row means not allowed (fail closed: forgetting
+// to configure never means wide open).
 //
-// 不做进程内缓存：与 capabilitypolicy / pluginpolicy 的闸同口径 —— 多实例部署下
-// 缓存会让「刚关掉的开关」在一段时间里仍生效，而这个开关是安全相关的一票。
-// /platform/market/* 是低频接口（拉目录、导包），一次点查换掉这份不一致是划算的。
+// No in-process cache: the same rule as the capabilitypolicy / pluginpolicy gates — with several instances deployed a
+// cache would keep "the switch just turned off" in effect for a while, and this switch is a security-relevant vote.
+// /platform/market/* are low-frequency endpoints (pull the catalogue, import a pack), so one point query is a fair price
+// for dropping that inconsistency.
 func MarketOpen() (bool, error) {
 	var open bool
 	err := db.DB.QueryRow(`SELECT open FROM ` + settingsTable() + ` WHERE id = 1`).Scan(&open)
@@ -309,7 +316,7 @@ func MarketOpen() (bool, error) {
 	return open, nil
 }
 
-// SetMarketOpen 写出口策略（单行 upsert），by 为操作者平台用户 id（可为空）。
+// SetMarketOpen writes the export policy (single-row upsert); by is the operator's platform user id (may be empty).
 func SetMarketOpen(open bool, by string) error {
 	var byVal any
 	if by = strings.TrimSpace(by); by != "" {

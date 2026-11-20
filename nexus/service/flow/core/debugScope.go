@@ -2,51 +2,55 @@ package flow
 
 import "sync"
 
-// DraftRef 一次调试运行里「跟随了草稿」的实体。
+// DraftRef is one entity whose draft was followed by a debug run.
 //
-// 落进运行记录（flow_run_records.drafts），用来回答「这次跑出来的是哪几份草稿」——
-// 这正是「无脑传播草稿」丢掉的东西：scope 内换了内容，事后必须能说清当时用的是哪一份。
+// It lands in the run record (flow_run_records.drafts) to answer "which drafts produced this run" —
+// exactly what blindly propagating drafts loses: if the content inside the scope changed, it must
+// still be possible to say afterwards which copy was used at the time.
 type DraftRef struct {
 	Kind string `json:"kind"` // flow / agent / skill / tool
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	Note string `json:"note,omitempty"` // 例如「未发布」「有未发布修改」
+	Note string `json:"note,omitempty"` // e.g. "never released", "has unreleased changes"
 }
 
-// DebugScope 一次调试会话的作用域。
+// DebugScope is the scope of one debug session.
 //
-// 它只有两个来源：编辑页调试器（websocket 的 flowDebugSource）与 run_flow 试跑。
-// 其余入口（MCP / RPC / agent 的 local__ 工具 / 用户聊天）构造执行上下文时一律不设，
-// 因此天然拿不到 scope —— 不需要「记得别设置」，而是结构上就没有。
+// It only has two sources: the editor debugger (the flowDebugSource websocket) and a run_flow trial
+// run. Every other entry point (MCP / RPC / the agent's local__ tools / user chat) leaves it unset
+// when building the execution context, so they structurally cannot obtain a scope — it is not a
+// matter of "remembering not to set it".
 //
-// 作用域沿**进程内内部调用**继承（flow → flow，将来还有 flow → agent → flow），
-// 跨进程边界的调用（MCP / RPC / HTTP）不存在 scope。
+// The scope is inherited along in-process internal calls (flow → flow, and later flow → agent → flow);
+// calls crossing a process boundary (MCP / RPC / HTTP) have no scope at all.
 //
-// 语义是「草稿沿归属与依赖走，但不跨进程」：
-//   - 被调实体对调试者可编辑、且未归档 → 用草稿，并记进 Drafts；
-//   - 其余 → 用正式版本（没有正式版本就报错，不静默退回草稿）。
+// The semantics are "drafts travel along ownership and dependencies, but never across processes":
+//   - the callee is editable by the debugger and not archived → use the draft and record it in Drafts;
+//   - otherwise → use the released version (error out when there is none, never fall back silently).
 type DebugScope struct {
-	// FollowDrafts 是否跟随依赖的草稿。调试面板上的开关，默认开：
-	// 关掉就是「只跑我这一层」，用来确认「单独改 A 有没有问题」。
+	// FollowDrafts controls whether dependencies follow their drafts. It is the switch in the debug
+	// panel and defaults to on: turning it off means "run only my own layer", used to confirm
+	// "is the change to A alone harmless".
 	FollowDrafts bool
 
 	mu     sync.Mutex
 	drafts []DraftRef
 }
 
-// NewDebugScope 新建一个调试作用域。
+// NewDebugScope creates a debug scope.
 func NewDebugScope(followDrafts bool) *DebugScope {
 	return &DebugScope{FollowDrafts: followDrafts}
 }
 
-// Enabled 是否是「跟草稿」的调试作用域；nil 安全（正式运行返回 false）。
+// Enabled reports whether this is a draft-following debug scope; nil safe (production runs return false).
 func (s *DebugScope) Enabled() bool {
 	return s != nil && s.FollowDrafts
 }
 
-// RecordDraft 记一条「本次跟随了谁的草稿」。同一实体只记一次，避免并发节点重复写入。
+// RecordDraft records whose draft was followed. The same entity is recorded once, so concurrent
+// nodes do not write it twice.
 //
-// 并发节点（mono / 并行）会从多个 goroutine 调用，所以加锁。
+// Concurrent nodes (mono / parallel) call this from several goroutines, hence the lock.
 func (s *DebugScope) RecordDraft(kind, id, name, note string) {
 	if s == nil || id == "" {
 		return
@@ -61,7 +65,7 @@ func (s *DebugScope) RecordDraft(kind, id, name, note string) {
 	s.drafts = append(s.drafts, DraftRef{Kind: kind, ID: id, Name: name, Note: note})
 }
 
-// Drafts 返回本次跟随的草稿清单（副本，供落库）。
+// Drafts returns the drafts followed by this run (a copy, for persistence).
 func (s *DebugScope) Drafts() []DraftRef {
 	if s == nil {
 		return nil

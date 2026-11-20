@@ -9,32 +9,33 @@ import (
 	"flame/nexus/shared/config"
 	"flame/tools/xlog"
 
-	_ "github.com/lib/pq" // PostgreSQL驱动
+	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
-// DB 全局数据库连接
+// DB is the global database connection.
 var DB *sql.DB
 
-// dbConnected 数据库连接状态（atomic，避免并发读写竞争）
+// dbConnected is the connection state (atomic, so concurrent readers and writers do not race).
 var dbConnected atomic.Bool
 
-// IsConnected 返回数据库连接状态
+// IsConnected returns the database connection state.
 func IsConnected() bool { return dbConnected.Load() }
 
-// OpenDatabase 打开一个数据库连接并设置连接池参数，建连后立即 Ping 校验连通性。
-// 供主库与 LiteLLM 独立库等复用，避免各处重复 sql.Open + 连接池配置。
+// OpenDatabase opens a database connection, sets the pool parameters and Pings right away to verify connectivity.
+// It is reused by the main database and by separate ones such as LiteLLM's, so sql.Open + pool setup is not repeated
+// everywhere.
 func OpenDatabase(connStr string) (*sql.DB, error) {
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// 设置连接池参数
+	// Pool parameters
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	// 测试连接
+	// Test the connection
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
@@ -42,14 +43,14 @@ func OpenDatabase(connStr string) (*sql.DB, error) {
 	return db, nil
 }
 
-// InitDatabase 初始化数据库连接
+// InitDatabase initialises the database connection.
 func InitDatabase() error {
 	cfg := config.Cfg
 	if cfg == nil {
 		return fmt.Errorf("config not initialized")
 	}
 
-	// 构建连接字符串
+	// Build the connection string
 	connStr := cfg.Database.GetDSN()
 
 	var err error
@@ -63,7 +64,7 @@ func InitDatabase() error {
 	return nil
 }
 
-// CheckDatabaseConnection 检查数据库连接状态
+// CheckDatabaseConnection checks the database connection state.
 func CheckDatabaseConnection() bool {
 	if DB == nil {
 		dbConnected.Store(false)
@@ -78,7 +79,7 @@ func CheckDatabaseConnection() bool {
 	return true
 }
 
-// ReconnectDatabase 重新连接数据库
+// ReconnectDatabase reconnects to the database.
 func ReconnectDatabase() bool {
 	err := InitDatabase()
 	if err != nil {
@@ -88,7 +89,7 @@ func ReconnectDatabase() bool {
 	return true
 }
 
-// CloseDatabase 关闭数据库连接
+// CloseDatabase closes the database connection.
 func CloseDatabase() error {
 	if DB != nil {
 		return DB.Close()

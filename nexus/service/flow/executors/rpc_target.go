@@ -315,6 +315,12 @@ func runAgentEndpoint(ctx context.Context, authInfo *auth.AuthInfo, sessionID st
 	if sessionID != "" {
 		agentArguments["session_id"] = sessionID
 	}
+	// The output language travels the same way, but only when this run's caller pinned it: the called agent's NewAgent reads
+	// the reserved key, and a value that was merely resolved here must not become a demand on the agent's own default. It
+	// sits at the top level (next to session_id), so it never becomes a model-visible {{args._output_language}}.
+	if core.LanguagePinnedFrom(ctx) {
+		agentArguments = core.WithOutputLanguage(agentArguments, core.LanguageHintFrom(ctx))
+	}
 	// A debug session follows the agent draft and records it (the same rule as following flow drafts); a real run
 	// reads the released current version and errors outright when there is none.
 	//

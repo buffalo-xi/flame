@@ -1,6 +1,6 @@
 package svcauthbindings
 
-// NewRepository 返回默认的存储实现。
+// NewRepository returns the default storage implementation.
 func NewRepository() Repository {
 	return &PostgresRepository{}
 }

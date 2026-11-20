@@ -1,272 +1,303 @@
-# nexus/platform —— 平台管理台（多租户管理）
+# nexus/platform — the platform admin console (multi-tenant management)
 
-平台身份（管理员 / 用户）与租户控制台完全独立：前者在 `platform.users`，后者在各租户
-`<schema>.users`——**同名但完全独立的两张表**，语义也不同（平台侧 `admin`/`user`，
-租户侧 `manage`/`service`）。平台登录不填租户，登录后按 token 里的 `role` 分流：
+[中文](README.zh.md) | English
 
-| role | 界面 | 数据面 |
+Platform identities (admin / user) are completely independent of the tenant console: the former live in `platform.users`, the
+latter in each tenant's `<schema>.users` — **two tables with the same name that share nothing**, not even their vocabulary
+(`admin` / `user` on the platform side, `manage` / `service` on the tenant side). Platform login asks for no tenant; after
+signing in, `role` from the token decides the branch:
+
+| role | screens | data surface |
 |---|---|---|
-| `admin` 管理员 | 管理员页（租户管理 + 平台用户管理） | `/platform/tenants*`、`/platform/users*` 全部 |
-| `user` 用户 | 用户页（我的租户） | `/platform/me/tenants`（读，`owner_user_id = 自己`）+ `/platform/me/tenants/:schema/status`（启停自己名下的租户） |
+| `admin` | admin pages (tenant management + platform users) | all of `/platform/tenants*`, `/platform/users*` |
+| `user` | user pages (my tenants) | `/platform/me/tenants` (read, `owner_user_id = self`) + `/platform/me/tenants/:schema/status` (start / stop the tenants they own) |
 
-## 目录
+## Layout
 
 ```
 nexus/platform/
-├─ README.md                      本文件（边界规则）
-├─ router.go                      挂载 /platform 路由组（由 nexus/cmd/router.go 调用）
-├─ auth/                          平台身份：角色词表、token 签发/解析、两把中间件、受保护管理员名常量
-├─ handler/                       HTTP 层（薄）：login / me / tenants / users
-├─ repository/{tenants,pmusers}/  platform schema 的数据访问
-├─ provision/                     开通编排 + template/ 模板包（//go:embed，必须在本包目录下）
-│                                 template/schema.sql  表结构
-│                                 template/seed.sql    main + 受保护技能 + 授权绑定
-│                                 template/files/      定义域文件（AGENT.md / SKILL.md）
-└─ sql/                           platform.sql（平台两张表，DBA 执行）
+├─ README.md                      this file (boundary rules)
+├─ router.go                      mounts the /platform group (called by nexus/cmd/router.go)
+├─ auth/                          platform identity: role vocabulary, token issue / parse, the two middlewares, protected-admin name
+├─ handler/                       HTTP layer (thin): login / me / tenants / users
+├─ repository/{tenants,pmusers}/  data access for the platform schema
+├─ provision/                     provisioning orchestration + template/ pack (//go:embed, must stay under this package)
+│                                 template/schema.sql  tables
+│                                 template/seed.sql    main + protected skills + grants / bindings
+│                                 template/files/      definition-domain files (AGENT.md / SKILL.md)
+└─ sql/                           platform.sql (the two platform tables, run by a DBA)
 ```
 
-## 挂载方式
+## How it is mounted
 
-`nexus/cmd/router.go` 两行：
+Two lines in `nexus/cmd/router.go`:
 
 ```go
 platformGroup := router.Group("/platform")
 platform.SetupRoutes(platformGroup)
 ```
 
-本包**没有启动期引导**：首个平台管理员（登录名固定 `plat`）由环境初始数据预置，
-`nexus/cmd/main.go` 不再需要调用任何 platform 初始化函数。
+This package has **no startup bootstrap**: the first platform admin (login name fixed to `plat`) is part of the environment's
+initial data, so `nexus/cmd/main.go` no longer calls any platform init function.
 
-## 边界规则（改动本目录时必须遵守）
+## Boundary rules (bind every change in this directory)
 
-**允许依赖**
+**Allowed dependencies**
 
-- `flame/nexus/shared/*`：`config`、`db`、`account`、`tenants`、`quota`、`flowconfig`、`storage`、`workspace`、`repository/flowconfigs`
-- `flame/tools/*`：`xhttp`、`xjwt`、`xlog`
+- `flame/nexus/shared/*`: `config`, `db`, `account`, `tenants`, `quota`, `flowconfig`, `storage`, `workspace`, `repository/flowconfigs`
+- `flame/tools/*`: `xhttp`, `xjwt`, `xlog`
 
-**禁止依赖**
+**Forbidden dependencies**
 
-| 禁止 | 原因 / 替代 |
+| Forbidden | Why / what to use instead |
 |---|---|
-| `nexus/admin/**` | 那是租户控制台的 handler；开通租户时需要的"建首个租户管理员"由本目录自己写 INSERT |
-| `nexus/service/**` | 租户运行时逻辑；目录约定请用 `nexus/shared/paths` |
-| `nexus/shared/auth`（整个包） | 里面是租户登录 handler（依赖 gin）。密码/状态请用 `nexus/shared/account` |
+| `nexus/admin/**` | that is the tenant console's handler; "create the first tenant admin", which provisioning needs, is an INSERT written here |
+| `nexus/service/**` | tenant runtime logic; for directory conventions use `nexus/shared/paths` |
+| `nexus/shared/auth` (the whole package) | it holds the tenant login handler (and depends on gin). For passwords / status use `nexus/shared/account` |
 
-反向也成立：**`nexus/**` 不得 import `nexus/platform/**`**，唯一例外是 `nexus/cmd` 的那两行挂载。
+The reverse holds too: **`nexus/**` must not import `nexus/platform/**`**, the only exception being those two mounting lines in
+`nexus/cmd`.
 
-> 为什么放在 `nexus` module 内、而不是仓库根目录的独立 module：
-> `nexus/` 自身是 module `flame/nexus`；若平台做成根目录独立 module，它要 `require flame/nexus`
-> （用 shared 包），而 `nexus/cmd` 又要 `require` 平台 module 才能挂载 ⇒ **module 互相依赖成环**。
-> 想要"仓库根目录的独立 module"，前提是**平台独立进程**（届时依赖变成单向：平台 → nexus，
-> 但"停用租户立即生效"要退化为 TTL 生效，或改用 LISTEN/NOTIFY）。
+> Why this lives inside the `nexus` module instead of being a module of its own at the repository root:
+> `nexus/` is the module `flame/nexus`. A root-level platform module would have to `require flame/nexus` (it uses the shared
+> packages), while `nexus/cmd` would have to `require` the platform module in order to mount it ⇒ **the modules require each
+> other in a cycle**. A root-level module is only possible once the platform is **its own process** (the dependency then points
+> one way, platform → nexus, but "suspending a tenant takes effect immediately" degrades to taking effect after a TTL, or has to
+> move to LISTEN/NOTIFY).
 
-## 身份互斥（两把锁）
+## Identity walls (two locks)
 
-| 打过来的 token | 结果 |
+| Token arriving | Result |
 |---|---|
-| 平台 token → `/admin/*` | 无 `schema` → 租户侧 `parseClaims` 直接拒 |
-| 租户 token → `/platform/*` | 无 `scope` → `PlatformAuthMiddleware` 拒 |
-| `user` token → `/platform/tenants*`、`/platform/users*` | `RequirePlatformAdmin` → 403 |
+| platform token → `/admin/*` | no `schema` → the tenant-side `parseClaims` rejects it outright |
+| tenant token → `/platform/*` | no `scope` → `PlatformAuthMiddleware` rejects it |
+| `user` token → `/platform/tenants*`, `/platform/users*` | `RequirePlatformAdmin` → 403 |
 
-## 自助改密
+## Changing your own password
 
-`POST /platform/me/password`（body `{old_password,new_password}`）：本人凭旧密码更换，只改自己，
-**不签发新 token、不作废其它端会话**（与租户侧 `/admin/me/password` 同语义）。
-代人重置仍走 `POST /platform/users/:id/password`（仅管理员）。
+`POST /platform/me/password` (body `{old_password,new_password}`): you change your own password with the old one. It only
+touches yourself, **issues no new token and does not invalidate sessions on other devices** (same semantics as the tenant-side
+`/admin/me/password`). Resetting someone else's password still goes through `POST /platform/users/:id/password` (admin only).
 
-> 初始数据里给 `plat` 的密码只是临时值：第一次登录后立刻用这个接口改掉。
+> The password the initial data gives `plat` is a temporary value: change it with this endpoint right after the first login.
 
-## 用户自助操作自己名下的租户
+## Users managing the tenants they own
 
-平台「用户」有两条自助写入口（都在 `/platform/me/...`，**都不进管理员组**）：
+A platform "user" has two self-service write paths (both under `/platform/me/...`, **neither in the admin group**):
 
-| 接口 | 作用 | 权限 |
+| Endpoint | Purpose | Permission |
 |---|---|---|
-| `PUT /platform/me/tenants/:schema/status` | 启停（body `{status: active\|suspended}`） | `owner_user_id == 自己`，否则 **403**；租户不存在 **404** |
-| `GET/PUT /platform/me/tenants/:schema/flowconfigs` | 读写自己名下租户的**工作流运行参数**（`GET` 回 `{system, tenant}`） | 同上 |
-| `POST /platform/me/tenants/:schema/primary/password` | 为名下租户的**根账号 primary** 重置密码（body `{password}`） | 同上；`primary` 行不存在 **404** |
+| `PUT /platform/me/tenants/:schema/status` | start / stop (body `{status: active\|suspended}`) | `owner_user_id == self`, otherwise **403**; unknown tenant **404** |
+| `GET/PUT /platform/me/tenants/:schema/flowconfigs` | read / write the **flow runtime parameters** of a tenant they own (`GET` returns `{system, tenant}`) | same |
+| `POST /platform/me/tenants/:schema/primary/password` | reset the password of that tenant's **root account `primary`** (body `{password}`) | same; a missing `primary` row **404** |
 
-- 管理员走 `/platform/tenants/:schema/...` 那组（可操作**任意**租户）；两条路**共用同一份校验核心**
-  （`handler/flowconfigs.go` 的 `loadFlowBundle` / `saveFlowConfigs`），口径不会漂。
-- owner 校验统一在 `mustOwnTenant`（启停与工作流运行参数共用），越权一律 403 `{error:"forbidden"}`。
-- 状态只允许 `active ⇄ suspended`（`pending / deleted` 属内部态，两边都不给写）；工作流字段与租户侧
-  `/admin/flowconfigs` 同规则：7 个字段均可空 = 回退系统级、`-1` = 不限制、**不得超过系统级**。
-- 写完的缓存失效：状态 → `sharedtenants.Invalidate(schema)`；工作流 → `flowconfig.Invalidate(schema)`。
-  **两者都立即生效**（停用后该租户的登录与 MCP/RPC 解析马上被拒）。重置密码无缓存需要失效。
-- **根账号密码**那条只 `UPDATE <schema>.users SET password`（`WHERE name = primary`），
-  角色 / 状态 / 显示名一律不碰 —— 与租户侧对 primary 的处理一致（`updateUser` 拦修改，**重置密码刻意留着**）。
-  它解决的是"平台交付的初始密码被忘了"：租户侧进不去（改密要旧密码），平台管理台又不触碰租户 `users`。
-  不签发 token、不作废已有会话（要立即踢下线就停用该租户）。
-- 管理员永远不是 owner（`CreateTenant` / `UpdateTenant` 都要求 owner 是 `role=user`），所以两条路不重叠。
+- Admins use the `/platform/tenants/:schema/...` group (any tenant); both paths **share one validation core**
+  (`loadFlowBundle` / `saveFlowConfigs` in `handler/flowconfigs.go`), so their criteria cannot drift.
+- The owner check lives in `mustOwnTenant` (shared by status and flow parameters); any violation is 403 `{error:"forbidden"}`.
+- Status only allows `active ⇄ suspended` (`pending` / `deleted` are internal states, writable from neither side); the flow
+  fields follow the same rules as the tenant-side `/admin/flowconfigs`: all 7 may be empty = fall back to the system level,
+  `-1` = no limit, and **must not exceed the system level**.
+- Cache invalidation after a write: status → `sharedtenants.Invalidate(schema)`; flow → `flowconfig.Invalidate(schema)`.
+  **Both take effect immediately** (a suspended tenant's logins and MCP/RPC resolution are refused at once). A password reset
+  has no cache to invalidate.
+- The **root account password** path only runs `UPDATE <schema>.users SET password` (`WHERE name = primary`); role, status and
+  display name are untouched — the same treatment `primary` gets on the tenant side (`updateUser` refuses to modify it, and the
+  **password reset is deliberately kept**). It solves "the initial password the platform delivered was forgotten": the tenant
+  side cannot get in (a password change needs the old one) and the platform console does not touch tenant `users`. It issues no
+  token and invalidates no session (to kick someone off immediately, suspend the tenant).
+- An admin is never an owner (`CreateTenant` / `UpdateTenant` both require the owner to be `role=user`), so the two paths do
+  not overlap.
 
-## 列表分页（租户）
+## Paging the tenant list
 
-`GET /platform/tenants?q=&status=&page=&page_size=`：`page` 从 1 起；`page_size` 省略 / `<=0` = **不分页**
-（返回全部，兼容旧调用），上限 100。回包 `{items,total,page,page_size}`，其中 **`total` 是筛选后的总数**
-（不是本页条数），前端分页器必须用它。
+`GET /platform/tenants?q=&status=&page=&page_size=`: `page` starts at 1; a missing `page_size` or `<=0` means **no paging**
+(everything is returned, for old callers), capped at 100. The response is `{items,total,page,page_size}` where **`total` is the
+filtered total** (not the size of this page); the frontend pager must use it.
 
-> 每行都要算三次用量 COUNT（`quota.CountAgents/Skills/Flows`），所以放大 `page_size` 等于放大 DB 压力。
+> Each row costs three usage COUNTs (`quota.CountAgents/Skills/Flows`), so a larger `page_size` is more DB pressure.
 
-## 新建租户：schema 自动探索 + 固定登录名
+## Creating a tenant: schema auto-discovery + a fixed login name
 
-- `GET /platform/tenant-schemas/next` → `{schema}`：建议值，规则是 **`t` + 从 0 起逐个 +1**
-  （`t0`、`t1`、`t2`…）取第一个未被占用的，跳过系统保留名。
-  路径用独立静态前缀 `tenant-schemas`：`/tenants/next-schema` 与 `/tenants/:schema` 同级，有冲突风险。
-- `POST /platform/tenants`：`schema` 留空 = 后端按同一规则自动探索（管理台不给手填）；
-  `admin_name` 留空 = `provision.DefaultAdminName`（`primary`）。显式传值仍按显式值走，兼容脚本调用。
+- `GET /platform/tenant-schemas/next` → `{schema}`: a suggestion, computed as **`t` + 0, 1, 2 …** (`t0`, `t1`, `t2` …), taking
+  the first free one and skipping system-reserved names. The path uses its own static prefix `tenant-schemas`:
+  `/tenants/next-schema` would sit at the same level as `/tenants/:schema` and could collide.
+- `POST /platform/tenants`: an empty `schema` = the backend discovers one by the same rule (the console does not let you type
+  it); an empty `admin_name` = `provision.DefaultAdminName` (`primary`). Explicit values still win, for scripted callers.
 
-> `primary` 在**租户侧是受保护账号**：`nexus/admin/users` 的 `updateUser` 拒绝修改它（资料 / 角色 / 状态），
-> 租户侧也**不提供删除用户接口** —— 保证"平台交付的那个账号"始终是有效的 `manage` 且可登录。
-> 常量同源在 `shared/tenants.PrimaryUserName`（platform 与 admin 互不 import，只能共享这一份）。
-- **占用判定**（`provision.SchemaAvailable`）两套事实都可用才算可用：
-  库里没有同名 schema（`information_schema.schemata`）**且**注册表没有该行（含已停用/软删）。
-  只看一处都会在 `CREATE SCHEMA` 撞墙（孤儿 schema / 已 DROP 的注册行）。
-- **落库前会再查一次**；检查与 `CREATE SCHEMA` 之间被抢占（PG `42P06` 也算）时，
-  `Provision` 返回 `ErrSchemaTaken` → 接口回 **HTTP 409 + `{error:"conflict", message}`**，
-  前端提示"已被占用"、重新探索出新值，**弹窗不关**，等操作者确认后再次开通（**不静默改 schema**）。
+> `primary` is a **protected account on the tenant side**: `updateUser` in `nexus/admin/users` refuses to modify it (profile /
+> role / status), and the tenant side **has no delete-user endpoint** — that is what keeps "the account the platform delivered"
+> a valid, loginable `manage`. The constant has one source, `shared/tenants.PrimaryUserName` (platform and admin do not import
+> each other, so this is the only thing they can share).
+- **Occupancy** (`provision.SchemaAvailable`) needs both facts to say "free": no schema of that name in the database
+  (`information_schema.schemata`) **and** no row in the registry (including suspended / soft-deleted ones). Checking only one of
+  them runs into `CREATE SCHEMA` (an orphan schema, or a registry row whose schema was already DROPped).
+- **It is checked again before writing**; if something is taken between the check and `CREATE SCHEMA` (PG `42P06` counts too),
+  `Provision` returns `ErrSchemaTaken` → the endpoint answers **HTTP 409 + `{error:"conflict", message}`**, the frontend says
+  "already taken", discovers a new value and **keeps the dialog open** until the operator confirms and provisions again (**the
+  schema is never changed silently**).
 
-## 工作流运行参数（租户行）
+## Flow runtime parameters (tenant row)
 
-`GET /platform/tenants/:schema/flowconfigs` → `{system, tenant}`（系统级只读，供对照）；
-`PUT` 同路径只写 `platform.flow_configs` 里 `tenant_id = :schema` 那一行，校验口径与租户侧
-`/admin/flowconfigs` 完全一致（租户值不得超过系统级）。实现在 `handler/flowconfigs.go`，
-仓储直接复用 `shared/repository/flowconfigs`（不引 `nexus/admin/**`）。
+`GET /platform/tenants/:schema/flowconfigs` → `{system, tenant}` (the system level is read-only, for comparison); `PUT` on the
+same path writes only the `platform.flow_configs` row with `tenant_id = :schema`, validated by exactly the same criteria as the
+tenant-side `/admin/flowconfigs` (a tenant value must not exceed the system level). Implemented in `handler/flowconfigs.go`,
+reusing `shared/repository/flowconfigs` directly (no `nexus/admin/**`).
 
-> 租户运行时读的是 `shared/flowconfig` 的 TTL 缓存；平台侧写完会调 `flowconfig.Invalidate(schema)`
-> 主动失效，**本进程下一次读取即生效**（TTL 只作为"绕过接口直接改库 / 多实例部署"的兜底）。
+> The tenant runtime reads a TTL cache in `shared/flowconfig`; the platform side calls `flowconfig.Invalidate(schema)` after a
+> write, so **the next read in this process sees it** (the TTL only covers "changed the database behind the API's back" and
+> multi-instance deployments).
 
-## 系统设置
+## System settings
 
-前两个域是 `tenant_id = ''` 的**系统行**（全局默认 / 硬顶），第三个域是全局共享的预设表。都仅管理员：
+The first two domains are **system rows** with `tenant_id = ''` (global default / hard ceiling); the third is a globally shared
+preset table. All admin-only:
 
-| 域 | 接口 | 语义 |
+| Domain | Endpoint | Semantics |
 |---|---|---|
-| 配额上限 | `GET/PUT /platform/system/quota` | 同样是**硬顶**：运行期取 `min(租户值, 系统值)`，租户行配得比它高也无效 |
-| 工作流运行参数 | `GET/PUT /platform/system/flowconfigs` | 既是租户未设置时的**兜底**，也是租户值的**硬顶**（运行期 `clampMax` 取 min） |
-| LLM 服务商预设 | `GET/POST /platform/system/llm-provider-presets`、`PUT/DELETE /platform/system/llm-provider-presets/:id` | `platform.llm_provider_presets` 的完整 CRUD（租户侧只读；点预设是**复制填充**，无外键，删除不影响租户） |
+| Quota ceiling | `GET/PUT /platform/system/quota` | also a **hard ceiling**: at runtime `min(tenant value, system value)`, so a higher tenant row has no effect |
+| Flow runtime parameters | `GET/PUT /platform/system/flowconfigs` | both the **fallback** when a tenant has not set anything and the **hard ceiling** on tenant values (runtime `clampMax` takes the min) |
+| LLM provider presets | `GET/POST /platform/system/llm-provider-presets`, `PUT/DELETE /platform/system/llm-provider-presets/:id` | full CRUD on `platform.llm_provider_presets` (tenants read only; picking a preset is **copy-and-fill**, there is no foreign key, deleting one does not affect tenants) |
 
-前两个域的 GET 都额外回带 `fallback`（代码内置兜底值），供界面提示"留空会退到哪"：
-`flowconfig.Fallback()` / `quota.Fallback()`，避免前端硬编码而与共享包漂移。
+Both `GET`s of the first two domains also return `fallback` (the value baked into the code) so the UI can say "leave it empty
+and you get this": `flowconfig.Fallback()` / `quota.Fallback()`, which keeps the frontend from hardcoding a number that drifts
+from the shared package.
 
-前两个域的写接口只校验"值只能是 `-1`（不限制）或非负数"；**没有"不超过上级"的校验**（它就是最上级）。
+The write endpoints of the first two domains only validate "the value is `-1` (no limit) or non-negative"; there is **no
+"not above the parent" check** (they *are* the parent).
 
-预设域：`id` 由**程序生成**（`uuid.NewString()`，表上无 DB 默认值），长度按建表列宽校验
-（name 100 / icon 255 / protocol 50 / url 1024），`protocol` 无 CHECK（前端给
-vertexai / anthropic / googleai / openai 四项 + 允许自定义）；`extra_params` 不参与读写
-（新增走表默认 `{}`，编辑不动该列）。
+The preset domain: `id` is **generated by the program** (`uuid.NewString()`, there is no DB default), length is validated
+against the column widths (name 100 / icon 255 / protocol 50 / url 1024), `protocol` has no CHECK (the frontend offers
+vertexai / anthropic / googleai / openai plus custom values); `extra_params` takes no part in read or write (a new row gets the
+table default `{}`, an edit leaves the column alone).
 
-实现在 `handler/system.go` 与 `handler/llmpresets.go`，前端在管理台顶栏「系统设置」页（左域导航 + 右域卡片）。
+Implemented in `handler/system.go` and `handler/llmpresets.go`; the frontend is the "system settings" page in the console's top
+bar (domain navigation on the left, cards on the right).
 
-## 租户配额：原始值 vs 生效值
+## Tenant quota: raw value vs effective value
 
-`GET /platform/tenants/:schema/quota` 回四样：
+`GET /platform/tenants/:schema/quota` returns four things:
 
-| 字段 | 含义 |
+| Field | Meaning |
 |---|---|
-| `quota` | 该租户的**原始行**（`null` = 未设置）—— 编辑界面绑它 |
-| `system` | 系统行原始值（`null` = 未设置）—— 展示"系统顶" |
-| `fallback` | 代码兜底值（智能体 100 / 技能 300 / 工作流 300 / 单会话空间 `-1` / 单用户会话数 `-1`）—— 系统行未设置时它就是顶 |
-| `effective` | 生效值 = `min(租户值, 系统顶)`，直接取 `quota.Resolve(schema)`，**前端不重算**截断规则 |
+| `quota` | the tenant's **raw row** (`null` = not set) — the edit form binds this |
+| `system` | the system row's raw value (`null` = not set) — shown as "system ceiling" |
+| `fallback` | the value baked into the code (agents 100 / skills 300 / flows 300 / per-session space `-1` / sessions per user `-1`) — it is the ceiling while the system row is unset |
+| `effective` | the effective value = `min(tenant value, system ceiling)`, taken straight from `quota.Resolve(schema)`; **the frontend never recomputes** the clamp |
 
-`PUT` 同路径写的是原始行，写完 `quota.Invalidate(schema)`。
+`PUT` on the same path writes the raw row, then calls `quota.Invalidate(schema)`.
 
-> **列表接口（`/platform/tenants`）回的是生效值**（`tenantView` 里走 `quota.Resolve`），
-> 所以别拿列表数据当编辑框：某租户行存 500、生效值 100 时，用列表数据回填再保存会把 500 压成 100。
+> **The list endpoint (`/platform/tenants`) returns the effective value** (`tenantView` goes through `quota.Resolve`), so do not
+> use list data as an edit form: if a tenant row holds 500 and the effective value is 100, filling the form from the list and
+> saving flattens 500 to 100.
 
-## 插件停用
+## Disabling a plugin
 
-插件**缺省对所有租户开放**（2026-11-02 起）：租户只要在自己的「插件」页启用并配好实现就能用。
-平台侧不再逐租户开通，`platform.tenant_plugins`（建表脚本 `sql/tenant_plugins.sql`，幂等）退化为
-**停用记录** —— 只有显式 `is_allowed = false` 的行才表示「对这个租户停用」，没有行 = 开放。
-租户侧 `{schema}.plugins` 仍负责「用哪个实现、key、是否启用」，两者都过才放行。
+Plugins are **open to every tenant by default** (since 2026-11-02): a tenant only has to enable one and configure an
+implementation on its own "plugins" page. The platform side no longer enables them one by one, and
+`platform.tenant_plugins` (created by `sql/tenant_plugins.sql`, idempotent) degrades into a **disable record** — only a row with
+an explicit `is_allowed = false` means "disabled for this tenant", and no row means open. The tenant side's `{schema}.plugins`
+still owns "which implementation, which key, enabled or not"; both have to allow it.
 
-| 接口 | 语义 |
+| Endpoint | Semantics |
 |---|---|
-| `GET /platform/plugins` | 插件管理页的聚合视图：磁盘清单（含实现）+ 全部租户 + 各租户原始行 + 租户侧启用状态 |
-| `GET /platform/tenants/:schema/plugins` | 磁盘插件清单 × 本租户策略（生效值 + 原始行）× 租户侧启用状态 |
-| `PUT /platform/tenants/:schema/plugins/:name` | 写本租户行（`allowed=false` 即停用）；字段省略 = 保留当前值 |
-| `DELETE /platform/tenants/:schema/plugins/:name` | 删本租户行 = 回到缺省（开放） |
+| `GET /platform/plugins` | aggregate view for the plugin page: the on-disk catalog (with implementations) + every tenant + each tenant's raw row + the tenant-side enabled state |
+| `GET /platform/tenants/:schema/plugins` | on-disk catalog × this tenant's policy (effective value + raw row) × tenant-side enabled state |
+| `PUT /platform/tenants/:schema/plugins/:name` | writes this tenant's row (`allowed=false` disables it); an omitted field keeps the current value |
+| `DELETE /platform/tenants/:schema/plugins/:name` | removes this tenant's row = back to the default (open) |
 
-解析规则在 `shared/pluginpolicy`：**没有行 = 开放**，有行按 `is_allowed` 取。
-执行期 `Runner.Invoke` 读不到策略时**不放行**（fail-closed），插件目录降级为「全部不可用」并记日志 ——
-缺省虽已开放，但「读不出」不等于「没人停用过」。
-全局急停仍在 `platform.plugin_gates`：缺省放行，一旦拦下压过本表、影响所有租户。
+The resolution rule lives in `shared/pluginpolicy`: **no row = open**, a row is read through `is_allowed`. When `Runner.Invoke`
+cannot read the policy at execution time it **does not let it through** (fail-closed): the plugin catalog degrades to "none
+available" and a log line is written — the default being open does not mean "unreadable" is the same as "nobody disabled it".
+The global kill switch is still `platform.plugin_gates`: open by default, and once it blocks, it outranks this table and affects
+every tenant.
 
-为什么翻转：插件本体是平台放进磁盘的可信代码，凭证与成本都在租户侧
-（`{schema}.plugins.configs` 里是租户自己的 key），逐个开通只是运营负担。
-要收紧时仍能按租户停用，或用全局急停一键止血。
+Why it was flipped: the plugin itself is trusted code the platform puts on disk, while credentials and cost live on the tenant
+side (`{schema}.plugins.configs` holds the tenant's own key), so enabling them one by one was pure operations overhead. You can
+still disable per tenant, or pull the global switch to stop the bleeding.
 
-升级注意：老库执行 `sql/tenant_plugins.sql` 的 2026-11-02 段，会删掉 `is_allowed = true`
-的冗余行；原先 `is_allowed = false` 的行继续表示停用，行为不变（仍然不可用）。
+Upgrade note: on an old database, running the 2026-11-02 section of `sql/tenant_plugins.sql` deletes the redundant rows with
+`is_allowed = true`; rows that were already `is_allowed = false` keep meaning "disabled" and behave the same (still unavailable).
 
-> 历史：本表曾带 `daily_limit` / `concurrency_limit`，但计数只在进程内（重启清零、
-> 多副本各算各的），「每天最多 N 次」名不副实，已移除。将来要做真正的配额，
-> 应基于共享存储（Redis）重新设计。
+> History: this table used to carry `daily_limit` / `concurrency_limit`, but the counters only lived inside a process (reset on
+> restart, counted per replica), so "at most N per day" was not true and they were removed. A real quota has to be redesigned on
+> shared storage (Redis).
+
+> The platform console cannot import `service/plugin` (see "boundary rules"), so the on-disk plugin catalog is forwarded through
+> the minimal view in `shared/plugininfo` (injected by `service/plugin.SetDefault`).
+
+## Platform users
+
+`POST /platform/users`: the account name matches `^[A-Za-z0-9_-]{1,64}$`, the password is at least `account.MinPasswordLength`
+(8). **The display name may be empty** (both sides trim before writing; an empty one makes the UI fall back to the account name)
+— `POST` and `PUT` agree, neither requires it.
+
+**The protected admin (fixed `plat`) is protected**: `PUT /platform/users/:id` always refuses it (profile / role / status are all
+immutable, and the check sits before "you cannot touch yourself", so `plat` cannot change itself either); **there is no
+delete-user endpoint**, so "must not be deleted" holds by construction. The login name is hardcoded in
+`auth.BootstrapAdminName` (the same kind of thing as `shared/tenants.PrimaryUserName` on the tenant side: "the account the
+system ships with"), the config no longer has a `name` field, and nexus no longer creates it at startup (see "tables and
+bootstrap"). `userView` returns `protected: true/false` and the frontend greys out "edit / suspend" from that,
+**never from a hardcoded name**. A password reset is not blocked (same reasoning as above: it does not change identity, it
+restores access).
+
+`GET /platform/users?role=&status=&q=&page=&page_size=`: paging follows exactly the same criteria as `/platform/tenants`
+(`page` from 1; a missing `page_size` or `<=0` = no paging, capped at 100; `{items,total,page,page_size}` with `total` the
+filtered total). A "user" row carries `tenant_count` (tenants they own) — that is **one `CountByOwner` per row**, so do not
+inflate `page_size`.
+
+`GET /platform/users/:id/tenants`: the tenants a platform user owns (the "tenants owned" block of the console's detail card).
+Same source as `/platform/me/tenants` (`tenantsrepo.ListByOwner`, which already excludes `status=deleted`), returns
+`{items,total}`.
+
+`userView` returns `created_at` / `updated_at` (used by the info rows of the detail card).
+
+## Self-lock guards (not optional)
+
+- You cannot suspend / demote **the account you are signed in as**
+- You cannot suspend / demote **the last active admin** (that locks the platform out and leaves hand-editing the database)
+- Suspending a "user" who owns tenants: allowed, but it returns a `warning` suggesting the ownership be transferred first
+  (**no cascade, no automatic transfer**)
+
+## A write must invalidate its cache
+
+| Write | Call |
+|---|---|
+| create / suspend / delete / change the status of a tenant | `sharedtenants.Invalidate(schema)` (otherwise a suspension takes up to a TTL period to apply) |
+| change a tenant's quota | `quota.Invalidate(schema)` |
+| change a tenant's flow config | `flowconfig.Invalidate(schema)` |
+| change a **system row** (flow / quota) | `flowconfig.InvalidateAll()` / `quota.InvalidateAll()` |
+
+> `Resolve` caches the **already merged** result (tenant -> system -> fallback), so **changing a system row must clear
+> everything**: deleting only the `""` slot leaves every tenant's cached slot stale.
 >
-> 平台管理台不能 import `service/plugin`（见「边界规则」），磁盘插件清单经
-> `shared/plugininfo` 这一层最小视图转发（`service/plugin.SetDefault` 时注入）。
+> Invalidation only covers **this process's memory**: a single-process deployment makes it global; with several replicas or a
+> split into several processes, the other instances can only wait for the TTL (2 minutes). For cross-process immediacy, add PG
+> `LISTEN/NOTIFY` (the writer calls `pg_notify` in the same transaction and each instance keeps a LISTEN connection that clears
+> its cache), or a "config version number + poll every 3–5 seconds".
 
-## 平台用户
+## Tables and bootstrap
 
-`POST /platform/users`：账号名 `^[A-Za-z0-9_-]{1,64}$`、密码 ≥ `account.MinPasswordLength`（8）。
-**显示名可空**（写入前两侧都 trim；为空时界面回退显示账号名）—— `POST` 与 `PUT` 口径一致，都不强制。
+1. `psql ... -f nexus/platform/sql/platform.sql` (the two tables + indexes)
+   - cross-tenant asset distribution has its own `sql/shared_assets.sql` (snapshots / visibility / install records), which
+     **must run after `platform.sql`** (its foreign key references `platform.tenants`). Design:
+     [docs/asset-sharing.md](../docs/asset-sharing.md).
+2. Load the **environment's initial data**: it must contain a `users` row that is active, has role `admin` and the fixed login
+   name `plat`. The platform admin is no longer bootstrapped by nexus — `nexus/cmd/main.go` has no platform startup bootstrap and
+   the config no longer has `platform.bootstrap_admin` / `platform.ddl_dsn`. Without that row the console has no account to sign
+   in with (the login name `plat` is `auth.BootstrapAdminName`, and the console can neither modify nor delete it).
+3. Provisioning a tenant (the console's "new tenant", or `POST /platform/tenants`) works from here; the implementation is in
+   `provision/`:
 
-**受保护管理员（固定 `plat`）受保护**：`PUT /platform/users/:id` 对它一律拒绝（资料 / 角色 / 状态都不可改，
-放在"不能对自己动手"之前，所以 `plat` 本人也改不了自己）；**没有删除用户接口**，所以"不得删除"天然成立。
-登录名写死在 `auth.BootstrapAdminName`（与租户侧 `shared/tenants.PrimaryUserName` 同性质：都是"系统预置的
-那个账号"），配置里不再有 `name` 字段，也不再由 nexus 在启动时创建（见「建表与引导」）。`userView` 回带 `protected: true/false`，前端据此置灰「编辑 / 停用」，
-**不写死名字**。重置密码不拦（与前几条同理：不改账号身份，是恢复访问的手段）。
+   - one transaction: `CREATE SCHEMA` → transaction-scoped `set_config('search_path', …)` → `template/schema.sql` →
+     `template/seed.sql` → the first `manage` user → materialise `template/files/` into `tenants/<schema>/` before committing →
+     the `platform.tenants` row → `platform.tenant_capabilities` all open by default (`capability.All()` with `is_allowed=true`
+     per item; the platform can disable item by item and the global gate can stop everything)
+   - a failure rolls back as a whole (PG supports transactional DDL), and the directories already written are reclaimed with
+     `DeletePrefix`, so there is no half-provisioned tenant
+   - after the commit: `sharedtenants.Invalidate` + `quota.Invalidate`
+   - the schema is auto-discovered by `provision.NextSchema` (not editable in the console); the first admin's login name is the
+     fixed `primary`
 
-`GET /platform/users?role=&status=&q=&page=&page_size=`：分页口径与 `/platform/tenants` **完全一致**
-（`page` 从 1 起；`page_size` 省略 / `<=0` = 不分页，上限 100；回 `{items,total,page,page_size}`，
-`total` 是筛选后的总数）。「用户」行附带 `tenant_count`（名下租户数）—— 这是**逐行一次 `CountByOwner`**，
-所以 `page_size` 别放大。
-
-`GET /platform/users/:id/tenants`：某平台用户名下的租户（管理台详情卡的「名下租户」块）。
-与 `/platform/me/tenants` 同源（`tenantsrepo.ListByOwner`，已排除 `status=deleted`），回 `{items,total}`。
-
-`userView` 回带 `created_at` / `updated_at`（详情卡的信息行用）。
-
-## 自锁守卫（不可省略）
-
-- 不能停用 / 降级**当前登录账号**
-- 不能停用 / 降级**最后一个 active 的管理员**（否则平台自锁，只能改库救场）
-- 停用名字下有租户的「用户」：允许，但返回 `warning` 提示先转移负责人（**不级联、不自动转移**）
-
-## 写操作后必须失效缓存
-
-| 写什么 | 调用 |
-|---|---|
-| 租户开 / 停 / 删 / 改状态 | `sharedtenants.Invalidate(schema)`（否则停用最多延迟一个 TTL 周期才生效） |
-| 改租户配额 | `quota.Invalidate(schema)` |
-| 改租户的 flow 配置 | `flowconfig.Invalidate(schema)` |
-| 改**系统行**（flow / 配额） | `flowconfig.InvalidateAll()` / `quota.InvalidateAll()` |
-
-> `Resolve` 缓存的是"已合并（tenant -> sys -> fallback）"的结果，所以**改系统行必须全量清**：
-> 只删 `""` 那一格不够，每个租户缓存的那一格都过时了。
->
-> 失效只覆盖**本进程内存**：单进程部署下等于全局生效；同服务多副本 / 拆成多进程后，别的实例
-> 只能等 TTL（2 分钟）兜底。要跨进程立即生效再上 PG `LISTEN/NOTIFY`（写方在同一事务里
-> `pg_notify`，各实例常驻 LISTEN 连接收到就清缓存），或"配置版本号 + 每 3~5 秒轮询"。
-
-## 建表与引导
-
-1. `psql ... -f nexus/platform/sql/platform.sql`（两张表 + 索引）
-   - 跨租户资源分发另有一份 `sql/shared_assets.sql`（资产快照 / 可见范围 / 安装记录），
-     **必须在 `platform.sql` 之后执行**（外键引用 `platform.tenants`）。方案见
-     [docs/asset-sharing.md](../docs/asset-sharing.md)。
-2. 装载**环境初始数据**：其中必须有一行 active、角色 `admin`、登录名固定 `plat` 的 `users`。
-   平台管理员不再由 nexus 自举 —— `nexus/cmd/main.go` 没有任何 platform 启动引导，配置里也没有
-   `platform.bootstrap_admin` / `platform.ddl_dsn`。缺这一行，管理台就没有可登录的账号
-   （登录名 `plat` 是 `auth.BootstrapAdminName`，管理台不可修改 / 不可删除）。
-3. 开通租户（管理台「新建租户」或 `POST /platform/tenants`）已可用，实现在 `provision/`：
-
-   - 单个事务：`CREATE SCHEMA` → 事务级 `set_config('search_path', …)` → `template/schema.sql` → `template/seed.sql`
-     → 首个 `manage` 用户 → 提交前物化 `template/files/` 到 `tenants/<schema>/` → `platform.tenants` 行
-     → `platform.tenant_capabilities` 缺省全开（`capability.All()` 每项 `is_allowed=true`；平台可逐项关闭、全局闸可急停）
-   - 失败整体回滚（PG 支持事务性 DDL），已写入的文件目录用 `DeletePrefix` 回收，不留半残租户
-   - 提交后 `sharedtenants.Invalidate` + `quota.Invalidate`
-   - schema 由 `provision.NextSchema` 自动探索（管理台不可编辑），首个管理员登录名固定 `primary`
-
-   模板包内容与重新生成方式见 [docs/tenant-template-pack.md](../docs/tenant-template-pack.md)（租户创建资源方案）。
-   一句话：`schema.sql` 从 t0 dump 生成、`seed.sql` 与 `files/` 由预置资产维护，**运行时完全不读 t0**。
+   The template pack's contents and how to regenerate it are in
+   [docs/tenant-template-pack.md](../docs/tenant-template-pack.md). In one line: `schema.sql` is dumped from t0, `seed.sql` and
+   `files/` are maintained as shipped assets, and **the runtime never reads t0**.

@@ -1,6 +1,6 @@
 package repository
 
-// NewRepository 创建LLM模型存储实例
+// NewRepository creates the LLM model storage instance.
 func NewRepository() LLMModelRepository {
 	return NewPostgresRepository()
 }

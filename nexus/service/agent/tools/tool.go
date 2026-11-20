@@ -262,6 +262,9 @@ type AgentInfo struct {
 	//	ToolsUnrestricted: whether tools are "unrestricted" (candidates not narrowed by allow)
 	SkillDiscovery    bool `json:"skill_discovery"`
 	ToolsUnrestricted bool `json:"tools_unrestricted"`
+	// OutputLanguage is agents.default_language, already normalized ("" = not configured): the language this agent
+	// replies in unless a caller pins another one for a single call. read_agent shows it, update_agent writes it.
+	OutputLanguage string `json:"output_language"`
 }
 
 // AgentManager registers and queries agent instances (used by the meta tools create_agent / list_agents).
@@ -270,7 +273,9 @@ type AgentManager interface {
 	// Create creates an agent instance. isSupervisor=true materialises the supervisor starter pack
 	// (the core tool group + unrestricted tools + skill discovery + the four authoring skills),
 	// with the same result as "SetSupervisor(true) after creation" (the same helpers).
-	Create(ctx context.Context, name, description string, isSupervisor bool) (string, error)
+	// defaultLanguage is the default reply language (agents.default_language, a BCP-47 tag; empty = follow the caller).
+	// It is written by the same INSERT, so a malformed tag fails the whole creation instead of leaving a half-made agent.
+	Create(ctx context.Context, name, description, defaultLanguage string, isSupervisor bool) (string, error)
 	List(ctx context.Context) ([]AgentInfo, error)
 	Exists(ctx context.Context, name string) (bool, error)
 	// Get takes an agent's brief information (id / status included) by exact name; missing returns (nil, nil).
@@ -282,6 +287,10 @@ type AgentManager interface {
 	// It is an attribute of the agent itself, unrelated to tool grants (agent_tool_grants); only the super agent may change it,
 	// and it may target itself (D5 revision: the boundary is carried by status, and only the admin side can change status).
 	SetUnrestricted(ctx context.Context, agentID string, unrestricted bool) error
+	// SetOutputLanguage sets an agent's (by uuid) default reply language (agents.default_language, a normalized
+	// BCP-47 tag); an empty tag clears it. It is a single-column write, not the full-row Update: the caller must never have
+	// to carry the other definition columns over (same reasoning as SetUnrestricted / SetSupervisor).
+	SetOutputLanguage(ctx context.Context, agentID, tag string) error
 	// SetSupervisor sets an agent's (by uuid) super-privilege attribute (agents.is_supervisor).
 	// Only a supervisor may change it, and it may target itself; demoting the "last supervisor" is refused by the repository.
 	// The target must be in the normal state (a deprecated agent accepts no attribute change).
@@ -307,6 +316,10 @@ type CallRequest struct {
 	// Without the pass-through, "while debugging the child agent runs the live version" appears, and that is the easiest thing to be fooled by
 	// during triage.
 	DefinitionMode DefinitionMode
+	// OutputLanguage is the language the caller pinned for this chain (already validated), and only that: a resolved default must
+	// not travel, or it would become a pin for the callee. The pass-through matters most here - the callee's input is a JSON
+	// argument map, so without it the callee's model has no language signal at all.
+	OutputLanguage string
 }
 
 // AgentCaller calls other agents (implemented and injected by service/agent, to avoid an import cycle).
@@ -331,7 +344,12 @@ type AgentGrantView struct {
 	// Pending means an allow grant some skill declares, but that skill has not been use_skill'ed in this run yet: it applies once activated.
 	Pending  bool   `json:"pending,omitempty"`
 	ViaSkill string `json:"via_skill,omitempty"` // the skill that backs it (while pending = which skill lights it up)
-	Note     string `json:"note,omitempty"`      // why it is inert / not activated, plus how to fix it
+	// Note is why it is inert / not activated, plus how to fix it.
+	//
+	// English: it is produced inside a tool call, where nothing carries the caller's language (the reply-language rule is what
+	// restates it for the user). The UI does not render this field - if it ever does, it must become a code plus params
+	// resolved from the locale bundle, like the `error` envelope.
+	Note string `json:"note,omitempty"`
 }
 
 // ToolGrantsManager reads and writes agent tool grants (implemented and injected by package service/agent).
@@ -617,10 +635,17 @@ type Context struct {
 	// and it is carried outbound (rpc__ external connection / call_agent) unchanged - going outbound does not append
 	// itself; the append happens on the side that is about to execute an entity.
 	CallChain []string
-	Timeout   time.Duration     // timeout of one tool call
-	Sandbox   sandbox.Sandbox   // command sandbox (nil = unisolated "none")
-	Env       map[string]string // extra environment variables for command execution
-	MaxOutput int               // command output byte cap (0 = default)
+	// OutputLanguage is the reply language resolved for this run, already validated by core.NormalizeOutputLanguage: a caller-pinned
+	// `_meta.language`, else the agent's `default_language`, else the product default (English). It is carried into
+	// sub-calls so a chain does not lose it.
+	OutputLanguage string
+	// OutputLanguagePinned says whether that language came from the caller (true) or is only a default (false). The prompt words
+	// the two differently: a pin overrides the language of the input, a default only applies when the input carries no signal.
+	OutputLanguagePinned bool
+	Timeout              time.Duration     // timeout of one tool call
+	Sandbox              sandbox.Sandbox   // command sandbox (nil = unisolated "none")
+	Env                  map[string]string // extra environment variables for command execution
+	MaxOutput            int               // command output byte cap (0 = default)
 	// AllowedTools is the set of tool names this run may execute (= the tools array declared to the model).
 	// When non-nil, ExecuteTool refuses any tool outside the set - the same criterion as "the grant catalog is produced per
 	// identity".

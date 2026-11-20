@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"flame/nexus/service/agent/core"
 	"flame/nexus/service/agent/tools"
 	"flame/nexus/shared/auth"
 	"flame/nexus/shared/models"
@@ -46,13 +47,19 @@ func (m *agentManager) auth() *auth.AuthInfo {
 // isSupervisor=true means "create it directly as a supervisor": the repository materialises the core tool group, the two switches and the
 // four authoring skills from the starter pack (the same result as SetSupervisor(true) after creation).
 // A non-supervisor cannot create a supervisor - the execution layer already refuses by category, and this is defence in depth on top.
-func (m *agentManager) Create(ctx context.Context, name, description string, isSupervisor bool) (string, error) {
+func (m *agentManager) Create(ctx context.Context, name, description, defaultLanguage string, isSupervisor bool) (string, error) {
 	// Name rule backstop: letters, digits and hyphens only, 64 characters at most
 	if !tools.ValidName(name) {
 		return "", fmt.Errorf("invalid agent name %q (letters, digits and hyphens only, 64 characters at most)", name)
 	}
 	if isSupervisor && !m.isSupervisor {
 		return "", fmt.Errorf("only a supervisor may create a supervisor")
+	}
+	// The language is validated before the INSERT: a malformed tag must never reach the column (the runtime would read it
+	// as "not configured", so the setting would look applied while doing nothing).
+	language, _ := core.NormalizeOutputLanguage(defaultLanguage)
+	if defaultLanguage != "" && language == "" {
+		return "", fmt.Errorf("default reply language %q is not a valid BCP-47 language tag (e.g. zh-CN, en, ja)", defaultLanguage)
 	}
 	// Check for a name collision first: it must not clash with another agent or a workflow (before any database write)
 	if err := m.ensureNameFree(ctx, name, ""); err != nil {
@@ -68,10 +75,11 @@ func (m *agentManager) Create(ctx context.Context, name, description string, isS
 	}
 
 	inst := &models.Agent{
-		Name:         name,
-		Description:  xsql.String(description),
-		Status:       xsql.Int(models.StatusNormal),
-		IsSupervisor: isSupervisor,
+		Name:            name,
+		Description:     xsql.String(description),
+		Status:          xsql.Int(models.StatusNormal),
+		IsSupervisor:    isSupervisor,
+		DefaultLanguage: language,
 	}
 	// Default grant: grant the new agent to its creator (whoever built it can call it)
 	return m.repo.CreateAgent(m.auth(), inst, m.agentID)
@@ -125,6 +133,9 @@ func (m *agentManager) Get(ctx context.Context, name string) (*tools.AgentInfo, 
 		IsSupervisor:      inst.IsSupervisor,
 		SkillDiscovery:    inst.SkillDiscovery,
 		ToolsUnrestricted: inst.ToolsUnrestricted,
+		// Read through the same parser the runtime uses, so what read_agent shows is exactly what a run would apply
+		// (an invalid stored tag reads as "not configured" instead of being echoed).
+		OutputLanguage: agentDefaultLanguage(inst),
 	}, nil
 }
 
@@ -236,6 +247,30 @@ func (m *agentManager) SetUnrestricted(_ context.Context, agentID string, v bool
 		return fmt.Errorf("target agent id is empty")
 	}
 	return m.repo.SetUnrestricted(m.auth(), agentID, v)
+}
+
+// SetOutputLanguage sets the target agent's (by uuid) default reply language: agents.default_language, a BCP-47 tag; an
+// empty tag clears it.
+//
+// A default is deliberately weaker than a caller's pin: `_meta.language` still wins for a single call, and the value is
+// carried to callees as a hint (core.WithLanguageHint), never as a pin - a workflow started by this agent can read it as
+// the builtin `language`, but it cannot override the next agent's own default.
+//
+// Only the supervisor may change it (defence in depth: a non-supervisor cannot reach the management tools at all).
+func (m *agentManager) SetOutputLanguage(_ context.Context, agentID, tag string) error {
+	if !m.isSupervisor {
+		return fmt.Errorf("only the super agent may modify an agent's reply language")
+	}
+	if agentID == "" {
+		return fmt.Errorf("target agent id is empty")
+	}
+	// Normalize here as well, not only in the tool: this is the one place that writes the value, so a malformed tag must
+	// never reach the column (the reader would silently ignore it and the setting would look applied but do nothing).
+	normalized, _ := core.NormalizeOutputLanguage(tag)
+	if tag != "" && normalized == "" {
+		return fmt.Errorf("default output language %q is not a valid BCP-47 language tag", tag)
+	}
+	return m.repo.SetOutputLanguage(m.auth(), agentID, normalized)
 }
 
 // SetSupervisor sets the super-privilege attribute (agents.is_supervisor) of the target agent (by uuid).

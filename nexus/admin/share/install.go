@@ -703,8 +703,9 @@ func suggestFreeToolName(store *customtoolstore.Store, base string) string {
 // Private skills are restored with the directory, and restorePrivateSkills rebuilds their rows from
 // payload.private_skills (with ownership pointing at the new agent).
 //
-// Three switches (is_supervisor / tools_unrestricted / skill_discovery) **travel with the bundle**: they decide
-// how the agent runs in a tenant, and leaving them behind installs a copy that behaves differently. The cost is
+// Three switches (is_supervisor / tools_unrestricted / skill_discovery) and the default reply language
+// (default_language) **travel with the bundle**: they decide how the agent runs in a tenant, and leaving them behind
+// installs a copy that behaves differently. The cost is
 // that "import" and "ticking a box on the edit page" reach the same permission surface - they always were
 // the same surface (the same tenant admin API), so no extra gate is added; the result is written into warnings so it is visible.
 //
@@ -827,6 +828,12 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 	wantSupervisor := flagFrom(payload, "is_supervisor", prev != nil && prev.IsSupervisor)
 	wantToolsUnrestricted := flagFrom(payload, "tools_unrestricted", prev != nil && prev.ToolsUnrestricted)
 	wantSkillDiscovery := flagFrom(payload, "skill_discovery", prev != nil && prev.SkillDiscovery)
+	// The default reply language: an old bundle without the key keeps the target's value on overwrite (never silently
+	// forget a language an admin configured).
+	wantDefaultLanguage := asString(payload["default_language"])
+	if _, ok := payload["default_language"]; !ok && prev != nil {
+		wantDefaultLanguage = prev.DefaultLanguage
+	}
 
 	ag := &models.Agent{
 		Name:              name,
@@ -836,6 +843,7 @@ func installAgent(c *gin.Context, info *auth.AuthInfo, src *installSource, name 
 		IsSupervisor:      wantSupervisor,
 		ToolsUnrestricted: wantToolsUnrestricted,
 		SkillDiscovery:    wantSkillDiscovery,
+		DefaultLanguage:   wantDefaultLanguage,
 	}
 
 	var id string

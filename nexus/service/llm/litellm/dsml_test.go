@@ -9,7 +9,8 @@ import (
 	"flame/nexus/service/llm/gateway"
 )
 
-// 标记用拼接构造，避免测试源码里出现连续的特殊字符序列。
+// The markers are built by concatenation, so no contiguous run of the special characters appears in the
+// test source.
 var (
 	barHalf = "|" + "DSML" + "|"
 	barFull = "｜" + "DSML" + "｜"
@@ -45,7 +46,7 @@ func TestParseDSMLToolCalls(t *testing.T) {
 		wantClean string
 	}{
 		{
-			name:      "半角竖线 + string 参数",
+			name:      "half-width bars plus a string parameter",
 			in:        fnCalls(barHalf, invoke(barHalf, "read_skill", strParam(barHalf, "name", "english-joke-writing"))),
 			wantCalls: 1,
 			wantName:  "read_skill",
@@ -53,7 +54,7 @@ func TestParseDSMLToolCalls(t *testing.T) {
 			wantClean: "",
 		},
 		{
-			name:      "全角竖线 + 前后正文",
+			name:      "full-width bars with surrounding text",
 			in:        "好的" + fnCalls(barFull, invoke(barFull, "read_skill", strParam(barFull, "name", "poet"))) + "。",
 			wantCalls: 1,
 			wantName:  "read_skill",
@@ -61,7 +62,7 @@ func TestParseDSMLToolCalls(t *testing.T) {
 			wantClean: "好的。",
 		},
 		{
-			name:      "双全角竖线",
+			name:      "doubled full-width bars",
 			in:        fnCalls(barDbl, invoke(barDbl, "read_agent", strParam(barDbl, "name", "poet"))),
 			wantCalls: 1,
 			wantName:  "read_agent",
@@ -69,7 +70,7 @@ func TestParseDSMLToolCalls(t *testing.T) {
 			wantClean: "",
 		},
 		{
-			name: "非 string 参数按 JSON 解析",
+			name: "non-string parameters are decoded as JSON",
 			in: fnCalls(barHalf, invoke(barHalf, "f",
 				rawParam(barHalf, "n", "42"), rawParam(barHalf, "flag", "true"))),
 			wantCalls: 1,
@@ -78,7 +79,7 @@ func TestParseDSMLToolCalls(t *testing.T) {
 			wantClean: "",
 		},
 		{
-			name:      "无标记原样返回",
+			name:      "no markers: returned unchanged",
 			in:        "这是一段普通回答",
 			wantCalls: 0,
 			wantClean: "这是一段普通回答",
@@ -153,7 +154,7 @@ func TestParseDSMLToolCallsBareInvoke(t *testing.T) {
 	}
 }
 
-// 文本形态调用必须带上 FromText 标记，供 agentImpl 选择纯文本回填。
+// A text-shaped call must carry the FromText flag, which agentImpl uses to choose plain-text echoing.
 func TestParseDSMLToolCallsMarksFromText(t *testing.T) {
 	in := fnCalls(barHalf, invoke(barHalf, "read_skill", strParam(barHalf, "name", "a")))
 	calls, _ := parseDSMLToolCalls(in)
@@ -166,11 +167,11 @@ func TestParseDSMLToolCallsMarksFromText(t *testing.T) {
 }
 
 func TestSafeEmitLenAlignsToRuneBoundary(t *testing.T) {
-	s := "abc中文" // 3 个 ASCII 字节 + 2 个汉字（各 3 字节）
+	s := "abc中文" // 3 ASCII bytes plus 2 CJK characters (3 bytes each)
 	if got := safeEmitLen(s, len(s)); got != len(s) {
 		t.Fatalf("full = %d, want %d", got, len(s))
 	}
-	// want 落在「中」的中间（字节 4、5）→ 收敛到 3
+	// A want landing inside "中" (bytes 4 and 5) rounds down to 3.
 	for _, want := range []int{4, 5} {
 		if got := safeEmitLen(s, want); got != 3 {
 			t.Errorf("safeEmitLen(%q, %d) = %d, want 3", s, want, got)
@@ -181,7 +182,7 @@ func TestSafeEmitLenAlignsToRuneBoundary(t *testing.T) {
 	}
 }
 
-// sseChunk 构造一行 SSE data（finish 非 nil 时带上 finish_reason）。
+// sseChunk builds one SSE data line (finish_reason is included when finish is not nil).
 func sseChunk(content string, finish any) string {
 	choice := map[string]any{"index": 0, "delta": map[string]any{"content": content}}
 	if finish != nil {
@@ -191,7 +192,7 @@ func sseChunk(content string, finish any) string {
 	return "data: " + string(b) + "\n\n"
 }
 
-// collectStream 驱动 readSSEStream，返回累积正文与解析出的工具调用。
+// collectStream drives readSSEStream and returns the accumulated text plus the parsed tool calls.
 func collectStream(t *testing.T, sse string) (string, []gateway.ToolCall) {
 	t.Helper()
 	g := &ProxyGateway{URL: "http://test"}
@@ -212,16 +213,18 @@ func collectStream(t *testing.T, sse string) (string, []gateway.ToolCall) {
 	return got.String(), calls
 }
 
-// 说明乱码来源：按字节切中文会切出非法 UTF-8，再经 json.Marshal 就变成 U+FFFD。
+// Demonstrates where the garbage comes from: slicing CJK text by byte produces invalid UTF-8, which
+// json.Marshal then renders as U+FFFD.
 func TestByteSliceWouldCorrupt(t *testing.T) {
-	s := "中文"                   // 6 字节
-	b, _ := json.Marshal(s[:4]) // 4 落在「文」的中间
+	s := "中文"                   // 6 bytes
+	b, _ := json.Marshal(s[:4]) // 4 lands inside "文"
 	if !strings.ContainsRune(string(b), '\uFFFD') {
-		t.Fatalf("期望出现替换字符 U+FFFD，实际 %q", string(b))
+		t.Fatalf("expected the replacement character U+FFFD, got %q", string(b))
 	}
 }
 
-// 逐字发送中文正文，验证流式分片不会切断多字节字符（曾因按字节切片产生 U+FFFD 乱码）。
+// Sends CJK text one rune at a time to prove the streaming fragments never cut a multi-byte character
+// (byte slicing used to produce U+FFFD garbage).
 func TestReadSSEStreamDoesNotSplitUTF8(t *testing.T) {
 	const want = "你好世界，这是一段用于验证流式分片不会切断多字节汉字的中文测试文本，长度需要超过 holdback 阈值。"
 	var sb strings.Builder
@@ -232,14 +235,14 @@ func TestReadSSEStreamDoesNotSplitUTF8(t *testing.T) {
 
 	got, _ := collectStream(t, sb.String())
 	if strings.ContainsRune(got, '\uFFFD') {
-		t.Fatalf("输出含替换字符 U+FFFD（乱码）: %q", got)
+		t.Fatalf("output contains the replacement character U+FFFD (garbage): %q", got)
 	}
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
-// 中文正文 + |DSML| 调用混合：既不乱码，也不把标记当正文泄漏。
+// CJK text mixed with a |DSML| call: neither garbled nor leaking the markers as text.
 func TestReadSSEStreamChineseWithDSMLCall(t *testing.T) {
 	head := "好的，我先读一下技能。"
 	tail := "读完继续作答。"
@@ -263,10 +266,10 @@ func TestReadSSEStreamChineseWithDSMLCall(t *testing.T) {
 		t.Errorf("arg name = %v", calls[0].Args["name"])
 	}
 	if strings.Contains(got, "DSML") {
-		t.Fatalf("输出泄漏了 DSML 标记: %q", got)
+		t.Fatalf("the output leaked DSML markers: %q", got)
 	}
 	if strings.ContainsRune(got, '\uFFFD') {
-		t.Fatalf("输出含替换字符 U+FFFD（乱码）: %q", got)
+		t.Fatalf("output contains the replacement character U+FFFD (garbage): %q", got)
 	}
 	if want := head + tail; got != want {
 		t.Fatalf("got %q, want %q", got, want)

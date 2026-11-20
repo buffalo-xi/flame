@@ -13,7 +13,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// newTestMcpServerURL 起一个只暴露指定协议版本的临时 MCP server（无状态 transport）。
+// newTestMcpServerURL starts a throwaway MCP server exposing only the given protocol versions
+// (stateless transport).
 func newTestMcpServerURL(t *testing.T, versions []string) string {
 	t.Helper()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1"}, &mcp.ServerOptions{
@@ -30,7 +31,7 @@ func newTestMcpServerURL(t *testing.T, versions []string) string {
 	return ts.URL
 }
 
-// TestConnectSessionNewProtocol server 与本端同为 2026-07-28，正常建连。
+// TestConnectSessionNewProtocol: the server speaks the same 2026-07-28 as this side, so connecting succeeds.
 func TestConnectSessionNewProtocol(t *testing.T) {
 	url := newTestMcpServerURL(t, []string{mcpspec.ProtocolVersion})
 	conn := &models.McpConnection{Name: "new", Transport: "streamable_http", URL: url}
@@ -47,8 +48,9 @@ func TestConnectSessionNewProtocol(t *testing.T) {
 	}
 }
 
-// TestConnectSessionLegacyServer 对端只支持旧协议时，SDK 会悄悄降级协商，
-// connectSession 必须把它判成配置类错误（老协议不进 nexus）。
+// TestConnectSessionLegacyServer: when the peer only supports the old protocol the SDK silently
+// negotiates down; connectSession must turn that into a configuration error (the old protocol does not
+// enter nexus).
 func TestConnectSessionLegacyServer(t *testing.T) {
 	url := newTestMcpServerURL(t, []string{"2025-11-25"})
 	conn := &models.McpConnection{Name: "legacy", Transport: "streamable_http", URL: url}

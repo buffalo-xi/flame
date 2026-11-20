@@ -30,22 +30,25 @@ func AgentCurrentVersion(schema, agentName string) (int, string, error) {
 	return pick(v, err, schema, paths.VersionAgents, agentName, "agent")
 }
 
-// AgentCurrentSwitches returns the two "definition switches" frozen into an agent's current version:
-// unrestricted tools (tools_unrestricted) and "allow discovering unbound skills" (skill_discovery).
+// AgentCurrentAttributes returns the definition attributes frozen into an agent's current version: the two switches
+// (tools_unrestricted / skill_discovery) and the default reply language (default_language).
 //
 // They come from the same source as the version's files: a production run must read the copy in the version.
-// Reading the current value from the agents table would make "frozen at release" a lie — changing a switch after
+// Reading the current value from the agents table would make "frozen at release" a lie — changing an attribute after
 // the release would immediately change production behaviour (an implicit change unrelated to revoke).
 // With no is_current it follows the same rule as AgentCurrentVersion: ErrNoReleasedVersion, no fallback to the
 // current value.
-func AgentCurrentSwitches(schema, agentName string) (toolsUnrestricted, skillDiscovery bool, err error) {
-	err = db.DB.QueryRow(`SELECT v.tools_unrestricted, v.skill_discovery FROM `+schema+`.agent_versions v
+func AgentCurrentAttributes(schema, agentName string) (toolsUnrestricted, skillDiscovery bool, defaultLanguage string, err error) {
+	err = db.DB.QueryRow(`SELECT COALESCE(v.tools_unrestricted,false), COALESCE(v.skill_discovery,false),
+			COALESCE(v.default_language,'')
+		FROM `+schema+`.agent_versions v
 		JOIN `+schema+`.agents a ON a.id = v.agent_id
-		WHERE a.name = $1 AND v.is_current`, agentName).Scan(&toolsUnrestricted, &skillDiscovery)
+		WHERE a.name = $1 AND v.is_current`, agentName).
+		Scan(&toolsUnrestricted, &skillDiscovery, &defaultLanguage)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, false, fmt.Errorf("agent %q has no released version yet: %w", agentName, versions.ErrNoReleasedVersion)
+		return false, false, "", fmt.Errorf("agent %q has no released version yet: %w", agentName, versions.ErrNoReleasedVersion)
 	}
-	return toolsUnrestricted, skillDiscovery, err
+	return toolsUnrestricted, skillDiscovery, defaultLanguage, err
 }
 
 // TenantSkillCurrentVersion returns a tenant-level skill's current version number and version directory key.

@@ -11,12 +11,12 @@ import (
 	"time"
 )
 
-// fetchOAuthToken 通过 OAuth 2.0 client_credentials 流程获取 access_token。
-// 使用 cfg.TokenURL 作为 token endpoint；为空时回退到 <连接 URL 所在 origin> + 常见路径的推断由调用方决定，
-// 此处要求显式提供 token_url。
+// fetchOAuthToken obtains an access_token through the OAuth 2.0 client_credentials flow.
+// cfg.TokenURL is the token endpoint. Inferring it from the connection origin plus a well-known
+// path is a decision for the caller; this function requires an explicit token_url.
 func fetchOAuthToken(cfg *AuthConfig) (string, error) {
 	if cfg.TokenURL == "" {
-		return "", fmt.Errorf("oauth 鉴权需要 token_url（token endpoint）")
+		return "", fmt.Errorf("oauth auth requires a token_url (the token endpoint)")
 	}
 
 	form := url.Values{}
@@ -36,13 +36,13 @@ func fetchOAuthToken(cfg *AuthConfig) (string, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("oauth token 请求失败: %w", err)
+		return "", fmt.Errorf("oauth token request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("oauth token 请求失败，状态码 %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("oauth token request failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var tokenResp struct {
@@ -51,13 +51,13 @@ func fetchOAuthToken(cfg *AuthConfig) (string, error) {
 		Error       string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return "", fmt.Errorf("解析 oauth token 响应失败: %w", err)
+		return "", fmt.Errorf("failed to parse the oauth token response: %w", err)
 	}
 	if tokenResp.Error != "" {
-		return "", fmt.Errorf("oauth 错误: %s", tokenResp.Error)
+		return "", fmt.Errorf("oauth error: %s", tokenResp.Error)
 	}
 	if tokenResp.AccessToken == "" {
-		return "", fmt.Errorf("oauth token 响应缺少 access_token")
+		return "", fmt.Errorf("the oauth token response has no access_token")
 	}
 	return tokenResp.AccessToken, nil
 }

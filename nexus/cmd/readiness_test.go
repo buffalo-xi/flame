@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// Cause 是唯一可能携带内网地址的字段（如 "get http://127.0.0.1:27081/...: http 500"），
-// 而 /health 会把 readinessIssue 整个序列化给探针。json:"-" 就是那道闸 ——
-// 它要是被顺手改掉，内网拓扑会随探针响应外泄，且没有任何别的地方会因此变红。
+// Cause is the only field that may carry internal addresses (such as "get http://127.0.0.1:27081/...:
+// http 500"), and /health serializes the whole readinessIssue to the probe. json:"-" is that gate — if it
+// is casually changed, the internal topology leaks through the probe response and nothing else turns red.
 func TestReadinessIssueCauseNotSerialized(t *testing.T) {
 	issue := readinessIssue{
 		Key:    "sandbox",
@@ -20,20 +20,21 @@ func TestReadinessIssueCauseNotSerialized(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	if strings.Contains(string(b), "127.0.0.1") || strings.Contains(string(b), "capabilities") {
-		t.Fatalf("Cause 不该进响应体, got %s", b)
+		t.Fatalf("Cause must not reach the response body, got %s", b)
 	}
 
-	// 探针仍要能看出「是哪条依赖挂了」—— 压掉 Cause 不能连 Key/Detail 一起压掉。
+	// The probe must still see which dependency failed — dropping Cause must not drop Key/Detail with it.
 	var back []readinessIssue
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(back) != 1 || back[0].Key != "sandbox" || back[0].Detail == "" {
-		t.Errorf("探针该拿到 dependency/detail, got %+v", back)
+		t.Errorf("the probe should receive dependency/detail, got %+v", back)
 	}
 }
 
-// describeIssues 是日志面：必须带上 Cause，否则排障时又回到「不知道哪条、为什么挂」。
+// describeIssues is the log side: it must include Cause, otherwise debugging falls back to "which one
+// failed and why is unknown".
 func TestDescribeIssues(t *testing.T) {
 	got := describeIssues([]readinessIssue{
 		{Key: "db", Detail: "database not connected"},
@@ -44,6 +45,6 @@ func TestDescribeIssues(t *testing.T) {
 		t.Errorf("describeIssues = %q, want %q", got, want)
 	}
 	if got := describeIssues(nil); got != "" {
-		t.Errorf("就绪时不该产出文案, got %q", got)
+		t.Errorf("a ready service should produce no copy, got %q", got)
 	}
 }

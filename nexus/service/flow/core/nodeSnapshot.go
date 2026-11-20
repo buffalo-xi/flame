@@ -6,19 +6,19 @@ import (
 	"time"
 )
 
-// 截断阈值：与落库共用，保证「调试拉取」与「落库存储」的截断行为完全一致。
+// Truncation thresholds, shared with persistence so that "debug pull" and "stored record" truncate alike.
 const (
-	// MaxVarJSONBytes 变量 JSON 的最大字节数，超过则按顶层 key 截断。
+	// MaxVarJSONBytes is the maximum size of a variable JSON document; beyond it, top-level keys are dropped.
 	MaxVarJSONBytes = 64 * 1024 // 64KB
-	// MaxLogLines 单节点日志最大保留行数，超过则保留最后 MaxLogLines 行。
+	// MaxLogLines is the maximum number of log lines kept per node; beyond it, the last MaxLogLines lines are kept.
 	MaxLogLines = 200
-	// MaxProgressEntries 每个 category 最多保留的消息条数，超过则保留最后 N 条。
+	// MaxProgressEntries is the maximum number of messages kept per category; beyond it, the last N are kept.
 	MaxProgressEntries = 1000
 )
 
-// NodeSnapshot 单个节点执行数据的展示快照。
-// 调试实时推送（node_inspect / node_snapshot）与历史查询（落库）共用同一字段结构，
-// 保证「调试看到的」与「落库存的」一致。
+// NodeSnapshot is the display snapshot of one node execution.
+// The live debug push (node_inspect / node_snapshot) and the history query (persistence) share the same
+// field structure, so "what the debugger saw" equals "what was stored".
 type NodeSnapshot struct {
 	NodeID              string          `json:"node_id"`
 	ProcessID           string          `json:"process_id"`
@@ -44,11 +44,11 @@ type NodeSnapshot struct {
 	StartTime           *time.Time      `json:"start_time"`
 	EndTime             *time.Time      `json:"end_time"`
 	DurationMs          int64           `json:"duration_ms"`
-	Extra               json.RawMessage `json:"extra"` // 节点类型特有的运行结果（branch/loop/function/http），其他为 null
+	Extra               json.RawMessage `json:"extra"` // node-type specific result (branch/loop/function/http), null otherwise
 }
 
-// BuildSnapshot 将 NodeResult 组装为展示快照，并对变量/日志做截断。
-// 与落库 buildNodeRecord 共用同一套截断函数，保证两处产出一致。
+// BuildSnapshot assembles a NodeResult into a display snapshot and truncates variables and logs.
+// It shares the truncation helpers with the persistence path (buildNodeRecord), so both produce the same output.
 func (nr *NodeResult) BuildSnapshot() *NodeSnapshot {
 	local, output := nr.SnapshotVars()
 	inputs := nr.GetInputVars()
@@ -98,8 +98,8 @@ func (nr *NodeResult) BuildSnapshot() *NodeSnapshot {
 	}
 }
 
-// BuildExtra 序列化节点类型特有的运行结果（branch/loop/function/http），其他节点返回 nil。
-// 供落库与调试推送共用，保证两处一致。
+// BuildExtra serializes the node-type specific result (branch/loop/function/http); other nodes return null.
+// Shared by persistence and the debug push so both stay consistent.
 func (nr *NodeResult) BuildExtra() json.RawMessage {
 	var extra map[string]any
 	switch nr.NodeType {
@@ -130,15 +130,15 @@ func (nr *NodeResult) BuildExtra() json.RawMessage {
 		}
 	}
 	if extra == nil {
-		return json.RawMessage("null") // JSON null；不能用 Go nil，否则 pq 序列化成空字符串导致 jsonb 报错
+		return json.RawMessage("null") // JSON null: Go nil would make pq serialize an empty string and break jsonb
 	}
 	b, _, _ := MarshalAndTruncate(extra, MaxVarJSONBytes)
 	return json.RawMessage(b)
 }
 
-// MarshalAndTruncate 将 map 序列化为 JSON 字节，超过 maxBytes 时按顶层 key（字典序）逐个剔除，
-// 直到字节数 <= maxBytes。返回 (jsonBytes, truncated, originalSize)。
-// originalSize 始终为截断前的完整字节数；truncated 标记是否发生了截断。
+// MarshalAndTruncate serializes a map to JSON bytes; beyond maxBytes it drops top-level keys one by one
+// (lexicographic order) until the size is <= maxBytes. Returns (jsonBytes, truncated, originalSize).
+// originalSize is always the full size before truncation; truncated reports whether anything was dropped.
 func MarshalAndTruncate(vars map[string]any, maxBytes int) ([]byte, bool, int) {
 	if len(vars) == 0 {
 		return []byte("{}"), false, 0
@@ -153,7 +153,7 @@ func MarshalAndTruncate(vars map[string]any, maxBytes int) ([]byte, bool, int) {
 		return full, false, origSize
 	}
 
-	// 超阈值：按 key 字典序从后往前逐个删除，直到达标。
+	// Over the threshold: drop keys from the end of the lexicographic order until it fits.
 	keys := make([]string, 0, len(vars))
 	for k := range vars {
 		keys = append(keys, k)
@@ -173,12 +173,12 @@ func MarshalAndTruncate(vars map[string]any, maxBytes int) ([]byte, bool, int) {
 		}
 	}
 
-	// 极端情况：删到空仍超限（单个 value 本身超阈值），退化为空对象。
+	// Extreme case: still over the limit after dropping everything (a single value exceeds it) — fall back to {}.
 	return []byte("{}"), true, origSize
 }
 
-// TruncateLogs 将日志切片截断，超过 maxLines 行时保留最后 maxLines 行。
-// 返回 (kept, truncated, originalLines)。originalLines 为原始总行数。
+// TruncateLogs truncates a log slice; beyond maxLines it keeps the last maxLines lines.
+// Returns (kept, truncated, originalLines), where originalLines is the original total.
 func TruncateLogs(logs []string, maxLines int) ([]string, bool, int) {
 	origLines := len(logs)
 	if origLines <= maxLines {
@@ -187,8 +187,8 @@ func TruncateLogs(logs []string, maxLines int) ([]string, bool, int) {
 	return logs[origLines-maxLines:], true, origLines
 }
 
-// MarshalLogsAndTruncate 将日志切片截断并序列化为 JSON 数组。
-// 返回 (jsonBytes, truncated, originalLines)。用于落库（FlowNodeRecord.RunLogs 为 []byte）。
+// MarshalLogsAndTruncate truncates a log slice and serializes it as a JSON array.
+// Returns (jsonBytes, truncated, originalLines); used for persistence (FlowNodeRecord.RunLogs is a []byte).
 func MarshalLogsAndTruncate(logs []string, maxLines int) ([]byte, bool, int) {
 	kept, truncated, origLines := TruncateLogs(logs, maxLines)
 	if origLines == 0 {
@@ -198,8 +198,8 @@ func MarshalLogsAndTruncate(logs []string, maxLines int) ([]byte, bool, int) {
 	return b, truncated, origLines
 }
 
-// TruncateTail 截断消息切片，超过 maxEntries 时保留最后 maxEntries 条。
-// 返回 (kept, truncated, originalCount)。
+// TruncateTail truncates a message slice; beyond maxEntries it keeps the last maxEntries entries.
+// Returns (kept, truncated, originalCount).
 func TruncateTail(msgs []string, maxEntries int) ([]string, bool, int) {
 	orig := len(msgs)
 	if orig <= maxEntries {

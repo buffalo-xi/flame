@@ -17,25 +17,26 @@ import (
 	"flame/tools/xsql"
 )
 
-// ClientSession 一个 RPC 客户端会话，封装与远端 RPC server 的 JSON-RPC 2.0 通信。
-// streamable_http 下为无状态短连接（每次请求独立 POST）；stdio 下对应一个子进程。
+// ClientSession is one RPC client session wrapping the JSON-RPC 2.0 conversation with a remote RPC server.
+// Under streamable_http it is a stateless short-lived connection (one POST per request); under stdio it
+// corresponds to one child process.
 type ClientSession struct {
 	conn *models.RpcConnection
 
-	// streamable_http 专用
+	// streamable_http only.
 	httpClient *http.Client
 
-	// stdio 专用
+	// stdio only.
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  *bufio.Reader
-	reqMu   sync.Mutex // 串行化 stdio 请求（一次一个 in-flight 请求）
+	reqMu   sync.Mutex // serializes stdio requests (one in-flight request at a time)
 	nextID  int64
 	closed  bool
 	closeMu sync.Mutex
 }
 
-// rpcRequest JSON-RPC 2.0 请求
+// rpcRequest is a JSON-RPC 2.0 request.
 type rpcRequest struct {
 	Jsonrpc string      `json:"jsonrpc"`
 	Version int         `json:"version"`
@@ -44,7 +45,7 @@ type rpcRequest struct {
 	Params  interface{} `json:"params,omitempty"`
 }
 
-// rpcResponse JSON-RPC 2.0 响应
+// rpcResponse is a JSON-RPC 2.0 response.
 type rpcResponse struct {
 	Jsonrpc string          `json:"jsonrpc"`
 	ID      int64           `json:"id"`
@@ -57,17 +58,20 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
-// rpcProgress 进度通知信封（服务端主动推送，无 id）
+// rpcProgress is the envelope of a progress notification (pushed by the server, no id).
 type rpcProgress struct {
 	Jsonrpc string                     `json:"jsonrpc"`
 	Method  string                     `json:"method"`
 	Params  ProgressNotificationParams `json:"params"`
 }
 
-// ProgressNotificationParams 进度通知参数（字段位置对齐 MCP 2026-07-28 的 notifications/progress）。
-// Meta 用 map[string]any：agent 事件会在 _meta 里带 call_id / ok / duration_ms 等非字符串字段。
+// ProgressNotificationParams holds the parameters of a progress notification (field layout aligned
+// with notifications/progress of MCP 2026-07-28).
+// Meta is a map[string]any: agent events carry non-string fields such as call_id / ok / duration_ms
+// inside _meta.
 //
-// Progress 只保证单调递增（「第几条通知」），不代表完成度；总量未知时 Total 为 0（缺省）。
+// Progress is only guaranteed to increase monotonically ("which notification this is"), it does not
+// express completion; Total is 0 (absent) when the total is unknown.
 type ProgressNotificationParams struct {
 	ProgressToken any            `json:"progressToken"`
 	Progress      float64        `json:"progress"`
@@ -76,32 +80,32 @@ type ProgressNotificationParams struct {
 	Meta          map[string]any `json:"_meta,omitempty"`
 }
 
-// NewClientSession 根据连接配置建立与远端 RPC server 的会话。
-// 调用方负责在会话使用完毕后调用返回的 session.Close()。
+// NewClientSession opens a session with the remote RPC server according to the connection config.
+// The caller is responsible for calling session.Close() once the session is no longer needed.
 func NewClientSession(ctx context.Context, conn *models.RpcConnection) (*ClientSession, error) {
 	s := &ClientSession{conn: conn}
 
 	switch strings.ToLower(conn.Transport) {
 	case "", "streamable_http":
 		if conn.URL == "" {
-			return nil, fmt.Errorf("streamable_http 传输需要 url")
+			return nil, fmt.Errorf("the streamable_http transport requires a url")
 		}
 		s.httpClient = newHTTPClientWithHeaders(customHeaders(conn.Auth))
 	case "stdio":
 		if conn.Command == "" {
-			return nil, fmt.Errorf("stdio 传输需要 command")
+			return nil, fmt.Errorf("the stdio transport requires a command")
 		}
 		if err := s.startStdio(); err != nil {
 			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("不支持的 transport: %s", conn.Transport)
+		return nil, fmt.Errorf("unsupported transport: %s", conn.Transport)
 	}
 
 	return s, nil
 }
 
-// startStdio 启动 stdio 子进程并建立 stdin/stdout 通道
+// startStdio starts the stdio child process and wires up the stdin/stdout pipes.
 func (s *ClientSession) startStdio() error {
 	args := parseArgs(s.conn.Args)
 	cmd := exec.Command(s.conn.Command, args...)
@@ -120,11 +124,11 @@ func (s *ClientSession) startStdio() error {
 	if err != nil {
 		return err
 	}
-	// stderr 直接丢弃（子进程调试日志不参与协议）
+	// stderr is discarded (the child's debug output is not part of the protocol).
 	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动 stdio 子进程失败: %w", err)
+		return fmt.Errorf("failed to start the stdio child process: %w", err)
 	}
 
 	s.cmd = cmd
@@ -134,7 +138,7 @@ func (s *ClientSession) startStdio() error {
 	return nil
 }
 
-// Call 发送一次 JSON-RPC 请求并返回 result 原始 JSON。
+// Call sends one JSON-RPC request and returns the raw result JSON.
 func (s *ClientSession) Call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	if strings.ToLower(s.conn.Transport) == "stdio" {
 		return s.callStdio(ctx, method, params)
@@ -142,10 +146,11 @@ func (s *ClientSession) Call(ctx context.Context, method string, params interfac
 	return s.callHTTP(ctx, method, params)
 }
 
-// CallWithProgress 发送一次 JSON-RPC 请求，并在执行期间流式接收 progress 通知。
-// onProgress 会在服务端推送 notifications/progress 时边推边调（与阻塞在调用上的主协程并发）。
-//   - stdio：在读取循环中识别 method=="notifications/progress" 的帧并回调。
-//   - streamable_http：解析 SSE 流，识别 progress 事件与最终 result。
+// CallWithProgress sends one JSON-RPC request and streams progress notifications while it runs.
+// onProgress is invoked as the server pushes notifications/progress (concurrently with the main
+// goroutine blocked on the call):
+//   - stdio: the read loop recognizes frames with method == "notifications/progress" and calls back;
+//   - streamable_http: the SSE stream is parsed for progress events and the final result.
 func (s *ClientSession) CallWithProgress(ctx context.Context, method string, params interface{}, onProgress func(*ProgressNotificationParams)) (json.RawMessage, error) {
 	if strings.ToLower(s.conn.Transport) == "stdio" {
 		return s.callStdioWithProgress(ctx, method, params, onProgress)
@@ -153,14 +158,15 @@ func (s *ClientSession) CallWithProgress(ctx context.Context, method string, par
 	return s.callHTTPWithProgress(ctx, method, params, onProgress)
 }
 
-// callHTTP streamable_http 下发起一次 JSON-RPC POST 请求
+// callHTTP issues one JSON-RPC POST under streamable_http.
 func (s *ClientSession) callHTTP(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	return s.callHTTPWithProgress(ctx, method, params, nil)
 }
 
-// callHTTPWithProgress streamable_http 下发起请求。
-// 服务端流式响应为 text/event-stream：先推多条 notifications/progress，最后推带 id 的最终 result。
-// 非流式响应为单条 application/json。两种情况统一处理，progress 通知边读边回调 onProgress。
+// callHTTPWithProgress issues a request under streamable_http.
+// A streaming response is text/event-stream: several notifications/progress first, then the final
+// result carrying the id. A non-streaming response is a single application/json body. Both are handled
+// uniformly, and progress notifications call onProgress while being read.
 func (s *ClientSession) callHTTPWithProgress(ctx context.Context, method string, params interface{}, onProgress func(*ProgressNotificationParams)) (json.RawMessage, error) {
 	reqBody, err := json.Marshal(rpcRequest{Jsonrpc: "2.0", Version: protocol.CurrentProtocolVersion, ID: 1, Method: method, Params: params})
 	if err != nil {
@@ -174,7 +180,7 @@ func (s *ClientSession) callHTTPWithProgress(ctx context.Context, method string,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 
-	// 鉴权头（stdio 下忽略，凭证走 env）
+	// Auth header (ignored under stdio, where credentials travel through env).
 	if authHeader, aerr := buildAuthorizationHeader(s.conn.Auth); aerr != nil {
 		return nil, aerr
 	} else if authHeader != "" {
@@ -202,15 +208,16 @@ func (s *ClientSession) callHTTPWithProgress(ctx context.Context, method string,
 	return rpcResp.Result, nil
 }
 
-// parseSSE 解析 text/event-stream 响应流：progress 事件边读边回调，最终 result 返回。
-// 事件格式：`event: message\ndata: {json}\n\n`，流结束即关闭连接（无 [DONE] 标记）。
+// parseSSE parses a text/event-stream response: progress events call back while being read, and the
+// final result is returned. Event format: `event: message\ndata: {json}\n\n`; the connection closes
+// when the stream ends (there is no [DONE] marker).
 func (s *ClientSession) parseSSE(ctx context.Context, body io.Reader, onProgress func(*ProgressNotificationParams)) (json.RawMessage, error) {
 	reader := bufio.NewReader(body)
 	for {
 		line, err := readSSELine(ctx, reader)
 		if err != nil {
 			if err == io.EOF {
-				return nil, fmt.Errorf("SSE 流提前结束，未收到最终结果")
+				return nil, fmt.Errorf("the SSE stream ended early without a final result")
 			}
 			return nil, err
 		}
@@ -219,7 +226,7 @@ func (s *ClientSession) parseSSE(ctx context.Context, body io.Reader, onProgress
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 
-		// 先尝试按 progress 通知解析
+		// Try a progress notification first.
 		var prog rpcProgress
 		if err := json.Unmarshal([]byte(payload), &prog); err == nil && prog.Method == "notifications/progress" {
 			if onProgress != nil {
@@ -227,7 +234,7 @@ func (s *ClientSession) parseSSE(ctx context.Context, body io.Reader, onProgress
 			}
 			continue
 		}
-		// 否则视为最终 result
+		// Otherwise treat it as the final result.
 		var rpcResp rpcResponse
 		if err := json.Unmarshal([]byte(payload), &rpcResp); err != nil {
 			continue
@@ -242,7 +249,7 @@ func (s *ClientSession) parseSSE(ctx context.Context, body io.Reader, onProgress
 	}
 }
 
-// readSSELine 读取一行 SSE 文本（\n 分隔），支持 ctx 取消。
+// readSSELine reads one line of SSE text (separated by \n) and honours ctx cancellation.
 func readSSELine(ctx context.Context, reader *bufio.Reader) (string, error) {
 	type result struct {
 		line string
@@ -261,18 +268,19 @@ func readSSELine(ctx context.Context, reader *bufio.Reader) (string, error) {
 	}
 }
 
-// callStdio stdio 下发起一次 JSON-RPC 请求（\n 分隔帧，串行）
+// callStdio issues one JSON-RPC request under stdio (\n separated frames, serialized).
 func (s *ClientSession) callStdio(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	return s.callStdioWithProgress(ctx, method, params, nil)
 }
 
-// callStdioWithProgress stdio 下发起请求，并在读取循环中识别 progress 通知并回调。
+// callStdioWithProgress issues a request under stdio and recognizes progress notifications in the read
+// loop, calling back for each of them.
 func (s *ClientSession) callStdioWithProgress(ctx context.Context, method string, params interface{}, onProgress func(*ProgressNotificationParams)) (json.RawMessage, error) {
 	s.reqMu.Lock()
 	defer s.reqMu.Unlock()
 
 	if s.isClosed() {
-		return nil, fmt.Errorf("RPC stdio 会话已关闭")
+		return nil, fmt.Errorf("the RPC stdio session is closed")
 	}
 
 	s.closeMu.Lock()
@@ -286,16 +294,17 @@ func (s *ClientSession) callStdioWithProgress(ctx context.Context, method string
 	}
 
 	if _, err := s.stdin.Write(append(reqBody, '\n')); err != nil {
-		return nil, fmt.Errorf("写入 stdio 请求失败: %w", err)
+		return nil, fmt.Errorf("failed to write the stdio request: %w", err)
 	}
 
-	// 读取响应直到匹配到对应 id；期间识别 server 主动推送的 progress 通知。
+	// Read responses until the matching id shows up, recognizing the progress notifications the server
+	// pushes on its own along the way.
 	for {
 		line, err := s.readFrame(ctx)
 		if err != nil {
 			return nil, err
 		}
-		// 先尝试按 progress 通知解析（method == notifications/progress）
+		// Try a progress notification first (method == notifications/progress).
 		var prog rpcProgress
 		if err := json.Unmarshal(line, &prog); err == nil && prog.Method == "notifications/progress" {
 			if onProgress != nil {
@@ -317,7 +326,7 @@ func (s *ClientSession) callStdioWithProgress(ctx context.Context, method string
 	}
 }
 
-// readFrame 读取一行（\n 分隔）JSON 帧
+// readFrame reads one JSON frame (separated by \n).
 func (s *ClientSession) readFrame(ctx context.Context) ([]byte, error) {
 	type result struct {
 		line []byte
@@ -340,7 +349,7 @@ func (s *ClientSession) readFrame(ctx context.Context) ([]byte, error) {
 	}
 }
 
-// ListTools 调用 tools/list 发现工具列表
+// ListTools calls tools/list to discover the tool list.
 func (s *ClientSession) ListTools(ctx context.Context) ([]*models.RpcConnectionTool, error) {
 	result, err := s.Call(ctx, "tools/list", map[string]interface{}{})
 	if err != nil {
@@ -356,12 +365,13 @@ func (s *ClientSession) ListTools(ctx context.Context) ([]*models.RpcConnectionT
 		ServerVersion int `json:"serverVersion"`
 	}
 	if err := json.Unmarshal(result, &listResult); err != nil {
-		return nil, fmt.Errorf("解析 tools/list 结果失败: %w", err)
+		return nil, fmt.Errorf("failed to parse the tools/list result: %w", err)
 	}
 
-	// 版本协商：服务端版本高于客户端时，记录告警（内部同构代码通常同步升级）
+	// Version negotiation: when the server version is higher than the client one, a warning is expected
+	// (internally isomorphic code is usually upgraded in lockstep).
 	if listResult.ServerVersion > protocol.CurrentProtocolVersion {
-		// 可选：记录告警或返回特定错误，交由上层决定
+		// Optionally log a warning or return a specific error, left to the caller.
 		_ = listResult.ServerVersion
 	}
 
@@ -387,7 +397,7 @@ func (s *ClientSession) isClosed() bool {
 	return s.closed
 }
 
-// Close 关闭会话（stdio 下终止子进程）
+// Close closes the session (terminating the child process under stdio).
 func (s *ClientSession) Close() error {
 	if strings.ToLower(s.conn.Transport) != "stdio" {
 		return nil
@@ -410,7 +420,7 @@ func (s *ClientSession) Close() error {
 	return nil
 }
 
-// newHTTPClientWithHeaders 返回一个注入了默认请求头的 *http.Client
+// newHTTPClientWithHeaders returns an *http.Client with the given default headers injected.
 func newHTTPClientWithHeaders(headers map[string]string) *http.Client {
 	base := http.DefaultClient
 	return &http.Client{
@@ -422,7 +432,7 @@ func newHTTPClientWithHeaders(headers map[string]string) *http.Client {
 	}
 }
 
-// headerRoundTripper 在每次请求前注入自定义头
+// headerRoundTripper injects custom headers on every request.
 type headerRoundTripper struct {
 	base   http.RoundTripper
 	header map[string]string
@@ -439,7 +449,7 @@ func (rt *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	return base.RoundTrip(req)
 }
 
-// parseArgs 将 JSONB 参数数组解析为字符串切片
+// parseArgs parses a JSONB argument array into a string slice.
 func parseArgs(args xsql.JSONB) []string {
 	var arr []string
 	if args.Data == nil {
@@ -451,7 +461,7 @@ func parseArgs(args xsql.JSONB) []string {
 	return arr
 }
 
-// parseEnv 将 JSONB 环境变量数组（["K=V", ...]）解析为字符串切片
+// parseEnv parses a JSONB environment array (["K=V", ...]) into a string slice.
 func parseEnv(env xsql.JSONB) []string {
 	var arr []string
 	if env.Data == nil {

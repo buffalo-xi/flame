@@ -1,6 +1,6 @@
 package repository
 
-// NewRepository 创建 flow_configs 存储实例
+// NewRepository creates the flow_configs storage instance.
 func NewRepository() Repository {
 	return NewPostgresRepository()
 }

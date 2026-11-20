@@ -13,23 +13,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// PostgresRepository PostgreSQL实现的LLM服务商存储
+// PostgresRepository is the PostgreSQL implementation of LLM provider storage.
 type PostgresRepository struct{}
 
-// NewPostgresRepository 创建PostgreSQL存储实例
+// NewPostgresRepository creates a PostgreSQL storage instance.
 func NewPostgresRepository() *PostgresRepository {
 	return &PostgresRepository{}
 }
 
-// allowedSortColumns ORDER BY 列名白名单。
-// sort_by 来自请求体，直接拼接会形成注入点（Postgres 允许 ORDER BY 里放子查询），
-// 因此只接受白名单内的列名，其余丢弃。
+// allowedSortColumns is the ORDER BY column whitelist.
+// sort_by comes from the request body, and concatenating it directly would open an injection point (Postgres allows
+// subqueries in ORDER BY), so only whitelisted column names are accepted and the rest are dropped.
 var allowedSortColumns = map[string]bool{
 	"id": true, "name": true, "url": true, "protocol": true,
 	"api_key": true, "icon": true, "enabled": true, "extra_config": true,
 }
 
-// GetByID 根据ID获取LLM服务商
+// GetByID returns one LLM provider by id.
 func (r *PostgresRepository) GetByID(authInfo *auth.AuthInfo, id string) (*models.LLMProvider, error) {
 	var llmProvider models.LLMProvider
 	err := db.DB.QueryRow(fmt.Sprintf(`SELECT id, name, url, protocol, api_key, icon, enabled, extra_config FROM %s.llm_providers WHERE id = $1`, authInfo.Schema), id).Scan(
@@ -42,7 +42,7 @@ func (r *PostgresRepository) GetByID(authInfo *auth.AuthInfo, id string) (*model
 	return &llmProvider, nil
 }
 
-// Create 创建LLM服务商（id 由程序生成，不再依赖数据库 DEFAULT）
+// Create creates an LLM provider (the id is generated in the program, no longer relying on a database DEFAULT).
 func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, llmProvider *models.LLMProvider) (string, error) {
 	id := llmProvider.ID
 	if id == "" {
@@ -58,7 +58,7 @@ func (r *PostgresRepository) Create(authInfo *auth.AuthInfo, llmProvider *models
 	return id, nil
 }
 
-// Update 更新LLM服务商
+// Update updates an LLM provider.
 func (r *PostgresRepository) Update(authInfo *auth.AuthInfo, id string, llmProvider *models.LLMProvider) error {
 	result, err := db.DB.Exec(fmt.Sprintf(`UPDATE %s.llm_providers SET name = $1, url = $2, protocol = $3, api_key = $4, icon = $5, enabled = $6, extra_config = $7 WHERE id = $8`, authInfo.Schema),
 		llmProvider.Name, llmProvider.URL, llmProvider.Protocol, llmProvider.APIKey, llmProvider.Icon, llmProvider.Enabled, llmProvider.ExtraConfig, id)
@@ -78,7 +78,7 @@ func (r *PostgresRepository) Update(authInfo *auth.AuthInfo, id string, llmProvi
 	return nil
 }
 
-// Delete 根据ID删除LLM服务商
+// Delete deletes one LLM provider by id.
 func (r *PostgresRepository) Delete(authInfo *auth.AuthInfo, id string) error {
 	result, err := db.DB.Exec(fmt.Sprintf(`DELETE FROM %s.llm_providers WHERE id = $1`, authInfo.Schema), id)
 	if err != nil {
@@ -97,9 +97,9 @@ func (r *PostgresRepository) Delete(authInfo *auth.AuthInfo, id string) error {
 	return nil
 }
 
-// List 获取LLM服务商列表
+// List lists LLM providers.
 func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListLLMProvidersRequest) ([]models.LLMProvider, int, error) {
-	// 构建查询条件
+	// Build the filter
 	whereClause := ""
 	args := []interface{}{}
 	argIndex := 1
@@ -121,7 +121,7 @@ func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListLLMProviders
 		argIndex++
 	}
 
-	// 计算总数
+	// Total
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.llm_providers", authInfo.Schema) + whereClause
 	var total int
 	err := db.DB.QueryRow(countQuery, args...).Scan(&total)
@@ -129,8 +129,8 @@ func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListLLMProviders
 		return nil, 0, err
 	}
 
-	// 处理分页：limit 未指定（0）按 10；负数表示全量（不追加 LIMIT），
-	// 供设置页等「一次拿完」的场景使用（前端传的就是 -1）。
+	// Paging: an unset limit (0) means 10; a negative one means everything (no LIMIT appended), for settings pages and the
+	// like that take it all at once (the frontend sends -1).
 	page := req.Page
 	if page < 1 {
 		page = 1
@@ -143,35 +143,35 @@ func (r *PostgresRepository) List(authInfo *auth.AuthInfo, req *ListLLMProviders
 
 	offset := (page - 1) * limit
 
-	// 处理排序：sort_by 必须过列名白名单（防 ORDER BY 注入），非法列丢弃
+	// Sorting: sort_by must pass the column whitelist (ORDER BY injection), invalid columns are dropped
 	sortClauses := []string{}
 	for i, sortBy := range req.SortBy {
 		if !allowedSortColumns[sortBy] {
 			continue
 		}
 		sortOrder := "asc"
-		// 如果指定了对应列的排序顺序，使用指定的顺序
+		// Use the direction given for that column, when it is valid
 		if i < len(req.SortOrder) && (req.SortOrder[i] == "asc" || req.SortOrder[i] == "desc") {
 			sortOrder = req.SortOrder[i]
 		}
 		sortClauses = append(sortClauses, sortBy+" "+sortOrder)
 	}
-	// 没有任何有效排序列时回退默认（同时覆盖「未传 sort_by」的情况）
+	// Fall back to the default when no valid sort column is left (which also covers "no sort_by was sent")
 	if len(sortClauses) == 0 {
 		sortClauses = append(sortClauses, "name asc")
 	}
 
-	// 构建排序子句
+	// Build the ORDER BY clause
 	sortClause := "ORDER BY " + strings.Join(sortClauses, ", ")
 
-	// 构建查询语句：全量（limit < 0）时不追加 LIMIT，避免 Postgres 对负值报错
+	// Build the query: append no LIMIT when taking everything (limit < 0), so Postgres never sees a negative value
 	query := fmt.Sprintf("SELECT id, name, url, protocol, api_key, icon, enabled, extra_config FROM %s.llm_providers", authInfo.Schema) + whereClause + " " + sortClause
 	if limit > 0 {
 		query += " LIMIT $" + strconv.Itoa(argIndex) + " OFFSET $" + strconv.Itoa(argIndex+1)
 		args = append(args, limit, offset)
 	}
 
-	// 执行查询
+	// Run it
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
 		return nil, 0, err

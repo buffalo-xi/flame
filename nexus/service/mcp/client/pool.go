@@ -15,57 +15,59 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// nowUnix 返回当前 Unix 秒级时间戳（供池内 lastUsed 记录）
+// nowUnix returns the current Unix timestamp in seconds (recorded as lastUsed in the pool).
 func nowUnix() int64 {
 	return time.Now().Unix()
 }
 
-// pooledSession 池中复用的一个 stdio 会话（一个 conn.ID 对应一个子进程）
+// pooledSession is one stdio session reused by the pool (one child process per conn.ID).
 type pooledSession struct {
 	session     *mcp.ClientSession
 	transport   *mcp.CommandTransport
 	connID      string
-	fingerprint string // command+args+work_dir+env 的哈希，配置变更后用于失效
+	fingerprint string // hash of command+args+work_dir+env, used to invalidate after a config change
 	lastUsed    int64
-	closed      bool // 子进程已退出
+	closed      bool // the child process already exited
 }
 
-// SessionPool stdio 会话进程池：一个 conn.ID 复用一个 ClientSession / 子进程。
-// streamable_http 为无状态短连接，不进池。
+// SessionPool is the stdio session process pool: one conn.ID reuses one ClientSession / child process.
+// streamable_http is a stateless short-lived connection and is never pooled.
 type SessionPool struct {
 	mu       sync.Mutex
 	sessions map[string]*pooledSession
 
-	// progressRoutes 维护 progressToken -> onProgress 回调的映射，用于把
-	// server 推送的 progress 通知路由回「发起本次调用的 onProgress」。
-	// token 是调用级唯一（uuid string），跨 session 共享（stdio 复用同一子进程）。
+	// progressRoutes maps progressToken -> onProgress, routing the progress notifications the server
+	// pushes back to "the onProgress of the call that started them".
+	// The token is unique per call (a uuid string) but shared across sessions (stdio reuses the same
+	// child process).
 	progressMu     sync.RWMutex
 	progressRoutes map[string]func(*mcp.ProgressNotificationParams)
 }
 
-// sessionPool 全局单例
+// sessionPool is the global singleton.
 var sessionPool = &SessionPool{
 	sessions:       make(map[string]*pooledSession),
 	progressRoutes: make(map[string]func(*mcp.ProgressNotificationParams)),
 }
 
-// GetSessionPool 返回全局 stdio 会话进程池单例
+// GetSessionPool returns the global stdio session pool singleton.
 func GetSessionPool() *SessionPool {
 	return sessionPool
 }
 
-// Get 获取（或懒创建）某连接对应的 stdio 会话。
-// 若池中已有同指纹会话且进程存活，则复用；否则新建并替换旧会话。
+// Get fetches (or lazily creates) the stdio session of a connection.
+// When the pool holds a session with the same fingerprint and the process is alive it is reused;
+// otherwise a new one is created and replaces the old session.
 func (p *SessionPool) Get(ctx context.Context, conn *models.McpConnection) (*mcp.ClientSession, error) {
 	if strings.ToLower(conn.Transport) != "stdio" {
-		return nil, fmt.Errorf("SessionPool 仅支持 stdio transport，收到: %s", conn.Transport)
+		return nil, fmt.Errorf("SessionPool only supports the stdio transport, got: %s", conn.Transport)
 	}
 
 	fp := fingerprint(conn)
 
 	p.mu.Lock()
 	existing, ok := p.sessions[conn.ID]
-	// 已有且指纹一致且进程未退出 -> 复用
+	// Present, same fingerprint and process alive -> reuse.
 	if ok && existing.fingerprint == fp && !existing.closed {
 		existing.lastUsed = nowUnix()
 		session := existing.session
@@ -74,7 +76,7 @@ func (p *SessionPool) Get(ctx context.Context, conn *models.McpConnection) (*mcp
 	}
 	p.mu.Unlock()
 
-	// 需要新建：先失效旧会话
+	// A new session is needed: invalidate the old one first.
 	if ok {
 		p.Invalidate(conn.ID)
 	}
@@ -91,7 +93,7 @@ func (p *SessionPool) Get(ctx context.Context, conn *models.McpConnection) (*mcp
 		fingerprint: fp,
 		lastUsed:    nowUnix(),
 	}
-	// 监听子进程退出，标记为 closed
+	// Watch the child process exit and mark the session closed.
 	go p.watchProcess(ps)
 
 	p.mu.Lock()
@@ -100,8 +102,9 @@ func (p *SessionPool) Get(ctx context.Context, conn *models.McpConnection) (*mcp
 	return session, nil
 }
 
-// newStdioSession 建立一个新的 stdio 会话（与 NewClientSession 对 stdio 路径等价，但保留 transport 引用）
-// 同时注入 ProgressNotificationHandler，按 progressToken 查表分发到对应 onProgress。
+// newStdioSession opens a fresh stdio session (equivalent to the stdio path of NewClientSession, but
+// keeping a reference to the transport) and injects a ProgressNotificationHandler that looks the token
+// up and dispatches to the matching onProgress.
 func newStdioSession(ctx context.Context, conn *models.McpConnection) (*mcp.ClientSession, *mcp.CommandTransport, error) {
 	transport, err := newCommandTransport(conn)
 	if err != nil {
@@ -127,22 +130,23 @@ func newStdioSession(ctx context.Context, conn *models.McpConnection) (*mcp.Clie
 	return session, ct, nil
 }
 
-// RegisterProgress 注册 progressToken 对应的 onProgress 回调（调用前调用）。
+// RegisterProgress registers the onProgress callback of a progressToken (called before the call starts).
 func (p *SessionPool) RegisterProgress(token string, onProgress func(*mcp.ProgressNotificationParams)) {
 	p.progressMu.Lock()
 	p.progressRoutes[token] = onProgress
 	p.progressMu.Unlock()
 }
 
-// UnregisterProgress 注销 progressToken 对应的回调（调用结束后调用）。
+// UnregisterProgress removes the callback of a progressToken (called once the call finished).
 func (p *SessionPool) UnregisterProgress(token string) {
 	p.progressMu.Lock()
 	delete(p.progressRoutes, token)
 	p.progressMu.Unlock()
 }
 
-// watchProcess 监听子进程退出，置 closed 标志。
-// 注意：不要在此处从 map 中删除，避免并发 Get 误判；失效由 Invalidate 显式处理。
+// watchProcess waits for the child process to exit and sets the closed flag.
+// Note: do not delete from the map here, a concurrent Get could misjudge; invalidation is explicit
+// through Invalidate.
 func (p *SessionPool) watchProcess(ps *pooledSession) {
 	if ps.transport == nil || ps.transport.Command == nil {
 		return
@@ -155,7 +159,7 @@ func (p *SessionPool) watchProcess(ps *pooledSession) {
 	p.mu.Unlock()
 }
 
-// Invalidate 主动关闭并移除指定连接对应的池内会话（配置变更或禁用时调用）
+// Invalidate closes and removes the pooled session of a connection (called on a config change or disable).
 func (p *SessionPool) Invalidate(connID string) {
 	p.mu.Lock()
 	ps, ok := p.sessions[connID]
@@ -171,7 +175,7 @@ func (p *SessionPool) Invalidate(connID string) {
 	}
 }
 
-// Close 关闭池内所有会话并清空（系统退出时调用）
+// Close closes every pooled session and empties the pool (called on system shutdown).
 func (p *SessionPool) Close() {
 	p.mu.Lock()
 	snapshot := make([]*pooledSession, 0, len(p.sessions))
@@ -188,7 +192,8 @@ func (p *SessionPool) Close() {
 	}
 }
 
-// fingerprint 计算连接配置指纹，用于判断 stdio 子进程是否需要重建
+// fingerprint computes a config fingerprint of the connection, used to decide whether the stdio child
+// process must be rebuilt.
 func fingerprint(conn *models.McpConnection) string {
 	raw, _ := json.Marshal(struct {
 		Command string     `json:"command"`

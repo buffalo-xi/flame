@@ -9,7 +9,8 @@ import (
 
 const testKey = "test-value-key-0123456789-0123456789-abcdef"
 
-// withConfig 在本测试期内换上指定配置，结束后还原（config.Cfg 是包级全局）。
+// withConfig swaps in the given configuration for the duration of one test and restores it afterwards (config.Cfg is a
+// package-level global).
 func withConfig(t *testing.T, valueKey, jwtKey string) {
 	t.Helper()
 	prev := config.Cfg
@@ -26,138 +27,140 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 	plain := "sk-live-abcdefghijklmnop"
 	sealed, err := Encrypt(plain)
 	if err != nil {
-		t.Fatalf("加密失败: %v", err)
+		t.Fatalf("encrypt failed: %v", err)
 	}
 	if !IsEncrypted(sealed) || !strings.HasPrefix(sealed, "enc:v1:") {
-		t.Fatalf("密文应带 enc:v1: 前缀，实际 %q", sealed)
+		t.Fatalf("the ciphertext should carry the enc:v1: prefix, got %q", sealed)
 	}
 	if strings.Contains(sealed, plain) {
-		t.Fatal("密文里不该出现明文")
+		t.Fatal("the plaintext must not appear inside the ciphertext")
 	}
 
 	back, err := Decrypt(sealed)
 	if err != nil {
-		t.Fatalf("解密失败: %v", err)
+		t.Fatalf("decrypt failed: %v", err)
 	}
 	if back != plain {
-		t.Fatalf("还原不一致: 期望 %q，实际 %q", plain, back)
+		t.Fatalf("round trip mismatch: want %q, got %q", plain, back)
 	}
 }
 
-// 同一明文两次加密应得到不同密文（nonce 随机），否则能从库里看出两行值相同。
+// Encrypting the same plaintext twice must give different ciphertexts (a random nonce), or the database would reveal that
+// two rows hold the same value.
 func TestEncryptIsRandomized(t *testing.T) {
 	withConfig(t, testKey, "")
 
 	a, _ := Encrypt("same-value")
 	b, _ := Encrypt("same-value")
 	if a == b {
-		t.Fatal("同一明文的两次加密结果相同，nonce 没有随机化")
+		t.Fatal("two encryptions of the same plaintext matched: the nonce is not randomised")
 	}
 	for _, s := range []string{a, b} {
 		if got, err := Decrypt(s); err != nil || got != "same-value" {
-			t.Fatalf("解密 %q 失败: %v / %q", s, err, got)
+			t.Fatalf("decrypt %q failed: %v / %q", s, err, got)
 		}
 	}
 }
 
-// 空串不加密：很多地方用 value == "" 表示「还没设置」。
+// An empty string is not encrypted: many places use an empty value to mean "not set yet".
 func TestEncryptEmptyStaysEmpty(t *testing.T) {
 	withConfig(t, testKey, "")
 
 	sealed, err := Encrypt("")
 	if err != nil || sealed != "" {
-		t.Fatalf("空串应原样返回，实际 %q err=%v", sealed, err)
+		t.Fatalf("an empty string should come back unchanged, got %q err=%v", sealed, err)
 	}
 	back, err := Decrypt("")
 	if err != nil || back != "" {
-		t.Fatalf("空串解密应原样返回，实际 %q err=%v", back, err)
+		t.Fatalf("decrypting an empty string should return it unchanged, got %q err=%v", back, err)
 	}
 }
 
-// 已加密的输入不能再加密一层：否则下次解密得到的是密文。
+// An already encrypted input must not be encrypted again: otherwise the next decryption yields ciphertext.
 func TestEncryptSkipsAlreadyEncrypted(t *testing.T) {
 	withConfig(t, testKey, "")
 
 	first, _ := Encrypt("v")
 	second, err := Encrypt(first)
 	if err != nil {
-		t.Fatalf("重复加密报错: %v", err)
+		t.Fatalf("re-encrypting errored: %v", err)
 	}
 	if second != first {
-		t.Fatal("已是密文的输入被再加密了一次")
+		t.Fatal("an already encrypted input was encrypted a second time")
 	}
 }
 
-// 加密功能上线前写入的明文没有前缀，必须原样返回而不是报错。
+// Plaintext written before encryption existed has no prefix and must be returned as is rather than erroring.
 func TestDecryptPlaintextPassthrough(t *testing.T) {
 	withConfig(t, testKey, "")
 
 	back, err := Decrypt("legacy-plain-secret")
 	if err != nil {
-		t.Fatalf("明文应原样返回，实际报错: %v", err)
+		t.Fatalf("plaintext should be returned as is, but errored: %v", err)
 	}
 	if back != "legacy-plain-secret" {
-		t.Fatalf("明文被改动: %q", back)
+		t.Fatalf("the plaintext was modified: %q", back)
 	}
 }
 
-// 换密钥后必须硬失败：静默返回空串会让「没配密钥也能跑」变成线上现实。
+// After a key change decryption must fail hard: silently returning an empty string would make "it runs without a
+// configured key" a production reality.
 func TestDecryptWithRotatedKeyFails(t *testing.T) {
 	withConfig(t, testKey, "")
 	sealed, _ := Encrypt("top-secret")
 
 	withConfig(t, "another-value-key-0123456789-0123456789-xyz", "")
 	if _, err := Decrypt(sealed); err == nil {
-		t.Fatal("换了密钥仍能解密成功，完整性校验失效")
+		t.Fatal("decryption still succeeded after the key changed: the integrity check is not working")
 	}
 }
 
-// 密文被改写应解密失败，而不是返回垃圾值。
+// A tampered ciphertext must fail to decrypt rather than return garbage.
 func TestDecryptTamperedFails(t *testing.T) {
 	withConfig(t, testKey, "")
 	sealed, _ := Encrypt("top-secret")
 
 	tampered := sealed[:len(sealed)-2] + "ZZ"
 	if _, err := Decrypt(tampered); err == nil {
-		t.Fatal("被改写的密文仍解密成功")
+		t.Fatal("a tampered ciphertext still decrypted successfully")
 	}
 }
 
-// 没配 security.value_key 时回退到 jwt.secret_key：存量部署不需要改配置。
+// Without security.value_key the key is derived from jwt.secret_key: existing deployments need no configuration change.
 func TestKeyFallsBackToJWTSecret(t *testing.T) {
 	withConfig(t, "", "jwt-secret-key-0123456789-0123456789")
 
 	sealed, err := Encrypt("v")
 	if err != nil {
-		t.Fatalf("回退派生失败: %v", err)
+		t.Fatalf("fallback derivation failed: %v", err)
 	}
 	if back, err := Decrypt(sealed); err != nil || back != "v" {
-		t.Fatalf("回退派生解密失败: %v / %q", err, back)
+		t.Fatalf("fallback-derived decryption failed: %v / %q", err, back)
 	}
 }
 
-// 配了 value_key 就以它为准：换 jwt.secret_key 不该让已加密的值解不开。
-// 这正是把两把密钥拆开的理由（轮换登录密钥不该牵连存量 secret）。
+// When value_key is configured it wins: changing jwt.secret_key must not make already encrypted values undecryptable.
+// This is exactly why the two keys were split (rotating the login key must not drag existing secrets along).
 func TestValueKeyTakesPrecedence(t *testing.T) {
 	withConfig(t, testKey, "jwt-secret-key-0123456789-0123456789")
 	sealed, err := Encrypt("v")
 	if err != nil {
-		t.Fatalf("加密失败: %v", err)
+		t.Fatalf("encrypt failed: %v", err)
 	}
 
 	withConfig(t, testKey, "rotated-jwt-key-0123456789-0123456789")
 	if back, err := Decrypt(sealed); err != nil || back != "v" {
-		t.Fatalf("换 jwt.secret_key 后解密失败（说明 value_key 没生效）: %v / %q", err, back)
+		t.Fatalf("decryption failed after rotating jwt.secret_key (value_key did not take effect): %v / %q", err, back)
 	}
 }
 
-// 配置未加载时应报错，而不是 panic。
+// An unloaded configuration must error rather than panic.
 func TestNoConfigFails(t *testing.T) {
 	prev := config.Cfg
 	config.Cfg = nil
 	t.Cleanup(func() { config.Cfg = prev })
 
 	if _, err := Encrypt("v"); err == nil {
-		t.Fatal("配置为 nil 时加密应报错")
+		t.Fatal("encrypting with a nil configuration should error")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 
+	"flame/nexus/service/agent/core"
 	"flame/nexus/service/agent/tools"
 	"flame/nexus/shared/auth"
 	"flame/nexus/shared/models"
@@ -67,9 +68,11 @@ func agentToMap(instance *models.Agent) gin.H {
 		// The two agent-level switches (same-named columns, both carried by the agents table).
 		"tools_unrestricted": instance.ToolsUnrestricted,
 		"skill_discovery":    instance.SkillDiscovery,
-		"created_by":         instance.CreatedBy,
-		"updated_by":         instance.UpdatedBy,
-		"updated_by_name":    instance.UpdatedByName,
+		// Default reply language (agents.default_language; empty = not configured, so the caller's tag wins).
+		"default_language": instance.DefaultLanguage,
+		"created_by":       instance.CreatedBy,
+		"updated_by":       instance.UpdatedBy,
+		"updated_by_name":  instance.UpdatedByName,
 		// The two criteria are orthogonal and must not stand in for each other (see shared/models/protected.go):
 		// protected     = cannot be deleted or renamed (the preinstalled list, currently main only);
 		// is_supervisor = the super-power identity (all built-in tools by default, reads the draft on every entry point, more than one allowed).
@@ -169,6 +172,9 @@ type agentRequest struct {
 	// On update an unsent switch keeps the stored value (UpdateAgent is a full-column UPDATE, see the fallback there).
 	ToolsUnrestricted *bool `json:"tools_unrestricted"`
 	SkillDiscovery    *bool `json:"skill_discovery"`
+	// DefaultLanguage is the agent's default reply language (agents.default_language, a BCP-47 tag). A pointer for
+	// the same reason as the switches: "not sent" keeps the stored value, an explicit empty string clears it.
+	DefaultLanguage *string `json:"default_language"`
 	// IsSupervisor is the super-power flag (agents.is_supervisor). The admin API is the human management
 	// surface and one of the authoritative entry points for it (the other is update_agent, called by the
 	// supervisor itself). Updates go through the single-column SetSupervisor, never through UpdateAgent.
@@ -203,7 +209,31 @@ func (req *agentRequest) toModel() models.Agent {
 	if req.IsSupervisor != nil {
 		m.IsSupervisor = *req.IsSupervisor
 	}
+	if req.DefaultLanguage != nil {
+		m.DefaultLanguage = *req.DefaultLanguage
+	}
 	return m
+}
+
+// normalizeDefaultLanguage trims and validates agents.default_language (an empty value clears it).
+//
+// A malformed tag is rejected instead of stored: the runtime reads an unknown value as "not configured", so accepting it
+// would look like the setting had been applied and done nothing.
+func (req *agentRequest) normalizeDefaultLanguage() error {
+	if req.DefaultLanguage == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(*req.DefaultLanguage)
+	if raw == "" {
+		req.DefaultLanguage = &raw
+		return nil
+	}
+	tag, _ := core.NormalizeOutputLanguage(raw)
+	if tag == "" {
+		return fmt.Errorf("default_language %q is not a valid BCP-47 language tag (e.g. zh-CN, en, ja)", raw)
+	}
+	req.DefaultLanguage = &tag
+	return nil
 }
 
 // checkJSONPayload reports the first JSON text field that is not valid JSON.
@@ -246,6 +276,10 @@ func CreateAgent(c *gin.Context) {
 	// storage is deleted or written.
 	if field, ok := req.checkJSONPayload(); !ok {
 		xhttp.ErrCode(c, "common.invalid_params", gin.H{"field": field}, field+" must be valid JSON", "")
+		return
+	}
+	if lerr := req.normalizeDefaultLanguage(); lerr != nil {
+		xhttp.ErrCode(c, "common.invalid_params", nil, lerr.Error(), "")
 		return
 	}
 
@@ -608,6 +642,10 @@ func UpdateAgent(c *gin.Context) {
 		xhttp.ErrCode(c, "common.invalid_params", gin.H{"field": field}, field+" must be valid JSON", "")
 		return
 	}
+	if lerr := req.normalizeDefaultLanguage(); lerr != nil {
+		xhttp.ErrCode(c, "common.invalid_params", nil, lerr.Error(), "")
+		return
+	}
 
 	// Only two states are accepted; absent keeps the stored one (a full-column UPDATE must not zero the status).
 	if req.Status == 0 && old != nil {
@@ -627,6 +665,11 @@ func UpdateAgent(c *gin.Context) {
 		}
 		if req.SkillDiscovery == nil {
 			agent.SkillDiscovery = old.SkillDiscovery
+		}
+		// The same for the default reply language: a full-column UPDATE would otherwise clear a value the request
+		// never mentioned (one rename would wipe it).
+		if req.DefaultLanguage == nil {
+			agent.DefaultLanguage = old.DefaultLanguage
 		}
 	}
 

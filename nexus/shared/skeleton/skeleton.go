@@ -1,36 +1,38 @@
-// Package skeleton 生成新建 agent / skill 时写入定义域入口文件的默认正文。
+// Package skeleton generates the default body of the definition-domain entry file when a new agent / skill is created.
 //
-// 为什么单独一层：
-//   - 骨架是**内容**，不是界面文案。它只在「新建且没写正文」时生成一次，
-//     之后就变成用户自己的 AGENT.md / SKILL.md，各语言各自演进 ——
-//     因此刻意不做「读取时按语言翻译」，否则版本快照、资产包、全局变量校验的语义都会漂。
-//   - 语言只是生成参数：系统仍是一套（租户 / 版本 / 授权都不按语言分叉）。
-//   - 新增语言只需在下面的注册表里加一项，调用方（admin handlers）不用改。
+// Why a separate layer:
+//   - a skeleton is **content**, not UI copy. It is generated once, at "create and no body written", and from then on it is
+//     the user's own AGENT.md / SKILL.md, evolving separately per language — so there is deliberately no "translate at read
+//     time", which would make version snapshots, asset packs and global variable validation drift.
+//   - the language is merely a generation parameter: the system stays one (tenants / versions / grants never fork by
+//     language).
+//   - adding a language only needs one more entry in the registry below; the callers (admin handlers) do not change.
 //
-// 骨架主语言是英文（Default = LangEN），中文是第二语言。
+// The primary skeleton language is English (Default = LangEN); Chinese is the second language.
 package skeleton
 
 import "strings"
 
-// Lang 是骨架语言。只认主语言，不认地区（zh-TW / zh-Hans 都归 LangZH）。
+// Lang is a skeleton language. Only the primary language is recognised, not the region (zh-TW / zh-Hans both map to
+// LangZH).
 type Lang string
 
 const (
 	LangEN Lang = "en"
 	LangZH Lang = "zh-CN"
 
-	// Default 未指定或暂不支持的语言都落到它。
+	// Default is what an unspecified or not-yet-supported language falls back to.
 	Default = LangEN
 )
 
-// Normalize 把任意语言标签归一到注册表里的语言。
+// Normalize maps any language tag onto a language in the registry.
 //
-//	""、"fr"、"ja"          → Default（英文）
-//	"en"、"en-US"、"EN_us"  → LangEN
-//	"zh"、"zh-CN"、"zh_CN"、"zh-Hans" → LangZH
+//	"", "fr", "ja"          -> Default (English)
+//	"en", "en-US", "EN_us"  -> LangEN
+//	"zh", "zh-CN", "zh_CN", "zh-Hans" -> LangZH
 //
-// 不认识的语言回落英文而不是报错：新建实体拿到一份可读的英文骨架，
-// 比拿到空文件或 500 更接近用户预期。
+// An unknown language falls back to English rather than raising an error: a new entity getting a readable English skeleton
+// is closer to what a user expects than an empty file or a 500.
 func Normalize(raw string) Lang {
 	tag := strings.ToLower(strings.TrimSpace(raw))
 	tag = strings.ReplaceAll(tag, "_", "-")
@@ -46,7 +48,7 @@ func Normalize(raw string) Lang {
 	return Default
 }
 
-// AgentMD 新建 agent 的入口文件正文。
+// AgentMD is the entry file body of a new agent.
 func AgentMD(lang Lang, name, desc string) string {
 	if fn, ok := agentSkeletons[lang]; ok {
 		return fn(name, desc)
@@ -54,7 +56,7 @@ func AgentMD(lang Lang, name, desc string) string {
 	return agentSkeletons[Default](name, desc)
 }
 
-// SkillMD 新建 skill 的入口文件正文。
+// SkillMD is the entry file body of a new skill.
 func SkillMD(lang Lang, name, desc string) string {
 	if fn, ok := skillSkeletons[lang]; ok {
 		return fn(name, desc)
@@ -62,7 +64,7 @@ func SkillMD(lang Lang, name, desc string) string {
 	return skillSkeletons[Default](name, desc)
 }
 
-// 注册表：新增语言在这里各加一项即可（Lang 常量 + 两个函数）。
+// The registry: adding a language means adding one entry here (the Lang constant plus two functions).
 var (
 	agentSkeletons = map[Lang]func(name, desc string) string{
 		LangEN: agentMDEn,
@@ -84,6 +86,8 @@ func agentMDEn(name, desc string) string {
 		"## How it works\n\n(Describe its workflow, constraints and output requirements.)\n"
 }
 
+// agentMDZh is generated content for a Chinese-language tenant and therefore stays Chinese (the body rules cover the
+// system definition files, not tenant content).
 func agentMDZh(name, desc string) string {
 	return title(name, desc) +
 		"## 角色\n\n（描述这个智能体的职责与能力边界）\n\n" +
@@ -96,6 +100,7 @@ func skillMDEn(name, desc string) string {
 		"## What it contains\n\n(Instructions, steps or rules written for the model.)\n"
 }
 
+// skillMDZh is generated content for a Chinese-language tenant and therefore stays Chinese.
 func skillMDZh(name, desc string) string {
 	return title(name, desc) +
 		"## 何时使用\n\n（描述这个技能适用于什么场景）\n\n" +

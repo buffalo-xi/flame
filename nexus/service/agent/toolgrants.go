@@ -196,31 +196,35 @@ func (m *toolGrantManager) GrantAgentTool(_ context.Context, agentName, agentID,
 	return kind, grantReason(kind, declaring, oldKind, auto), nil
 }
 
-// grantReason explains "what was actually written and why" - it is returned to the model verbatim, so the copy stays in the user's language.
+// grantReason explains "what was actually written and why" - the model relays it verbatim.
+//
+// English, because this string is produced deep inside a tool call where nothing carries the caller's language (the run has a
+// reply-language rule but no locale field). Same rule as skeleton.Default: with no language input, fall back to the product's
+// primary language. The reply-language rule then has the model restate it in whatever language the user writes.
 func grantReason(kind, declaring, oldKind string, auto bool) string {
 	var b strings.Builder
 	switch kind {
 	case models.GrantKindAllow:
 		if auto {
-			fmt.Fprintf(&b, "已按 allow 写入：目标已注入的 skill %q 声明了该工具依赖，将按需注入；"+
-				"若解绑该 skill，本授权会失效（届时可用 grant_agent_tool 重写以升级为 required）", declaring)
+			fmt.Fprintf(&b, "Written as allow: injected skill %q declares this tool dependency, so it is injected on demand; "+
+				"unbinding that skill stops it applying (re-run grant_agent_tool on this ref to upgrade it to required)", declaring)
 		} else {
-			fmt.Fprintf(&b, "已按 allow 写入：skill %q 声明了该工具依赖，只有在 use_skill 激活它之后才注入", declaring)
+			fmt.Fprintf(&b, "Written as allow: skill %q declares this tool dependency; it is injected only after use_skill activates it", declaring)
 		}
 	case models.GrantKindRequired:
 		if declaring != "" {
-			fmt.Fprintf(&b, "已按 required 写入：恒注入常驻（未降级为 allow，尽管 skill %q 声明了它）", declaring)
+			fmt.Fprintf(&b, "Written as required: always injected (not downgraded to allow, although skill %q declares it)", declaring)
 		} else {
-			b.WriteString("已按 required 写入：恒注入常驻")
+			b.WriteString("Written as required: always injected")
 		}
 		if auto {
-			b.WriteString("（当前没有已注入的 skill 声明该依赖，写 allow 不会生效）")
+			b.WriteString(" (no injected skill declares this dependency, so allow would never take effect)")
 		}
 	case models.GrantKindDeny:
-		b.WriteString("已写入 deny：该 ref 不会注入，即使某个技能声明了它")
+		b.WriteString("Written as deny: this ref is never injected, even if a skill declares it")
 	}
 	if oldKind != "" && oldKind != kind {
-		fmt.Fprintf(&b, "；该 ref 原有的一行是 %s，已被覆盖（每个 ref 只保留一行）", oldKind)
+		fmt.Fprintf(&b, "; the existing row for this ref was %s and has been overwritten (one row per ref)", oldKind)
 	}
 	return b.String()
 }
@@ -374,18 +378,18 @@ func grantViews(grants []models.AgentToolGrant,
 		case g.GrantKind == models.GrantKindDeny:
 			// deny only subtracts from the candidates: it must not be marked pending / spinning, or "explicitly forbidden" would read as
 			// "waiting to take effect".
-			v.Note = "显式拒绝：即使某个技能声明该依赖也不会注入"
+			v.Note = "Explicit deny: not injected even if a skill declares this dependency"
 		case declaring != nil:
 			if name := declaring(expand(g.Ref)); name != "" {
 				v.Pending = true
 				v.ViaSkill = name
-				v.Note = "已绑定/私有技能声明了它，但本轮尚未激活：use_skill " + name + " 之后生效"
+				v.Note = "Declared by a bound or private skill, but not activated yet in this run: it applies after use_skill " + name
 				break
 			}
-			v.Note = "allow 未生效：没有任何已绑定或私有的 skill 声明该依赖；" +
-				"可用 grant_agent_tool 重写该 ref（会自动升级为 required）"
+			v.Note = "allow has no effect: no bound or private skill declares this dependency; " +
+				"re-run grant_agent_tool on this ref to upgrade it to required"
 		default:
-			v.Note = "allow 未生效：没有任何已绑定或私有的 skill 声明该依赖"
+			v.Note = "allow has no effect: no bound or private skill declares this dependency"
 		}
 		out = append(out, v)
 	}

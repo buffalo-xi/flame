@@ -1,38 +1,42 @@
-// Package protocol 定义自研 RPC 的协议版本与信封结构。
-// server / client 均引用本包，避免版本常量与结构在两处漂移。
+// Package protocol defines the protocol version and envelope structures of our own RPC.
+// Both server and client import this package so the version constant and the structures cannot drift.
 package protocol
 
-// CurrentProtocolVersion 当前协议主版本号。
-// 仅在不兼容变更（删字段/改响应结构/改错误语义）时 +1。
+// CurrentProtocolVersion is the current protocol major version.
+// It only increments on an incompatible change (dropping a field, changing a response structure or the
+// error semantics).
 //
-// 「新增可选字段」不升版：尚未实现的一方会忽略未知字段，行为退化为「不订阅进度」，
-// 调用仍然成功 —— 属兼容变更。params._meta.progressToken 与通知里的
-// progressToken / progress / total 都是这样进来的，所以版本仍是 1。
+// Adding an optional field does not bump the version: the side that does not implement it yet ignores
+// the unknown field, behaviour degrades to "no progress subscription", and the call still succeeds —
+// that is a compatible change. params._meta.progressToken and progressToken / progress / total in the
+// notifications all arrived this way, which is why the version is still 1.
 const CurrentProtocolVersion = 1
 
-// MinSupportedVersion 向后兼容的最低主版本号。
-// 小于该版本的客户端将被明确拒绝，而非静默降级。
+// MinSupportedVersion is the oldest major version supported for backward compatibility.
+// Clients below it are rejected explicitly rather than silently degraded.
 const MinSupportedVersion = 1
 
-// ErrCodeInvalidParams JSON-RPC 2.0 标准错误码（参数错误），与 MCP 版本不匹配时复用。
+// ErrCodeInvalidParams is the JSON-RPC 2.0 standard error code (invalid params), reused when the
+// protocol version does not match.
 const ErrCodeInvalidParams = -32602
 
-// Request 客户端发来的 JSON-RPC 请求信封。
+// Request is the JSON-RPC request envelope sent by the client.
 type Request struct {
 	Jsonrpc string      `json:"jsonrpc"`
-	Version int         `json:"version,omitempty"` // 协议主版本号；缺省(0)按 MinSupportedVersion 处理
+	Version int         `json:"version,omitempty"` // protocol major version; 0 (absent) is treated as MinSupportedVersion
 	Method  string      `json:"method"`
 	Params  interface{} `json:"params"`
 	ID      interface{} `json:"id"`
 }
 
-// VersionError 协议版本不支持时的错误 data 结构（对齐 MCP 的 supported 反馈）。
+// VersionError is the error data structure returned when the protocol version is unsupported
+// (aligned with the supported feedback of MCP).
 type VersionError struct {
 	Requested int   `json:"requested"`
 	Supported []int `json:"supported"`
 }
 
-// NormalizeVersion 归一版本号：未传(0)按 MinSupportedVersion 处理。
+// NormalizeVersion normalizes a version number: 0 (absent) is treated as MinSupportedVersion.
 func NormalizeVersion(v int) int {
 	if v == 0 {
 		return MinSupportedVersion
@@ -40,7 +44,7 @@ func NormalizeVersion(v int) int {
 	return v
 }
 
-// IsVersionSupported 判断版本是否在服务端支持范围内。
+// IsVersionSupported reports whether the version is within the range the server supports.
 func IsVersionSupported(v int) bool {
 	return v >= MinSupportedVersion && v <= CurrentProtocolVersion
 }

@@ -55,7 +55,9 @@ func TestQuotaExceededErrorKeepsCause(t *testing.T) {
 // stubAgents lets the cross-domain write gate (checkWrite) read the target agent's status; delete_file only uses Get.
 type stubAgents struct{ status int }
 
-func (s stubAgents) Create(context.Context, string, string, bool) (string, error) { return "", nil }
+func (s stubAgents) Create(context.Context, string, string, string, bool) (string, error) {
+	return "", nil
+}
 
 func (s stubAgents) List(context.Context) ([]AgentInfo, error) { return nil, nil }
 
@@ -68,6 +70,8 @@ func (s stubAgents) Get(context.Context, string) (*AgentInfo, error) {
 func (s stubAgents) Update(context.Context, string, string, string) (string, error) { return "", nil }
 
 func (s stubAgents) SetUnrestricted(context.Context, string, bool) error { return nil }
+
+func (s stubAgents) SetOutputLanguage(context.Context, string, string) error { return nil }
 
 func (s stubAgents) SetSupervisor(context.Context, string, bool) error { return nil }
 

@@ -1,21 +1,24 @@
-// Package plugininfo 磁盘插件清单的只读视图（进程级单例）。
+// Package plugininfo is the read-only view of the on-disk plugin manifests (a process-level singleton).
 //
-// 为什么要有这一层：插件清单的真实来源是 service/plugin（Registry 扫描磁盘），
-// 但平台管理台（nexus/platform）的边界规则禁止 import nexus/service/**。
-// 这里只放「名字 + 展示名 + 描述 + 版本」这种最小结构，由 service/plugin 在启动时注入；
-// 平台侧据此列出「可以给租户开通哪些插件」，不碰实现细节、不碰 Python。
+// Why this layer exists: the real source of the plugin manifests is service/plugin (the Registry scans the disk), but the
+// platform console (nexus/platform) may not import nexus/service/** under the boundary rules.
+// Only the minimal shape "name + display name + description + version" lives here, injected by service/plugin at startup;
+// the platform side uses it to list "which plugins can be opened for a tenant", without touching implementation details
+// or Python.
 package plugininfo
 
 import "sync/atomic"
 
-// Implementation 插件的一种实现（tavily / bing_rss / searxng ...）。
-// 平台页面只需展示「有哪几种」，配置项与 key 属于租户侧，不进这里。
+// Implementation is one implementation of a plugin (tavily / bing_rss / searxng ...).
+// The platform page only needs to show "which ones exist" — the configuration keys belong to the tenant side and do not
+// come here.
 type Implementation struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
 }
 
-// Tool 一个已发现的插件工具（与 tool.py 的 manifest 一一对应，不含实现配置与 key）。
+// Tool is one discovered plugin tool (one-to-one with the manifest in tool.py; it carries no implementation
+// configuration and no keys).
 type Tool struct {
 	Name            string           `json:"name"`
 	DisplayName     string           `json:"display_name"`
@@ -25,20 +28,20 @@ type Tool struct {
 	Implementations []Implementation `json:"implementations"`
 }
 
-// Source 插件清单来源（生产是 service/plugin 的适配器；单测可注入假实现）。
+// Source is the plugin manifest source (production uses service/plugin's adapter; a unit test may inject a fake).
 type Source interface {
 	Tools() []Tool
 }
 
-// box 包一层：atomic.Value 要求存入的具体类型始终一致。
+// box wraps the value: atomic.Value requires every stored value to have the same concrete type.
 type box struct{ s Source }
 
 var defaultSource atomic.Value
 
-// SetSource 注入清单来源（服务启动时调用；传 nil 表示清空）。
+// SetSource injects the manifest source (called at service startup; nil clears it).
 func SetSource(s Source) { defaultSource.Store(box{s: s}) }
 
-// Current 取清单来源；未注入时为 nil。
+// Current returns the manifest source; nil when nothing was injected.
 func Current() Source {
 	if v, ok := defaultSource.Load().(box); ok {
 		return v.s
@@ -46,7 +49,8 @@ func Current() Source {
 	return nil
 }
 
-// Tools 当前已发现的插件工具（未注入时返回空切片，不是 nil，前端可直接遍历）。
+// Tools returns the currently discovered plugin tools (an empty slice when nothing was injected — not nil, so the
+// frontend can iterate it directly).
 func Tools() []Tool {
 	s := Current()
 	if s == nil {
@@ -55,7 +59,7 @@ func Tools() []Tool {
 	return s.Tools()
 }
 
-// Find 按名字查一个插件（大小写敏感，与工具名口径一致）。
+// Find looks one plugin up by name (case sensitive, the same rule as tool names).
 func Find(name string) (Tool, bool) {
 	for _, t := range Tools() {
 		if t.Name == name {

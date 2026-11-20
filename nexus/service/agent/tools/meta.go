@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 
+	"flame/nexus/service/agent/core"
 	"flame/nexus/shared/db"
 	"flame/nexus/shared/models"
 	"flame/nexus/shared/versioning"
@@ -150,6 +151,9 @@ func (t *createAgentTool) Meta() ToolMeta {
 				"name":        map[string]any{"type": "string", "description": "Unique name, letters/digits/hyphens only — it is also the definition-domain directory name"},
 				"description": map[string]any{"type": "string", "description": "Agent description"},
 				"agent_md":    map[string]any{"type": "string", "description": "Full text of AGENT.md"},
+				"default_language": map[string]any{"type": "string", "description": "Default reply language as a BCP-47 tag (e.g. zh-CN, en, ja); omit or empty for \"follow the caller\" (optional). " +
+					"A caller-pinned _meta.language still overrides it for a single call, and a workflow started by this agent can read it as the builtin `language`. " +
+					"Editable later with update_agent(default_language=…)"},
 				"is_supervisor": map[string]any{"type": "boolean", "description": "Whether to create it directly as a supervisor (optional, default false). " +
 					"When true the starter kit is materialized as well: the core tool group (including builtin:agent-admin), unrestricted tools, discovery of unbound skills, " +
 					"and the agent-authoring / skill-authoring / custom-tool-authoring / flow-authoring skills bound"},
@@ -178,20 +182,30 @@ func (t *createAgentTool) Execute(ctx context.Context, c *Context, args map[stri
 	agentMd := argString(args, "agent_md")
 	description := argString(args, "description")
 
+	// Validate the language before anything is written: a malformed tag must not leave a half-created agent behind
+	// (AGENT.md on disk, no row).
+	rawLanguage := strings.TrimSpace(argString(args, "default_language"))
+	language, _ := core.NormalizeOutputLanguage(rawLanguage)
+	if rawLanguage != "" && language == "" {
+		return nil, fmt.Errorf("default_language %q is not a valid BCP-47 language tag (e.g. zh-CN, en, ja)", rawLanguage)
+	}
+
 	// Write AGENT.md (storage creates the directory automatically)
 	if err := c.Storage.WriteFile(ctx, path.Join(AgentsKey(c.Schema, name), agentEntryFile), []byte(agentMd)); err != nil {
 		return nil, err
 	}
-	// Register the instance (tools are decided by the "tool configuration" grant system; config is not written here)
-	id, err := c.Agents.Create(ctx, name, description, argBool(args, "is_supervisor"))
+	// Register the instance (tools are decided by the "tool configuration" grant system; config is not written here).
+	// The default reply language goes into the same INSERT, so creation is all-or-nothing.
+	id, err := c.Agents.Create(ctx, name, description, language, argBool(args, "is_supervisor"))
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"id":            id,
-		"name":          name,
-		"workspace":     AgentsKey(c.Schema, name),
-		"is_supervisor": argBool(args, "is_supervisor"),
+		"id":               id,
+		"name":             name,
+		"workspace":        AgentsKey(c.Schema, name),
+		"is_supervisor":    argBool(args, "is_supervisor"),
+		"default_language": language, // "" = follow the caller (the product default then applies)
 	}, nil
 }
 
@@ -202,7 +216,7 @@ func (t *updateAgentTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "update_agent",
 		Category: CategoryAgentAdmin,
-		Description: "Update an agent: rename it, change its description, the \"discover unbound skills\" switch or the \"unrestricted tools\" switch (a rename migrates its definition-domain directory too). " +
+		Description: "Update an agent: rename it, change its description, the \"discover unbound skills\" switch, the \"unrestricted tools\" switch or its default reply language (a rename migrates its definition-domain directory too). " +
 			"You may update yourself (the supervisor is the admin), but **you cannot rename yourself** (the file operations later in this run would break).",
 		Parameters: map[string]any{
 			"type": "object",
@@ -213,6 +227,8 @@ func (t *updateAgentTool) Meta() ToolMeta {
 				"discovery":     map[string]any{"type": "boolean", "description": "Whether this agent may discover unbound shared skills (optional; omit to leave unchanged)"},
 				"unrestricted":  map[string]any{"type": "boolean", "description": "Whether tools are unrestricted: when on, candidate tools are no longer filtered by allow (optional; omit to leave unchanged)"},
 				"is_supervisor": map[string]any{"type": "boolean", "description": "Whether to grant supervisor power (same level as the supervisor: admin tools + cross-domain writes). Only a supervisor may do this; demoting the tenant's last supervisor is refused (optional; omit to leave unchanged)"},
+				"default_language": map[string]any{"type": "string", "description": "Default reply language as a BCP-47 tag (e.g. zh-CN, en, ja); an empty string clears it (optional; omit to leave unchanged). " +
+					"A caller-pinned _meta.language still overrides it for that single call, and a workflow started by this agent can read it as the builtin `language`"},
 			},
 			"required": []any{"name"},
 		},
@@ -242,7 +258,8 @@ func (t *updateAgentTool) Execute(ctx context.Context, c *Context, args map[stri
 	_, dOK := args["discovery"]
 	_, uOK := args["unrestricted"]
 	_, sOK := args["is_supervisor"]
-	if dOK || uOK || sOK {
+	_, lOK := args["default_language"]
+	if dOK || uOK || sOK || lOK {
 		info, gerr := c.Agents.Get(ctx, finalName)
 		if gerr != nil {
 			return nil, gerr
@@ -282,6 +299,19 @@ func (t *updateAgentTool) Execute(ctx context.Context, c *Context, args map[stri
 				c.MarkToolsDirty()
 			}
 		}
+		// Default reply language: agents.default_language, so it is a single-column write rather than the full-row Update
+		// (which would wipe the other definition columns). An empty value clears it; a malformed tag is an error instead of
+		// a silently ignored value, because the runtime would treat it as "not configured" and look like it had no effect.
+		if lOK {
+			raw := argString(args, "default_language")
+			tag, _ := core.NormalizeOutputLanguage(raw)
+			if raw != "" && tag == "" {
+				return nil, fmt.Errorf("default_language %q is not a valid BCP-47 language tag (e.g. zh-CN, en, ja)", raw)
+			}
+			if lerr := c.Agents.SetOutputLanguage(ctx, info.ID, tag); lerr != nil {
+				return nil, lerr
+			}
+		}
 	}
 	// The id is returned as well: the frontend uses it to locate this agent on the agents page (after a rename the old name from
 	// the call arguments no longer finds it).
@@ -291,7 +321,13 @@ func (t *updateAgentTool) Execute(ctx context.Context, c *Context, args map[stri
 	if info, gerr := c.Agents.Get(ctx, finalName); gerr == nil && info != nil {
 		agentID = info.ID
 	}
-	return map[string]any{"id": agentID, "name": finalName, "updated": true}, nil
+	out := map[string]any{"id": agentID, "name": finalName, "updated": true}
+	if lOK {
+		// Echo the normalized value (empty = cleared) rather than what was sent, so a caller that wrote "zh-cn" sees the
+		// tag that was actually stored.
+		out["default_language"], _ = core.NormalizeOutputLanguage(argString(args, "default_language"))
+	}
+	return out, nil
 }
 
 // deleteAgentTool deletes an agent.
@@ -818,7 +854,7 @@ func (t *readAgentTool) Meta() ToolMeta {
 		Category: CategoryAgent,
 		Description: "Read an agent's AGENT.md and return the names of the skills currently bound to it (skills). " +
 			"When called by a supervisor it also returns that agent's tool grants (tool_grants: required always applies / allow is pending until use_skill activates it / deny is an explicit refusal), the \"unrestricted tools\" switch (unrestricted), " +
-			"the \"discover unbound skills\" switch (discovery), " +
+			"the \"discover unbound skills\" switch (discovery), its default reply language (default_language, empty when not configured), " +
 			"and its call grants (can_call = whom it may call, called_by = who may call it).",
 		Parameters: map[string]any{
 			"type": "object",
@@ -861,6 +897,9 @@ func (t *readAgentTool) Execute(ctx context.Context, c *Context, args map[string
 				out["discovery"] = info.SkillDiscovery
 				out["unrestricted"] = info.ToolsUnrestricted
 				out["is_supervisor"] = info.IsSupervisor
+				// "" means not configured: the agent then follows the caller's language and falls back to the product
+				// default, so the empty value is worth showing rather than omitting the key.
+				out["default_language"] = info.OutputLanguage
 			}
 			// Tool grants are given from a supervisor's viewpoint only: they say "who may use which tools", and a non-supervisor
 			// has no right to peek at another agent's configuration
@@ -1002,7 +1041,7 @@ func (t *callAgentTool) Execute(ctx context.Context, c *Context, args map[string
 		return nil, errors.New("agent caller not available")
 	}
 	subArgs, _ := args["arguments"].(map[string]any)
-	out, err := c.Caller.Call(ctx, CallRequest{
+	req := CallRequest{
 		CallerID:   c.AgentID,
 		CallerName: c.AgentName,
 		CalleeName: name,
@@ -1015,7 +1054,13 @@ func (t *callAgentTool) Execute(ctx context.Context, c *Context, args map[string
 		// With the switch off the child agent reads the released version, and a missing version is an explicit error - it never
 		// falls back to the draft silently.
 		DefinitionMode: c.ChildMode(),
-	})
+	}
+	// Only a **caller-pinned** language travels. Passing the resolved default down would turn it into a pin for the callee, and a
+	// Chinese conversation would then hand "en" to every child agent - the callee is free to resolve its own default.
+	if c.OutputLanguagePinned {
+		req.OutputLanguage = c.OutputLanguage
+	}
+	out, err := c.Caller.Call(ctx, req)
 	if err != nil {
 		return nil, err
 	}

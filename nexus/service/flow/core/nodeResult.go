@@ -21,7 +21,7 @@ const (
 	StatusRunning   NodeStatus = "running"
 )
 
-// ErrorAction 错误处理动作
+// ErrorAction is the error handling action.
 type ErrorAction string
 
 const (
@@ -30,14 +30,14 @@ const (
 	ErrorActionHandler ErrorAction = "handler"
 )
 
-// 错误编码常量
+// Error codes.
 const (
 	ErrCodeTimeout    = "timeout"
-	ErrCodeBusy       = "busy"   // 沙箱并发额度耗尽（sandboxd 取槽超时拒绝，脚本未执行）
-	ErrCodeCancel     = "cancel" // 用户主动取消
+	ErrCodeBusy       = "busy"   // sandbox concurrency quota exhausted (sandboxd rejected the slot, script never ran)
+	ErrCodeCancel     = "cancel" // cancelled by the user
 	ErrCodeConfig     = "config"
 	ErrCodeScript     = "script"
-	ErrCodeCapability = "capability" // 平台未给本租户开通这类能力（沙箱脚本等）
+	ErrCodeCapability = "capability" // the platform has not enabled this capability for the tenant (sandbox scripts etc.)
 	ErrCodeVar        = "var"
 	ErrCodeConnection = "connection"
 	ErrCodeAuth       = "auth"
@@ -46,7 +46,7 @@ const (
 	ErrCodeOther      = "other"
 )
 
-// AllErrorCodes 返回所有全局错误编码常量
+// AllErrorCodes returns every global error code constant.
 func AllErrorCodes() []string {
 	return []string{
 		ErrCodeTimeout,
@@ -66,7 +66,7 @@ func AllErrorCodes() []string {
 
 type NodeResult struct {
 	ID          string         `json:"id"`
-	NodeID      string         `json:"node_id"` //就是flow.node的id
+	NodeID      string         `json:"node_id"` // the id of the flow node
 	ProcessID   string         `json:"process_id"`
 	Ctx         *ExecContext   `json:"-"`
 	Status      NodeStatus     `json:"status"`
@@ -82,11 +82,11 @@ type NodeResult struct {
 	ErrStack    string         `json:"err_stack"`
 	RetryCount  int            `json:"retry_count"`
 	ErrorAction ErrorAction    `json:"error_action"`
-	PostError   string         `json:"post_error"` // 后处理脚本执行错误（不影响节点主状态）
+	PostError   string         `json:"post_error"` // post-processing script error (does not affect the node status)
 
 	NodeType NodeType `json:"node_type"`
 
-	//各种节点的结果，存储节点类型数据结果
+	// Per-node-type results, holding the data of the corresponding node type.
 	LoopResult     *LoopResult                 `json:"loop_result"`
 	ProcessResult  *ProcessResult              `json:"process_result"`
 	FunctionResult *FunctionResult             `json:"function_result"`
@@ -95,13 +95,14 @@ type NodeResult struct {
 	WaitResult     *WaitResult                 `json:"wait_result"`
 	BranchResult   *BranchResult               `json:"branch_result"`
 	HttpResult     *HttpResult                 `json:"http_result"`
-	OutputBindings map[string][]*OutputBinding `json:"-"` // 输出变量的流式绑定配置
+	OutputBindings map[string][]*OutputBinding `json:"-"` // streaming bindings of the output variables
 	mu             sync.RWMutex
-	// warned 记录已经提示过的告警 key，供 WarnOnce 去重（不落库、不对外）。
+	// warned holds the warning keys already reported, used by WarnOnce for de-duplication
+	// (never persisted, never exposed).
 	warned map[string]struct{}
 }
 
-// NewNodeResult 创建基础 NodeResult，公共字段由外部统一设置
+// NewNodeResult creates a bare NodeResult; the common fields are set by the caller.
 func NewNodeResult(node *Node, processID string, ctx *ExecContext) *NodeResult {
 	return &NodeResult{
 		NodeID:     node.ID,
@@ -115,14 +116,14 @@ func NewNodeResult(node *Node, processID string, ctx *ExecContext) *NodeResult {
 	}
 }
 
-// Finish 结束执行，设置最终状态、耗时，并自动记录日志
-// 先到先得：脚本通过 wf_set_error 设过的 ErrCode/ErrMsg 不会被覆盖
+// Finish ends the execution: sets the final status and duration and logs it.
+// First writer wins: an ErrCode/ErrMsg already set by a script through wf_set_error is not overwritten.
 func (nr *NodeResult) Finish(status NodeStatus, errCode string, errMsg string) {
 	nr.Status = status
 	nr.EndTime = time.Now()
 	nr.DurationMs = nr.EndTime.Sub(nr.StartTime).Milliseconds()
 
-	// 脚本通过 wf_set_error 设过的不覆盖（先到先得）
+	// Values set by a script through wf_set_error are kept (first writer wins).
 	if nr.ErrCode == "" {
 		if status != StatusSuccess && strings.TrimSpace(errCode) == "" {
 			errCode = ErrCodeOther
@@ -134,18 +135,18 @@ func (nr *NodeResult) Finish(status NodeStatus, errCode string, errMsg string) {
 	}
 
 	if status == StatusSuccess {
-		nr.AddLog("执行成功")
+		nr.AddLog("execution succeeded")
 	} else if status == StatusSkipped {
-		nr.AddLog("执行跳过")
-		// 调试模式下，通知调试源该节点被跳过（用于前端标记「跳过」节点）
+		nr.AddLog("execution skipped")
+		// In debug mode, tell the debug source that the node was skipped (the frontend marks it "skipped").
 		if nr.Ctx != nil && nr.Ctx.Debug != nil {
 			if hook := nr.Ctx.Debug.skipHook; hook != nil {
 				hook(nr.NodeID, nr.nodeName())
 			}
 		}
 	} else {
-		nr.AddLog("执行失败: " + nr.ErrMsg)
-		// 调试模式下，通知调试源该节点执行失败（用于前端标记「出错」节点）
+		nr.AddLog("execution failed: " + nr.ErrMsg)
+		// In debug mode, tell the debug source that the node failed (the frontend marks it "failed").
 		if nr.Ctx != nil && nr.Ctx.Debug != nil {
 			if hook := nr.Ctx.Debug.failHook; hook != nil {
 				hook(nr.NodeID, nr.nodeName(), nr.ErrMsg)
@@ -153,8 +154,8 @@ func (nr *NodeResult) Finish(status NodeStatus, errCode string, errMsg string) {
 		}
 	}
 
-	// 调试模式下，通知调试源该节点已完成（无论成功/失败/跳过），
-	// 供 WS 调试源累积该节点最新数据（按 node_id 去重保留最后一次执行）。
+	// In debug mode, tell the debug source that the node finished (success, failure or skip),
+	// so the WS debug source can accumulate the latest data of the node (last execution per node_id).
 	if nr.Ctx != nil && nr.Ctx.Debug != nil {
 		if hook := nr.Ctx.Debug.doneHook; hook != nil {
 			hook(nr)
@@ -162,8 +163,8 @@ func (nr *NodeResult) Finish(status NodeStatus, errCode string, errMsg string) {
 	}
 }
 
-// nodeName 返回节点名字（从 flow.NodeMap 查，查不到返回空）。
-// 节点名字存在 Data.Label（前端 Vue flow 保存节点的惯例），无独立 name 属性。
+// nodeName returns the node name, looked up in flow.NodeMap (empty when not found).
+// The name lives in Data.Label (the convention of the frontend Vue flow), there is no separate name field.
 func (nr *NodeResult) nodeName() string {
 	if nr.Ctx != nil && nr.Ctx.Flow != nil && nr.Ctx.Flow.NodeMap != nil {
 		if n := nr.Ctx.Flow.NodeMap[nr.NodeID]; n != nil {
@@ -175,31 +176,31 @@ func (nr *NodeResult) nodeName() string {
 	return ""
 }
 
-// Skip 将节点标记为「跳过」（on_error skip/handler 返回 skip 时调用）。
-// 与 Finish(StatusSkipped) 的差异：Skip 不重设 EndTime/DurationMs/ErrCode，
-// 仅设置状态并触发调试源回调（与 Finish 内 skipped 分支保持一致）。
+// Skip marks the node as skipped (called when on_error skip/handler returns skip).
+// Unlike Finish(StatusSkipped), Skip does not reset EndTime/DurationMs/ErrCode: it only sets the
+// status and fires the debug-source callback (consistent with the skipped branch of Finish).
 func (nr *NodeResult) Skip() {
 	nr.Status = StatusSkipped
-	nr.AddLog("执行跳过")
+	nr.AddLog("execution skipped")
 	if nr.Ctx != nil && nr.Ctx.Debug != nil {
 		if hook := nr.Ctx.Debug.skipHook; hook != nil {
 			hook(nr.NodeID, nr.nodeName())
 		}
-		// 跳过后同样通知调试源更新最新数据（覆盖之前可能存在的 failed 状态）
+		// After skipping, tell the debug source to refresh the data as well (overriding a previous failed state).
 		if hook := nr.Ctx.Debug.doneHook; hook != nil {
 			hook(nr)
 		}
 	}
 }
 
-// SetInputVars 设置节点的统一输入变量（加锁）
+// SetInputVars sets the unified input variables of the node (locked).
 func (nr *NodeResult) SetInputVars(vars map[string]any) {
 	nr.mu.Lock()
 	defer nr.mu.Unlock()
 	nr.InputVars = vars
 }
 
-// GetInputVars 读取节点的统一输入变量（加锁）
+// GetInputVars reads the unified input variables of the node (locked).
 func (nr *NodeResult) GetInputVars() map[string]any {
 	nr.mu.RLock()
 	defer nr.mu.RUnlock()
@@ -209,13 +210,15 @@ func (nr *NodeResult) GetInputVars() map[string]any {
 type NodeType string
 
 const (
-	// 结构节点：start 由工具/前端生成，entry 由容器自动生成，layout 为纯占位节点；
-	// 三者都没有执行器，runner 直接跳过并继续沿出边前进。
+	// Structural nodes: start is generated by the tooling/frontend, entry by the container, and
+	// layout is a pure placeholder. None of the three has an executor; the runner skips it and
+	// continues along the outgoing edges.
 	NodeTypeStart  NodeType = "start"
 	NodeTypeEntry  NodeType = "entry"
 	NodeTypeLayout NodeType = "layout"
 
-	// 以下与 executors.RegisterExecutor 的注册名一一对应，命名保持小写、单数
+	// The names below map one to one to the names registered by executors.RegisterExecutor;
+	// keep them lower-case and singular.
 	NodeTypeLLM      NodeType = "llm"
 	NodeTypeCode     NodeType = "code"
 	NodeTypeHTTP     NodeType = "http"
@@ -244,9 +247,9 @@ type CodeResult struct {
 }
 
 type LoopResult struct {
-	LoopConfig map[string]interface{} `json:"loop"` // loop 节点配置（含 type）
+	LoopConfig map[string]interface{} `json:"loop"` // loop node config (including type)
 	LoopVars   map[string]interface{} `json:"loop_vars"`
-	Iterations int                    `json:"iterations"` // 实际执行次数
+	Iterations int                    `json:"iterations"` // number of iterations actually executed
 	mu         sync.RWMutex
 }
 type ProcessResult struct {
@@ -258,34 +261,34 @@ type FunctionResult struct {
 	mu        sync.RWMutex
 }
 
-// ForkState ForkResult 的 group 状态
+// ForkState is the group state of a ForkResult.
 type ForkState int
 
-// ForkResult 的 group 状态
+// Group states of a ForkResult.
 const (
-	ForkStateActive    ForkState = iota // 普通状态，可继续 Add
-	ForkStateWaiting                    // 等待中，不可 Add
-	ForkStateDone                       // 已完成（所有任务 Done），不可 Add/Wait
-	ForkStateAbandoned                  // 已放弃等待（超时），后台任务可能仍在跑，不可 Add/Wait
+	ForkStateActive    ForkState = iota // normal, further Add calls are allowed
+	ForkStateWaiting                    // waiting, Add is rejected
+	ForkStateDone                       // finished (every task Done), Add/Wait are rejected
+	ForkStateAbandoned                  // waiting abandoned (timeout); tasks may still run, Add/Wait are rejected
 )
 
 type ForkResult struct {
 	MaxConcurrency int `json:"max_concurrency"`
 	mu             sync.Mutex
 	wg             sync.WaitGroup
-	sem            chan struct{} // 并发上限信号量，MaxConcurrency<=0 时为 nil（不限流）
-	count          int           // 累计加入数
+	sem            chan struct{} // concurrency semaphore; nil when MaxConcurrency <= 0 (unlimited)
+	count          int           // number of tasks added so far
 	state          ForkState     // ForkStateActive / ForkStateWaiting / ForkStateDone / ForkStateAbandoned
-	members        []ForkMember  // 加入的成员（processID + nodeID），供 wait 扫描状态
+	members        []ForkMember  // added members (processID + nodeID), used by wait to scan statuses
 }
 
-// ForkMember 记录加入 fork 组的并发分支身份，供 wait 扫描节点状态
+// ForkMember identifies one concurrent branch added to a fork group, used by wait to scan node statuses.
 type ForkMember struct {
 	ProcessID string
 	NodeID    string
 }
 
-// NewForkResult 创建 ForkResult，maxConcurrency<=0 表示不限流
+// NewForkResult creates a ForkResult; maxConcurrency <= 0 means unlimited.
 func NewForkResult(maxConcurrency int) *ForkResult {
 	fr := &ForkResult{MaxConcurrency: maxConcurrency}
 	if maxConcurrency > 0 {
@@ -294,10 +297,12 @@ func NewForkResult(maxConcurrency int) *ForkResult {
 	return fr
 }
 
-// Add 加入 delta 个任务，进入 wait/done 状态后拒绝加入（设计错误）。
-// 若配置了 MaxConcurrency，获取信号量时阻塞等待空位（实现并发限流，退出一个递补一个）；
-// ctx 取消时回滚已获取的信号量与计数。
-// member 为本次加入的成员身份（processID + nodeID），用于 wait 扫描状态；delta>1 时忽略 member。
+// Add adds delta tasks; once in the wait/done state it refuses to add (a design error).
+// With MaxConcurrency configured, acquiring the semaphore blocks until a slot frees up (that is the
+// concurrency limit: one slot is handed over when one task exits); a cancelled ctx rolls back the
+// acquired slots and the counters.
+// member is the identity added by this call (processID + nodeID), used by wait to scan statuses; it
+// is ignored when delta > 1.
 func (fr *ForkResult) Add(delta int, ctx context.Context, member ForkMember) error {
 	fr.mu.Lock()
 	if fr.state >= ForkStateWaiting {
@@ -311,20 +316,20 @@ func (fr *ForkResult) Add(delta int, ctx context.Context, member ForkMember) err
 	}
 	fr.mu.Unlock()
 
-	// 信号量限流（在锁外阻塞，避免长时间持锁）
+	// Semaphore throttling (blocking outside the lock, so the lock is not held for long).
 	if fr.sem != nil {
 		for i := 0; i < delta; i++ {
 			select {
 			case fr.sem <- struct{}{}:
 			case <-ctx.Done():
-				// ctx 取消：回滚已获取的 sem 与 wg/count
+				// ctx cancelled: roll back the acquired semaphore slots and the wg/count bookkeeping.
 				for j := 0; j < i; j++ {
 					<-fr.sem
 				}
 				fr.mu.Lock()
 				fr.count -= delta
 				if delta == 1 {
-					// 回滚成员记录（移除末尾刚追加的）
+					// Roll back the member record (drop the one appended last).
 					if len(fr.members) > 0 {
 						fr.members = fr.members[:len(fr.members)-1]
 					}
@@ -338,7 +343,7 @@ func (fr *ForkResult) Add(delta int, ctx context.Context, member ForkMember) err
 	return nil
 }
 
-// Members 返回成员列表的快照（供 wait 扫描节点状态）
+// Members returns a snapshot of the member list (used by wait to scan node statuses).
 func (fr *ForkResult) Members() []ForkMember {
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
@@ -347,7 +352,7 @@ func (fr *ForkResult) Members() []ForkMember {
 	return result
 }
 
-// Done 标记一个任务完成，并释放信号量（触发递补）
+// Done marks one task finished and releases its semaphore slot (handing it to the next task).
 func (fr *ForkResult) Done() {
 	if fr.sem != nil {
 		<-fr.sem
@@ -355,30 +360,32 @@ func (fr *ForkResult) Done() {
 	fr.wg.Done()
 }
 
-// Wait 标记进入等待状态，等待所有已加入的任务完成（无超时）
-// 返回 true 正常完成，false 状态异常（已被 Wait 过）
+// Wait switches to the waiting state and waits for every added task to finish (no timeout).
+// It returns true on normal completion and false on an invalid state (Wait was already called).
 func (fr *ForkResult) Wait() (bool, error) {
 	return fr.waitInternal(context.Background(), -1)
 }
 
-// WaitTimeout 标记进入等待状态，等待所有已加入的任务完成
-// 返回 (completed, err)
-// completed: true 正常完成，false 超时或状态异常
-// err: 状态异常时非 nil
-// timeoutSeconds <= 0 表示无超时
+// WaitTimeout switches to the waiting state and waits for every added task to finish.
+// Returns (completed, err):
+//   - completed: true on normal completion, false on timeout or invalid state;
+//   - err: non-nil on an invalid state.
+//
+// timeoutSeconds <= 0 means no timeout.
 func (fr *ForkResult) WaitTimeout(timeoutSeconds int) (bool, error) {
 	return fr.waitInternal(context.Background(), timeoutSeconds)
 }
 
-// WaitTimeoutCtx 同 WaitTimeout，但额外监听 ctx：取消/超时时立即返回，err 为 ctx.Err()。
-// 节点级等待必须用它 —— 否则用户停止工作流后，wait 节点会一直挂到并发分支自己结束。
+// WaitTimeoutCtx is WaitTimeout plus a ctx: it returns immediately on cancellation or timeout, with
+// err = ctx.Err(). Node-level waits must use this one — otherwise a wait node keeps hanging until the
+// concurrent branches finish on their own after the user stopped the flow.
 func (fr *ForkResult) WaitTimeoutCtx(ctx context.Context, timeoutSeconds int) (bool, error) {
 	return fr.waitInternal(ctx, timeoutSeconds)
 }
 
-// waitInternal 返回 (completed bool, err error)
-// completed: true 正常完成，false 超时/取消
-// err: 状态异常或 ctx 取消时返回错误
+// waitInternal returns (completed bool, err error):
+//   - completed: true on normal completion, false on timeout or cancellation;
+//   - err: set on an invalid state or when ctx is cancelled.
 func (fr *ForkResult) waitInternal(ctx context.Context, timeoutSeconds int) (bool, error) {
 	fr.mu.Lock()
 	if fr.state != ForkStateActive {
@@ -407,8 +414,8 @@ func (fr *ForkResult) waitInternal(ctx context.Context, timeoutSeconds int) (boo
 	case <-timeoutCh:
 		completed = false
 	case <-ctx.Done():
-		// 取消不等于超时：同样放弃等待，标记 Abandoned；
-		// 后台任务照常 Done() 收尾计数，只是没人再收结果
+		// Cancellation is not a timeout: the wait is abandoned the same way and marked Abandoned;
+		// the background tasks still call Done() and settle their counters, nobody collects results.
 		fr.mu.Lock()
 		fr.state = ForkStateAbandoned
 		fr.mu.Unlock()
@@ -419,8 +426,8 @@ func (fr *ForkResult) waitInternal(ctx context.Context, timeoutSeconds int) (boo
 	if completed {
 		fr.state = ForkStateDone
 	} else {
-		// 超时放弃等待：后台任务可能仍在跑，标记为 Abandoned
-		// 后续这些任务的 Done() 仍会正常递减 wg 计数，但不再有 wait 收结果
+		// Timeout abandoned the wait: the background tasks may still run, so mark it Abandoned.
+		// Their Done() calls still decrement the wg counter, but no wait collects the results anymore.
 		fr.state = ForkStateAbandoned
 	}
 	fr.mu.Unlock()
@@ -428,14 +435,14 @@ func (fr *ForkResult) waitInternal(ctx context.Context, timeoutSeconds int) (boo
 	return completed, nil
 }
 
-// State 返回当前状态
+// State returns the current state.
 func (fr *ForkResult) State() ForkState {
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
 	return fr.state
 }
 
-// IsAbandoned 是否因超时被放弃等待（后台任务可能仍在跑）
+// IsAbandoned reports whether the wait was abandoned by a timeout (tasks may still be running).
 func (fr *ForkResult) IsAbandoned() bool {
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
@@ -448,15 +455,15 @@ type WaitResult struct {
 }
 
 type BranchResult struct {
-	ExecutedBranches []string `json:"executed_branches"` // 所有实际执行过的分支 ID（按顺序）
+	ExecutedBranches []string `json:"executed_branches"` // every branch ID actually executed, in order
 	mu               sync.RWMutex
 }
 
 type HttpResult struct {
-	URL     string              `json:"url"` // 渲染后的实际 url
+	URL     string              `json:"url"` // the rendered, actual url
 	Method  string              `json:"method"`
-	Headers map[string][]string `json:"headers"` // 实际发送的请求头
-	Status  int                 `json:"status"`  // 响应状态码(摘要)
+	Headers map[string][]string `json:"headers"` // headers actually sent
+	Status  int                 `json:"status"`  // response status code (summary)
 	mu      sync.RWMutex
 }
 
@@ -479,8 +486,8 @@ func (nr *NodeResult) AddLog(log string) {
 	nr.mu.Lock()
 	defer nr.mu.Unlock()
 	ts := time.Now().Format("15:04:05.000")
-	// 只进 RunLogs：落库由 persist 负责，实时推送由 websocket 负责。
-	// 这里不要往 stderr 打，节点日志是高频的。
+	// RunLogs only: persistence is handled by persist, the live push by the websocket.
+	// Do not write to stderr here, node logs are high frequency.
 	nr.RunLogs = append(nr.RunLogs, "["+ts+"] "+log)
 }
 
@@ -488,10 +495,11 @@ func (nr *NodeResult) AddLogf(format string, args ...interface{}) {
 	nr.AddLog(fmt.Sprintf(format, args...))
 }
 
-// WarnOnce 同一个 key 在一个节点内只记一次日志，返回本次是否真的记录了。
+// WarnOnce logs once per key inside a node and reports whether this call actually logged.
 //
-// 用于「逐帧调用的脚本反复命中同一条告警」的场景：handler 每来一个 chunk 调一次，
-// 逐条记日志会把节点日志刷成几百行同样的内容，反而看不起真正的信息。
+// It covers "a script called per frame keeps hitting the same warning": the handler runs once per
+// chunk, and logging each one would flood the node log with hundreds of identical lines and hide the
+// information that matters.
 func (nr *NodeResult) WarnOnce(key, format string, args ...interface{}) bool {
 	if nr == nil {
 		return false
@@ -631,7 +639,7 @@ func (fr *FunctionResult) GetVariable(path string) (interface{}, error) {
 	return nil, fmt.Errorf("var path %s not found in function params", path)
 }
 
-// SetParamVar 设置入口参数值，供 call 节点调用时传入参数
+// SetParamVar sets an entry parameter value, passed in when a call node invokes the function.
 func (fr *FunctionResult) SetParamVar(path string, value interface{}) error {
 	if fr == nil {
 		return errors.New("functionResult is nil")
@@ -644,8 +652,8 @@ func (fr *FunctionResult) SetParamVar(path string, value interface{}) error {
 	return SetVarByPath(fr.ParamVars, path, value)
 }
 
-// GetTargetDef 获取可写变量定义
-// 从节点配置的 targets 属性中查找指定路径的变量定义
+// GetTargetDef looks up a writable variable definition.
+// It searches the variable definition of the given path among the node's targets config.
 func (nr *NodeResult) GetTargetDef(path string) (interface{}, error) {
 	if nr == nil {
 		return nil, errors.New("nodeResult is nil")
@@ -654,11 +662,11 @@ func (nr *NodeResult) GetTargetDef(path string) (interface{}, error) {
 		return nil, errors.New("execution context or flow is nil")
 	}
 
-	// 提取变量名：先用 . 切分取第一段，再用 [ 切分取第一段
+	// Extract the variable name: take the first segment split by ".", then the first split by "[".
 	varName := strings.Split(path, ".")[0]
 	varName = strings.Split(varName, "[")[0]
 
-	// 获取当前节点
+	// Look up the current node.
 	node, exists := nr.Ctx.Flow.NodeMap[nr.NodeID]
 	if !exists {
 		return nil, fmt.Errorf("node %s not found in flow", nr.NodeID)
@@ -667,13 +675,13 @@ func (nr *NodeResult) GetTargetDef(path string) (interface{}, error) {
 		return nil, fmt.Errorf("node %s has no config", nr.NodeID)
 	}
 
-	// 获取 targets 配置
+	// Read the targets config.
 	targets, ok := node.Data.Config["targets"].(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("node %s has no targets config", nr.NodeID)
 	}
 
-	// 查找变量定义
+	// Look up the variable definition.
 	def, exists := targets[varName]
 	if !exists {
 		return nil, fmt.Errorf("target %s not defined", varName)
@@ -691,7 +699,7 @@ func (nr *NodeResult) SetLocalVar(path string, value interface{}) error {
 	if nr.LocalVars == nil {
 		nr.LocalVars = make(map[string]interface{})
 	}
-	// 提取变量名：先用 . 切分取第一段，再用 [ 切分取第一段
+	// Extract the variable name: take the first segment split by ".", then the first split by "[".
 	varName := strings.Split(path, ".")[0]
 	varName = strings.Split(varName, "[")[0]
 	if _, exists := nr.LocalVars[varName]; !exists {
@@ -731,7 +739,7 @@ func (nr *NodeResult) SetOutputVar(path string, value interface{}) error {
 	if nr.OutputVars == nil {
 		nr.OutputVars = make(map[string]interface{})
 	}
-	// 提取变量名：先用 . 切分取第一段，再用 [ 切分取第一段
+	// Extract the variable name: take the first segment split by ".", then the first split by "[".
 	varName := strings.Split(path, ".")[0]
 	varName = strings.Split(varName, "[")[0]
 	if _, exists := nr.OutputVars[varName]; !exists {
@@ -740,7 +748,7 @@ func (nr *NodeResult) SetOutputVar(path string, value interface{}) error {
 	return SetVarByPath(nr.OutputVars, path, value)
 }
 
-// SetOutputVarWithFire 写入输出变量 + 自动触发 output binding
+// SetOutputVarWithFire writes an output variable and fires its output binding.
 func (nr *NodeResult) SetOutputVarWithFire(path string, value interface{}) error {
 	if err := nr.SetOutputVar(path, value); err != nil {
 		return err
@@ -762,7 +770,7 @@ func (nr *NodeResult) SetOutputVars(vars map[string]interface{}) error {
 		nr.OutputVars = make(map[string]interface{})
 	}
 	for path, value := range vars {
-		// 提取变量名：先用 . 切分取第一段，再用 [ 切分取第一段
+		// Extract the variable name: take the first segment split by ".", then the first split by "[".
 		varName := strings.Split(path, ".")[0]
 		varName = strings.Split(varName, "[")[0]
 		if _, exists := nr.OutputVars[varName]; !exists {
@@ -775,7 +783,7 @@ func (nr *NodeResult) SetOutputVars(vars map[string]interface{}) error {
 	return nil
 }
 
-// SetOutputVarsWithFire 批量写入输出变量 + 自动触发 output binding
+// SetOutputVarsWithFire writes output variables in bulk and fires their output bindings.
 func (nr *NodeResult) SetOutputVarsWithFire(vars map[string]interface{}) error {
 	if err := nr.SetOutputVars(vars); err != nil {
 		return err
@@ -791,9 +799,9 @@ func (nr *NodeResult) SetOutputVarsWithFire(vars map[string]interface{}) error {
 	return nil
 }
 
-// AppendOutputVarWithFire 追加输出变量并触发 output binding。
-// chunk 为 string 时拼接到当前值末尾，binding fire 用 chunk（增量）；
-// chunk 非 string 时直接覆盖，binding fire 用最终值（全量）。
+// AppendOutputVarWithFire appends to an output variable and fires its output binding.
+// When chunk is a string it is appended to the current value and the binding is fired with the chunk
+// (the increment); otherwise the value is replaced and the binding is fired with the final value.
 func (nr *NodeResult) AppendOutputVarWithFire(path string, chunk interface{}) error {
 	if nr == nil {
 		return errors.New("nodeResult is nil")
@@ -804,7 +812,7 @@ func (nr *NodeResult) AppendOutputVarWithFire(path string, chunk interface{}) er
 		nr.OutputVars = make(map[string]interface{})
 	}
 
-	// 提取变量名
+	// Extract the variable name.
 	varName := strings.Split(path, ".")[0]
 	varName = strings.Split(varName, "[")[0]
 	if _, exists := nr.OutputVars[varName]; !exists {
@@ -812,7 +820,7 @@ func (nr *NodeResult) AppendOutputVarWithFire(path string, chunk interface{}) er
 		return fmt.Errorf("output var %s not defined", varName)
 	}
 
-	// 读当前值
+	// Read the current value.
 	current, _ := GetVarByPath(nr.OutputVars, path)
 
 	var finalValue interface{}
@@ -824,10 +832,10 @@ func (nr *NodeResult) AppendOutputVarWithFire(path string, chunk interface{}) er
 		} else {
 			finalValue = chunkStr
 		}
-		fireValue = chunk // 增量
+		fireValue = chunk // the increment
 	} else {
 		finalValue = chunk
-		fireValue = chunk // 全量
+		fireValue = chunk // the full value
 	}
 
 	if err := SetVarByPath(nr.OutputVars, path, finalValue); err != nil {
@@ -836,30 +844,30 @@ func (nr *NodeResult) AppendOutputVarWithFire(path string, chunk interface{}) er
 	}
 	nr.mu.Unlock()
 
-	// fire binding（锁外执行）
+	// Fire the binding (outside the lock).
 	if nr.Ctx != nil && nr.Ctx.OutputBindingFire != nil {
 		return nr.Ctx.OutputBindingFire(nr, varName, fireValue)
 	}
 	return nil
 }
 
-// InitLocalVars 带锁初始化 LocalVars，内部复用包级 InitLocalVars 函数
+// InitLocalVars initializes LocalVars under the lock, reusing the package-level InitLocalVars helper.
 func (nr *NodeResult) InitLocalVars(defVars map[string]interface{}) {
 	nr.mu.Lock()
 	defer nr.mu.Unlock()
 	nr.LocalVars = InitLocalVars(defVars)
 }
 
-// InitOutputVars 带锁初始化 OutputVars，内部复用包级 InitOutputVars 函数
+// InitOutputVars initializes OutputVars under the lock, reusing the package-level InitOutputVars helper.
 func (nr *NodeResult) InitOutputVars(defVars map[string]interface{}) {
 	nr.mu.Lock()
 	defer nr.mu.Unlock()
 	nr.OutputVars = InitOutputVars(defVars)
 }
 
-// InitOutputBindings 从 outputs 配置中提取 binding 字段，初始化 OutputBindings。
-// 仅 string/number/boolean 类型的变量支持 binding。
-// 配置格式兼容单个对象简写和数组多 binding。
+// InitOutputBindings extracts the binding field from the outputs config and initializes OutputBindings.
+// Only string / number / boolean variables support a binding.
+// The config accepts both the single-object shorthand and an array of several bindings.
 func (nr *NodeResult) InitOutputBindings(outputs map[string]interface{}) {
 	if outputs == nil {
 		return
@@ -870,19 +878,19 @@ func (nr *NodeResult) InitOutputBindings(outputs map[string]interface{}) {
 			continue
 		}
 
-		// 仅 string/number/boolean 类型支持 binding
+		// Only string / number / boolean variables support a binding.
 		varType, _ := def["type"].(string)
 		if varType != "string" && varType != "number" && varType != "boolean" {
 			continue
 		}
 
-		// 从变量定义中提取 binding 字段
+		// Extract the binding field from the variable definition.
 		rawBinding, exists := def["binding"]
 		if !exists {
 			continue
 		}
 
-		// 值可以是数组（多个 binding）或单个对象（兼容简写）
+		// The value is either an array (several bindings) or a single object (the shorthand).
 		var items []interface{}
 		switch val := rawBinding.(type) {
 		case []interface{}:
@@ -906,7 +914,7 @@ func (nr *NodeResult) InitOutputBindings(outputs map[string]interface{}) {
 				ob.Transform = &BindingTransform{}
 				ob.Transform.Lang, _ = t["lang"].(string)
 				ob.Transform.Script, _ = t["script"].(string)
-				// 解析 timeout: {enabled: bool, seconds: int}
+				// Parse timeout: {enabled: bool, seconds: int}.
 				if timeoutMap, ok := t["timeout"].(map[string]interface{}); ok {
 					ob.Transform.Timeout = &BindingTimeout{}
 					if enabled, ok := timeoutMap["enabled"].(bool); ok {
@@ -928,7 +936,7 @@ func (nr *NodeResult) InitOutputBindings(outputs map[string]interface{}) {
 	}
 }
 
-// SetOutputVarsFrom 带锁设置 OutputVars（直接从其他 NodeResult 复制）
+// SetOutputVarsFrom sets OutputVars under the lock (copied straight from another NodeResult).
 func (nr *NodeResult) SetOutputVarsFrom(vars map[string]interface{}) {
 	nr.mu.Lock()
 	defer nr.mu.Unlock()
@@ -947,7 +955,7 @@ func (lr *LoopResult) SetLoopVar(path string, value interface{}) error {
 	return SetVarByPath(lr.LoopVars, path, value)
 }
 
-// IncIteration 累计一次实际迭代。
+// IncIteration counts one iteration actually executed.
 func (lr *LoopResult) IncIteration() {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
@@ -971,7 +979,7 @@ func (lr *LoopResult) SetLoopVars(vars map[string]interface{}) error {
 	return nil
 }
 
-// SnapshotVars 获取 local 和 output 变量的浅拷贝快照（RLock 保护）
+// SnapshotVars takes a shallow copy of the local and output variables (guarded by RLock).
 func (nr *NodeResult) SnapshotVars() (local, output map[string]any) {
 	nr.mu.RLock()
 	defer nr.mu.RUnlock()

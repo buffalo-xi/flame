@@ -25,8 +25,8 @@ func NewProcessManager() *ProcessManager {
 	}
 }
 
-// NewProcess 创建新进程并返回其 ID
-// parentID 为空时创建根进程（ID 为 "1"），不为空时创建子进程
+// NewProcess creates a process and returns its ID.
+// An empty parentID creates the root process (ID "1"); otherwise a child process is created.
 func (pm *ProcessManager) NewProcess(parentID string, data map[string]interface{}) (string, error) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -166,8 +166,8 @@ func (pm *ProcessManager) GetAllProcessIDs() []string {
 	return result
 }
 
-// GetCallDepth 计算 call→function 递归深度：沿父链向上追溯，只统计 Data["call_func"]==true 的进程数。
-// 一次加锁遍历到底，O(depth) 纯内存操作。
+// GetCallDepth computes the call→function recursion depth: it walks up the parent chain and counts
+// only the processes whose Data["call_func"] is true. A single locked pass, O(depth), in memory only.
 func (pm *ProcessManager) GetCallDepth(id string) int {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -179,7 +179,7 @@ func (pm *ProcessManager) GetCallDepth(id string) int {
 		if !exists {
 			break
 		}
-		// 当前进程是由 call→function 创建的吗？
+		// Was the current process created by a call→function step?
 		if info.Data != nil {
 			if v, ok := info.Data["call_func"]; ok && v == true {
 				depth++

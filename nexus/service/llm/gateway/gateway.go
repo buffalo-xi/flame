@@ -2,7 +2,7 @@ package gateway
 
 import "context"
 
-// ModelInput 模型输入参数
+// ModelInput holds the model input parameters.
 type ModelInput struct {
 	ID            string
 	Name          string
@@ -15,29 +15,29 @@ type ModelInput struct {
 	ExtraParams   map[string]any
 }
 
-// ProviderInput 供应商输入参数
+// ProviderInput holds the provider input parameters.
 type ProviderInput struct {
 	ID       string
 	Name     string
 	URL      string
 	APIKey   string
 	Protocol string
-	// ExtraConfig 服务商的额外配置（对应 llm_providers.extra_config），原样透传进
-	// LiteLLM 的 litellm_params。用于 api_version（Azure）、vertex_project / vertex_location /
-	// vertex_credentials（Vertex AI）、timeout、max_retries 等任意 LiteLLM 支持的参数。
+	// ExtraConfig is the provider's extra config (llm_providers.extra_config), passed through as is into
+	// the litellm_params of LiteLLM. It carries any parameter LiteLLM supports, such as api_version
+	// (Azure), vertex_project / vertex_location / vertex_credentials (Vertex AI), timeout, max_retries.
 	ExtraConfig map[string]any
 }
 
-// Message 消息
+// Message is a chat message.
 type Message struct {
 	Role       string           `json:"role"`
 	Content    string           `json:"content"`
-	Name       string           `json:"name,omitempty"`         // tool 消息的工具名
-	ToolCallID string           `json:"tool_call_id,omitempty"` // tool 消息的调用 ID
-	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`   // assistant 消息的工具调用（OpenAI 格式）
+	Name       string           `json:"name,omitempty"`         // the tool name of a tool message
+	ToolCallID string           `json:"tool_call_id,omitempty"` // the call id of a tool message
+	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`   // tool calls of an assistant message (OpenAI format)
 }
 
-// OpenAIToolCall OpenAI 协议的工具调用（assistant 消息回填用）。
+// OpenAIToolCall is a tool call in the OpenAI protocol (used to echo back in assistant messages).
 type OpenAIToolCall struct {
 	ID       string `json:"id"`
 	Type     string `json:"type"`
@@ -47,25 +47,26 @@ type OpenAIToolCall struct {
 	} `json:"function"`
 }
 
-// ToolCall 工具调用
+// ToolCall is a tool call.
 type ToolCall struct {
 	ID   string
 	Name string
 	Args map[string]any
-	// FromText 标记该调用来自正文里的「文本形态工具调用」（如 DeepSeek 的 |DSML| 标记），
-	// 而非上游返回的结构化 tool_calls。上游既然不会返回结构化调用，也就多半不认
-	// assistant.tool_calls / role:"tool" 的回填，必须改走纯文本回填（见 agentImpl.Stream）。
+	// FromText marks a call that came from a "text-shaped tool call" in the body (such as the |DSML|
+	// markers of DeepSeek) rather than from structured tool_calls returned upstream. An upstream that
+	// does not return structured calls most likely does not understand assistant.tool_calls /
+	// role:"tool" echoes either, so the echo has to go back as plain text (see agentImpl.Stream).
 	FromText bool
 }
 
-// ToolDef 工具定义
+// ToolDef is a tool definition.
 type ToolDef struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
 }
 
-// StreamChunk 流式响应块
+// StreamChunk is one chunk of a streaming response.
 type StreamChunk struct {
 	Content          string
 	ReasoningContent string
@@ -74,49 +75,53 @@ type StreamChunk struct {
 	Done             bool
 }
 
-// GenerateResponse 非流式响应
+// GenerateResponse is a non-streaming response.
 type GenerateResponse struct {
 	Content string
-	// ReasoningContent 思考内容（模型支持 reasoning 时才有值），
-	// 与 StreamChunk.ReasoningContent 对齐：非流式模式不能丢掉推理内容。
+	// ReasoningContent is the thinking content (present when the model supports reasoning), aligned
+	// with StreamChunk.ReasoningContent: non-streaming mode must not drop the reasoning either.
 	ReasoningContent string
 	ToolCalls        []ToolCall
 }
 
-// ProvisionedModel 网关上已注册的一条模型记录，供同步（配置比对 / 清理多余）使用。
+// ProvisionedModel is one model record already registered on the gateway, used by the sync (comparing
+// config and cleaning up leftovers).
 type ProvisionedModel struct {
-	// GatewayID 网关侧主键（LiteLLM 的 model_id UUID），对应 DB 的 gateway_id
+	// GatewayID is the gateway-side primary key (the model_id UUID of LiteLLM), matching gateway_id in the DB.
 	GatewayID string
-	// ModelName 网关上的模型名，形如 "<schema>:<gateway_model>"
+	// ModelName is the model name on the gateway, shaped "<schema>:<gateway_model>".
 	ModelName string
-	// LitellmParams 网关实际保存的调用参数（model / api_key / api_base 等）
+	// LitellmParams are the call parameters actually stored on the gateway (model / api_key / api_base ...).
 	LitellmParams map[string]any
-	// ModelInfo 网关实际保存的模型元信息（context_window / max_tokens 等）
+	// ModelInfo is the model metadata actually stored on the gateway (context_window / max_tokens ...).
 	ModelInfo map[string]any
 }
 
-// Client LLM 网关客户端接口
+// Client is the LLM gateway client interface.
 type Client interface {
-	// Provision 检查模型是否已在网关注册，未注册则注册；返回 gatewayID
+	// Provision checks whether the model is registered on the gateway and registers it when it is not;
+	// it returns the gatewayID.
 	Provision(schema string, model ModelInput, provider ProviderInput) (gatewayID string, err error)
-	// Deprovision 从网关删除模型
+	// Deprovision removes the model from the gateway.
 	Deprovision(schema string, model ModelInput, provider ProviderInput) error
-	// DeprovisionAll 禁用（删除）某 schema 下所有已注册到网关的模型，返回实际删除的数量
+	// DeprovisionAll disables (removes) every model of a schema registered on the gateway and returns
+	// how many were actually removed.
 	DeprovisionAll(schema string) (int, error)
-	// ListProvisioned 列出某 schema 下已注册到网关的模型（按 "<schema>:" 前缀过滤）
+	// ListProvisioned lists the models of a schema registered on the gateway (filtered by the "<schema>:" prefix).
 	ListProvisioned(schema string) ([]ProvisionedModel, error)
-	// Update 按 GatewayID 覆盖更新已注册模型的参数，用于把本地配置对齐到网关
+	// Update overwrites the parameters of a registered model by GatewayID, aligning the gateway with the
+	// local configuration.
 	Update(schema string, model ModelInput, provider ProviderInput) error
-	// Stream 流式调用
+	// Stream is a streaming call.
 	Stream(ctx context.Context, model ModelInput, messages []Message, tools []ToolDef) (<-chan StreamChunk, error)
-	// Generate 非流式调用
+	// Generate is a non-streaming call.
 	Generate(ctx context.Context, model ModelInput, messages []Message, tools []ToolDef) (GenerateResponse, error)
 }
 
-// Current 全局网关客户端实例
+// Current is the global gateway client instance.
 var Current Client
 
-// SetCurrent 设置全局网关客户端
+// SetCurrent sets the global gateway client.
 func SetCurrent(c Client) {
 	Current = c
 }

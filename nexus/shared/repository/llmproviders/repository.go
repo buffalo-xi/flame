@@ -5,7 +5,7 @@ import (
 	"flame/nexus/shared/models"
 )
 
-// ListLLMProvidersRequest LLM服务商列表请求参数
+// ListLLMProvidersRequest holds the LLM provider list parameters.
 type ListLLMProvidersRequest struct {
 	Page      int      `json:"page" form:"page"`
 	Limit     int      `json:"limit" form:"limit"`
@@ -15,20 +15,20 @@ type ListLLMProvidersRequest struct {
 	SortOrder []string `json:"sort_order" form:"sort_order"`
 }
 
-// LLMProviderRepository LLM服务商仓库接口
+// LLMProviderRepository is the LLM provider repository interface.
 type LLMProviderRepository interface {
-	// GetByID 根据ID获取LLM服务商
+	// GetByID returns one LLM provider by id.
 	GetByID(authInfo *auth.AuthInfo, id string) (*models.LLMProvider, error)
 
-	// Create 创建LLM服务商
+	// Create creates an LLM provider.
 	Create(authInfo *auth.AuthInfo, llmProvider *models.LLMProvider) (string, error)
 
-	// Update 更新LLM服务商
+	// Update updates an LLM provider.
 	Update(authInfo *auth.AuthInfo, id string, llmProvider *models.LLMProvider) error
 
-	// Delete 根据ID删除LLM服务商
+	// Delete deletes one LLM provider by id.
 	Delete(authInfo *auth.AuthInfo, id string) error
 
-	// List 获取LLM服务商列表
+	// List lists LLM providers.
 	List(authInfo *auth.AuthInfo, req *ListLLMProvidersRequest) ([]models.LLMProvider, int, error)
 }

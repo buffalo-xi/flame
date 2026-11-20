@@ -15,18 +15,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// PostgresRepository 基于 PostgreSQL 的插件配置仓储。
+// PostgresRepository is the PostgreSQL plugin configuration store.
 type PostgresRepository struct{}
 
-// NewRepository 构造仓储。
+// NewRepository builds the repository.
 func NewRepository() Repository { return &PostgresRepository{} }
 
 var _ Repository = (*PostgresRepository)(nil)
 
-// selectColumns 列顺序须与 scanPlugin 一致。kind 紧跟 id，便于对照唯一键 (kind, name)。
+// selectColumns: the column order must match scanPlugin. kind follows id, so it lines up with the unique key
+// (kind, name).
 const selectColumns = `id,kind,name,impl,fallbacks,configs,is_active,created_at,updated_at,last_used_at,last_error,last_error_at`
 
-// Get 按 (kind, name) 取一条。
+// Get returns one row by (kind, name).
 func (r *PostgresRepository) Get(authInfo *auth.AuthInfo, kind, name string) (*models.Plugin, error) {
 	q := fmt.Sprintf(`SELECT %s FROM %s.%s WHERE kind=$1 AND name=$2`, selectColumns, authInfo.Schema, tableName)
 	p, err := scanPlugin(db.DB.QueryRow(q, kind, name))
@@ -39,7 +40,8 @@ func (r *PostgresRepository) Get(authInfo *auth.AuthInfo, kind, name string) (*m
 	return p, nil
 }
 
-// List 列出本租户的插件配置（全部 kind）。不分 kind 是刻意的：调用方都是一次取全。
+// List lists this tenant's plugin configurations (every kind). Not filtering by kind is deliberate: the callers
+// all want everything at once.
 func (r *PostgresRepository) List(authInfo *auth.AuthInfo) ([]models.Plugin, error) {
 	q := fmt.Sprintf(`SELECT %s FROM %s.%s ORDER BY kind, name`, selectColumns, authInfo.Schema, tableName)
 	rows, err := db.DB.Query(q)
@@ -59,19 +61,19 @@ func (r *PostgresRepository) List(authInfo *auth.AuthInfo) ([]models.Plugin, err
 	return out, rows.Err()
 }
 
-// Upsert 按 (kind, name) 插入或更新。落库前把 JSON 列的 nil 归一成 [] / {}，
-// 避免显式 NULL 覆盖掉表默认值。
+// Upsert inserts or updates by (kind, name). Before writing, nil JSON columns are normalised to [] / {}, so an
+// explicit NULL cannot overwrite the table default.
 //
-// kind 为空直接报错而不是回退成 "tools"：DB 的 DEFAULT 只在不显式传该列时生效，
-// 一旦把空串写进去，那一行就再也不会被任何按 kind 过滤的查询读到 —— 插件会
-// 「保存成功但凭空消失」，是最难查的一类故障。
+// An empty kind is an outright error rather than falling back to "tools": the database's DEFAULT only applies
+// when the column is not passed at all, and once an empty string is written that row can never be read by any
+// kind-filtered query — the plugin "saves successfully but vanishes", the hardest class of fault to diagnose.
 func (r *PostgresRepository) Upsert(authInfo *auth.AuthInfo, p *models.Plugin) error {
 	if p == nil {
 		return fmt.Errorf("plugins: nil plugin")
 	}
 	kind := strings.TrimSpace(p.Kind)
 	if kind == "" {
-		return fmt.Errorf("plugins: kind 为空（必须显式指定，见 models.Plugin.Kind）")
+		return fmt.Errorf("plugins: kind is empty (it must be set explicitly, see models.Plugin.Kind)")
 	}
 	id := p.ID
 	if id == "" {
@@ -89,7 +91,7 @@ func (r *PostgresRepository) Upsert(authInfo *auth.AuthInfo, p *models.Plugin) e
 	return wrapPgErr(err)
 }
 
-// SetActive 只改启用状态。
+// SetActive only changes the enabled state.
 func (r *PostgresRepository) SetActive(authInfo *auth.AuthInfo, kind, name string, active bool) error {
 	q := fmt.Sprintf(`UPDATE %s.%s SET is_active=$3, updated_at=CURRENT_TIMESTAMP WHERE kind=$1 AND name=$2`, authInfo.Schema, tableName)
 	res, err := db.DB.Exec(q, kind, name, active)
@@ -102,7 +104,7 @@ func (r *PostgresRepository) SetActive(authInfo *auth.AuthInfo, kind, name strin
 	return nil
 }
 
-// Delete 删除本租户的插件配置。
+// Delete removes this tenant's plugin configuration.
 func (r *PostgresRepository) Delete(authInfo *auth.AuthInfo, kind, name string) error {
 	q := fmt.Sprintf(`DELETE FROM %s.%s WHERE kind=$1 AND name=$2`, authInfo.Schema, tableName)
 	res, err := db.DB.Exec(q, kind, name)
@@ -115,24 +117,24 @@ func (r *PostgresRepository) Delete(authInfo *auth.AuthInfo, kind, name string) 
 	return nil
 }
 
-// maxLastErrorRunes last_error 的落库上限（按字符截断，避免把多字节字符切坏）。
-// 够排障即可，不该把整段栈塞进一行。
+// maxLastErrorRunes is the storage ceiling for last_error (truncated by rune, so no multi-byte character is cut
+// in half). Enough for troubleshooting; the whole stack does not belong in one column.
 const maxLastErrorRunes = 200
 
-// TouchUsed 记一次成功调用，并清掉上一次错误。
+// TouchUsed records one successful call and clears the previous error.
 //
-// 刻意不碰 updated_at：那一列表示「配置什么时候改过」，
-// 被调用频率污染之后就没法判断配置是否过期了。
+// It deliberately does not touch updated_at: that column means "when was the configuration changed", and once
+// polluted by call frequency it can no longer tell whether the configuration is stale.
 func (r *PostgresRepository) TouchUsed(authInfo *auth.AuthInfo, kind, name string) error {
 	q := fmt.Sprintf(`UPDATE %s.%s
 		SET last_used_at=CURRENT_TIMESTAMP, last_error='', last_error_at=NULL
 		WHERE kind=$1 AND name=$2`, authInfo.Schema, tableName)
-	// 行可能已经被删：可观测信息写不进去不算调用失败
+	// The row may already be deleted: failing to write observability data is not a failed call
 	_, err := db.DB.Exec(q, kind, name)
 	return ignoreNoRows(err)
 }
 
-// SetError 记一次失败（消息截断后落库）。
+// SetError records one failure (the message is truncated before writing).
 func (r *PostgresRepository) SetError(authInfo *auth.AuthInfo, kind, name, message string) error {
 	q := fmt.Sprintf(`UPDATE %s.%s
 		SET last_error=$3, last_error_at=CURRENT_TIMESTAMP
@@ -179,7 +181,7 @@ func scanPlugin(scanner interface{ Scan(...any) error }) (*models.Plugin, error)
 	return &p, nil
 }
 
-// jsonOr 保留已有 JSON；空值用 fallback 字面量兜底（如 "[]" / "{}"）。
+// jsonOr keeps the existing JSON; an empty value falls back to the literal (such as "[]" / "{}").
 func jsonOr(j xsql.JSONB, fallback string) any {
 	v, err := j.Value()
 	if err != nil || v == nil {

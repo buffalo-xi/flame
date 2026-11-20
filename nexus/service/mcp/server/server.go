@@ -26,14 +26,15 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// NewMCPServer 按租户加载 svc_endpoints（protocol=mcp AND exposed=true），动态构建 Server 实例。
-// 每个 endpoint 注册为一个 MCP 工具，input_schema 直接用作工具 InputSchema。
+// NewMCPServer loads this tenant's svc_endpoints (protocol=mcp AND exposed=true) and builds a Server
+// instance dynamically. Every endpoint is registered as one MCP tool, with input_schema used directly
+// as the tool InputSchema.
 func NewMCPServer(authInfo *auth.AuthInfo) (*mcp.Server, error) {
 	listReq := &svcendpoints.ListSvcEndpointsRequest{
 		Protocol: "mcp",
 		Exposed:  boolPtr(true),
 	}
-	// 必须用 ListAll：List 有默认 limit=10，会把第 11 个端点起静默截掉
+	// ListAll is required: List defaults to limit=10 and would silently cut off the 11th endpoint onwards.
 	endpoints, err := svcendpoints.NewRepository().ListAll(authInfo, listReq)
 	if err != nil {
 		return nil, fmt.Errorf("list mcp endpoints: %w", err)
@@ -43,19 +44,22 @@ func NewMCPServer(authInfo *auth.AuthInfo) (*mcp.Server, error) {
 		Name:    "flame-mcp-server",
 		Version: "2.0",
 	}
-	// 只认一版协议：2026-07-28（无 initialize 握手，每个请求自带 _meta 里的 protocolVersion）。
-	// 新版客户端在 _meta 里报了别的版本 → SDK 回 -32022 UnsupportedProtocolVersion；
-	// 旧版客户端仍会走 initialize，被协商成 2025-11-25 后，紧接着带
-	// MCP-Protocol-Version 头的请求会被传输层以 400 Unsupported protocol version 拒掉。
+	// Only one protocol version is accepted: 2026-07-28 (no initialize handshake, every request carries
+	// protocolVersion in its _meta).
+	// A new client reporting another version in _meta gets -32022 UnsupportedProtocolVersion from the SDK;
+	// an old client still goes through initialize, is negotiated down to 2025-11-25, and the following
+	// request carrying the MCP-Protocol-Version header is rejected by the transport with
+	// 400 Unsupported protocol version.
 	s := mcp.NewServer(impl, &mcp.ServerOptions{
 		SupportedProtocolVersions: []string{mcpspec.ProtocolVersion},
 	})
 
 	for i := range endpoints {
 		ep := endpoints[i]
-		// 凭证的端点访问范围：无权目标不注册。
-		// MCP 只需这一处 —— tools/list 由注册表生成，调用也只能命中已注册的 handler，
-		// 不存在 rpc 那种「手写请求按 name 直调」的绕过路径。
+		// Endpoint scope of the credential: unauthorized targets are not registered.
+		// MCP needs exactly this one place — tools/list is generated from the registry, and a call can
+		// only hit a registered handler, so there is no bypass like the hand-written request addressed
+		// by name that RPC has.
 		if !authInfo.TargetAllowedWith(ep.TargetType, ep.TargetID, ep.TargetSupervisor) {
 			continue
 		}
@@ -65,14 +69,15 @@ func NewMCPServer(authInfo *auth.AuthInfo) (*mcp.Server, error) {
 	return s, nil
 }
 
-// buildTool 从 SvcEndpoint 构造 mcp.Tool
+// buildTool builds an mcp.Tool from a SvcEndpoint.
 func buildTool(ep models.SvcEndpoint) *mcp.Tool {
 	t := &mcp.Tool{
 		Name:        ep.Name,
 		Description: ep.Description,
 	}
-	// input_schema 直接作为工具的 InputSchema（JSON Schema object）
-	// 仅当用户 schema 合法（解析成功且顶层 type=object）才采用，否则回退到开放 object
+	// input_schema is used directly as the tool InputSchema (a JSON Schema object).
+	// It is only adopted when the user schema is valid (it parses and its top-level type is object),
+	// otherwise it falls back to an open object.
 	if !ep.InputSchema.IsNil() {
 		var raw json.RawMessage
 		if err := ep.InputSchema.Unmarshal(&raw); err == nil && len(raw) > 0 {
@@ -81,14 +86,14 @@ func buildTool(ep models.SvcEndpoint) *mcp.Tool {
 			}
 		}
 	}
-	// 兜底：无 input_schema 或非法时给一个开放 object schema（任意输入均合法）
+	// Fallback: with no input_schema, or an invalid one, use an open object schema (any input is valid).
 	if t.InputSchema == nil {
 		t.InputSchema = json.RawMessage(`{"type":"object","properties":{}}`)
 	}
 	return t
 }
 
-// isObjectSchema 校验 JSON Schema 顶层为 object 类型（SDK 要求）
+// isObjectSchema checks that the top-level JSON Schema type is object (an SDK requirement).
 func isObjectSchema(raw json.RawMessage) bool {
 	var s struct {
 		Type string `json:"type"`
@@ -99,7 +104,7 @@ func isObjectSchema(raw json.RawMessage) bool {
 	return s.Type == "object"
 }
 
-// makeToolHandler 返回该工具的调用处理函数
+// makeToolHandler returns the call handler of a tool.
 func makeToolHandler(authInfo *auth.AuthInfo, ep models.SvcEndpoint) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var input map[string]interface{}
@@ -111,22 +116,24 @@ func makeToolHandler(authInfo *auth.AuthInfo, ep models.SvcEndpoint) mcp.ToolHan
 		if input == nil {
 			input = map[string]interface{}{}
 		}
-		// 已废弃的 arguments.stream：剥掉（既不当控制参数，也不当业务变量），留日志便于排查。
+		// The deprecated arguments.stream is stripped (neither a control parameter nor a business
+		// variable), with a log line to keep it diagnosable.
 		if core.StripLegacyStream(input) {
-			xlog.Info("忽略已废弃的 arguments.stream（改用 params._meta.progressToken 订阅进度）endpoint=%s", ep.Name)
+			xlog.Info("ignoring the deprecated arguments.stream (subscribe to progress through params._meta.progressToken instead) endpoint=%s", ep.Name)
 		}
 
-		// 调用链：拒绝重入（f → a → f），与 /service/rpc 同一套语义（见 shared/callchain）。
-		// 链只认 params._meta，不进 arguments —— 后者是模型可见的业务入参。
-		// 同样是协作式检测：不传就检测不到，深度上限仍必须留着兜底。
+		// Call chain: reject re-entry (f → a → f), the same semantics as /service/rpc (see shared/callchain).
+		// The chain is only read from params._meta and never from arguments — the latter is the
+		// model-visible business input.
+		// Detection is cooperative too: without a chain nothing is detected, so the depth cap must stay.
 		chain, chainTooLong := callChain(req)
 		if chainTooLong {
-			return nil, fmt.Errorf("call_chain 超过上限 %d 段", callchain.MaxLen)
+			return nil, fmt.Errorf("call_chain exceeds the limit of %d entries", callchain.MaxLen)
 		}
 		self := callchain.Key(ep.TargetType, ep.TargetID)
 		if callchain.Contains(chain, self) {
-			xlog.Info("检测到循环调用 schema=%s endpoint=%s chain=%s", authInfo.Schema, ep.Name, callchain.Format(chain))
-			return nil, fmt.Errorf("检测到循环调用：%s 已在本调用链中（%s）", self, callchain.Format(chain))
+			xlog.Info("detected a call loop schema=%s endpoint=%s chain=%s", authInfo.Schema, ep.Name, callchain.Format(chain))
+			return nil, fmt.Errorf("detected a call loop: %s is already on this call chain (%s)", self, callchain.Format(chain))
 		}
 		chain = callchain.Append(chain, self)
 
@@ -141,47 +148,58 @@ func makeToolHandler(authInfo *auth.AuthInfo, ep models.SvcEndpoint) mcp.ToolHan
 	}
 }
 
-// runFlowTool 执行 flow 类型目标。
-// 客户端没订阅进度（无 progressToken）：同步执行并返回最终结果。
-// 订阅了进度：在后台执行，消费 progress/result channel 并通过 notifications/progress 推送
-// （两个通道都按 category=text 推送；最终结果只认 tools/call 的返回值）。
+// runFlowTool executes a flow-typed target.
+// When the client did not subscribe to progress (no progressToken): run synchronously and return the
+// final result. When it did: run in the background, consume the progress/result channels and push them
+// as notifications/progress (both channels are pushed with category=text; the final result is only the
+// tools/call return value).
 func runFlowTool(authInfo *auth.AuthInfo, flowId string, input map[string]interface{}, req *mcp.CallToolRequest, ctx context.Context, chain []string) (*mcp.CallToolResult, error) {
 	repo := flows.NewRepository()
-	// 正式入口：只运行已发布的正式版本。没有正式版本时明确报错，
-	// 不退回草稿 —— 草稿只在编辑页调试/run_flow 试跑里生效。
+	// Production entry point: only the released version runs. Without one it fails loudly and never
+	// falls back to the draft — drafts only take effect in the editor debugger / run_flow trial runs.
 	Instance, err := repo.GetCurrentFlowVersion(authInfo, flowId)
 	if err != nil {
 		if errors.Is(err, flows.ErrNoReleasedVersion) {
-			return nil, fmt.Errorf("flow %s 尚未发布正式版本，请先在编辑页发布后再调用", flowId)
+			return nil, fmt.Errorf("flow %s has no released version yet; release it from the editor before calling it", flowId)
 		}
 		return nil, fmt.Errorf("get flow instance %s: %w", flowId, err)
 	}
-	// 废弃的 flow 不可运行：status 在实体行、版本快照里没有，外部入口必须自己判一次，
-	// 不能只靠「切废弃时收回端点」这个 best-effort 动作（失败只记日志）。
+	// A deprecated flow cannot run: status lives on the entity row and not in the version snapshot, so
+	// an external entry point has to check it itself; it cannot rely on the best-effort act of
+	// retracting the endpoint when deprecating (a failure there is only logged).
 	if !models.IsRunnable(int(Instance.Status)) {
-		return nil, fmt.Errorf("flow %s 已废弃，不可调用", Instance.Name)
+		return nil, fmt.Errorf("flow %s is deprecated and cannot be called", Instance.Name)
 	}
 
-	// 要不要推进度只由客户端决定：params._meta.progressToken 存在 = 订阅了。
-	// 端点侧没有自己的开关（flows.stream 已废弃）—— server 无权替客户端决定收不收通知。
+	// Whether progress is pushed is decided by the client alone: params._meta.progressToken present means
+	// subscribed. The endpoint has no switch of its own (flows.stream is gone) — the server may not decide
+	// on the client's behalf whether notifications are wanted.
 	pump := core.NewProgressPump(progressToken(req))
 
-	// 会话 id 只认 params._meta 一处（与 agent 端点同一口径）。
-	// 归属校验放在这里而不是 NewFlow 里 —— 后者还要服务「agent 调 flow 时共用调用方会话」
-	// 的内部路径，那里的 owner 是父 agent。
+	// The session id is only recognized in params._meta (the same rule as agent endpoints).
+	// The ownership check lives here rather than in NewFlow — that one also serves the internal path
+	// where an agent calls a flow and shares the caller's session, and there the owner is the parent agent.
 	sid := metaSessionID(req)
 	if sid != "" {
-		// 会话归属用户（owner 只记录创建者）：父子 agent 共用同一 session 时 owner 对不上，
-		// 用 owner 收口会把合法级联整体拒掉，所以这里与 HTTP chat 一样按 user 收口。
-		// 不存在则用该 id 建档 —— 协议端点靠调用方自带 UUID 表达「首次创建」。
+		// A session belongs to a user (owner only records the creator): a parent and child agent sharing
+		// a session would disagree on owner, and closing on owner would reject every legitimate cascade,
+		// so this closes on the user like HTTP chat. A missing session is created with that id — protocol
+		// endpoints express "first creation" by the caller supplying a UUID.
 		if _, serr := sessions.ResolveOrCreateForUser(
 			authInfo.Schema, sid, models.SessionOwnerTypeFlow, Instance.ID, authInfo.ID, "",
 		); serr != nil {
 			return nil, fmt.Errorf("session %s: %w", sid, serr)
 		}
-		input = core.WithSessionID(input, sid) // NewFlow 会再把它剥离出业务入参
+		input = core.WithSessionID(input, sid) // NewFlow strips it out of the business input again
 	}
-	// 调用链走保留键，NewFlow 会剥离（与 _call_depth 同一套机制），不进业务变量
+	// The output language is supplied the same way and takes the same route: params._meta.language is a pin, so the flow
+	// run carries it as its builtin `language` and forwards it to whatever it calls next. A malformed tag is "not
+	// supplied" (_meta is advisory).
+	if lang := metaLanguage(req); lang != "" {
+		input = core.WithOutputLanguage(input, lang)
+	}
+	// The call chain travels through the reserved key and is stripped by NewFlow (the same mechanism as
+	// _call_depth), so it never becomes a business variable.
 	input = callchain.WithArguments(input, chain)
 
 	execCtx, err := executors.NewFlow(Instance, input, uuid.NewString(), uuid.Must(uuid.NewV7()).String(), authInfo.Schema, authInfo.ID, ctx)
@@ -190,12 +208,13 @@ func runFlowTool(authInfo *auth.AuthInfo, flowId string, input map[string]interf
 	}
 
 	if !pump.Enabled() {
-		// 错误已双写进 execCtx.Error，交由 finalFlowResult 统一处理
+		// The error is already mirrored into execCtx.Error and handled uniformly by finalFlowResult.
 		_ = executors.Start(execCtx)
 		return finalFlowResult(execCtx)
 	}
 
-	// 订阅了进度：后台执行，主协程消费 channel 并推送通知
+	// Progress subscribed: run in the background and let the main goroutine consume the channels and
+	// push notifications.
 	ss := req.Session
 
 	errCh := make(chan error, 1)
@@ -223,8 +242,8 @@ loop:
 			}
 			notifyCategory(ctx, ss, pump, core.CategoryText, r, nil)
 		case <-errCh:
-			// 后台执行结束：业务错误已双写进 execCtx.Error，
-			// 统一交给 finalFlowResult 包装（isError 结果 vs 文本结果）
+			// The background execution ended: the business error is already mirrored into execCtx.Error
+			// and wrapped uniformly by finalFlowResult (an isError result versus a text result).
 			break loop
 		case <-ctx.Done():
 			execCtx.CloseChans()
@@ -235,8 +254,8 @@ loop:
 	return finalFlowResult(execCtx)
 }
 
-// finalFlowResult 在 flow 执行收尾时统一检查 execCtx.Error：
-// 有错则返回 isError 标记的结果，否则返回最终结果。
+// finalFlowResult checks execCtx.Error when a flow execution ends: an error becomes a result flagged
+// isError, otherwise the final result is returned.
 func finalFlowResult(execCtx *flow.ExecContext) (*mcp.CallToolResult, error) {
 	if e := execCtx.GetError(); e != "" {
 		return errorResult(e), nil
@@ -244,11 +263,12 @@ func finalFlowResult(execCtx *flow.ExecContext) (*mcp.CallToolResult, error) {
 	return textResult(execCtx.GetResult()), nil
 }
 
-// runAgentTool 执行 agent 类型目标。
-// 客户端没订阅进度（无 progressToken）：同步执行并返回最终结果。
-// 订阅了进度：在后台执行，消费结构化事件 channel 并通过 notifications/progress 推送
-// （category = thinking / text / tool_call / tool_result）；
-// Agent 没有 final 帧：最终答案随 tools/call 返回，流里靠 tool_call 边界切分。
+// runAgentTool executes an agent-typed target.
+// When the client did not subscribe to progress (no progressToken): run synchronously and return the
+// final result. When it did: run in the background, consume the structured event channel and push it as
+// notifications/progress (category = thinking / text / tool_call / tool_result).
+// An agent has no final frame: the final answer is returned by tools/call, and the stream is split on
+// tool_call boundaries.
 func runAgentTool(authInfo *auth.AuthInfo, agentID string, input map[string]interface{}, req *mcp.CallToolRequest, ctx context.Context, chain []string) (*mcp.CallToolResult, error) {
 	repo := agents.NewRepository()
 	agentInst, err := repo.GetAgent(authInfo, agentID)
@@ -256,20 +276,26 @@ func runAgentTool(authInfo *auth.AuthInfo, agentID string, input map[string]inte
 		return nil, fmt.Errorf("get agent instance %s: %w", agentID, err)
 	}
 
-	// 同 runFlowTool：进度订阅只由 progressToken 表达，agent 端点曾恒为非流式，
-	// 那只是「没有开关可回退」的副产物，现在与 flow 端点同一口径。
+	// Same as runFlowTool: the progress subscription is expressed by progressToken only. Agent endpoints
+	// used to be non-streaming without exception, which was a by-product of "there was no switch to fall
+	// back to"; they now follow the same rule as flow endpoints.
 	pump := core.NewProgressPump(progressToken(req))
 
-	// 会话 id 只认 params._meta 一处（与 progressToken 同一处）。
+	// The session id is only recognized in params._meta (the same place as progressToken).
 	sid := metaSessionID(req)
-	// 业务入参里的同名键一律剥掉：它会变成模型可见的 {{args.session_id}}。
-	// 这里不再拿它当会话开关，只是防止误传把控制字段漏进提示词。
+	// A key of the same name in the business input is stripped: it would become the model-visible
+	// {{args.session_id}}. It is no longer a session switch here, only protection against the control
+	// field leaking into the prompt by mistake.
 	input = core.StripSessionID(input)
+	// The same protection for the language hint: supplied through _meta (see metaLanguage), so a business key of that
+	// name is only a mistake and must not reach the model as {{args._output_language}}.
+	input = core.StripOutputLanguage(input)
 
-	// 会话归属：给了 session_id 就必须是这个用户的会话（与 HTTP chat 同一口径）。
-	// owner 只记录创建者：父子 agent 共用同一 session 时 owner 必然对不上，
-	// 用 owner 收口会把 call_agent 的合法级联整体拒掉，所以按 user 收口；
-	// 不存在则用该 id 建档（调用方自带 UUID 即首次创建的意图）。
+	// Session ownership: when a session_id is given, the session must belong to this user (the same rule
+	// as HTTP chat). owner only records the creator: a parent and child agent sharing a session would
+	// disagree on owner, and closing on owner would reject every legitimate call_agent cascade, so the
+	// check closes on the user; a missing session is created with that id (a caller-supplied UUID is the
+	// intent of a first creation).
 	if sid != "" {
 		if _, serr := sessions.ResolveOrCreateForUser(
 			authInfo.Schema, sid, models.SessionOwnerTypeAgent, agentInst.ID, authInfo.ID, "",
@@ -278,9 +304,11 @@ func runAgentTool(authInfo *auth.AuthInfo, agentID string, input map[string]inte
 		}
 	}
 
-	// user_id 恒定注入：verifyAPIKey / verifyOAuth 只放行绑定了用户的凭证（见 auth.go），
-	// MCP 没有租户级/无主身份 —— 运行域隔离、会话归属与会话记忆全都以它为归属依据。
-	// session_id 由调用方自带（已从业务入参剥离）：给了就是会话调用，不给则单轮、不记记忆。
+	// user_id is always injected: verifyAPIKey / verifyOAuth only accept credentials bound to a user
+	// (see auth.go), and MCP has no tenant-level or anonymous identity — run-domain isolation, session
+	// ownership and session memory all key off it.
+	// session_id comes from the caller (already stripped from the business input): when given it is a
+	// session call, otherwise a single turn that records no memory.
 	agentArguments := map[string]interface{}{
 		"args":      input,
 		"user_id":   authInfo.ID,
@@ -289,12 +317,19 @@ func runAgentTool(authInfo *auth.AuthInfo, agentID string, input map[string]inte
 	if sid != "" {
 		agentArguments["session_id"] = sid
 	}
-	// 链放顶层保留键，不放 args 内部：args 是模型可见的业务入参，
-	// 控制字段混进去会变成 {{args._call_chain}}。
+	// The chain goes into a top-level reserved key, not inside args: args are the model-visible business
+	// input, and a control field there would become {{args._call_chain}}.
 	if len(chain) > 0 {
 		agentArguments[callchain.ArgumentKey] = chain
 	}
-	// 正式入口：读已发布的当前版本（没有版本就拒绝，不退回草稿）
+	// Same shape for the caller's language (params._meta.language): a top-level reserved key, never inside args.
+	// Without it a programmatic call whose arguments are pure JSON leaves the model no language signal at all, and it
+	// answers in the prompt's language.
+	if lang := metaLanguage(req); lang != "" {
+		agentArguments[core.OutputLanguageKey] = lang
+	}
+	// Production entry point: read the released current version (refuse when there is none, never fall
+	// back to the draft).
 	agent.SetReleaseMode(agentArguments)
 	inst, err := agent.NewAgent(agentInst, authInfo.Schema, agentArguments)
 	if err != nil {
@@ -306,19 +341,22 @@ func runAgentTool(authInfo *auth.AuthInfo, agentID string, input map[string]inte
 	defer inst.Close()
 
 	if !pump.Enabled() {
-		// 用调用方的 ctx：对端关连接 / 取消请求即在同一条 ctx 上取消本次运行，
-		// 不必等它把 LLM 轮次和沙箱调用跑完（与 HTTP 试聊同一口径）。
-		// 错误已双写进 inst.Error，交由 finalAgentResult 统一处理。
+		// Use the caller's ctx: when the peer closes the connection or cancels the request, this run is
+		// cancelled on the same ctx without waiting for its LLM turns and sandbox calls to finish (the
+		// same rule as HTTP chat).
+		// The error is already mirrored into inst.Error and handled uniformly by finalAgentResult.
 		_ = inst.Stream(ctx)
 		inst.CloseChans()
 		if ctx.Err() != nil {
-			return nil, ctx.Err() // 调用方已断开：不再回一条没人收的结果
+			return nil, ctx.Err() // the caller disconnected: no result to return
 		}
 		return finalAgentResult(inst)
 	}
 
-	// 订阅了进度：后台执行，主协程消费「结构化事件」channel 并推送通知。
-	// 思考（EventThinking）与工具调用只在这里出现，早先的纯文本进度通道已删除。
+	// Progress subscribed: run in the background and let the main goroutine consume the "structured
+	// event" channel and push notifications.
+	// Thinking (EventThinking) and tool calls only appear here; the earlier plain-text progress channel
+	// has been removed.
 	ss := req.Session
 
 	errCh := make(chan error, 1)
@@ -328,9 +366,10 @@ func runAgentTool(authInfo *auth.AuthInfo, agentID string, input map[string]inte
 	}()
 
 	eventCh := inst.GetEventChan()
-	// 调用方断开后不再推通知，但仍把事件通道读干净：运行与本次调用共用同一条 ctx，
-	// 已随断开取消 —— 等它自行收尾（落库、杀常驻进程）再返回。直接 return 会让
-	// defer inst.Close() 在 Stream 还没退出时跑，与它抢同一个一次性工作目录。
+	// After the caller disconnects, stop pushing notifications but keep draining the event channel: the
+	// run shares this call's ctx and has already been cancelled by the disconnect — wait for it to wind
+	// down (persistence, killing resident processes) before returning. Returning directly would let
+	// defer inst.Close() run while Stream is still active, fighting over the same one-shot working directory.
 	gone := ctx.Done()
 
 loop:
@@ -342,27 +381,28 @@ loop:
 				continue
 			}
 			if gone == nil {
-				continue // 已断开：只读不推
+				continue // already disconnected: read only, never push
 			}
 			if item, ok := ev.ToProgress(); ok {
 				notifyCategory(ctx, ss, pump, item.Category, item.Message, item.Meta)
 			}
 		case <-errCh:
-			// 后台执行结束：业务错误已双写进 inst.Error，统一交给 finalAgentResult 包装
+			// The background execution ended: the business error is already mirrored into inst.Error and
+			// wrapped uniformly by finalAgentResult.
 			break loop
 		case <-gone:
-			gone = nil // 置 nil 后该分支永久阻塞，避免空转
+			gone = nil // nil blocks that branch for good, avoiding a busy loop
 		}
 	}
 
 	if ctx.Err() != nil {
-		return nil, ctx.Err() // 调用方已断开：结果无人接收
+		return nil, ctx.Err() // the caller disconnected: nobody receives the result
 	}
 	return finalAgentResult(inst)
 }
 
-// finalAgentResult 在 agent 执行收尾时统一检查 inst.GetError()：
-// 有错则返回 isError 标记的结果，否则返回最终结果。
+// finalAgentResult checks inst.GetError() when an agent execution ends: an error becomes a result
+// flagged isError, otherwise the final result is returned.
 func finalAgentResult(inst core.Agent) (*mcp.CallToolResult, error) {
 	if e := inst.GetError(); e != "" {
 		return errorResult(e), nil
@@ -370,7 +410,7 @@ func finalAgentResult(inst core.Agent) (*mcp.CallToolResult, error) {
 	return textResult(inst.GetResult()), nil
 }
 
-// textResult 构造文本型工具返回
+// textResult builds a plain-text tool result.
 func textResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
@@ -379,7 +419,7 @@ func textResult(s string) *mcp.CallToolResult {
 	}
 }
 
-// errorResult 构造带 isError 标记的文本型工具返回（工具已执行但业务结果失败）
+// errorResult builds a plain-text tool result flagged isError (the tool ran but the business result failed).
 func errorResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
@@ -389,10 +429,10 @@ func errorResult(s string) *mcp.CallToolResult {
 	}
 }
 
-// callChain 取客户端在 params._meta["call_chain"] 里给的祖先链。
+// callChain reads the ancestor chain the client supplied in params._meta["call_chain"].
 //
-// tooLong 表示超过 MaxLen：必须直接拒绝，不能截断 ——
-// 被截掉的那几段里可能正好藏着要检测的重入。
+// tooLong means it exceeds MaxLen: it must be rejected outright, never truncated — the dropped entries
+// may be exactly the re-entry being looked for.
 func callChain(req *mcp.CallToolRequest) (chain []string, tooLong bool) {
 	if req == nil || req.Params == nil {
 		return nil, false
@@ -404,10 +444,11 @@ func callChain(req *mcp.CallToolRequest) (chain []string, tooLong bool) {
 	return callchain.Normalize(raw), false
 }
 
-// metaSessionID 取客户端在 params._meta["session_id"] 里给的会话 id。
+// metaSessionID reads the session id the client supplied in params._meta["session_id"].
 //
-// 与 progressToken 对称：都是「影响这次调用怎么处理」的元数据，都不属于端点的业务参数。
-// 返回空串 = 没给（无状态运行，走 runs/ 兜底场地）。
+// Symmetric to progressToken: both are metadata that "affects how this call is handled", neither belongs
+// to the endpoint's business parameters. An empty return means "not supplied" (a stateless run, falling
+// back to the runs/ scratch area).
 func metaSessionID(req *mcp.CallToolRequest) string {
 	if req == nil || req.Params == nil {
 		return ""
@@ -416,11 +457,25 @@ func metaSessionID(req *mcp.CallToolRequest) string {
 	return strings.TrimSpace(s)
 }
 
-// progressToken 取客户端在 params._meta.progressToken 里表达过的订阅意愿。
+// metaLanguage reads the output language the caller supplied in params._meta["language"].
 //
-// 返回 nil 表示「没订阅」—— 这时一帧进度都不能发：MCP 2026-07-28 要求
-// notifications/progress 只引用活跃请求里提供过的 token。
-// 早先的做法是没传就兜底生成一个 UUID，等于往客户端从未订阅过的 token 上推送。
+// The same family as metaSessionID: it describes how the call should be answered, not what the business input is. An
+// unrecognised tag counts as "not supplied" rather than an error - _meta is advisory, and failing a whole call over a
+// mistyped tag would be worse than ignoring the hint.
+func metaLanguage(req *mcp.CallToolRequest) string {
+	if req == nil || req.Params == nil {
+		return ""
+	}
+	s, _ := req.Params.Meta[core.MetaLanguageKey].(string)
+	tag, _ := core.NormalizeOutputLanguage(s)
+	return tag
+}
+
+// progressToken reads the subscription the client expressed in params._meta.progressToken.
+//
+// nil means "not subscribed" — and then not a single progress frame may be sent: MCP 2026-07-28 requires
+// notifications/progress to reference only a token supplied by an active request. The earlier approach
+// generated a UUID when nothing was supplied, which pushed onto a token the client never subscribed to.
 func progressToken(req *mcp.CallToolRequest) any {
 	if req == nil || req.Params == nil {
 		return nil
@@ -432,9 +487,10 @@ func progressToken(req *mcp.CallToolRequest) any {
 	return t
 }
 
-// notifyCategory 通过标准 notifications/progress 推送一条指定 category 的增量。
-// category 取值与事件映射统一在 agent/core（Category* 常量 / Event.ToProgress）。
-// message 与 extra 都为空时不发，避免推送空帧 —— 也因此不会白白消耗一个序号。
+// notifyCategory pushes one increment of the given category through a standard notifications/progress.
+// The category values and the event mapping live in agent/core (the Category* constants /
+// Event.ToProgress). Nothing is sent when both message and extra are empty, avoiding empty frames — and
+// therefore avoiding burning a sequence number.
 func notifyCategory(ctx context.Context, ss *mcp.ServerSession, pump *core.ProgressPump, category, message string, extra map[string]any) {
 	if !pump.Enabled() {
 		return
@@ -449,20 +505,20 @@ func notifyCategory(ctx context.Context, ss *mcp.ServerSession, pump *core.Progr
 	_ = ss.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
 		Meta:          meta,
 		ProgressToken: pump.Token,
-		// progress MUST 递增：这里给的是「第几条通知」而非真实完成度，
-		// 总量未知，故不填 Total（规范允许省略）。
+		// progress MUST increase: the value here is "which notification this is", not real completion,
+		// and the total is unknown, so Total is left out (the spec allows omitting it).
 		Progress: pump.Next(),
 		Message:  message,
 	})
 }
 
-// boolPtr 辅助
+// boolPtr is a helper.
 func boolPtr(b bool) *bool {
 	return &b
 }
 
-// NewMCPHandler 返回 gin 路由处理函数：先做租户识别 + 认证（Bearer 分流），
-// 再委托给 SDK 的 StreamableHTTPHandler（无状态模式）。
+// NewMCPHandler returns the gin route handler: it resolves the tenant and authenticates first (Bearer
+// dispatch), then delegates to the SDK StreamableHTTPHandler (stateless mode).
 func NewMCPHandler() http.HandlerFunc {
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server {
@@ -478,9 +534,9 @@ func NewMCPHandler() http.HandlerFunc {
 		},
 		&mcp.StreamableHTTPOptions{
 			Stateless: true,
-			// 允许不带 session 头（无状态模式）
+			// Session headers may be absent (stateless mode).
 			JSONResponse: false,
-			// 让 SDK 处理协议细节；认证失败已由外层拦截
+			// The SDK handles the protocol details; authentication failures are already intercepted above.
 		},
 	)
 
@@ -504,7 +560,7 @@ func NewMCPHandler() http.HandlerFunc {
 	}
 }
 
-// xhttpErr 写简单 JSON 错误（认证失败不记录凭证明文）
+// xhttpErr writes a plain JSON error (an authentication failure never logs the credential in clear).
 func xhttpErr(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

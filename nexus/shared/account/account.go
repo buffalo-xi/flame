@@ -1,21 +1,22 @@
-// Package account 账号原语：密码哈希/校验 + 账号状态词表。
+// Package account holds the account primitives: password hashing / verification plus the account status vocabulary.
 //
-// 中立包，两侧共用：
-//   - 租户用户：<schema>.users（shared/auth 通过别名转发复用本包，见 auth/password.go）
-//   - 平台用户：platform.users（nexus_platform 直接引用）
+// A neutral package shared by both sides:
+//   - tenant users: <schema>.users (shared/auth re-exports it through an alias, see auth/password.go)
+//   - platform users: platform.users (nexus_platform references it directly)
 //
-// 之所以从 shared/auth 抽出来：auth 包里还有租户登录 handler（login.go，依赖 gin），
-// 而平台侧只需要"哈希 / 校验 / 状态词表"，不该为此把租户登录逻辑拖进依赖图。
+// Why it was extracted from shared/auth: that package also holds the tenant login handler (login.go, which depends on gin),
+// while the platform side only needs "hash / verify / the status vocabulary" and should not drag tenant login logic into
+// its dependency graph for that.
 //
-// 密码存储策略（与原实现完全一致，未改语义）：
-//   - 新写入（新建用户 / 重置密码 / 改角色设密码）一律 bcrypt：
-//     自带 salt 与算法/成本标识（形如 `$2a$10$...`），比较是恒定时间的。
-//   - 兼容历史 MD5（32 位小写 hex，无盐）：登录校验通过后由调用方透明升级为 bcrypt
-//     （见 VerifyPassword 的 needRehash 返回值）。
-//   - 其它格式一律拒绝，不做猜测。
+// Password storage policy (identical to the original implementation, semantics unchanged):
+//   - every new write (create user / reset password / set a password while changing the role) uses bcrypt:
+//     it carries its own salt and algorithm/cost marker (of the form `$2a$10$...`), and the comparison is constant time.
+//   - legacy MD5 (32 lowercase hex characters, unsalted) stays readable: once the verification passes the caller upgrades it
+//     to bcrypt transparently (see the needRehash return value of VerifyPassword).
+//   - any other format is refused outright, never guessed at.
 //
-// 注意：bcrypt 只使用明文的前 72 字节，因此超长密码直接拒绝，
-// 避免"前 72 字节相同即通过"的歧义。
+// Note: bcrypt only uses the first 72 bytes of the plaintext, so an over-long password is refused outright, avoiding the
+// ambiguity of "identical in the first 72 bytes means it passes".
 package account
 
 import (
@@ -29,24 +30,25 @@ import (
 )
 
 const (
-	// MaxPasswordBytes bcrypt 可处理的明文上限（字节）
+	// MaxPasswordBytes is the plaintext limit bcrypt can handle (bytes)
 	MaxPasswordBytes = 72
-	// MinPasswordLength 密码最小长度（与前端校验保持一致）
+	// MinPasswordLength is the minimum password length (kept in step with the frontend check)
 	MinPasswordLength = 8
 )
 
-// 账号状态词表：租户用户（<schema>.users.status）与平台用户（platform.users.status）共用。
-// 语义：账号是否可用 —— 登录与 API 调用两侧都看它。
+// Account status vocabulary: shared by tenant users (<schema>.users.status) and platform users
+// (platform.users.status).
+// Meaning: whether the account is usable — both login and API calls look at it.
 const (
 	StatusActive   = "active"
 	StatusDisabled = "disabled"
 	StatusLocked   = "locked"
 )
 
-// ErrPasswordTooLong 密码超过 bcrypt 上限
-var ErrPasswordTooLong = errors.New("密码过长（最多 72 字节）")
+// ErrPasswordTooLong means the password exceeds the bcrypt limit.
+var ErrPasswordTooLong = errors.New("password too long (at most 72 bytes)")
 
-// HashPassword 生成密码哈希（bcrypt）。
+// HashPassword produces a password hash (bcrypt).
 func HashPassword(plain string) (string, error) {
 	if len(plain) > MaxPasswordBytes {
 		return "", ErrPasswordTooLong
@@ -58,14 +60,15 @@ func HashPassword(plain string) (string, error) {
 	return string(b), nil
 }
 
-// VerifyPassword 校验明文密码是否与存储值匹配。
-// needRehash = true 表示"校验通过，但存储值仍是旧格式（MD5）"，调用方应重新哈希后落库。
+// VerifyPassword checks a plaintext password against a stored value.
+// needRehash = true means "the verification passed but the stored value is still in the old (MD5) format", and the caller
+// should re-hash it and write it back.
 func VerifyPassword(stored, plain string) (ok bool, needRehash bool) {
 	if stored == "" {
 		return false, false
 	}
 
-	// bcrypt：$2a$ / $2b$ / $2y$
+	// bcrypt: $2a$ / $2b$ / $2y$
 	if strings.HasPrefix(stored, "$2") {
 		if len(plain) > MaxPasswordBytes {
 			return false, false
@@ -73,7 +76,7 @@ func VerifyPassword(stored, plain string) (ok bool, needRehash bool) {
 		return bcrypt.CompareHashAndPassword([]byte(stored), []byte(plain)) == nil, false
 	}
 
-	// 旧格式：32 位 hex = md5(明文)
+	// Old format: 32 hex characters = md5(plaintext)
 	if len(stored) == 32 && isHex(stored) {
 		sum := md5.Sum([]byte(plain))
 		want := hex.EncodeToString(sum[:])
@@ -83,11 +86,11 @@ func VerifyPassword(stored, plain string) (ok bool, needRehash bool) {
 		return false, false
 	}
 
-	// 其它格式：拒绝
+	// Any other format: refused
 	return false, false
 }
 
-// isHex 判断字符串是否全为十六进制字符。
+// isHex reports whether the string consists only of hexadecimal characters.
 func isHex(s string) bool {
 	for _, c := range s {
 		switch {

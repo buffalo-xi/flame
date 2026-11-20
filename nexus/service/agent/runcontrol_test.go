@@ -163,8 +163,8 @@ func TestStopSessionStopsAllRuns(t *testing.T) {
 
 func TestCancelMessage(t *testing.T) {
 	cases := map[error]string{
-		ErrRunStopped: "运行已终止（用户请求）",
-		ErrClientGone: "运行已终止（客户端断开）",
+		ErrRunStopped: "Run stopped by the user",
+		ErrClientGone: "Run stopped: the client disconnected",
 	}
 	for cause, want := range cases {
 		if got := cancelMessage(cause); got != want {

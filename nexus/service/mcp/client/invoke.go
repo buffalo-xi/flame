@@ -15,7 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// InvokeError 携带 flow 错误码的调用错误，便于上层按类型分类处理。
+// InvokeError carries a flow error code so callers can dispatch on the category.
 type InvokeError struct {
 	Code string // flow.ErrCodeTimeout / ErrCodeCancel / ErrCodeAuth / ErrCodeConfig / ErrCodeConnection / ErrCodeOther
 	Err  error
@@ -24,15 +24,16 @@ type InvokeError struct {
 func (e *InvokeError) Error() string { return e.Err.Error() }
 func (e *InvokeError) Unwrap() error { return e.Err }
 
-// classifyInvokeError 将 InvokeWithProgress 返回的错误映射到 flow 错误码。
-// 优先级：cancel > timeout > auth > config > connection > other；已分类的 InvokeError 透传。
+// classifyInvokeError maps an error returned by InvokeWithProgress to a flow error code.
+// Priority: cancel > timeout > auth > config > connection > other; an already classified InvokeError
+// passes through unchanged.
 func classifyInvokeError(err error) error {
 	if err == nil {
 		return nil
 	}
 	var ie *InvokeError
 	if errors.As(err, &ie) {
-		return err // 已分类，透传
+		return err // already classified, pass through
 	}
 	msg := err.Error()
 	switch {
@@ -81,20 +82,20 @@ func isConnectionError(msg string) bool {
 	return false
 }
 
-// ToolResult 工具调用结果（已展平）
+// ToolResult is a flattened tool call result.
 type ToolResult struct {
-	// Content 文本形式的合并结果
+	// Content is the merged textual result.
 	Content string
-	// Structured 结构化结果（若 server 返回 structuredContent）
+	// Structured is the structured result (when the server returns structuredContent).
 	Structured any
-	// IsError 调用是否以错误结束
+	// IsError reports whether the call ended with an error.
 	IsError bool
-	// Raw 原始 SDK 结果，便于上层按需处理
+	// Raw is the original SDK result, for callers that need more.
 	Raw *mcp.CallToolResult
 }
 
-// CallToolOnce 建立一次性连接并调用远端工具（适合低频、无连接池场景）。
-// arguments 应为可 JSON 化的 map[string]any。
+// CallToolOnce opens a one-shot connection and calls a remote tool (suited to low-frequency use without
+// a pool). arguments must be a JSON-serializable map[string]any.
 func CallToolOnce(ctx context.Context, conn *models.McpConnection, toolName string, arguments map[string]any) (*ToolResult, error) {
 	session, err := NewClientSession(ctx, conn)
 	if err != nil {
@@ -104,10 +105,11 @@ func CallToolOnce(ctx context.Context, conn *models.McpConnection, toolName stri
 	return callToolOnSession(ctx, session, toolName, arguments)
 }
 
-// Invoke 高层调用入口：根据已建立会话或直接基于连接配置调用工具。
-// 本函数优先复用传入的 session（若非 nil），否则临时建连。
-// - streamable_http：无状态短连接，使用一次性建连（CallToolOnce）。
-// - stdio：有状态子进程，复用进程池（sessionPool）以减少频繁启停开销。
+// Invoke is the high-level entry point: it calls a tool through an existing session or straight from
+// the connection config. The session passed in is preferred when it is not nil, otherwise a connection
+// is opened on the fly.
+//   - streamable_http: a stateless short-lived connection, opened per call (CallToolOnce);
+//   - stdio: a stateful child process, reusing the process pool (sessionPool) to avoid start/stop churn.
 func Invoke(ctx context.Context, conn *models.McpConnection, session *mcp.ClientSession, toolName string, arguments map[string]any) (*ToolResult, error) {
 	if session != nil {
 		return callToolOnSession(ctx, session, toolName, arguments)
@@ -118,7 +120,8 @@ func Invoke(ctx context.Context, conn *models.McpConnection, session *mcp.Client
 	return CallToolOnce(ctx, conn, toolName, arguments)
 }
 
-// CallToolPooled 基于进程池（sessionPool）调用 stdio 工具：复用同一子进程，不主动关闭。
+// CallToolPooled calls a stdio tool through the process pool (sessionPool): the same child process is
+// reused and not closed here.
 func CallToolPooled(ctx context.Context, conn *models.McpConnection, toolName string, arguments map[string]any) (*ToolResult, error) {
 	session, err := sessionPool.Get(ctx, conn)
 	if err != nil {
@@ -127,12 +130,12 @@ func CallToolPooled(ctx context.Context, conn *models.McpConnection, toolName st
 	return callToolOnSession(ctx, session, toolName, arguments)
 }
 
-// InvokeWithProgress 调用远端工具，并在执行期间流式接收 progress 通知。
-// onProgress 会被 SDK 后台读协程边调边推多次触发（与阻塞在 CallTool 的主协程并发）。
-// 按 transport 分流：
-//   - stdio：复用进程池，设置 progressToken 并注册到池上的路由表，由 newStdioSession
-//     注入的分发 handler 按 token 回传。
-//   - streamable_http：一次性建连，直接绑定 onProgress。
+// InvokeWithProgress calls a remote tool and streams its progress notifications.
+// onProgress fires repeatedly from the SDK's background read goroutine (concurrently with the main
+// goroutine blocked on CallTool). Dispatch by transport:
+//   - stdio: reuse the process pool, set a progressToken and register it in the pool's routing table,
+//     so the dispatcher injected by newStdioSession routes frames back by token;
+//   - streamable_http: a one-shot connection with onProgress bound directly.
 func InvokeWithProgress(ctx context.Context, conn *models.McpConnection, toolName string, arguments map[string]any, onProgress func(*mcp.ProgressNotificationParams)) (*ToolResult, error) {
 	var res *ToolResult
 	var err error
@@ -147,11 +150,12 @@ func InvokeWithProgress(ctx context.Context, conn *models.McpConnection, toolNam
 	return res, nil
 }
 
-// InvokeSync 调用远端工具但不订阅进度（不设 progressToken）。
+// InvokeSync calls a remote tool without subscribing to progress (no progressToken).
 //
-// 服务端据此不推 notifications/progress —— progress 是「客户端要，服务端才给」，
-// 而不是端点自带的属性。连接策略与 InvokeWithProgress 完全一致
-// （stdio 复用进程池、http 一次性建连），差别只是不挂回调、不带 token。
+// The server therefore pushes no notifications/progress — progress is "the client asks, the server
+// gives", not a property every endpoint has. The connection strategy matches InvokeWithProgress exactly
+// (stdio reuses the pool, http opens a one-shot connection); the only difference is that no callback is
+// attached and no token is sent.
 func InvokeSync(ctx context.Context, conn *models.McpConnection, toolName string, arguments map[string]any) (*ToolResult, error) {
 	var (
 		res *ToolResult
@@ -168,7 +172,7 @@ func InvokeSync(ctx context.Context, conn *models.McpConnection, toolName string
 	return res, nil
 }
 
-// invokeStdioSync stdio 分支：复用进程池，不注册进度路由。
+// invokeStdioSync is the stdio branch: reuse the pool, register no progress route.
 func invokeStdioSync(ctx context.Context, conn *models.McpConnection, toolName string, arguments map[string]any) (*ToolResult, error) {
 	session, err := sessionPool.Get(ctx, conn)
 	if err != nil {
@@ -177,7 +181,7 @@ func invokeStdioSync(ctx context.Context, conn *models.McpConnection, toolName s
 	return callToolOnSession(ctx, session, toolName, arguments)
 }
 
-// invokeHTTPSync streamable_http 分支：一次性建连，不挂 ProgressNotificationHandler。
+// invokeHTTPSync is the streamable_http branch: a one-shot connection with no ProgressNotificationHandler.
 func invokeHTTPSync(ctx context.Context, conn *models.McpConnection, toolName string, arguments map[string]any) (*ToolResult, error) {
 	authHandler, err := BuildOAuthHandler(conn.Auth)
 	if err != nil {
@@ -198,7 +202,7 @@ func invokeHTTPSync(ctx context.Context, conn *models.McpConnection, toolName st
 	return callToolOnSession(ctx, session, toolName, arguments)
 }
 
-// invokeStdioWithProgress stdio 分支：复用进程池 + token 路由。
+// invokeStdioWithProgress is the stdio branch: pool reuse plus token routing.
 func invokeStdioWithProgress(ctx context.Context, conn *models.McpConnection, toolName string, arguments map[string]any, onProgress func(*mcp.ProgressNotificationParams)) (*ToolResult, error) {
 	session, err := sessionPool.Get(ctx, conn)
 	if err != nil {
@@ -214,7 +218,7 @@ func invokeStdioWithProgress(ctx context.Context, conn *models.McpConnection, to
 	return callToolOnSessionWithToken(ctx, session, toolName, arguments, token)
 }
 
-// invokeHTTPWithProgress streamable_http 分支：一次性建连 + 直接绑 onProgress。
+// invokeHTTPWithProgress is the streamable_http branch: a one-shot connection with onProgress bound directly.
 func invokeHTTPWithProgress(ctx context.Context, conn *models.McpConnection, toolName string, arguments map[string]any, onProgress func(*mcp.ProgressNotificationParams)) (*ToolResult, error) {
 	authHandler, err := BuildOAuthHandler(conn.Auth)
 	if err != nil {
@@ -243,7 +247,7 @@ func invokeHTTPWithProgress(ctx context.Context, conn *models.McpConnection, too
 	return callToolOnSessionWithToken(ctx, session, toolName, arguments, token)
 }
 
-// callToolOnSessionWithToken 在会话上调用工具并设置 progressToken，展平结果。
+// callToolOnSessionWithToken calls a tool on the session with a progressToken set and flattens the result.
 func callToolOnSessionWithToken(ctx context.Context, session *mcp.ClientSession, toolName string, arguments map[string]any, token string) (*ToolResult, error) {
 	if arguments == nil {
 		arguments = map[string]any{}
@@ -256,12 +260,12 @@ func callToolOnSessionWithToken(ctx context.Context, session *mcp.ClientSession,
 	withCallChain(params, callchain.From(ctx))
 	result, err := session.CallTool(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("调用工具 %s 失败: %w", toolName, err)
+		return nil, fmt.Errorf("failed to call tool %s: %w", toolName, err)
 	}
 	return flattenResult(result), nil
 }
 
-// callToolOnSession 在已有会话上调用工具并展平结果
+// callToolOnSession calls a tool on an existing session and flattens the result.
 func callToolOnSession(ctx context.Context, session *mcp.ClientSession, toolName string, arguments map[string]any) (*ToolResult, error) {
 	if arguments == nil {
 		arguments = map[string]any{}
@@ -273,15 +277,16 @@ func callToolOnSession(ctx context.Context, session *mcp.ClientSession, toolName
 	withCallChain(params, callchain.From(ctx))
 	result, err := session.CallTool(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("调用工具 %s 失败: %w", toolName, err)
+		return nil, fmt.Errorf("failed to call tool %s: %w", toolName, err)
 	}
 	return flattenResult(result), nil
 }
 
-// withCallChain 把祖先链写进 params._meta.call_chain（与 RPC 侧同一键名）。
+// withCallChain writes the ancestor chain into params._meta.call_chain (the same key as on the RPC side).
 //
-// 出站只带不追加：追加发生在「即将执行某个实体」的服务端 ——
-// 否则链里会出现重复的自己，日志与错误信息都会变脏。
+// Outbound only carries it, never appends: appending happens in the server that is about to execute an
+// entity — otherwise the chain would contain duplicates of itself and both logs and error messages
+// would get dirty.
 func withCallChain(params *mcp.CallToolParams, chain []string) {
 	if params == nil || len(chain) == 0 {
 		return
@@ -292,7 +297,7 @@ func withCallChain(params *mcp.CallToolParams, chain []string) {
 	params.Meta[callchain.MetaKey] = chain
 }
 
-// flattenResult 将 SDK 的 CallToolResult 展平为文本与结构化内容
+// flattenResult flattens the SDK CallToolResult into text and structured content.
 func flattenResult(result *mcp.CallToolResult) *ToolResult {
 	out := &ToolResult{Raw: result, IsError: result.IsError}
 	var sb strings.Builder

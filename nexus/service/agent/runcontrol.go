@@ -279,15 +279,19 @@ func init() {
 }
 
 // cancelMessage turns a stop reason into a sentence for the user.
-// The strings stay in Chinese on purpose: they are shown to the user, not diagnostics.
+//
+// The sentence is English because it is written into the run record (run history) at a point where no language input exists:
+// the stop happens on whichever instance holds the run, possibly from a Redis signal rather than a request. With nothing to
+// resolve, the rule is the same as skeleton.Default - fall back to the product's primary language, English. The UI does not
+// translate this field (it is data, not copy), so it never argues with the interface language.
 func cancelMessage(cause error) string {
 	switch {
 	case errors.Is(cause, ErrRunStopped):
-		return "运行已终止（用户请求）"
+		return "Run stopped by the user"
 	case errors.Is(cause, ErrClientGone):
-		return "运行已终止（客户端断开）"
+		return "Run stopped: the client disconnected"
 	case cause != nil:
-		return "运行已终止：" + cause.Error()
+		return "Run stopped: " + cause.Error()
 	}
-	return "运行已终止"
+	return "Run stopped"
 }

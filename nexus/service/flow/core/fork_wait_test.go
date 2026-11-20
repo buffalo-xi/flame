@@ -7,14 +7,14 @@ import (
 	"time"
 )
 
-// WaitTimeoutCtx 必须在 ctx 取消时立即返回：
-// 用户停止工作流后，wait 节点不能挂到并发分支自己结束（timeout<=0 时尤其致命）。
+// WaitTimeoutCtx must return as soon as ctx is cancelled: after the user stops the flow a wait node
+// must not hang until the concurrent branches finish on their own (fatal when timeout <= 0).
 func TestWaitTimeoutCtxCancelled(t *testing.T) {
 	fr := NewForkResult(0)
 	if err := fr.Add(1, context.Background(), ForkMember{ProcessID: "p1", NodeID: "n1"}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	// 故意不 Done：模拟并发分支卡在不可中断的地方
+	// Deliberately never call Done: this simulates a concurrent branch stuck somewhere uninterruptible.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -27,20 +27,20 @@ func TestWaitTimeoutCtxCancelled(t *testing.T) {
 	elapsed := time.Since(start)
 
 	if completed {
-		t.Fatal("未完成时应返回 completed=false")
+		t.Fatal("completed must be false when the wait did not finish")
 	}
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v，want context.Canceled", err)
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	if elapsed > time.Second {
-		t.Fatalf("等待 %v 才返回，说明没有响应取消", elapsed)
+		t.Fatalf("waited %v before returning, so cancellation was not observed", elapsed)
 	}
 	if fr.State() != ForkStateAbandoned {
-		t.Fatalf("state = %v，want Abandoned", fr.State())
+		t.Fatalf("state = %v, want Abandoned", fr.State())
 	}
 }
 
-// 正常完成路径不受影响
+// The normal completion path is unaffected.
 func TestWaitTimeoutCtxCompleted(t *testing.T) {
 	fr := NewForkResult(0)
 	if err := fr.Add(1, context.Background(), ForkMember{ProcessID: "p1", NodeID: "n1"}); err != nil {
@@ -53,14 +53,14 @@ func TestWaitTimeoutCtxCompleted(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	if !completed {
-		t.Fatal("应正常完成")
+		t.Fatal("the wait should complete normally")
 	}
 	if fr.State() != ForkStateDone {
-		t.Fatalf("state = %v，want Done", fr.State())
+		t.Fatalf("state = %v, want Done", fr.State())
 	}
 }
 
-// 超时仍按 timeout 返回 false，且 err 为 nil（与取消区分开）
+// A timeout still returns false with err == nil (distinct from cancellation).
 func TestWaitTimeoutCtxTimeout(t *testing.T) {
 	fr := NewForkResult(0)
 	if err := fr.Add(1, context.Background(), ForkMember{ProcessID: "p1", NodeID: "n1"}); err != nil {
@@ -69,12 +69,12 @@ func TestWaitTimeoutCtxTimeout(t *testing.T) {
 
 	completed, err := fr.WaitTimeoutCtx(context.Background(), 1)
 	if err != nil {
-		t.Fatalf("err = %v，want nil", err)
+		t.Fatalf("err = %v, want nil", err)
 	}
 	if completed {
-		t.Fatal("超时应返回 completed=false")
+		t.Fatal("a timeout must return completed=false")
 	}
 	if fr.State() != ForkStateAbandoned {
-		t.Fatalf("state = %v，want Abandoned", fr.State())
+		t.Fatalf("state = %v, want Abandoned", fr.State())
 	}
 }
