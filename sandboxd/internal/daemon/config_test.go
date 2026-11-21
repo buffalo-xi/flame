@@ -745,3 +745,79 @@ func TestIdleNewWinsOverPool(t *testing.T) {
 		t.Errorf("want one \"old key is ignored\" warning, got %v", cfg.Warnings)
 	}
 }
+
+// tmp_dir is cleaned at startup, so a value that would take the machine (or the deployment) down with it has to fail at
+// load time instead of being discovered on the next restart.
+func TestConfigPathValidation(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	root, err := filepath.Abs(string(filepath.Separator))
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	parent := filepath.Dir(cwd)
+
+	type tc struct {
+		name string
+		body string
+		want string
+	}
+	cases := []tc{
+		{"tmp_dir is a filesystem root", "tmp_dir: '" + root + "'\n", "filesystem root"},
+		{"log_dir is a filesystem root", "log_dir: '" + root + "'\n", "filesystem root"},
+		{"tmp_dir is the cwd", "tmp_dir: .\n", "working directory"},
+	}
+	if parent != root {
+		cases = append(cases, tc{"tmp_dir contains the cwd", "tmp_dir: '" + parent + "'\n", "working directory"})
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		// The wording depends on whether the home directory happens to contain the cwd, but both messages end with the
+		// same advice — which is the part the operator needs to read.
+		cases = append(cases, tc{"tmp_dir is the home directory", "tmp_dir: '" + home + "'\n", "dedicated directory"})
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := loadYAML(t, c.body)
+			if err == nil {
+				t.Fatalf("want an error containing %q, got nil", c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error = %q, want it to contain %q", err, c.want)
+			}
+		})
+	}
+}
+
+// The directory settings are resolved against the startup cwd: the startup log, the validation and prepareTmpRoot must
+// all see the same absolute path, and "logs" must not silently mean "wherever the process happened to start".
+func TestConfigPathsResolvedToAbsolute(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "tmp")
+	logs := filepath.Join(t.TempDir(), "logs")
+	t.Setenv("SANDBOXD_TEST_TMP", tmp)
+	t.Setenv("SANDBOXD_TEST_LOG", logs)
+	cfg, err := loadYAML(t, "log_dir: \"${SANDBOXD_TEST_LOG}\"\ntmp_dir: \"${SANDBOXD_TEST_TMP}\"\n")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.TmpDir != tmp {
+		t.Errorf("tmp_dir = %q, want %q (expansion, then absolute)", cfg.TmpDir, tmp)
+	}
+	if cfg.LogDir != logs {
+		t.Errorf("log_dir = %q, want %q", cfg.LogDir, logs)
+	}
+
+	// Both defaults are written relative in the shipped config, so the default path must be absolute too.
+	def, err := loadYAML(t, "listen: \"127.0.0.1:0\"\n")
+	if err != nil {
+		t.Fatalf("load default config: %v", err)
+	}
+	if !filepath.IsAbs(def.TmpDir) || !filepath.IsAbs(def.LogDir) {
+		t.Errorf("defaults are not absolute: log_dir=%q tmp_dir=%q", def.LogDir, def.TmpDir)
+	}
+	if filepath.Base(def.TmpDir) != "tmp" || filepath.Base(def.LogDir) != "logs" {
+		t.Errorf("defaults lost their names: log_dir=%q tmp_dir=%q", def.LogDir, def.TmpDir)
+	}
+}

@@ -263,8 +263,10 @@ browser:
 # outright; and an nsjail chroot is read-only by default, leaving nowhere for a script's temporary files (Python's
 # tempfile and the like) to land.
 #
-# Startup empties this whole tree; nothing is deleted individually at runtime — so it is not a persistent data
-# directory.
+# At startup the worker directories left behind by a previous run are removed (only entries named codehost-*; anything
+# else is reported and left alone); nothing is deleted individually at runtime — so it is not a persistent data
+# directory, and it must be dedicated to sandboxd. A relative value is resolved against the process cwd at startup, and
+# the resolved path is reported in the log.
 # Under mode=none scripts write real paths on the host; under an isolation mode it is confined to the mount point.
 tmp_dir: run/tmp
 

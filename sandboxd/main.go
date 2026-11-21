@@ -54,6 +54,10 @@ func main() {
 		xlog.Error("sandboxd: %s", w)
 	}
 
+	// Both directories are resolved against the startup cwd (see LoadConfig.absolutizePaths), so the resolved value has
+	// to be checkable at a glance: "logs" means a different directory under a systemd unit than under a shell.
+	xlog.Info("sandboxd: log_dir=%s tmp_dir=%s (absolute, resolved at startup)", cfg.LogDir, cfg.TmpDir)
+
 	// Create the isolation implementation (which self-checks the nsjail/docker executable).
 	iso, err := isolate.New(cfg.Mode, isolate.Options{
 		Binary:         binaryFor(cfg),

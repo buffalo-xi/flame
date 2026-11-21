@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"flame/sandboxd/isolate"
@@ -127,7 +129,9 @@ type Config struct {
 	// TmpDir is the host root of the worker writable directories: every worker creates an exclusive subdirectory
 	// under it, which is mounted into the sandbox as /tmp (and is the script's cwd at the same time).
 	//
-	// Startup empties this whole tree; nothing is deleted individually at runtime — see prepareTmpRoot.
+	// Startup removes the worker directories a previous run left behind (only entries named codehost-*, nothing else);
+	// nothing is deleted individually at runtime — see prepareTmpRoot. It must be a dedicated directory, which is what
+	// validatePaths enforces.
 	TmpDir string `yaml:"tmp_dir"`
 	// AllowedMountRoots is the list of allowed host directory roots: a request's Mounts[].Host must fall under one
 	// of them. An empty list means no checking (a warning is logged at startup).
@@ -636,14 +640,90 @@ func LoadConfig(path string) (*Config, error) {
 	// is no way to tell "the user did not write it" from "the user wrote the old key".
 	c.applyLegacyKeys()
 	c.applyDefaults()
+	// After the defaults (they are the relative ones) and before validation (which judges the resolved path).
+	if err := c.absolutizePaths(); err != nil {
+		return nil, fmt.Errorf("sandboxd: config %s: %w", path, err)
+	}
 	if err := c.validate(); err != nil {
 		return nil, fmt.Errorf("sandboxd: config %s: %w", path, err)
 	}
 	return &c, nil
 }
 
+// absolutizePaths resolves the directory settings against sandboxd's startup cwd.
+//
+// Why: both defaults are relative (logs, run/tmp), and tmp_dir is cleaned at startup — "which directory that actually
+// is" must therefore not depend on the cwd of whoever started the process (a systemd unit and an interactive shell
+// disagree, and they disagree silently). Resolving once here also means the startup log, validatePaths and
+// prepareTmpRoot all see the same path.
+func (c *Config) absolutizePaths() error {
+	for _, f := range []struct {
+		key string
+		p   *string
+	}{
+		{"log_dir", &c.LogDir},
+		{"tmp_dir", &c.TmpDir},
+	} {
+		// Unreachable after applyDefaults, but filepath.Abs("") would resolve to the cwd — never let that happen to a
+		// directory that is cleaned at startup.
+		if *f.p == "" {
+			continue
+		}
+		abs, err := filepath.Abs(*f.p)
+		if err != nil {
+			return fmt.Errorf("%s: %q is not a usable path: %w", f.key, *f.p, err)
+		}
+		*f.p = abs
+	}
+	return nil
+}
+
+// validatePaths rejects the directory settings that cannot be right.
+//
+// tmp_dir is the destructive one: sandboxd removes the worker directories under it at startup (see prepareTmpRoot), so a
+// value that happens to be a filesystem root, the home directory, or a directory containing sandboxd's own working
+// directory is a deployment accident waiting for the next restart. Failing at startup is the only acceptable outcome;
+// "it worked last week" is not a reason to keep a value that eats the machine.
+func (c *Config) validatePaths() error {
+	for _, f := range []struct{ key, path string }{
+		{"log_dir", c.LogDir},
+		{"tmp_dir", c.TmpDir},
+	} {
+		if f.path == "" {
+			return fmt.Errorf("%s: empty", f.key)
+		}
+		if filepath.Dir(f.path) == f.path {
+			return fmt.Errorf("%s: %q is a filesystem root — pick a dedicated directory", f.key, f.path)
+		}
+	}
+	// "." and every ancestor of the cwd are covered by the first check; the home check covers "started from somewhere
+	// else but pointed at ~" (a systemd unit starts in /, not in the home directory).
+	if cwd, err := os.Getwd(); err == nil && pathContains(c.TmpDir, cwd) {
+		return fmt.Errorf("tmp_dir: %q contains sandboxd's working directory %q — it is cleaned at startup, pick a dedicated directory",
+			c.TmpDir, cwd)
+	}
+	if home, err := os.UserHomeDir(); err == nil && pathContains(c.TmpDir, home) {
+		return fmt.Errorf("tmp_dir: %q contains the home directory %q — it is cleaned at startup, pick a dedicated directory",
+			c.TmpDir, home)
+	}
+	return nil
+}
+
+// pathContains reports whether child is parent itself or sits under it. The comparison is lexical (symlinks are not
+// resolved): it is a guard against a misconfigured tmp_dir, not a security boundary.
+func pathContains(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
 // validate checks the values so that a misspelled policy is not silently taken as a default.
 func (c *Config) validate() error {
+	if err := c.validatePaths(); err != nil {
+		return err
+	}
 	if err := c.validateNetwork(); err != nil {
 		return err
 	}

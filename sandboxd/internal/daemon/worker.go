@@ -31,21 +31,42 @@ const (
 	tmpRemoveRetryDelay = 50 * time.Millisecond
 )
 
+// tmpEntryPrefix is the name prefix of every per-worker directory sandboxd creates under tmp_root (os.MkdirTemp in
+// spawnCodehost). prepareTmpRoot keys off it: an entry with any other name was not created by this service.
+const tmpEntryPrefix = "codehost-"
+
 // prepareTmpRoot prepares the host root of the worker writable directories.
 //
-// The whole tree is emptied at startup, so at run time no per-worker directory ever has to be deleted:
+// Only the worker directories a previous run left behind are removed — never the root itself, and never an entry with a
+// foreign name. Cleanup waits for startup, so at run time no per-worker directory ever has to be deleted:
 //   - when a process is killed its directory may still be mounted into the jail / container, where RemoveAll
 //     returns EBUSY;
 //   - leftovers from a previous abnormal exit are cleared along the way.
 //
 // The cost is that directories only accumulate during a run, but the pool capacity is bounded, so the volume is
 // controlled.
+//
+// ⚠️ Emptying the whole tree was the old behaviour and it made a wrong tmp_dir destructive: the value is validated at
+// load time (validatePaths), but this function does not rely on that — it deletes only what it can recognise as its own,
+// and reports the rest.
 func prepareTmpRoot(root string) error {
 	if root == "" {
 		return fmt.Errorf("worker: tmp_dir is not configured")
 	}
-	if err := os.RemoveAll(root); err != nil {
-		return fmt.Errorf("worker: clean tmp root %s: %w", root, err)
+	entries, err := os.ReadDir(root)
+	switch {
+	case err == nil:
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), tmpEntryPrefix) {
+				xlog.Error("sandboxd: tmp_dir %s contains %q, which is not a worker directory — left alone; "+
+					"point tmp_dir at a dedicated directory", root, e.Name())
+				continue
+			}
+			removeTmpDir(filepath.Join(root, e.Name()))
+		}
+	case !os.IsNotExist(err):
+		// Also the "root is a regular file" case: tmp_dir must be a directory, and saying so beats an MkdirAll error.
+		return fmt.Errorf("worker: read tmp root %s: %w", root, err)
 	}
 	if err := os.MkdirAll(root, 0o777); err != nil {
 		return fmt.Errorf("worker: create tmp root %s: %w", root, err)
@@ -303,7 +324,8 @@ func (w *Worker) reap() {
 //
 // The retry exists because right after a process is killed the isolation layer (nsjail's mount namespace /
 // docker's mounts) may not have released it yet, and RemoveAll returns EBUSY at that moment; after a retry it
-// usually works. A total failure is not fatal — the next startup's prepareTmpRoot empties the whole tmp_root.
+// usually works. A total failure is not fatal — the next startup's prepareTmpRoot removes it (and any other leftover
+// worker directory) before the pools are created.
 func removeTmpDir(dir string) {
 	if dir == "" {
 		return
