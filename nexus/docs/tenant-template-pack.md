@@ -20,7 +20,7 @@ In one sentence: t0 is used once to generate this pack; **at runtime nothing rea
 
 ```
 nexus/platform/provision/template/
-├── schema.sql      # full table definitions (28 tables / constraints / indexes / comments, no schema prefix on object names)
+├── schema.sql      # full table definitions (35 tables / constraints / indexes / comments, no schema prefix on object names)
 ├── seed.sql        # data rows for the seeded assets (fixed uuids)
 └── files/
     ├── agents/main/AGENT.md
@@ -155,10 +155,10 @@ CREATE SCHEMA t_pack_verify;
 SELECT set_config('search_path', 't_pack_verify', true);
 \i 'd:/proj/flame/nexus/platform/provision/template/schema.sql'
 \i 'd:/proj/flame/nexus/platform/provision/template/seed.sql'
-SELECT name, is_supervisor, status FROM agents;              -- main / t / 1
-SELECT count(*) FROM agent_tool_grants;                      -- 10
-SELECT count(*) FROM skill_tool_grants;                      -- 5
-SELECT count(*) FROM agent_skill_bindings;                   -- 3
+SELECT name, is_supervisor, status FROM agents;                          -- main / t / 1
+SELECT grant_kind, count(*) FROM agent_tool_grants GROUP BY grant_kind;  -- required 6 / allow 5
+SELECT count(*) FROM skill_tool_grants;                                  -- 6 (the four authoring skills' dependencies)
+SELECT count(*) FROM agent_skill_bindings;                               -- 4 (main binds the four authoring skills)
 ROLLBACK;
 ```
 

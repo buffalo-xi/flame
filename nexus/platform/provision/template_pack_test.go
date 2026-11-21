@@ -2,6 +2,7 @@ package provision
 
 import (
 	"io/fs"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -89,5 +90,37 @@ func assertExactDirs(t *testing.T, root string, want []string) {
 	if strings.Join(got, ",") != strings.Join(sorted, ",") {
 		t.Errorf("%s ships [%s], want exactly the protected list [%s]",
 			root, strings.Join(got, ", "), strings.Join(sorted, ", "))
+	}
+}
+
+// seedRequiredGroup picks main's core grant rows out of the seed (the allow rows and the skill dependencies are other shapes).
+var seedRequiredGroup = regexp.MustCompile(`'required',\s*'group',\s*'(builtin:[a-z-]+)'`)
+
+// TestSeedMatchesSupervisorCoreGrants ties the seed to the same list the runtime uses.
+//
+// models.SupervisorCoreGrantRefs already has a guard on the SQL side (TestSupervisorCoreGrantRefsMatchSQL), but the seed writes
+// the same six groups by hand and had none: dropping or renaming a core group would leave existing tenants following the
+// backfill script while a **freshly created** tenant silently starts with the old set - drift that only shows up the first
+// time someone provisions a tenant.
+func TestSeedMatchesSupervisorCoreGrants(t *testing.T) {
+	seeds := readSeed(t)
+
+	got := map[string]bool{}
+	for _, m := range seedRequiredGroup.FindAllStringSubmatch(seeds, -1) {
+		got[m[1]] = true
+	}
+	want := map[string]bool{}
+	for _, ref := range models.SupervisorCoreGrantRefs {
+		want[ref] = true
+		if !got[ref] {
+			t.Errorf("seed.sql does not grant %s as required; a new tenant's main would start without it", ref)
+		}
+	}
+	// Reverse direction: a group taken off the list must not linger in the seed either, or new tenants would hold something the
+	// code no longer treats as core.
+	for ref := range got {
+		if !want[ref] {
+			t.Errorf("seed.sql grants %s as required, but models.SupervisorCoreGrantRefs does not list it", ref)
+		}
 	}
 }

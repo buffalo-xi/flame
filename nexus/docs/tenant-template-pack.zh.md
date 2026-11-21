@@ -17,7 +17,7 @@
 
 ```
 nexus/platform/provision/template/
-├── schema.sql      # 全部表结构（28 张表 / 约束 / 索引 / 注释，对象名不带 schema 前缀）
+├── schema.sql      # 全部表结构（35 张表 / 约束 / 索引 / 注释，对象名不带 schema 前缀）
 ├── seed.sql        # 预置资产的数据行（固定 uuid）
 └── files/
     ├── agents/main/AGENT.md
@@ -146,10 +146,10 @@ CREATE SCHEMA t_pack_verify;
 SELECT set_config('search_path', 't_pack_verify', true);
 \i 'd:/proj/flame/nexus/platform/provision/template/schema.sql'
 \i 'd:/proj/flame/nexus/platform/provision/template/seed.sql'
-SELECT name, is_supervisor, status FROM agents;              -- main / t / 1
-SELECT count(*) FROM agent_tool_grants;                      -- 10
-SELECT count(*) FROM skill_tool_grants;                      -- 5
-SELECT count(*) FROM agent_skill_bindings;                   -- 3
+SELECT name, is_supervisor, status FROM agents;                          -- main / t / 1
+SELECT grant_kind, count(*) FROM agent_tool_grants GROUP BY grant_kind;  -- required 6 / allow 5
+SELECT count(*) FROM skill_tool_grants;                                  -- 6（四个 authoring 技能声明的依赖）
+SELECT count(*) FROM agent_skill_bindings;                               -- 4（main 绑定这四个 authoring 技能）
 ROLLBACK;
 ```
 
