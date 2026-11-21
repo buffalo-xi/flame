@@ -28,6 +28,9 @@ type Gateway struct {
 	sticky    StickyStore
 	discovery xregistry.Discovery
 	upgrader  websocket.Upgrader
+	// discoveryEmptyLogged rate-limits the "discovery answered nothing" warning to one line per streak instead of one
+	// per interval. Only DiscoveryLoop writes it, and that loop is a single goroutine.
+	discoveryEmptyLogged bool
 }
 
 // New builds the gateway. The sticky store follows the config: redis.addr present uses redis, otherwise
@@ -195,13 +198,43 @@ func (g *Gateway) DiscoveryLoop(ctx context.Context) {
 
 // discoverOnce pulls the instance list once and reconciles it, clearing the sticky bindings of the backends
 // that were evicted.
+//
+// Two answers deliberately do not empty the pool:
+//   - an error: the list stays as it is, so a discovery blip cannot take the gateway down;
+//   - a **successful but empty** list: it is ambiguous - "the last instance deregistered" and "the registry answered
+//     before the service re-registered" (a rolling restart is exactly the second) look identical. Giving it authority
+//     would drop every backend and fail every request until the next registration, so the pool keeps its last known
+//     list; a backend that is really gone is then removed by the health check (health_check_fail_threshold).
+//
+// A non-empty answer *is* authoritative: a static seed from `backends` that the registry does not list leaves the pool,
+// which is what keeps a registry-managed deployment from serving instances the operator already deregistered.
 func (g *Gateway) discoverOnce(ctx context.Context) {
 	insts, err := g.discovery.ListInstances(ctx, g.cfg.Discovery.ServiceName)
 	if err != nil {
 		xlog.Error("sandboxg: discovery: %v", err)
 		return
 	}
-	for _, b := range g.pool.Reconcile(insts, g.cfg.SandboxToken) {
+	if len(insts) == 0 {
+		if !g.discoveryEmptyLogged {
+			g.discoveryEmptyLogged = true
+			xlog.Error("sandboxg: discovery returned no instance of %q - keeping the current pool of %d backend(s); "+
+				"a backend that is really gone is still evicted by the health check",
+				g.cfg.Discovery.ServiceName, len(g.pool.all()))
+		}
+		return
+	}
+	g.discoveryEmptyLogged = false
+
+	removed := g.pool.Reconcile(insts, g.cfg.SandboxToken)
+	if len(removed) > 0 {
+		urls := make([]string, 0, len(removed))
+		for _, b := range removed {
+			urls = append(urls, b.URL)
+		}
+		xlog.Info("sandboxg: discovery dropped %d backend(s) the registry does not list: %s",
+			len(removed), strings.Join(urls, ", "))
+	}
+	for _, b := range removed {
 		if err := g.sticky.RemoveBackend(ctx, b.URL); err != nil {
 			xlog.Error("sandboxg: remove bindings for %s: %v", b.URL, err)
 		}

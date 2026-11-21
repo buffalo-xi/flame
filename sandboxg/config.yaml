@@ -38,19 +38,34 @@ redis:
   password: ""
   db: 0
 
-# The token shared by all backends (service discovery only yields addresses; the token is attached here centrally).
+# The token for instances that came from discovery: a registry only yields addresses, so the token is attached here for
+# all of them. Instances listed under `backends` use their own `token` field instead, so a discovery-managed deployment
+# must set this one.
 # sandbox_token: ""
 
-# Service discovery (the source of the backend list). An empty type falls back to static backends.
+# Service discovery (the source of the backend list). Empty `type` = static `backends` only.
+#
+# When to use which:
+#   static only (type: "")     - one or a few sandboxd instances with fixed addresses. backends is the pool; nothing
+#                                else moves it.
+#   discovery (type: consul|nacos) - instances come and go. The registry list is authoritative: an instance it does not
+#                                list leaves the pool (and its sticky bindings are cleared), so `backends` is only the
+#                                initial seed - it keeps the gateway usable before the first pull and while the registry
+#                                is unreachable.
+#   mixed                       - supported only as "seed + fallback", not as "static always wins": after a successful
+#                                pull, a static entry the registry does not list is dropped.
+#
+# Failure behaviour (both keep the current pool instead of emptying it):
+#   a pull that errors, and a pull that succeeds but returns no instance (a rolling restart looks exactly like that).
+#   A backend that is really gone is then removed by the health check (health_check_fail_threshold).
 discovery:
   type: "consul"                    # consul | nacos
   address: "localhost:8500"
   service_name: "sandboxd"
   interval_sec: 5
 
-# Static pool of sandboxd instances (used when discovery is empty; with discovery configured it serves as seeds /
-# fallback).
-# url is the HTTP base address (the gateway derives ws and /metrics itself).
+# Static pool of sandboxd instances: the only source when discovery.type is empty, the initial seed when it is set.
+# url is the HTTP base address (the gateway derives ws and /metrics itself); token authenticates against that instance.
 backends:
   - url: http://127.0.0.1:27081
     # token: ""

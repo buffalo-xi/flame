@@ -34,14 +34,19 @@ type Config struct {
 	// Redis is the shared store for sticky bindings (mandatory for a multi-instance gateway; empty falls
 	// back to per-process memory).
 	Redis RedisConfig `yaml:"redis"`
-	// Backends is the static sandboxd instance pool (used when discovery is empty; a seed / fallback once
-	// discovery is configured).
+	// Backends is the static sandboxd instance pool: the only source when discovery.type is empty, and the initial seed
+	// when it is set (the gateway is usable before the first pull, and a failing registry cannot empty it).
+	//
+	// A **successful** non-empty pull is authoritative: an entry the registry does not list leaves the pool, so a static
+	// entry only survives a registry-managed deployment before the first pull or while pulls fail. A successful but empty
+	// answer keeps the pool as it is - see discoverOnce.
 	Backends []BackendConfig `yaml:"backends"`
-	// SandboxToken is the token shared by every backend (service discovery only yields addresses, the
-	// token is attached uniformly).
+	// SandboxToken is the token for instances that came from discovery: a registry only yields addresses, so the token is
+	// attached uniformly here. Entries listed under backends use their own token field instead (empty = no auth), which is
+	// why a discovery-managed deployment has to set this.
 	SandboxToken string `yaml:"sandbox_token"`
-	// Discovery is service discovery (the source of the backend list). An empty type falls back to the
-	// static backends.
+	// Discovery is service discovery (the source of the backend list). An empty type means static backends only; a failing
+	// pull, and an empty answer, keep the current list.
 	Discovery DiscoveryConfig `yaml:"discovery"`
 }
 

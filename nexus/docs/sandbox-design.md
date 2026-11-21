@@ -203,6 +203,26 @@ script:
     sandbox: ""                            # implementation for this language alone
 ```
 
+### 5.1 Gateway (`sandboxg`): discovery and static backends
+
+`sandboxg/config.yaml` has two sources for the backend list. They are not alternatives you have to choose between, but they
+are not equal either:
+
+| `discovery.type` | `backends` |
+| --- | --- |
+| empty | the pool; nothing else moves it |
+| `consul` / `nacos` | the initial **seed**: it serves traffic before the first pull and while the registry is unreachable. A successful pull is authoritative, so a static entry the registry does not list is dropped (its sticky bindings are cleared with it) |
+
+Two answers keep the pool instead of emptying it: a pull that **errors**, and a pull that **succeeds but returns no
+instance** (a rolling restart looks exactly like the second). A backend that is really gone is then removed by the health
+check (`health_check_fail_threshold`), not by an empty registry answer.
+
+Tokens differ by source: an instance from `backends` uses its own `token`, an instance from discovery uses `sandbox_token`
+(a registry yields addresses only), so a discovery-managed deployment has to set `sandbox_token`.
+
+Rule of thumb: fixed set → `backends` only; elastic set → `discovery` + `sandbox_token`; "static always wins, discovery
+only fills in" is not supported.
+
 ---
 
 ## 6. Changes already shipped
