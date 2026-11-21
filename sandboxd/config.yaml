@@ -148,7 +148,7 @@ probe:
 #   At startup the final value is resolved for the current mode and logged; when a mode has no commands entry and the
 #   general command does not resolve either, startup fails outright (the language is not silently skipped).
 #
-#   The "locating" fields (commands / codehost.binaries / browser.* / tmp_dir / log_dir / allowed_mount_roots /
+#   The "locating" fields (commands / codehost.binaries / tmp_dir / log_dir / allowed_mount_roots /
 #   nsjail.rootfs / docker.image) support ${VAR} expansion: moving to another machine needs no config edit, an
 #   environment variable override is enough, for example
 #       none: "${FLAME_PYTHON}"
@@ -195,66 +195,10 @@ codehost:
     nsjail: /usr/local/bin/codehost
     docker: /usr/local/bin/codehost
 
-# ---------------------------------------------------------------------------
-# Browser (browserhost + the Chromium inside the sandbox)
-#
-# The browser is the same kind of thing as a shell: a session-level long-lived process. It therefore reuses the
-# /v1/interactive channel (tool_id=browser) and **adds no HTTP route**; this section only describes "where the
-# browserhost in the image / rootfs is, and whether headed is possible".
-#
-# Preconditions (all required):
-#   - Chromium is installed in the image / rootfs (see the Dockerfile);
-#   - the top-level network is on and docker.network is not none (otherwise pages will not load);
-#   - limits' memory and pids are sufficient (Chrome's process tree is an order of magnitude bigger than a shell's).
-# ---------------------------------------------------------------------------
-browser:
-  # Off by default: a browser can reach the network and read page content, a capability "you should know about when you
-  # turn it on".
-  enabled: true
-  binary: browserhost
-  binaries:
-    none: "D:/proj/flame/sandboxd/bin/browserhost.exe"
-    docker: /usr/local/bin/browserhost
-    # nsjail is not supported (the rootfs lacks /proc, /dev/shm, fonts and userns):
-    # enabling browser.enabled with mode=nsjail fails startup outright.
-  # The browser executable (**an in-sandbox** path). Empty = browserhost discovers it itself
-  # (chromium inside docker / Chrome or Edge on the host).
-  #
-  # This path has the same nature as binaries: a host path under none, an in-image path under docker, and one string
-  # cannot hold for both — so the effective value goes through exec_paths per mode and falls back to this line when the
-  # mode has no entry (the same rule as command/commands in langs).
-  exec_path: ""
-  exec_paths:
-    docker: /usr/bin/chromium
-    # none: "C:/Program Files/Google/Chrome/Application/chrome.exe"
-    # Empty = autodetect; when both Chrome and Edge are installed locally and you want one of them, write it here.
-  # Default display mode: false = headless (recommended in production).
-  headed: false
-  # Whether a caller may request headed per session (open with headed=true).
-  # Headed needs a real display environment and only holds with mode=none (sandboxd running on a machine with a
-  # desktop); allowing it under any other mode is a **startup failure** (validateBrowser stops it).
-  # Overridable per mode: the value here is used when the current mode matches, otherwise this line applies — one
-  # config serves both the local machine (with a desktop) and docker (no window), with no edit when switching modes.
-  allow_headed: false
-  allow_headed_modes:
-    none: true
-  # Chrome's user-data-dir (an in-sandbox path).
-  # Empty = per-mode default: docker → /tmp/browser (the container has --tmpfs /tmp, so the profile dies with the
-  # container); none → a temp directory removed when the browser exits.
-  profile_dir: ""
-  profile_dirs:
-    # docker: /tmp/browser      # that is the default already, so it usually need not be written
-  # Download directory (an in-sandbox path). Empty = <cwd>/downloads, that is the workspace, which the file tools can
-  # read directly.
-  # Once written as an absolute path it only holds for one mode (/workspace under none becomes the host disk root), so
-  # it is left empty by default and resolved relative to cwd.
-  downloads_dir: ""
-  downloads_dirs:
-    # docker: /workspace/downloads
-
-  # Resource cap of the browser process (clamped by the global limits afterwards).
-  limits:
-    memory_mb: 1024
+# The browser is **not** configured here any more: it moved to the standalone browser pool (browserd — see its config.yaml).
+# This service no longer launches a browser, no longer reports one in /v1/capabilities, and the /v1/interactive channel
+# carries the shell only. Why: a browser is 200-400 MB, takes seconds to start and carries login state, so it must not
+# share a lifetime or a capacity limit with a code-execution sandbox.
 
 # The worker writable directory (the host-side root): every worker creates an exclusive subdirectory under it, mounts it
 # into the sandbox as /tmp, and it is the script's cwd at the same time.
@@ -321,8 +265,8 @@ docker:
   #    really provide a network: an empty value or none leaves "the request wants egress" with nothing to switch to, and
   #    validateNetwork refuses to start.
   #    Allowed values when egress is permitted: bridge / host (none means no network at all).
-  #    bridge: the browser tool needs to reach the outside world; for a hard cut, set it back to none and switch the
-  #    top-level network to off.
+  #    bridge: exec / shell need to reach the outside world; for a hard cut, set it back to none and switch the
+  #    top-level network to off. (The browser does not use this network: it runs in its own pool, with its own egress.)
   network: bridge
   read_only: true
   user: "1000:1000"
@@ -332,8 +276,8 @@ docker:
 limits:
   memory_mb: 1024
   cpu_count: 2
-  # Chrome's process tree (browser / gpu / renderer / utility) commonly runs to 20+; 64 would kill the container on the
-  # pids limit as soon as a couple of tabs are open.
+  # The code channels fork an interpreter per call, and a script may fork its own children on top; with a few concurrent
+  # sessions the limit is reached quickly. 64 hits it during normal use, which looks like a random "fork failed".
   max_pids: 256
   max_file_mb: 64
   timeout_sec: 300
@@ -360,10 +304,9 @@ code_max_sec: 120
 # The difference from code_max_sec: that one is the hard gate of a **single interaction**, this one is the idle backstop
 # of a **cross-call resident process**.
 #
-# Why 5 minutes: a session container is the most expensive idle resource (a resident Chromium alone costs hundreds of
-# MB), while the state it keeps barely outlives the task. The browser profile sits in the container's tmpfs and dies
-# with it, so a longer idle never preserves logins; and a headed browser — the only case where a human really watches
-# the session — exists only under mode=none (local development). Raise it only for that local, human-in-the-loop use.
+# Why 5 minutes: a session container is the most expensive idle resource (a resident shell plus its container), while the
+# state it keeps — cwd, environment variables, downloaded files — barely outlives the task. A longer idle buys little and
+# holds memory; raise it only when a human is really sitting in front of a session (local development).
 # ---------------------------------------------------------------------------
 interactive_idle_sec: 300
 

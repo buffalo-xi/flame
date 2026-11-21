@@ -1,0 +1,98 @@
+# browserd — the standalone browser pool.
+#
+# Why it exists: the browser is not "a shell that draws pictures". It is 200-400 MB, takes seconds to start and keeps
+# login state in its user-data-dir, so it must not share a lifetime with a code-execution sandbox. This service owns the
+# browser only; sandboxd (and its mode: none / nsjail / docker) has nothing to do with it.
+#
+# One session = one Chromium: a worker is never reused across sessions, because that would hand one session's cookies to
+# the next. What is pooled is capacity, not processes.
+
+# The directory shared with nexus — **the same directory**, which is not the same thing as the same string.
+#
+# A browser produces files (screenshots, downloads) that the model has to be able to open afterwards, so every session
+# runs the driver with cwd inside this root, at the workspace path the caller sends in the open frame. Writing them
+# next to this service instead would leave them on a machine the tenant never sees.
+#
+# It must resolve to the **same place** as nexus's storage.root_dir:
+#   - local development (this file): the absolute path of nexus/config.yaml's storage.root_dir;
+#   - container deployment: the volume mounted from that directory — see Dockerfile (/data/workspace).
+# A mismatch does not fail loudly by itself (this service would simply create its own empty tree), which is why startup
+# complains when the root has no tenants/ subdirectory.
+workspace_root: "D:/proj/flame/nexus/data"
+
+# The listen address (internal network only).
+listen: "127.0.0.1:27091"
+
+# Bearer token the caller (nexus) must present. Empty means no check — internal network only.
+token: ""
+
+# Log directory.
+log_dir: logs
+
+# How Chromium is started.
+#   process — a plain child process of this service; the container (or the OS user) is the isolation boundary.
+#   docker  — one container per worker; NOT implemented yet (it would only be useful for debugging).
+mode: process
+
+# Maximum number of live browser sessions = the memory ceiling of this service (~workers x 300 MB at full house).
+workers: 2
+
+# How many sessions one tenant may hold at once (0 = no per-tenant cap).
+#
+# Behind browserg this stays **0**: the gateway is the only place a per-tenant cap can be enforced, because a cap counted
+# inside one instance multiplies by the number of instances. `workers` is this instance's hard ceiling either way. Set a
+# value here only when the pool is called directly (no gateway) and you want the cap without one.
+max_per_tenant: 0
+
+# How long a call waits for a free worker before it is rejected with busy. Queueing absorbs short bursts; a timeout keeps
+# a stuck run from piling up.
+queue_timeout_sec: 20
+
+# How long a session survives without a call. A live session keeps a Chromium resident, so this window is short.
+idle_timeout_sec: 300
+
+# Sweep interval of idle reclamation: the real reclaim time falls in (idle, idle + janitor].
+janitor_sec: 30
+
+browser:
+  # The driver. A bare name is resolved through PATH; a path with a separator is a host path, resolved against this
+  # service's startup cwd (the driver itself runs with cwd = the session's workspace, so a relative value left as-is
+  # would be looked up inside the tenant's directory and every launch would fail).
+  binary: "bin/browserhost.exe"
+
+  # The Chromium executable. Empty = autodetect chromium / chrome / msedge.
+  # In a pool container this is usually "/usr/bin/chromium" (or empty, since the image puts it on PATH).
+  exec_path: ""
+
+  # Parent of the per-session user-data-dir (resolved to an absolute path at startup).
+  #
+  # Deliberately not under workspace_root: the profile is this service's private state and is deleted when the session
+  # ends, while the workspace belongs to the tenant and is never touched.
+  profile_root: "run/browserd/profiles"
+
+  # Headless by default. `headless: false` needs a display and therefore allow_headed: true.
+  headless: true
+
+  # Headed browsing is useful when this service runs bare on a developer's desktop, and pointless in a pool container.
+  allow_headed: true
+
+# Service registration: announce this instance so browserg discovers it dynamically.
+#
+# This is the default topology — start another instance and the gateway picks it up on its next discovery pull, with no
+# restart and no config edit. Registration happens **after** HTTP is up (so the registry's /healthz probe succeeds on the
+# first try) and is kept alive: an initial failure or a registry disconnect heals itself.
+#
+# Every instance must register under the same service_name as browserg's discovery.service_name ("browserd"). An instance
+# whose registry is unreachable still serves traffic — it is just not discoverable, so keep it in browserg's static
+# `backends` as well if you rely on it.
+registry:
+  enabled: true
+  type: consul                  # consul | nacos
+  address: "localhost:8500"
+  service_name: "browserd"
+  # The address **browserg dials**. listen is often 127.0.0.1, which is unreachable across machines, so write the real
+  # host here (for example 192.168.1.20).
+  service_addr: "127.0.0.1"
+  # 0 = the port parsed out of listen.
+  service_port: 0
+  health_check_path: "/healthz"

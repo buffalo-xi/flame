@@ -100,22 +100,24 @@ half-translate a file in place — add or update the `.zh.md` mirror in the same
 
 ## Module map
 
-Four Go modules wired together with `replace`, no `go.work`:
+Six Go modules wired together with `replace`, no `go.work`:
 
 | Directory | module | Purpose |
 |---|---|---|
 | `nexus/` | `flame/nexus` | main service: platform API, tenant API, admin API |
-| `sandboxd/` | `flame/sandboxd` | execution sandbox daemon (isolation, worker pool, browser) |
+| `sandboxd/` | `flame/sandboxd` | execution sandbox daemon (isolation, worker pool) |
 | `sandboxg/` | `flame/sandboxg` | sandbox gateway (external proxy, per-tenant node selection) |
-| `tools/` | `flame/tools` | local library shared by the three services (`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …) |
+| `browserd/` | `flame/browserd` | standalone browser pool (one Chromium per session, capacity + idle reclamation) |
+| `browserg/` | `flame/browserg` | browser gateway (sticky session routing, per-tenant cap, aggregated capabilities) |
+| `tools/` | `flame/tools` | local library shared by the five services (`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …) |
 
-Dependency direction is one-way: the three services reference the local library with
+Dependency direction is one-way: the five services reference the local library with
 `replace flame/tools => ../tools`, and **`tools` never depends on any service in reverse**.
 
 Verification:
 
 - changing one service only: run `go build ./...` in that directory
-- changing `tools/`: build all three — `nexus`, `sandboxd` and `sandboxg` — otherwise downstream compile errors stay hidden
+- changing `tools/`: build all five — `nexus`, `sandboxd`, `sandboxg`, `browserd` and `browserg` — otherwise downstream compile errors stay hidden
 - changing `nexus/platform/sql/` or `nexus/platform/provision/template/*.sql`: run
   `powershell -File scripts/verify-sql.ps1` against a local PostgreSQL. SQL never reaches the compiler, so a mangled
   identifier (2026-11: every `s` / `c` silently became `o`, e.g. `platform.tenant_oapabilitieo`) survives `go build`,

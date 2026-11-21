@@ -24,6 +24,7 @@ type Config struct {
 	Storage  StorageConfig  `yaml:"storage"`
 	Download DownloadConfig `yaml:"download"`
 	Sandbox  SandboxConfig  `yaml:"sandbox"`
+	Browser  BrowserConfig  `yaml:"browser"`
 	Plugin   PluginConfig   `yaml:"plugin"`
 }
 
@@ -101,6 +102,15 @@ const (
 	// ⚠️ This is **plain HTTP** (not WebSocket): it returns sandboxd's isolation mode, network declaration and the
 	// sandbox environment probed at startup, which nexus pulls and injects into the agent prompt.
 	sandboxCapabilitiesPath = "/v1/capabilities"
+
+	// browserPath is the browser channel of the standalone browser pool (browserd).
+	//
+	// It carries the **same frame protocol** as sandboxInteractivePath, so the client is not a new one: only the URL and
+	// the tool id differ. The browser is deliberately not a route on sandboxd — it is 200-400 MB and carries login state,
+	// so it has its own service, its own capacity limits and its own isolation boundary.
+	browserPath = "/v1/browser"
+	// browserCapabilitiesPath is browserd's capability snapshot (plain HTTP: load, headed availability, engine).
+	browserCapabilitiesPath = "/v1/capabilities"
 )
 
 // SandboxConfig is the sandbox service connection configuration.
@@ -140,14 +150,7 @@ func (c SandboxConfig) InteractiveEndpoint() string { return c.endpoint(sandboxI
 // scheme must be converted to http here (wss -> https), otherwise net/http rejects the URL outright.
 // An unconfigured URL returns an empty string, and the caller decides whether it is usable.
 func (c SandboxConfig) CapabilitiesEndpoint() string {
-	switch u := c.endpoint(sandboxCapabilitiesPath); {
-	case strings.HasPrefix(u, "ws://"):
-		return "http://" + strings.TrimPrefix(u, "ws://")
-	case strings.HasPrefix(u, "wss://"):
-		return "https://" + strings.TrimPrefix(u, "wss://")
-	default:
-		return u // already http(s), or unconfigured (an empty string)
-	}
+	return wsToHTTP(c.endpoint(sandboxCapabilitiesPath))
 }
 
 // endpoint assembles "base address + purpose path".
@@ -162,8 +165,50 @@ func (c SandboxConfig) CapabilitiesEndpoint() string {
 // provides no route compatibility: requests always go to /v1/code. The route itself stays a compile-time matter; both
 // ends are in the same repo and module, so one build keeps them in sync.
 func (c SandboxConfig) endpoint(p string) string {
-	base := strings.TrimRight(strings.TrimSpace(c.URL), "/")
-	for _, ep := range []string{sandboxExecPath, sandboxCodePath, sandboxInteractivePath, legacySandboxScriptPath} {
+	return assembleEndpoint(c.URL,
+		[]string{sandboxExecPath, sandboxCodePath, sandboxInteractivePath, legacySandboxScriptPath}, p)
+}
+
+// BrowserConfig is the standalone browser pool (browserd) connection.
+//
+// The browser is no longer a route on sandboxd: it is its own service, with its own capacity (workers, per-tenant quota,
+// idle reclamation) and its own isolation boundary, so the sandbox mode no longer decides whether a browser can run.
+//
+// An empty url means "this deployment has no browser". The tool then says so and stops — there is deliberately no
+// fallback to a built-in browser inside the sandbox, because that mechanism no longer exists.
+type BrowserConfig struct {
+	// URL is the browser gateway base address, such as ws://browserg:27090 (a full ws://h:port/v1/browser is tolerated).
+	//
+	// It points at browserg, not at a pool instance: the gateway owns session stickiness and the per-tenant quota, which
+	// a single browserd cannot provide. Pointing it straight at one browserd is still valid for a single-instance
+	// deployment — the protocol and the two paths are identical.
+	URL string `yaml:"url"`
+	// Token is the bearer token sent with the handshake; must match browserd's token.
+	Token string `yaml:"token"`
+}
+
+// BrowserEndpoint is the browser channel: the same frame protocol as the interactive channel, different service.
+// An unconfigured URL returns an empty string, and the caller decides whether it is usable.
+func (c BrowserConfig) BrowserEndpoint() string { return c.endpoint(browserPath) }
+
+// CapabilitiesEndpoint is browserd's capability snapshot (plain HTTP: load, headed availability, engine version).
+// An unconfigured URL returns an empty string.
+func (c BrowserConfig) CapabilitiesEndpoint() string {
+	return wsToHTTP(c.endpoint(browserCapabilitiesPath))
+}
+
+func (c BrowserConfig) endpoint(p string) string {
+	return assembleEndpoint(c.URL, []string{browserPath, browserCapabilitiesPath}, p)
+}
+
+// assembleEndpoint joins "base address + purpose path".
+//
+// It tolerates a full endpoint written into base (such as ws://h/v1/exec): a trailing known endpoint path is stripped
+// first and the path appended afterwards, so /v1/exec/v1/exec never appears. An empty base returns an empty string as
+// is, never a half address such as "/v1/exec".
+func assembleEndpoint(base string, strip []string, p string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	for _, ep := range strip {
 		if strings.HasSuffix(base, ep) {
 			base = strings.TrimRight(strings.TrimSuffix(base, ep), "/")
 			break
@@ -173,6 +218,19 @@ func (c SandboxConfig) endpoint(p string) string {
 		return ""
 	}
 	return base + p
+}
+
+// wsToHTTP converts a WebSocket base address into its HTTP equivalent: net/http rejects ws:// outright, and the
+// capability snapshots are plain GETs. Anything else (already http(s), or unconfigured) is returned as is.
+func wsToHTTP(u string) string {
+	switch {
+	case strings.HasPrefix(u, "ws://"):
+		return "http://" + strings.TrimPrefix(u, "ws://")
+	case strings.HasPrefix(u, "wss://"):
+		return "https://" + strings.TrimPrefix(u, "wss://")
+	default:
+		return u
+	}
 }
 
 // StorageConfig is the data root of the whole platform.

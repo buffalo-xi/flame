@@ -1,0 +1,91 @@
+# browserg — the browser pool gateway: exposes /v1/browser to nexus, routes a session stickily to the instance that holds
+# its Chromium, and enforces the per-tenant cap across the whole pool.
+#
+# Why a separate gateway (rather than a second pool inside sandboxg): the browser channel is long-lived and stateful, its
+# capacity unit is one Chromium, and a session can never be moved between instances. sandboxg's routes are stateless and
+# load-balanced by process count — a different model that would have to be special-cased on every path.
+
+# The listen address exposed to nexus.
+listen: ":27090"
+
+# Log directory.
+log_dir: logs
+
+# Authentication towards nexus (optional, same convention as browserd: Authorization: Bearer <token>).
+# token: ""
+
+# Interval for pulling each instance's /v1/capabilities and /v1/sessions, in seconds.
+#
+# It bounds how stale the load score and the per-tenant live count are. The score drives routing, the count drives the cap;
+# the pending counter in the gateway closes most of the gap between two pulls.
+metrics_interval_sec: 2
+
+# Lifetime of a session binding, in seconds.
+#
+# It must exceed browserd's idle_sec + 2× its janitor sweep interval (validated at run time against each instance):
+#   binding expires before the lease → the same session lands on another instance and builds a second Chromium (two
+#   profiles, two pages, and the model sees whichever it hits last);
+#   binding expires after the lease → the next open lands on the original instance and lazily builds a new browser,
+#   costing one stale record that the TTL clears.
+# So err on the long side. browserd defaults to idle 300 + janitor 60, so the hard lower bound is 420; 2100 is kept because
+# it also covers a pool configured with the old sandbox defaults. A kill produces session_empty and the gateway unbinds
+# immediately, without relying on this value.
+sticky_ttl_sec: 2100
+
+# Health checks: interval for probing an instance's /healthz (seconds) and the number of consecutive failures that marks it
+# unhealthy.
+health_check_interval_sec: 5
+health_check_fail_threshold: 3
+
+# Per-tenant cap on live sessions **across the whole pool** (0 = no cap).
+#
+# The gateway is the only enforcement point: a cap configured on each browserd multiplies by the number of instances.
+# Leave browserd's own max_per_tenant at 0 and let its workers be the hard ceiling.
+max_per_tenant: 1
+
+# Shared storage for sticky bindings (required as soon as there are several gateway instances; empty degrades to
+# per-machine memory, which is fine for a single gateway only).
+#
+# The same instance sandboxg uses is fine. Leaving addr empty is deliberate for a laptop without redis: an unreachable
+# redis is a **startup failure**, not a silent downgrade, because a scrambled binding is worse than no service.
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+# The token for instances that came from discovery: a registry only yields addresses, so the token is attached here for all
+# of them. Instances listed under `backends` use their own `token` field instead.
+# browser_token: ""
+
+# Service discovery (the source of the instance list). Empty `type` = static `backends` only.
+#
+#   static only (type: "")         one or a few instances with fixed addresses; backends is the pool.
+#   discovery (consul|nacos)       the registry list is authoritative: an instance it does not list leaves the pool (and its
+#                                  sticky bindings are cleared), so `backends` is only the initial seed.
+#
+# Failure behaviour (both keep the current pool instead of emptying it): a pull that errors, and a pull that succeeds but
+# returns no instance (a rolling restart looks exactly like that). An instance that is really gone is then removed by the
+# health check.
+discovery:
+  # Dynamic scheduling: the instance list comes from the registry on every pull, so scaling the pool out or in needs no
+  # gateway restart and no config edit. A new instance joins the pool, a deregistered one leaves and its sticky bindings
+  # are cleared (its sessions fail with `session lost`, which is the honest answer — a browser cannot be migrated).
+  #
+  # The registry list is authoritative: an instance it does not list leaves the pool, so `backends` below is only the
+  # seed that keeps the gateway usable before the first pull and while the registry is unreachable. An instance whose own
+  # registry is down keeps serving traffic but is invisible here — list it under `backends` too if that must not happen.
+  type: "consul"                    # consul | nacos
+  address: "localhost:8500"
+  service_name: "browserd"
+  interval_sec: 5
+
+# Static pool of browserd instances: the only source when discovery.type is empty, the initial seed when it is set.
+# url is the HTTP base address (the gateway derives ws and the metadata paths itself); token authenticates against that
+# instance.
+#
+# Precondition for more than one instance: every browserd's workspace_root must be the same directory as nexus's
+# storage.root_dir. Otherwise a screenshot lands on the machine that happened to serve the session, and nexus — running on
+# another machine — cannot read it back, silently.
+backends:
+  - url: http://127.0.0.1:27091
+    # token: ""

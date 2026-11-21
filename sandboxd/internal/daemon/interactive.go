@@ -16,12 +16,6 @@ const interactiveJanitorInterval = time.Minute
 // errInteractiveEmptyArgv is returned when a long-lived interactive process is created without argv.
 var errInteractiveEmptyArgv = errors.New("interactive: empty argv")
 
-// BrowserToolID is the tool_id of the browser tool in the long-lived interactive registry.
-//
-// It is a peer of "shell": each occupies one entry in a session's tools map, and they share the same isolation unit
-// (docker) and the same idle reclamation / kill / sticky routing.
-const BrowserToolID = "browser"
-
 // writerSwitch is a writer whose target can be switched.
 //
 // A long-lived interactive process is persistent, while stdout/stderr must be sent back over the connection of "the

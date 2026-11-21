@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"flame/nexus/service/agent/tools"
+	"flame/nexus/shared/browserinfo"
 	"flame/nexus/shared/capability"
 	"flame/nexus/shared/sandboxinfo"
 )
@@ -189,44 +190,13 @@ func TestSandboxNotes(t *testing.T) {
 		t.Errorf("workflow script languages must not be mentioned when the peer reports no such field:\n%s", got)
 	}
 
-	// Browser: three states must be stated separately - not reported by the peer (nil) / explicitly unavailable (with a reason) / available
-	// (headed or not). Above all "unavailable" must not omit the reason: the model would misread "the tool is off" as "the site cannot be opened".
+	// The browser is no longer part of the sandbox: its facts come from browserinfo and are stated by browserNotes
+	// (see TestBrowserNotes), never here.
 	sandboxinfo.Set(sandboxinfo.Info{
 		Mode: "docker", Network: netInfo(sandboxinfo.NetworkOn), FetchedAt: time.Now(),
 	})
 	if got := a.sandboxNotes(); strings.Contains(got, "Browser") {
-		t.Errorf("the browser must not be mentioned when the peer reports no browser field:\n%s", got)
-	}
-
-	sandboxinfo.Set(sandboxinfo.Info{
-		Mode: "docker", Network: netInfo(sandboxinfo.NetworkOn), FetchedAt: time.Now(),
-		Browser: &sandboxinfo.BrowserInfo{Enabled: false, Error: "no browser in image"},
-	})
-	disabled := a.sandboxNotes()
-	if !strings.Contains(disabled, "unavailable") || !strings.Contains(disabled, "no browser in image") {
-		t.Errorf("an unavailable browser must come with the reason:\n%s", disabled)
-	}
-
-	sandboxinfo.Set(sandboxinfo.Info{
-		Mode: "docker", Network: netInfo(sandboxinfo.NetworkOn), FetchedAt: time.Now(),
-		Browser: &sandboxinfo.BrowserInfo{
-			Enabled: true, Version: "Chromium 141.0", HeadlessDefault: true, HeadedAvailable: false,
-		},
-	})
-	headless := a.sandboxNotes()
-	if !strings.Contains(headless, "headless only") || !strings.Contains(headless, "snapshot") {
-		t.Errorf("headless-only must state the fact and how to observe:\n%s", headless)
-	}
-
-	sandboxinfo.Set(sandboxinfo.Info{
-		Mode: "none", Network: netInfo(sandboxinfo.NetworkOn), FetchedAt: time.Now(),
-		Browser: &sandboxinfo.BrowserInfo{
-			Enabled: true, Version: "Chromium 141.0", HeadlessDefault: true, HeadedAvailable: true,
-		},
-	})
-	headed := a.sandboxNotes()
-	if !strings.Contains(headed, "headed=true") {
-		t.Errorf("when headed mode is allowed the model must be told how to enable it:\n%s", headed)
+		t.Errorf("the sandbox notes must not talk about the browser any more:\n%s", got)
 	}
 
 	// Injection scope: only for agents that can touch the sandbox (the criterion is tool grants). For an agent with no route into the sandbox,
@@ -251,11 +221,67 @@ func TestSandboxNotes(t *testing.T) {
 		t.Error("the sandbox notes must not be skipped when the tool context is missing")
 	}
 
-	// Any one of the two entry points being granted counts as "can touch the sandbox".
-	for _, tool := range []string{"exec", "run_skill_script", "shell", "browser"} {
+	// Any one of the sandbox entry points being granted counts as "can touch the sandbox".
+	for _, tool := range []string{"exec", "run_skill_script", "shell"} {
 		withTool := &agentImpl{toolCtx: &tools.Context{AllowedTools: map[string]bool{tool: true}}}
 		if got := withTool.sandboxNotes(); !strings.Contains(got, "Sandbox environment (isolation mode docker") {
 			t.Errorf("granting %s should inject the sandbox notes, got:\n%s", tool, got)
 		}
+	}
+	// The browser is not a sandbox entry point any more (it has its own pool), so it must not drag the sandbox facts in.
+	browserOnly := &agentImpl{toolCtx: &tools.Context{AllowedTools: map[string]bool{"browser": true}}}
+	if got := browserOnly.sandboxNotes(); got != "" {
+		t.Errorf("granting only browser must not inject sandbox environment notes, got:\n%s", got)
+	}
+}
+
+// browserNotes states the four browser states: no pool configured / pool not answered / unavailable (with the reason) /
+// available (headless or headed). "Unavailable" must always carry the reason: the model would otherwise misread "the tool
+// is off" as "this site cannot be opened".
+//
+// Order matters: BrowserConfigured / Configured are sticky package-level singletons, so "nothing configured" is judged
+// first, then the pool is injected for the remaining cases.
+func TestBrowserNotes(t *testing.T) {
+	a := &agentImpl{}
+
+	if got := a.browserNotes(); !strings.Contains(got, "no browser pool configured") {
+		t.Errorf("an unconfigured pool must say so, got:\n%s", got)
+	}
+
+	tools.SetBrowserPool("ws://browserg:27090/v1/browser", "")
+	t.Cleanup(func() { tools.SetBrowserPool("", "") })
+
+	// Configured but never answered: "unknown", never "cannot open pages".
+	if !browserinfo.Configured() {
+		if got := a.browserNotes(); !strings.Contains(got, "unknown") {
+			t.Errorf("a pool that has not answered must be reported as unknown, got:\n%s", got)
+		}
+	}
+
+	browserinfo.Set(browserinfo.Info{Available: false, Error: "no chromium in the image"})
+	disabled := a.browserNotes()
+	if !strings.Contains(disabled, "unavailable") || !strings.Contains(disabled, "no chromium in the image") {
+		t.Errorf("an unavailable browser must come with the reason:\n%s", disabled)
+	}
+
+	browserinfo.Set(browserinfo.Info{
+		Available: true, Version: "Chromium 141.0", HeadlessDefault: true, HeadedAvailable: false,
+	})
+	headless := a.browserNotes()
+	if !strings.Contains(headless, "headless only") || !strings.Contains(headless, "snapshot") {
+		t.Errorf("headless-only must state the fact and how to observe:\n%s", headless)
+	}
+
+	browserinfo.Set(browserinfo.Info{
+		Available: true, Version: "Chromium 141.0", HeadlessDefault: true, HeadedAvailable: true,
+	})
+	if got := a.browserNotes(); !strings.Contains(got, "headed=true") {
+		t.Errorf("when headed is allowed the model must be told how to enable it:\n%s", got)
+	}
+
+	// Scope: an agent without the browser tool gains nothing from these facts.
+	other := &agentImpl{toolCtx: &tools.Context{AllowedTools: map[string]bool{"read_file": true}}}
+	if got := other.browserNotes(); got != "" {
+		t.Errorf("the browser note must not be injected without the browser tool, got:\n%s", got)
 	}
 }

@@ -120,12 +120,6 @@ type Config struct {
 	// none, the rootfs path under nsjail), the same mechanism as langs.<lang> command/commands.
 	Codehost CodehostConfig `yaml:"codehost"`
 
-	// Browser locates the browser host (browserhost) and carries its policy.
-	//
-	// The browser is the same kind of thing as a shell: a session-level long-lived process. So it reuses the
-	// /v1/interactive channel (tool_id="browser") and adds no HTTP route; this section only describes "where the
-	// browserhost in the image / rootfs is, and whether headed is possible".
-	Browser BrowserConfig `yaml:"browser"`
 	// TmpDir is the host root of the worker writable directories: every worker creates an exclusive subdirectory
 	// under it, which is mounted into the sandbox as /tmp (and is the script's cwd at the same time).
 	//
@@ -180,12 +174,10 @@ type Config struct {
 	// the process, release the container. This is the lifetime backstop of session-level long-lived processes and is
 	// a different thing from code_max_sec (the hard gate of a single interaction).
 	//
-	// Why 5 minutes and not 30: a session container is the most expensive idle resource (a resident Chromium alone
-	// costs hundreds of MB), while the state it preserves barely reaches past the current task. The browser profile
-	// lives in the container's tmpfs and dies with it, so a long idle never buys persistent logins; headed browsers
-	// (the only case where a human is actually watching) exist only under mode=none, i.e. local development.
-	// In production (docker, headless) the window between "the model stopped" and "the container goes away" is
-	// waste, so the default is kept short and deployments that want longer local sessions raise it in their config.
+	// Why 5 minutes and not 30: a session container is the most expensive idle resource (a resident shell plus its
+	// container), while the state it preserves — cwd, environment variables, files written into the workspace — barely
+	// reaches past the current task. In production the window between "the model stopped" and "the container goes away"
+	// is waste, so the default is kept short and deployments with human-in-the-loop local sessions raise it.
 	InteractiveIdleSec int `yaml:"interactive_idle_sec"`
 
 	// InteractiveEphemeralIdleSec is the short idle reclaim cap of temporary interactive processes without a
@@ -383,71 +375,6 @@ type CodehostConfig struct {
 	Binaries map[string]string `yaml:"binaries"`
 }
 
-// BrowserConfig is the browser host config (top-level browser section).
-//
-// There is deliberately no "engine selection": the driver layer is fixed on CDP (the Chromium family). Switching
-// engines is not something one field can do (Firefox removed CDP, and WebKit only exists as Playwright's custom
-// build), and offering so many tiers would only make people believe switching over just works.
-type BrowserConfig struct {
-	// Enabled says whether the browser tool is offered. Default false: a browser can reach the network and read
-	// pages, which is a capability that "you should know about when you turn it on", not something obtained by
-	// omitting the config.
-	Enabled bool `yaml:"enabled"`
-
-	// Binary is the general default (for example "browserhost", resolved through PATH).
-	Binary string `yaml:"binary"`
-	// Binaries overrides Binary per isolation mode (key: none / nsjail / docker).
-	Binaries map[string]string `yaml:"binaries"`
-
-	// ExecPath is the browser executable (**an in-sandbox** path). Empty = discovered by browserhost itself
-	// (chromium / chrome / Edge on the host).
-	//
-	// Note that it has the same nature as binaries: it is "a path visible inside the isolation unit", a host path
-	// under none and an in-image path under docker — one string cannot hold for both, so the effective value goes
-	// through ExecPaths per mode.
-	ExecPath string `yaml:"exec_path"`
-	// ExecPaths overrides ExecPath per isolation mode (key: none / nsjail / docker). Typical use: docker writes
-	// /usr/bin/chromium from the image, none writes the absolute path of Chrome on the host.
-	ExecPaths map[string]string `yaml:"exec_paths"`
-
-	// Headed is the default display mode: false = headless (recommended in production).
-	//
-	// It is spelled "headed" rather than "headless" so that the zero value is the safe value — the zero value of a
-	// bool is false, and with "headless" there would be no way to tell "unset" from "explicitly off".
-	Headed bool `yaml:"headed"`
-	// AllowHeaded says whether a caller may request headed per session. Headed needs a real display environment and
-	// is currently only supported with mode=none (sandboxd running on a machine with a desktop).
-	AllowHeaded bool `yaml:"allow_headed"`
-	// AllowHeadedModes overrides AllowHeaded per isolation mode (key: none / nsjail / docker). The value here is
-	// used when the current mode has an entry, otherwise it falls back to AllowHeaded — the same rule as
-	// exec_paths.
-	AllowHeadedModes map[string]bool `yaml:"allow_headed_modes"`
-
-	// ProfileDir is Chrome's user-data-dir (an in-sandbox path).
-	//
-	// Empty = a per-mode default: docker → /tmp/browser (the container has --tmpfs /tmp, so the profile dies with
-	// the container, never lands in the read-only rootfs and never pollutes the workspace); none / nsjail → a temp
-	// directory removed when the browser exits.
-	ProfileDir string `yaml:"profile_dir"`
-	// ProfileDirs overrides ProfileDir per isolation mode (key: none / nsjail / docker).
-	ProfileDirs map[string]string `yaml:"profile_dirs"`
-	// DownloadsDir is the download directory (an in-sandbox path). Empty = <cwd>/downloads (that is, the
-	// workspace).
-	DownloadsDir string `yaml:"downloads_dir"`
-	// DownloadsDirs overrides DownloadsDir per isolation mode (key: none / nsjail / docker).
-	//
-	// Same reasoning as exec_path: this is an in-sandbox path, and an absolute one only holds for one mode
-	// (/workspace under none becomes C:\workspace on the host root disk). The default is relative to cwd and
-	// therefore cross-mode by nature, so most deployments do not need to configure it.
-	DownloadsDirs map[string]string `yaml:"downloads_dirs"`
-
-	// Limits is the resource cap of the browser process (defaults + global clamp).
-	//
-	// Why a separate section: Chrome's process tree plus rendering cache is a different order of magnitude from a
-	// shell, and applying exec's 512MB to it gets it OOM-killed when the second tab opens.
-	Limits LimitsConfig `yaml:"limits"`
-}
-
 // CodeLang is a script-specific language policy (code.pools.<lang>): pool and concurrency only, no interpreter
 // entry — that belongs to the top-level langs.
 //
@@ -610,14 +537,6 @@ func (c *Config) expandEnv() error {
 	set("nsjail.rootfs", &c.Nsjail.Rootfs)
 	set("docker.binary", &c.Docker.Binary)
 	set("docker.image", &c.Docker.Image)
-	set("browser.binary", &c.Browser.Binary)
-	setMap("browser.binaries", c.Browser.Binaries)
-	set("browser.exec_path", &c.Browser.ExecPath)
-	setMap("browser.exec_paths", c.Browser.ExecPaths)
-	set("browser.profile_dir", &c.Browser.ProfileDir)
-	setMap("browser.profile_dirs", c.Browser.ProfileDirs)
-	set("browser.downloads_dir", &c.Browser.DownloadsDir)
-	setMap("browser.downloads_dirs", c.Browser.DownloadsDirs)
 	return firstErr
 }
 
@@ -727,9 +646,6 @@ func (c *Config) validate() error {
 	if err := c.validateNetwork(); err != nil {
 		return err
 	}
-	if err := c.validateBrowser(); err != nil {
-		return err
-	}
 	switch c.Nsjail.CgroupVersion {
 	case isolate.CgroupV1, isolate.CgroupV2, isolate.CgroupAuto:
 	default:
@@ -760,34 +676,6 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("codehost.binaries: unknown mode %q (want %q, %q or %q)",
 				m, isolate.NoneName, isolate.NsjailName, isolate.DockerName)
-		}
-	}
-	// Same reasoning as commands / codehost.binaries: a misspelled mode makes the override silently ineffective, and
-	// here the consequence is subtler — after falling back to the general path, the browser points at a file that
-	// does not exist under the other mode, and it only blows up on the first open.
-	for key, modes := range map[string]map[string]string{
-		"browser.binaries":       c.Browser.Binaries,
-		"browser.exec_paths":     c.Browser.ExecPaths,
-		"browser.profile_dirs":   c.Browser.ProfileDirs,
-		"browser.downloads_dirs": c.Browser.DownloadsDirs,
-	} {
-		for mode := range modes {
-			switch mode {
-			case isolate.NoneName, isolate.NsjailName, isolate.DockerName:
-			default:
-				return fmt.Errorf("%s: unknown mode %q (want %q, %q or %q)",
-					key, mode, isolate.NoneName, isolate.NsjailName, isolate.DockerName)
-			}
-		}
-	}
-	// Same for the headed override table: a misspelled mode makes the override silently ineffective, and local
-	// headed debugging mysteriously turns headless.
-	for mode := range c.Browser.AllowHeadedModes {
-		switch mode {
-		case isolate.NoneName, isolate.NsjailName, isolate.DockerName:
-		default:
-			return fmt.Errorf("browser.allow_headed_modes: unknown mode %q (want %q, %q or %q)",
-				mode, isolate.NoneName, isolate.NsjailName, isolate.DockerName)
 		}
 	}
 	for name, lang := range c.Code.Pools {
@@ -1273,12 +1161,6 @@ func (c *Config) applyDefaults() {
 		// path.
 		c.Codehost.Binary = "codehost"
 	}
-	if c.Browser.Binary == "" {
-		c.Browser.Binary = "browserhost"
-	}
-	// Note: the docker default of browser.profile_dir (/tmp/browser) is **deliberately kept in
-	// ResolveBrowserProfileDir** and not filled here. Filling it into the field would turn it into a "general value"
-	// and drag the docker path onto none when the mode changes.
 	if c.TmpDir == "" {
 		c.TmpDir = "run/tmp"
 	}
@@ -1396,134 +1278,6 @@ func (c *Config) ResolveCodehostBinary(mode string) (string, error) {
 		return c.Codehost.Binary, nil
 	}
 	return "", fmt.Errorf("codehost binary not configured (set codehost.binary, or codehost.binaries.%s)", mode)
-}
-
-// ResolveBrowserBinary returns the entry name of the browserhost binary under the current mode: binaries[mode]
-// first, then the general default binary. Same "report an error when nothing resolves" as ResolveCodehostBinary —
-// degrading to empty silently only blows up at the first browser call as "start: exec: no command", by which time
-// the model has already planned the page operations.
-func (c *Config) ResolveBrowserBinary(mode string) (string, error) {
-	if b, ok := c.Browser.Binaries[mode]; ok && b != "" {
-		return b, nil
-	}
-	if c.Browser.Binary != "" {
-		return c.Browser.Binary, nil
-	}
-	return "", fmt.Errorf("browserhost binary not configured (set browser.binary, or browser.binaries.%s)", mode)
-}
-
-// BrowserLimits computes the final cap of the browser process:
-//
-//	browser.limits → request override (non-zero fields) → global clamp
-func (c *Config) BrowserLimits(req sandbox.Limits) sandbox.Limits {
-	return Clamp(sandbox.MergeLimits(c.Browser.Limits.ToSandbox(), req), c.Limits.ToSandbox())
-}
-
-// ResolveBrowserExecPath returns the browser executable path under the current mode.
-//
-// The fallback order matches command/commands in langs: exec_paths[mode] → exec_path → empty.
-// Empty is not an error: browserhost discovers it inside the sandbox (chromium under docker, Chrome/Edge on the
-// host), which is exactly the "do not guess when it is not configured" default.
-func (c *Config) ResolveBrowserExecPath(mode string) string {
-	if p, ok := c.Browser.ExecPaths[mode]; ok && p != "" {
-		return p
-	}
-	return c.Browser.ExecPath
-}
-
-// ResolveBrowserProfileDir returns the Chrome profile directory under the current mode.
-//
-// Order: profile_dirs[mode] → profile_dir → mode default (docker uses /tmp/browser) → empty.
-// Empty is not an error: browserhost creates a temp directory and removes it on exit.
-func (c *Config) ResolveBrowserProfileDir(mode string) string {
-	if p, ok := c.Browser.ProfileDirs[mode]; ok && p != "" {
-		return p
-	}
-	if c.Browser.ProfileDir != "" {
-		return c.Browser.ProfileDir
-	}
-	if mode == isolate.DockerName {
-		// The only writable location that dies with the container under a read-only rootfs (see --tmpfs /tmp in
-		// containerArgs).
-		return "/tmp/browser"
-	}
-	return ""
-}
-
-// ResolveBrowserDownloadsDir returns the download directory under the current mode.
-// Order: downloads_dirs[mode] → downloads_dir → empty (browserhost uses <cwd>/downloads).
-func (c *Config) ResolveBrowserDownloadsDir(mode string) string {
-	if p, ok := c.Browser.DownloadsDirs[mode]; ok && p != "" {
-		return p
-	}
-	return c.Browser.DownloadsDir
-}
-
-// AllowHeadedFor returns the effective "headed allowed" value for a mode: allow_headed_modes[mode] first, falling
-// back to allow_headed when there is no entry.
-func (c *Config) AllowHeadedFor(mode string) bool {
-	if v, ok := c.Browser.AllowHeadedModes[mode]; ok {
-		return v
-	}
-	return c.Browser.AllowHeaded
-}
-
-// BrowserArgv assembles the browserhost command line.
-//
-// Why sandboxd assembles it instead of nexus passing it: only this service knows the in-sandbox paths (what
-// browserhost is called in the image, where the profile goes), the same reasoning as langs / codehost.
-func (c *Config) BrowserArgv(mode string) ([]string, error) {
-	bin, err := c.ResolveBrowserBinary(mode)
-	if err != nil {
-		return nil, err
-	}
-	argv := []string{bin}
-	if p := c.ResolveBrowserExecPath(mode); p != "" {
-		argv = append(argv, "--exec-path", p)
-	}
-	if p := c.ResolveBrowserProfileDir(mode); p != "" {
-		argv = append(argv, "--profile", p)
-	}
-	if p := c.ResolveBrowserDownloadsDir(mode); p != "" {
-		argv = append(argv, "--downloads", p)
-	}
-	if c.AllowHeadedFor(mode) {
-		argv = append(argv, "--allow-headed")
-	}
-	if c.Browser.Headed {
-		argv = append(argv, "--default-headed")
-	}
-	return argv, nil
-}
-
-// validateBrowser checks whether the browser config is consistent with the current isolation mode.
-//
-// The criterion is the same as validateNetwork: **the declaration must match the fact**.
-//   - the nsjail rootfs does not have the whole runtime Chromium needs (/proc, /dev/shm, fonts, user namespace), so
-//     this version does not support it; enabling it refuses startup outright instead of failing when the model opens
-//     a page.
-//   - headed needs a real display environment, which currently only holds for mode=none (sandboxd running on a
-//     machine with a desktop); passing headed under docker / nsjail only yields an invisible window.
-func (c *Config) validateBrowser() error {
-	if !c.Browser.Enabled {
-		return nil
-	}
-	if c.Mode == isolate.NsjailName {
-		return fmt.Errorf("browser: not supported with mode %q — the jail rootfs has no Chromium runtime "+
-			"(/proc, /dev/shm, fonts); set browser.enabled: false, or use mode docker / none",
-			isolate.NsjailName)
-	}
-	if c.Browser.Headed && !c.AllowHeadedFor(c.Mode) {
-		return fmt.Errorf("browser.headed: true requires browser.allow_headed: true — " +
-			"a visible window is a policy decision, not a default")
-	}
-	if c.AllowHeadedFor(c.Mode) && c.Mode != isolate.NoneName {
-		return fmt.Errorf("browser.allow_headed: true is only supported with mode %q (a real display); "+
-			"mode %q has no visible window — set allow_headed: false",
-			isolate.NoneName, c.Mode)
-	}
-	_, err := c.ResolveBrowserBinary(c.Mode)
-	return err
 }
 
 // Clamp limits v to ceiling (a 0 dimension in ceiling means no limit).

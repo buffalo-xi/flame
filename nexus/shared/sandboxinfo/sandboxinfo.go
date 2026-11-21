@@ -58,12 +58,9 @@ type Info struct {
 
 	Environment Environment `json:"environment"`
 
-	// Browser is the browser capability (sandboxd's measured conclusion: whether the image has Chromium and whether it can run headed).
-	//
-	// nil and "Enabled=false" mean different things, so do not merge them: nil = the peer did not report the field (an older sandboxd / a
-	// field name mismatch), false = the peer explicitly says "unavailable" and gives a reason.
-	// The former must not lead the agent to conclude "the browser is broken"; it can only say "this sandbox did not tell me".
-	Browser *BrowserInfo `json:"browser,omitempty"`
+	// The browser is deliberately absent: it is not part of the sandbox any more, so it is described by its own service
+	// and its own snapshot (shared/browserinfo). Keeping a "browser" field here would make "this sandbox did not report a
+	// browser" and "the browser pool is down" indistinguishable.
 
 	// FetchedAt is when the last **successful** fetch happened.
 	FetchedAt time.Time `json:"-"`
@@ -118,16 +115,6 @@ func (n *NetworkInfo) UnmarshalJSON(b []byte) error {
 		n.Code = n.Script
 	}
 	return nil
-}
-
-// BrowserInfo is the browser capability snapshot (aligned with sandboxd's daemon.BrowserInfo).
-type BrowserInfo struct {
-	Enabled         bool   `json:"enabled"`
-	Engine          string `json:"engine,omitempty"`
-	Version         string `json:"version,omitempty"`
-	HeadlessDefault bool   `json:"headless_default"`
-	HeadedAvailable bool   `json:"headed_available"`
-	Error           string `json:"error,omitempty"`
 }
 
 // Network policy values (aligned with sandboxd's daemon.NetworkXxx).

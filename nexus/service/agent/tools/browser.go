@@ -5,19 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync/atomic"
 
-	"flame/nexus/shared/sandboxinfo"
+	"flame/nexus/shared/browserinfo"
 	"flame/tools/sandbox"
 )
 
-// browserTool is the in-sandbox browser (CDP / Chromium).
+// browserTool is the browser (CDP / Chromium), served by the standalone browser pool (browserd).
 //
 // Like shell it is a "session-level resident process": several calls within the same session / run reuse one browser instance
-// (cookies, login state and tabs all survive), the process is owned by sandboxd's long-interaction registry, and the tool side
-// only translates one action into one line of JSON.
+// (cookies, login state and tabs all survive). It is **not** part of the sandbox any more: browserd owns the process, its
+// capacity (workers / per-tenant quota) and its isolation boundary, and this tool side only translates one action into one
+// line of JSON.
 //
 // The observation channel is an **accessibility-tree snapshot**, not a screenshot: a tool result can only carry text back
 // (see marshalToolResult in agent_impl.go), screenshots go to disk for humans, and for the model to "see" a page it must rely
@@ -84,15 +84,12 @@ func (t *browserTool) Meta() ToolMeta {
 }
 
 func (t *browserTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
-	if err := ensureSandboxReady("browser"); err != nil {
-		return nil, err
-	}
 	if err := ensureBrowserReady(); err != nil {
 		return nil, err
 	}
-	client := CurrentInteractive()
+	client := browserClientFor(c.Schema)
 	if client == nil {
-		return nil, errors.New("browser disabled: interactive sandbox not initialized")
+		return nil, errors.New("browser disabled: no browser pool configured (set browser.url)")
 	}
 
 	action := strings.TrimSpace(argString(args, "action"))
@@ -119,9 +116,9 @@ func (t *browserTool) Execute(ctx context.Context, c *Context, args map[string]a
 	// Headed is a property of "creating the browser" and cannot be switched at run time. It is blocked here up front, so
 	// that the model does not believe a window is open while it stays headless (the reverse would be worse).
 	if action == "open" && argBool(args, "headed") {
-		if b := sandboxinfo.Get().Browser; b == nil || !b.HeadedAvailable {
-			reason := "this sandbox did not report headed support"
-			if b != nil && b.Error != "" {
+		if b := browserinfo.Get(); !b.HeadedAvailable {
+			reason := "the browser pool did not report headed support"
+			if b.Error != "" {
 				reason = b.Error
 			}
 			return nil, fmt.Errorf("browser: headed is not available (%s); call open without headed", reason)
@@ -133,24 +130,11 @@ func (t *browserTool) Execute(ctx context.Context, c *Context, args map[string]a
 		return nil, err
 	}
 
-	// Mounts identical to shell: the workspace (rw, cwd) + this agent's definition domain (ro).
-	// The browser process's own profile is pointed at /tmp by sandboxd, so no extra mount is needed.
-	hostRoot := c.Workspace
-	if hostRoot == "" {
-		hostRoot = "."
-	}
-	if err := os.MkdirAll(hostRoot, 0o755); err != nil {
-		return nil, err
-	}
-	mounts := []sandbox.Mount{
-		{Host: hostRoot, Guest: workspaceGuestDir, ReadOnly: false},
-	}
-	if c.AgentRoot != "" {
-		mounts = append(mounts, sandbox.Mount{Host: c.AgentRoot, Guest: agentGuestDir, ReadOnly: true})
-	}
-
+	// Mounts are meaningless to the pool (it is not in the sandbox), so nothing is mounted here. What it does need is the
+	// workspace **path**: the pool resolves it under the directory shared with nexus and runs the browser with that cwd,
+	// so a screenshot or a download lands where this tenant can open it afterwards.
 	line, err := client.Do(ctx, sess, browserToolID,
-		[]string{browserArgvPlaceholder}, req, mounts, workspaceGuestDir)
+		[]string{browserArgvPlaceholder}, req, nil, c.WorkKey)
 	if err != nil {
 		return nil, err
 	}
@@ -175,20 +159,24 @@ func (t *browserTool) Execute(ctx context.Context, c *Context, args map[string]a
 	return out, nil
 }
 
-// ensureBrowserReady is the browser tool's admission check: sandboxd must have said explicitly that the browser is available.
+// ensureBrowserReady is the browser tool's admission check: the browser pool must have said explicitly that it can run a
+// browser.
 //
-// The same philosophy as ensureSandboxReady - no guessing. A port that was never reported, a failed probe, an image without a
-// browser: all three must show the model an explicit reason rather than let it believe "this site cannot be opened".
+// The same philosophy as ensureSandboxReady - no guessing. No configured pool, a pool that never answered, a failed
+// self-test, a driver that cannot find Chromium: all four must show the model an explicit reason rather than let it
+// believe "this site cannot be opened".
 func ensureBrowserReady() error {
-	b := sandboxinfo.Get().Browser
-	if b == nil {
-		return errors.New("browser disabled: sandboxd did not report browser capability " +
-			"(upgrade sandboxd, or this sandbox does not ship a browser)")
+	if !BrowserConfigured() {
+		return errors.New("browser disabled: no browser pool configured (set browser.url)")
 	}
-	if !b.Enabled {
+	if !browserinfo.Configured() {
+		return errors.New("browser disabled: the browser pool has not answered yet (its capabilities are unknown)")
+	}
+	b := browserinfo.Get()
+	if !b.Available {
 		reason := b.Error
 		if reason == "" {
-			reason = "not enabled"
+			reason = "not available"
 		}
 		return fmt.Errorf("browser disabled: %s", reason)
 	}

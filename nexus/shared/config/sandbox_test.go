@@ -63,3 +63,50 @@ func TestSandboxConfigYAMLKey(t *testing.T) {
 		t.Errorf("ExecEndpoint() = %q, want %q", got, "ws://h:8080/v1/exec")
 	}
 }
+
+// The browser pool derives two endpoints from its own base address: the WebSocket channel and the plain-HTTP capability
+// snapshot. The capability one must be converted (net/http rejects ws://), and a full endpoint written into url must not
+// be doubled.
+func TestBrowserEndpoints(t *testing.T) {
+	cases := []struct {
+		name        string
+		url         string
+		wantChannel string
+		wantCaps    string
+	}{
+		{"base address", "ws://127.0.0.1:27090", "ws://127.0.0.1:27090/v1/browser", "http://127.0.0.1:27090/v1/capabilities"},
+		{"trailing slash", "ws://h:27090/", "ws://h:27090/v1/browser", "http://h:27090/v1/capabilities"},
+		{"wss becomes https", "wss://browserd:443", "wss://browserd:443/v1/browser", "https://browserd:443/v1/capabilities"},
+		{"full browser endpoint", "ws://h:27090/v1/browser", "ws://h:27090/v1/browser", "http://h:27090/v1/capabilities"},
+		{"full capabilities endpoint", "ws://h:27090/v1/capabilities", "ws://h:27090/v1/browser", "http://h:27090/v1/capabilities"},
+		{"already http", "http://h:27090", "http://h:27090/v1/browser", "http://h:27090/v1/capabilities"},
+		{"not configured", "", "", ""},
+		{"whitespace only", "   ", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := BrowserConfig{URL: tc.url}
+			if got := c.BrowserEndpoint(); got != tc.wantChannel {
+				t.Errorf("BrowserEndpoint() = %q, want %q", got, tc.wantChannel)
+			}
+			if got := c.CapabilitiesEndpoint(); got != tc.wantCaps {
+				t.Errorf("CapabilitiesEndpoint() = %q, want %q", got, tc.wantCaps)
+			}
+		})
+	}
+}
+
+// Pin the browser key names: a typo here would silently disable the browser tool (empty url = "no browser configured").
+func TestBrowserConfigYAMLKey(t *testing.T) {
+	var c Config
+	src := "browser:\n  url: ws://h:27090\n  token: tok\n"
+	if err := yaml.Unmarshal([]byte(src), &c); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := c.Browser.BrowserEndpoint(); got != "ws://h:27090/v1/browser" {
+		t.Errorf("BrowserEndpoint() = %q, want %q", got, "ws://h:27090/v1/browser")
+	}
+	if c.Browser.Token != "tok" {
+		t.Errorf("Browser.Token = %q, want %q", c.Browser.Token, "tok")
+	}
+}

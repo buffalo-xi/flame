@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -49,6 +50,9 @@ func SetSandbox(sb sandbox.Sandbox) { globalSandbox = sb }
 func CurrentSandbox() sandbox.Sandbox { return globalSandbox }
 
 // globalInteractive is the long-lived interactive (/v1/interactive) client (a process-level singleton injected by main at startup).
+//
+// It carries the **shell** only. The browser used to share this channel; it now lives in its own pool (browserd), with
+// its own capacity and isolation boundary — see browserClientFor.
 var globalInteractive *sandbox.InteractiveClient
 
 // SetInteractive sets the global interactive client (called at startup).
@@ -57,11 +61,59 @@ func SetInteractive(c *sandbox.InteractiveClient) { globalInteractive = c }
 // CurrentInteractive returns the interactive client in effect; nil when nothing was injected.
 func CurrentInteractive() *sandbox.InteractiveClient { return globalInteractive }
 
-// interactiveToolIDs are the built-in tools that go through /v1/interactive (session-level resident processes).
+// Browser pool (browserd) connection, injected by main at startup.
 //
-// They are peers: one session occupies one tool entry each in sandboxd's registry (they share one container under docker), so reclamation must
-// kill each of them - miss one and one process is left behind.
-var interactiveToolIDs = []string{"shell", "browser"}
+// A client per tenant is cached because browserd enforces its per-tenant quota from the ?tenant= query on the channel:
+// the quota key has to travel with the connection, and the client's endpoint is immutable once built.
+var (
+	browserMu       sync.Mutex
+	browserEndpoint string
+	browserToken    string
+	browserClients  map[string]*sandbox.InteractiveClient
+)
+
+// SetBrowserPool injects the browser pool endpoint (empty = this deployment has no browser). It must be called before
+// any browser tool runs; the tenant clients are built lazily on first use.
+func SetBrowserPool(endpoint, token string) {
+	browserMu.Lock()
+	defer browserMu.Unlock()
+	browserEndpoint, browserToken = endpoint, token
+	browserClients = nil
+}
+
+// BrowserConfigured reports whether a browser pool endpoint was injected.
+func BrowserConfigured() bool {
+	browserMu.Lock()
+	defer browserMu.Unlock()
+	return browserEndpoint != ""
+}
+
+// browserClientFor returns the client of that tenant; nil when no browser pool is configured.
+func browserClientFor(tenant string) *sandbox.InteractiveClient {
+	browserMu.Lock()
+	defer browserMu.Unlock()
+	if browserEndpoint == "" {
+		return nil
+	}
+	if c := browserClients[tenant]; c != nil {
+		return c
+	}
+	ep := browserEndpoint
+	if tenant != "" {
+		if u, err := url.Parse(ep); err == nil {
+			q := u.Query()
+			q.Set("tenant", tenant)
+			u.RawQuery = q.Encode()
+			ep = u.String()
+		}
+	}
+	c := sandbox.NewInteractive(ep, browserToken, sandbox.Limits{})
+	if browserClients == nil {
+		browserClients = map[string]*sandbox.InteractiveClient{}
+	}
+	browserClients[tenant] = c
+	return c
+}
 
 // KillInteractive destroys interactive processes; the key must be computed exactly like the shell / browser tools do:
 // SessionID first (session level, reusable), RunID as the fallback (temporary, dies with the run).
@@ -69,19 +121,25 @@ var interactiveToolIDs = []string{"shell", "browser"}
 // It is used to reclaim the resident processes an agent started when a run is stopped; a normal end **must not** call it - a session-level
 // browser is meant to be reused by the next conversation, and killing it early loses page state.
 //
-// The last resort is sandboxd's idle timeout; a failure only affects how fast resources come back, not correctness, so errors are swallowed
-// silently here.
+// The two channels are killed on their own clients. The browser one is harmless when nothing was ever opened: the pool
+// answers "no such session" without launching a Chromium (see browserpool.handleBrowser).
+//
+// The last resort is each service's idle timeout; a failure only affects how fast resources come back, not correctness,
+// so errors are swallowed silently here.
 func KillInteractive(sessionID, runID string) {
 	key, ephemeral := sessionID, false
 	if key == "" {
 		key, ephemeral = runID, true
 	}
-	if globalInteractive == nil || key == "" {
+	if key == "" {
 		return
 	}
-	for _, toolID := range interactiveToolIDs {
-		_ = globalInteractive.Kill(context.Background(),
-			sandbox.InteractiveSession{Key: key, Ephemeral: ephemeral}, toolID)
+	sess := sandbox.InteractiveSession{Key: key, Ephemeral: ephemeral}
+	if globalInteractive != nil {
+		_ = globalInteractive.Kill(context.Background(), sess, "shell")
+	}
+	if c := browserClientFor(""); c != nil {
+		_ = c.Kill(context.Background(), sess, browserToolID)
 	}
 }
 

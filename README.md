@@ -152,8 +152,10 @@ nexus/
   shared/         config, repositories, auth, logging
   platform/       platform bootstrap and tenant template (including agent definition files)
   docs/           terminology, sandbox design, workspace layout
-sandboxd/         isolated execution (docker / nsjail / none) + codehost + browserhost
+sandboxd/         isolated execution (docker / nsjail / none) + codehost
 sandboxg/         sandbox gateway
+browserg/         browser gateway (sticky routing across browser pools)
+browserd/         standalone browser pool (Chromium per session)
 tools/            shared libraries
 desktop/          Vue 3 admin console
 ```
@@ -171,6 +173,10 @@ desktop/          Vue 3 admin console
 - `nexus/docs/i18n-plan.md` — the layered bilingual plan, its costs and pitfalls ([中文](nexus/docs/i18n-plan.zh.md))
 - `nexus/docs/error-codes.md` — business error-code conventions (a prerequisite for a bilingual UI)
   ([中文](nexus/docs/error-codes.zh.md))
+- `browserd/README.md` — the standalone browser pool: how nexus reaches it, how to build and deploy it, and the three
+  settings that must line up ([中文](browserd/README.zh.md))
+- `browserg/README.md` — the browser gateway: sticky routing, the per-tenant cap, and why it is not part of sandboxg
+  ([中文](browserg/README.zh.md))
 - `AGENTS.md` — module map and cross-domain ground rules
 
 ## Security notes

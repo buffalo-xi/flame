@@ -18,6 +18,7 @@ import (
 	"flame/nexus/service/llm/gateway"
 	"flame/nexus/shared/agentconfig"
 	"flame/nexus/shared/auth"
+	"flame/nexus/shared/browserinfo"
 	"flame/nexus/shared/callchain"
 	"flame/nexus/shared/capability"
 	"flame/nexus/shared/capabilitypolicy"
@@ -782,6 +783,11 @@ func (a *agentImpl) loadSystemPrompt() (string, error) {
 	if notes := a.sandboxNotes(); notes != "" {
 		prompt += "\n\n" + notes
 	}
+	// The browser is its own service, so its facts are stated on their own (an agent with no sandbox access can still
+	// have the browser tool).
+	if notes := a.browserNotes(); notes != "" {
+		prompt += "\n\n" + notes
+	}
 	// The reply-language rule comes **last**: it constrains everything above it (AGENT.md included), and sitting after the capability /
 	// sandbox notes makes the order the model reads "facts -> convention".
 	prompt += "\n\n" + responseLanguageRule
@@ -966,34 +972,6 @@ func (a *agentImpl) sandboxNotes() string {
 		lines = append(lines, "- Whether the sandbox can reach the network is unknown (sandboxd gave no declaration): confirm with the user before writing networked code; do not assume.")
 	}
 
-	// Browser: available or not, both are facts, stated separately.
-	// When unavailable the **reason** must be stated, otherwise the model misreads "the tool is off" as "this site cannot be opened"
-	// and then spins on swapping URLs / selectors.
-	if b := info.Browser; b != nil {
-		switch {
-		case !b.Enabled:
-			reason := strings.TrimSpace(b.Error)
-			if reason == "" {
-				reason = "disabled"
-			}
-			lines = append(lines, "- Browser: **unavailable** ("+reason+"). This is a tool capability problem, not a problem with the target site.")
-		default:
-			mode := "headless only (this deployment has no display environment)"
-			switch {
-			case b.HeadedAvailable && b.HeadlessDefault:
-				mode = "headless by default; pass headed=true to open when a human needs to see the window (allowed in this deployment)"
-			case b.HeadedAvailable:
-				mode = "headed by default (visible window)"
-			}
-			ver := strings.TrimSpace(b.Version)
-			if ver == "" {
-				ver = b.Engine
-			}
-			lines = append(lines, "- Browser: available ("+ver+"; "+mode+"). "+
-				"Use snapshot to read a page (accessibility tree + refs) and refs to click/type; screenshots are written to disk for humans - you cannot read images yourself.")
-		}
-	}
-
 	// The snapshot may be stale: say so, so the model knows whether to still trust this environment description.
 	if info.Err != "" {
 		stale := "the above is the last successfully fetched snapshot"
@@ -1037,8 +1015,54 @@ func (a *agentImpl) usesSandbox() bool {
 	if c == nil || c.AllowedTools == nil {
 		return true
 	}
-	return c.AllowedTools["exec"] || c.AllowedTools["run_skill_script"] ||
-		c.AllowedTools["shell"] || c.AllowedTools["browser"]
+	// "browser" is deliberately absent: the browser is served by its own pool (see browserNotes), so granting it says
+	// nothing about whether this agent can touch a sandbox.
+	return c.AllowedTools["exec"] || c.AllowedTools["run_skill_script"] || c.AllowedTools["shell"]
+}
+
+// browserNotes builds the "browser" note: whether the browser pool can run a browser, and how to use it.
+//
+// Separate from sandboxNotes because the browser is no longer part of the sandbox: the facts come from browserd, and an
+// agent with no sandbox access can still have the browser tool.
+//
+// Available or not, both are facts, stated separately: when unavailable the **reason** must be stated, otherwise the
+// model misreads "the tool is off" as "this site cannot be opened" and then spins on swapping URLs / selectors.
+func (a *agentImpl) browserNotes() string {
+	// Tool grants are the criterion, the same source as capabilityNotes: nil means undecidable, and environment facts are
+	// safer to over-supply than to omit.
+	if c := a.toolCtx; c != nil && c.AllowedTools != nil && !c.AllowedTools["browser"] {
+		return ""
+	}
+	if !tools.BrowserConfigured() {
+		return "- Browser: **unavailable** (this deployment has no browser pool configured). This is a tool capability problem, not a problem with the target site."
+	}
+	if !browserinfo.Configured() {
+		return "- Browser: state unknown (the browser pool has not answered yet). Do not conclude that a page cannot be opened - " +
+			"try the tool, or fetch the content with exec."
+	}
+
+	b := browserinfo.Get()
+	if !b.Available {
+		reason := strings.TrimSpace(b.Error)
+		if reason == "" {
+			reason = "not available"
+		}
+		return "- Browser: **unavailable** (" + reason + "). This is a tool capability problem, not a problem with the target site."
+	}
+
+	mode := "headless only (this deployment has no display environment)"
+	switch {
+	case b.HeadedAvailable && b.HeadlessDefault:
+		mode = "headless by default; pass headed=true to open when a human needs to see the window (allowed in this deployment)"
+	case b.HeadedAvailable:
+		mode = "headed by default (visible window)"
+	}
+	ver := strings.TrimSpace(b.Version)
+	if ver == "" {
+		ver = b.Engine
+	}
+	return "- Browser: available (" + ver + "; " + mode + "). " +
+		"Use snapshot to read a page (accessibility tree + refs) and refs to click/type; screenshots and downloads are written into your workspace - you cannot read images yourself."
 }
 
 // capabilityNotes builds the "capability boundaries" note from the tool set actually granted to this run; it returns "" when no reminder

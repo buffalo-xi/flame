@@ -29,9 +29,6 @@ type Server struct {
 	// execInFlight is the number of in-flight /v1/exec connections (/metrics, for gateway load balancing).
 	execInFlight atomic.Int64
 
-	// browser is the browser capability snapshot (probed asynchronously at startup, see browser.go).
-	browser atomic.Pointer[BrowserInfo]
-
 	// env is the capability snapshot probed once at startup, only read by /v1/capabilities (never re-probed).
 	// It is a read-only field, so there is no concurrent write at run time.
 	env Environment
@@ -114,9 +111,6 @@ func NewServer(cfg *Config, iso sandbox.Sandbox) (*Server, error) {
 		xlog.Info("sandboxd: environment probed (%d lines)", strings.Count(s.env.Text, "\n"))
 	}
 
-	// Browser capability probe: asynchronous, and a failure does not block startup (browser is an optional
-	// capability).
-	s.startBrowserProbe()
 	return s, nil
 }
 
@@ -194,10 +188,6 @@ func (s *Server) handleCapabilities(c *gin.Context) {
 			"ephemeral_idle_sec": s.cfg.InteractiveEphemeralIdleSec,
 			"janitor_sec":        s.cfg.InteractiveJanitorSec,
 		},
-		// Browser capability: whether the image has Chromium and whether it can run headed.
-		// Like environment this is a **probe result**, not a config statement — whether it is enabled lives in the
-		// config, but "is it installed, which version" is only known by the sandbox itself.
-		"browser": s.BrowserSnapshot(),
 	})
 }
 

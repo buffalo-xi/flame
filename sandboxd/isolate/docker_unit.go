@@ -128,8 +128,8 @@ func (s *dockerSandbox) containerArgs(spec *sandbox.Spec, lim sandbox.Limits) []
 	}
 
 	// Under a read-only rootfs /tmp is read-only as well — and it is the only generic location that "every image has
-	// and that should naturally be writable": the browser puts the Chrome profile in it (--tmpfs dies with the
-	// container, so it never leaks into the workspace), and temporary files in shell sessions rely on it too.
+	// and that should naturally be writable": temporary files in shell sessions rely on it, and a program that writes
+	// to /tmp (pip, a compiler's scratch space) would otherwise fail for a reason that looks unrelated to the sandbox.
 	// Callers that already mounted /tmp explicitly (the script worker mounts its exclusive directory at /tmp) are not
 	// overridden. size is a hard cap: tmpfs counts against container memory, and without a cap one download / cache
 	// would blow up the cgroup.

@@ -14,6 +14,7 @@ import (
 	"flame/nexus/service/llm/litellm"
 	"flame/nexus/service/mcp/client"
 	"flame/nexus/service/plugin"
+	"flame/nexus/shared/browserinfo"
 	"flame/nexus/shared/config"
 	"flame/nexus/shared/db"
 	"flame/nexus/shared/redis"
@@ -258,6 +259,20 @@ func main() {
 	// a short timeout as a backstop.
 	agentTools.SetInteractive(sandbox.NewInteractive(
 		cfg.Sandbox.InteractiveEndpoint(), cfg.Sandbox.Token, sandbox.Limits{}))
+
+	// Browser pool (browserd): the browser is not part of the sandbox any more — it is a separate service with its own
+	// capacity (workers / per-tenant quota / idle reclamation) and its own isolation boundary, so the sandbox mode no
+	// longer decides whether a browser can run.
+	//
+	// An empty browser.url means "this deployment has no browser": the tool reports that, and there is deliberately no
+	// fallback to the old in-sandbox browser, which no longer exists.
+	if cfg.Browser.URL != "" {
+		agentTools.SetBrowserPool(cfg.Browser.BrowserEndpoint(), cfg.Browser.Token)
+		browserinfo.StartRefresher(context.Background(),
+			cfg.Browser.CapabilitiesEndpoint(), cfg.Browser.Token, time.Minute)
+	} else {
+		xlog.Info("browser pool not configured: the browser tool will report itself disabled")
+	}
 
 	// Capability snapshot: pull "can the sandbox reach the network + what is inside it" from sandboxd, for
 	// the agent prompt.

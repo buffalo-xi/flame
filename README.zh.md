@@ -45,9 +45,11 @@ Go 写的多租户 AI Agent 平台。把「智能体 / 技能 / 工具 / 工作�
 | 目录 | 语言 | 作用 |
 |---|---|---|
 | `nexus/` | Go | 主服务：平台 API、租户 API、管理 API（默认 `:27006`） |
-| `sandboxd/` | Go | 执行沙箱守护进程：脚本 / 命令 / 浏览器的隔离执行（默认 `:27081`） |
+| `sandboxd/` | Go | 执行沙箱守护进程：脚本 / 命令的隔离执行（默认 `:27081`） |
 | `sandboxg/` | Go | 沙箱网关：对 `nexus` 暴露统一 `/v1/*`，后端做负载均衡与粘性路由（默认 `:27080`） |
-| `tools/` | Go | 三个服务共用的本地库（`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …） |
+| `browserg/` | Go | 浏览器网关：对 `nexus` 暴露 `/v1/browser` 与聚合的 `/v1/capabilities`，按会话粘性路由到浏览器池实例，并执行租户配额（默认 `:27090`） |
+| `browserd/` | Go | 独立浏览器池：一个会话一个 Chromium，自带容量上限、租户配额与空闲回收（默认 `:27091`） |
+| `tools/` | Go | 各服务共用的本地库（`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …） |
 | `desktop/` | Vue 3 + Vite | 管理台（开发端口 `:5173`） |
 
 依赖方向是单向的：三个服务用 `replace flame/tools => ../tools` 引用本地库，`tools` 不反向依赖任何服务。
@@ -141,8 +143,9 @@ nexus/
   shared/         配置、仓储、鉴权、日志
   platform/       平台初始化与租户模板（含 agent 定义域模板）
   docs/           术语、沙箱设计、工作区布局等文档
-sandboxd/         隔离执行（docker / nsjail / none）+ codehost + browserhost
+sandboxd/         隔离执行（docker / nsjail / none）+ codehost
 sandboxg/         沙箱网关
+browserd/         独立浏览器池（一会话一个 Chromium）
 tools/            公共库
 desktop/          Vue 3 管理台
 ```
@@ -155,6 +158,10 @@ desktop/          Vue 3 管理台
 - `nexus/docs/design-highlights.md` — 设计要点：调用链防环、多租户配额、端点模型（[中文版](nexus/docs/design-highlights.zh.md)）
 - `nexus/docs/i18n-plan.md` — 中英双语的分层方案、成本与坑位（[中文版](nexus/docs/i18n-plan.zh.md)）
 - `nexus/docs/error-codes.md` — 业务错误码规范（UI 双语的前置条件）（[中文版](nexus/docs/error-codes.zh.md)）
+- `browserd/README.md` — 独立浏览器池：nexus 如何访问、如何构建与部署、哪三项配置必须对齐
+  （[中文版](browserd/README.zh.md)）
+- `browserg/README.md` — 浏览器网关：粘性路由、租户上限，以及为什么它不并进 sandboxg
+  （[中文版](browserg/README.zh.md)）
 - `AGENTS.md` — 模块地图与跨领域红线
 
 ## 安全提示

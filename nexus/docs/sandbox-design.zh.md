@@ -447,6 +447,67 @@ lua 继续 `reuse`，残留由 worker 自己清：
 2. **冷启动数字实测**：§9.1 的两个量级目前来自注释/文档估算，应实测后再定 python/go 的取舍；
 3. nsjail 下的 in-jail supervisor（L2-for-nsjail）—— 除非将来 jail 重建成本被证明不可接受，否则不做。
 
+### 9.8 浏览器搬出沙箱了（已落地）
+
+**决策**：浏览器是独立服务，**也是独立 Go module**：`browserd/`（`flame/browserd`），包含 `cmd/browserd`（进程池）、
+`cmd/browserhost`（容器内驱动）与 `cmd/browserclient`（手工验证工具）。拆到 module 一级的理由与拆进程相同 —— 它有自己的
+发布节奏和资源画像，而共用 sandboxd 的 module 意味着改一行浏览器代码就要重建沙箱镜像。sandboxd 不再启动浏览器、不再在
+`/v1/interactive` 上接受 `tool_id=browser`、`/v1/capabilities` 里也不再报 `browser` 字段。
+
+**原因**：浏览器不是「会画图的 shell」。它 200-400 MB、启动要几秒、登录态存在 `user-data-dir` 里，shell 的那套生命周期
+参数（一会话一进程、idle 超时、kill）描述不准它。挂进沙箱还把它跟隔离档绑在一起 —— nsjail 的 rootfs 根本装不下
+Chromium，于是「这个部署有没有浏览器」被一个不相干的决策回答了。
+
+**协议**：`/v1/browser` 用的是**同一套帧**（open / `ChanStdin` / kill），所以调用方复用 `sandbox.InteractiveClient`
+—— 换的是 URL，不是客户端。open 帧的 `argv` 与 `mounts` 被忽略：由池决定启动哪个驱动、哪个 Chromium。`Spec.Dir` 会被
+采用，但语义与沙箱里不同 —— 它是**相对 `workspace_root` 的工作区路径**，不是沙箱内绝对路径。
+
+**工作区（唯一仍然共享的东西）**：浏览器会产出文件（截图、下载），模型事后必须能打开。所以 `workspace_root` 必须与
+nexus 的 `storage.root_dir` 是同一个挂载；每个会话的驱动 `cwd` 落在其中，相对路径的截图与下载目录自然落到租户工作区。
+Chromium 的 profile **不在这里**：它是本服务的私有状态，会话结束即删除。
+
+**容量**：一会话一 Chromium，跨会话**不复用**（复用等于把一个租户的 cookie 交给下一个）。池化的是容量：`workers`
+（内存上限）、`max_per_tenant`（按 `?tenant=` 查询参数计的租户配额）、带 `queue_timeout_sec` 的排队、以及
+`idle_timeout_sec` + `janitor_sec` 的空闲回收。
+
+**kill 语义**：**不带 spec** 的 open 帧是探测或 kill，绝不创建浏览器 —— 否则「回收这次运行起的进程」会先拉起一个
+Chromium 再杀掉。kill 帧释放租约并删除 profile。
+
+**验证**：`browserclient` 手工跑真实协议（`open` → `snapshot` → `kill`，以及连续 kill 两次）；池的单测不需要装浏览器
+（会话粘性、排队超时、租户配额、空闲回收、工作区路径逃逸、下载跟随工作区）。
+
+### 9.9 浏览器网关（browserg）—— 与 sandboxg 分开
+
+单个 `browserd` 撑不住需要多实例的部署：会话天然要粘，而按实例计的租户上限会随实例数翻倍。所以网关是
+`browserg/`（`flame/browserg`，`:27090`），池实例跑在 `:27091`。
+
+**为什么不并进 sandboxg** —— 三处结构性冲突，不是口味问题：
+
+1. **`/v1/capabilities` 不是同一份文档。** sandboxg 透传某一个 sandboxd 的快照；浏览器的快照是**池**的答案
+   （`available` = 任一实例、`headed_available` = 全部实例、计数求和、`idle_sec` 取最小），而 nexus 是从
+   `browser.url` 派生这个地址的。两种形状塞进一条路径，只能再加一个配置项说明「你要的是哪一种」。
+2. **粘性键会撞。** shell 通道与浏览器通道用同一个 `session_id`，却必须落在不同的池；sandboxg 的键空间
+   （`sandboxg:session:<id>`）得再加一层域后缀，而写错不会崩溃 —— 是 shell 被路由到浏览器池。
+3. **容量模型不可比。** sandboxg 按活进程数打分；浏览器的单位是一个活着的 Chromium（300 MB，一会话一个）。把两者
+   排进同一个评分函数，等于在路由里塞一个类型分支。
+
+还有爆炸半径：共用进程意味着一次重启会同时断掉所有浏览器连接和所有 exec 路由，而这两个池的扩缩容曲线完全不同。
+
+**路由**：凡带会话键的 open 帧都粘 —— 包括无会话运行，nexus 把 run id 放在同一个字段里。通道上的 `?tenant=` 原样
+转发；它是实例自己计数的键，只转路径会让它悄悄失效。
+
+**容量**：`queue × 1_000_000 + sessions × 1_000 / workers` —— 排队优先，占用率用于打破平局。
+
+**配额**：`max_per_tenant` 只由网关执行（各实例 `/v1/sessions` 的 live 计数 + 一份短命的 `pending`，覆盖下一次快照
+还没看到的 open）。按实例配的上限会乘以实例数，所以 browserd 自己的上限应保持 0，`workers` 才是它的硬顶。
+
+**失败语义**：绑定指向的实例已不健康时，open 直接以 `session lost` 失败，**不做重路由**。浏览器搬不了家 —— cookie
+与标签页随实例一起没了 —— 在别处悄悄新建一个空浏览器，会让模型对着一个它已经没有的页面说话。`session_empty`
+（没有租约了）是另一回事：那是干净的信号，网关解绑但不报错。
+
+**多实例前提**：每个 browserd 的 `workspace_root` 必须是 nexus `storage.root_dir` 的同一个目录。否则截图会落在恰好
+服务该会话的那台机器上，而 nexus（可能在另一台）读不到，并且任何地方都不会报错。
+
 ---
 
 ## 10. 演进方向（非本期）

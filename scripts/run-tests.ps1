@@ -1,10 +1,10 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Run the test suites of the four Go modules behind one verdict.
+    Run the test suites of the six Go modules behind one verdict.
 
 .DESCRIPTION
-    tools / nexus / sandboxd / sandboxg are separate modules wired with `replace` and there is no
+    tools / nexus / sandboxd / sandboxg / browserd / browserg are separate modules wired with `replace` and there is no
     go.work, so `go test ./...` has to be run once per directory. Running them by hand makes it easy
     to forget one, and the sandboxd E2E tests need a working Docker daemon: without it they fail with
     `docker ps: exit status 1`, which looks exactly like a regression.
@@ -17,11 +17,11 @@
 
     The copy rules are checked at the end through `check-locale.ps1 -Gate` and fold into the same
     verdict: a Go comment or a display field that drifts back to Chinese is a source rule violation
-    (AGENTS.md), and it is cheap enough to run next to the tests. It always scans all four modules,
+    (AGENTS.md), and it is cheap enough to run next to the tests. It always scans all six modules,
     even when -Module narrows the test run.
 
 .PARAMETER Module
-    Restrict the run to some modules. Default: all four.
+    Restrict the run to some modules. Default: all six.
 
 .PARAMETER RequireDocker
     Fail instead of skipping when the Docker daemon is unreachable (use this in CI, where a silent
@@ -43,8 +43,8 @@
     pwsh scripts/run-tests.ps1 -SkipCopyCheck
 #>
 param(
-    [ValidateSet('tools', 'nexus', 'sandboxd', 'sandboxg')]
-    [string[]]$Module = @('tools', 'nexus', 'sandboxd', 'sandboxg'),
+    [ValidateSet('tools', 'nexus', 'sandboxd', 'sandboxg', 'browserd', 'browserg')]
+    [string[]]$Module = @('tools', 'nexus', 'sandboxd', 'sandboxg', 'browserd', 'browserg'),
 
     [switch]$RequireDocker,
 

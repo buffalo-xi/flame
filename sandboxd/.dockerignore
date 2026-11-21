@@ -1,4 +1,4 @@
-# 构建上下文只保留 Dockerfile COPY 的产物：codehost-linux / browserhost-linux。
+# 构建上下文只保留 Dockerfile COPY 的产物：codehost-linux（browserhost 已随浏览器池迁到 browserd）。
 # 其余（sandboxd.exe、codehost.exe、logs/、run/ 等）全部排除，不传给 docker daemon。
 #
 # ⚠️ 新增 / 改名 COPY 的产物时，这里必须同步加一条 !bin/...，否则构建会在 COPY 阶段
@@ -7,4 +7,3 @@
 !bin
 bin/*
 !bin/codehost-linux
-!bin/browserhost-linux

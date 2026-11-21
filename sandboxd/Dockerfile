@@ -14,7 +14,9 @@
 #   - 常驻命令：`docker run -d ... <image> sleep infinity` → 需要 sleep 常驻；
 #   - 杀 codehost 补刀：需要 procps；
 #   - 镜像需含 codehost 二进制（/usr/local/bin/codehost，见下方 COPY）；
-#   - 不设 ENTRYPOINT：sandboxd 总是显式给 argv（codehost 追加在镜像命令之后）。
+#   - 不设 ENTRYPOINT：sandboxd 总是显式给 argv（codehost 追加在镜像命令之后）；
+#   - no browser in this image: the browser is a separate service (browserd) and runs Chromium on the host, so nothing
+#     inside the sandbox ever launches one. The CJK fonts stay because script output (charts, PDFs) may still need them.
 #
 # base 选型：
 #   node:24-trixie-slim —— node 官方镜像自带 node/npm 与 uid=gid=1000 的 node 用户，
@@ -60,7 +62,6 @@ RUN set -eux; \
         python3-numpy \
         lua5.4 \
         luarocks \
-        chromium \
         fonts-liberation \
         fonts-noto-cjk; \
     # 统一解释器入口名，与 config.yaml 的 langs.*.command 对齐：
@@ -94,7 +95,6 @@ RUN set -eux; \
     sh -c 'echo sh ok'; \
     sleep --version >/dev/null; \
     command -v pkill pgrep ps; \
-    chromium --version; \
     fc-list | grep -qi "noto sans cjk" && echo "cjk fonts ok"; \
     python -c 'import json, struct, sys, csv, zipfile; print("stdlib ok")'; \
     python -c 'import openpyxl, xlrd, pandas, numpy; print("py-deps ok:", openpyxl.__version__, pandas.__version__)'; \
@@ -121,10 +121,6 @@ RUN set -eux; \
 # codehost 宿主二进制（D1 起 docker 也走 codehost，需预编译 Linux 版放入构建上下文）：
 #   cd sandboxd && GOOS=linux GOARCH=amd64 go build -o bin/codehost-linux ./cmd/codehost
 COPY --chmod=0755 bin/codehost-linux /usr/local/bin/codehost
-
-# browserhost 宿主二进制（浏览器工具；同样预编译 Linux 版）：
-#   cd sandboxd && GOOS=linux GOARCH=amd64 go build -o bin/browserhost-linux ./cmd/browserhost
-COPY --chmod=0755 bin/browserhost-linux /usr/local/bin/browserhost
 
 # 默认非 root；docker run --user 会覆盖它（值相同，见 config.yaml）
 USER 1000:1000

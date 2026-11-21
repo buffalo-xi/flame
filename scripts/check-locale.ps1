@@ -49,8 +49,8 @@
     powershell -File scripts/check-locale.ps1 -Module nexus -Detailed
 #>
 param(
-    [ValidateSet('tools', 'nexus', 'sandboxd', 'sandboxg')]
-    [string[]]$Module = @('tools', 'nexus', 'sandboxd', 'sandboxg'),
+    [ValidateSet('tools', 'nexus', 'sandboxd', 'sandboxg', 'browserd', 'browserg')]
+    [string[]]$Module = @('tools', 'nexus', 'sandboxd', 'sandboxg', 'browserd', 'browserg'),
 
     [switch]$Detailed,
 
@@ -231,7 +231,7 @@ foreach ($locale in $bundles.Keys) {
 
 # "entry never emitted" only means something when every module was scanned: a partial scan
 # sees a subset of the codes and would report the rest as dead.
-if ($Module.Count -eq 4) {
+if ($Module.Count -eq 6) {
     $allLocaleKeys = @{}
     foreach ($locale in $bundles.Keys) {
         foreach ($key in $bundles[$locale].Keys) { $allLocaleKeys[$key] = $true }

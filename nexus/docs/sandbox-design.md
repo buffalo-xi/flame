@@ -473,6 +473,82 @@ label at all before this change, so leaks were invisible.
    measured before settling the python/go trade-off;
 3. in-jail supervisor for nsjail (L2-for-nsjail) — unless jail rebuild cost later proves unacceptable, do not do it.
 
+### 9.8 The browser moved out of the sandbox (shipped)
+
+**Decision**: the browser is its own service **and its own Go module**: `browserd/` (`flame/browserd`), holding
+`cmd/browserd` (the pool), `cmd/browserhost` (the in-container driver) and `cmd/browserclient` (the manual verification
+tool). It is separate at the module level for the same reason it is separate at the process level — it has its own
+release cadence and its own resource profile, and sharing a module with sandboxd meant every browser change rebuilt the
+sandbox image. sandboxd no longer launches a browser, no longer accepts `tool_id=browser` on `/v1/interactive`, and no
+longer reports a `browser` field in `/v1/capabilities`.
+
+**Why**: a browser is not "a shell that draws pictures". It is 200-400 MB, takes seconds to start, and keeps login state
+in its `user-data-dir`; a shell's lifecycle parameters (one process per session, idle timeout, kill) do not describe it
+correctly. Tying it to the sandbox also tied it to the isolation mode — under nsjail the rootfs simply cannot host
+Chromium, so "does this deployment offer a browser" was answered by an unrelated decision.
+
+**Protocol**: `/v1/browser` speaks the **same frames** as `/v1/interactive` (open / `ChanStdin` / kill), so the caller
+reuses `sandbox.InteractiveClient` — a new URL, not a new client. The open frame's `argv` and `mounts` are ignored: the
+pool decides which driver and which Chromium to launch. `Spec.Dir` is honoured, but with a different meaning than in the
+sandbox — it is a **workspace path relative to `workspace_root`**, not a sandbox-internal absolute path.
+
+**Workspace (the one thing still shared)**: a browser produces files (screenshots, downloads) that the model must be able
+to open afterwards. `workspace_root` must therefore be the same mount as nexus's `storage.root_dir`; each session runs the
+driver with `cwd` inside it, so a relative screenshot path and the download directory both land in the tenant's workspace.
+The Chromium profile does **not** live there: it is this service's private state and is deleted when the session ends.
+
+**Capacity**: one session = one Chromium, never reused across sessions (reuse would hand one tenant's cookies to the
+next). What is pooled is capacity: `workers` (the memory ceiling), `max_per_tenant` (a per-tenant quota, keyed by the
+`?tenant=` query), queueing with `queue_timeout_sec`, and idle reclamation (`idle_timeout_sec` + `janitor_sec`).
+
+**Kill semantics**: an open frame **without a spec** is a probe or a kill, and it never creates a browser — otherwise
+"reclaim the processes of this run" would launch a Chromium only to destroy it. A kill frame releases the lease and
+deletes the profile.
+
+**Verification**: `browserclient` drives the real protocol by hand (`open` → `snapshot` → `kill`, and kill twice); the
+pool's unit tests run without a browser installed (lease stickiness, queue timeout, per-tenant cap, idle reclamation,
+workspace path escape, downloads following the workspace).
+
+### 9.9 The browser gateway (browserg) — separate from sandboxg
+
+A single `browserd` cannot serve a deployment that needs more than one: sessions are sticky by nature, and a per-tenant
+cap counted inside one instance multiplies by the number of instances. The gateway is therefore `browserg/`
+(`flame/browserg`, `:27090`), and pool instances run on `:27091`.
+
+**Why not fold it into sandboxg** — three structural conflicts, not taste:
+
+1. **`/v1/capabilities` is not the same document.** sandboxg passes one sandboxd's snapshot through. The browser snapshot
+   is a *pool* answer (`available` = any instance, `headed_available` = all of them, counters summed, `idle_sec` = the
+   minimum) and nexus derives it from `browser.url`. Two shapes behind one path would force a new config key just to say
+   which one you mean.
+2. **Sticky keys collide.** The shell channel and the browser channel share the same `session_id` but must land on
+   different pools; sandboxg's key namespace (`sandboxg:session:<id>`) would have to grow a per-domain suffix, and a mistake
+   there is not a crash — it is a shell routed to a browser pool.
+3. **The capacity models are not comparable.** sandboxg scores an instance by live process count; a browser's unit is a
+   live Chromium (300 MB, one per session). Ranking one against the other would need a type switch inside the router.
+
+Plus the blast radius: a shared process means one restart drops every browser connection together with every exec route,
+and the two pools scale on completely different curves.
+
+**Routing**: every open frame that carries a session key is sticky — including a session-less run, where nexus puts the
+run id in the same field. `?tenant=` on the channel is forwarded unchanged; it is the key the instance counts with, and a
+path-only forward would silently disable it.
+
+**Capacity**: `queue × 1_000_000 + sessions × 1_000 / workers` — queueing dominates, and the occupancy rate breaks ties.
+
+**Quota**: `max_per_tenant` is enforced by the gateway alone (`live` from each instance's `/v1/sessions` plus a short-lived
+`pending` count for opens the next snapshot has not seen yet). A cap configured per instance would multiply by the number of
+instances, so browserd's own cap should stay 0 and `workers` remains its hard ceiling.
+
+**Failure semantics**: if the binding points at an instance that is no longer healthy, the open fails with
+`session lost` instead of being re-routed. A browser cannot be migrated — the cookies and tabs are gone with the instance —
+and silently building an empty one elsewhere would leave the model talking to a page it no longer has. `session_empty`
+(no lease left) is different: it is a clean signal, and the gateway unbinds without an error.
+
+**Multi-instance precondition**: every browserd's `workspace_root` must be the same directory as nexus's
+`storage.root_dir`. Otherwise a screenshot is written on whichever machine served the session, and nexus — possibly on
+another machine — cannot read it back, with no error anywhere.
+
 ---
 
 ## 10. Evolution (out of scope this round)

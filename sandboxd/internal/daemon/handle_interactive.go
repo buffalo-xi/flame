@@ -64,26 +64,10 @@ func (s *Server) handleInteractive(c *gin.Context) {
 		return
 	}
 
+	// The channel carries the shell only. The browser is **not** here any more: it is 200-400 MB, carries login state
+	// and has its own capacity limits, so it moved to the standalone browser pool (browserd) — this service decides
+	// nothing about how a browser is launched.
 	lim := s.cfg.ExecLimits(reqLimits)
-
-	// The browser tool shares this channel with shell (both are "session-level resident processes"); the only
-	// difference is that this service assembles the argv: what the in-sandbox browserhost is called and where the
-	// profile goes are facts only sandboxd knows (the same reason as langs / codehost).
-	// The resource caps switch to browser.limits too — Chrome's process tree is far larger than a shell's.
-	if f.ToolID == BrowserToolID {
-		if !s.cfg.Browser.Enabled {
-			_ = wc.SendFrame(&sandbox.Frame{Type: sandbox.FrameError,
-				Message: "browser disabled: set browser.enabled: true in sandboxd config"})
-			return
-		}
-		bargs, berr := s.cfg.BrowserArgv(s.cfg.Mode)
-		if berr != nil {
-			_ = wc.SendFrame(&sandbox.Frame{Type: sandbox.FrameError, Message: berr.Error()})
-			return
-		}
-		argv = bargs
-		lim = s.cfg.BrowserLimits(reqLimits)
-	}
 
 	// 2) Lazily create / reuse the process (the process is locked, so this call has it exclusively)
 	// f.Ephemeral: a temporary process with no session; the registry reclaims it through the short idle timeout.
