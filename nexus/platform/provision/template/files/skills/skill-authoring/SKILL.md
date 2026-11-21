@@ -29,7 +29,7 @@ Hence two shapes:
 - **document-only skill** — body only (conventions, processes, templates);
 - **executable skill** — the body explains "how to use it", the code lives in `scripts/`, and the agent runs it **directly** with `run_skill_script` — there is **no need** to copy the code into the workspace.
 
-Directory layout (relative to `agent.root_dir`):
+Directory layout (relative to `storage.root_dir`):
 
 ```
 tenants/{schema}/skills/{name}/                    shared (tenant-level)
@@ -43,7 +43,7 @@ tenants/{schema}/agents/{agent}/skills/{name}/     private (agent-level)
 
 Every skill has an **ownership**, decided by `agent_id`:
 
-| Ownership | Content location (relative to agent.root_dir) | How it takes effect |
+| Ownership | Content location (relative to storage.root_dir) | How it takes effect |
 |---|---|---|
 | **Shared** (tenant-level) | `tenants/{schema}/skills/{name}/SKILL.md` | enters an agent's prompt only after being **bound** to it; visibility is separately controlled by "visible to everyone / allowlist" |
 | **Private** (agent-level) | `tenants/{schema}/agents/{agent}/skills/{name}/SKILL.md` | owned by the owning agent automatically (resident in its prompt); only it can see, edit or delete |

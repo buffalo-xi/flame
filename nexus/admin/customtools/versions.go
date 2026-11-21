@@ -63,7 +63,7 @@ type toolVersionView struct {
 // requires host paths to be reachable (the scripts are the sandbox mount source), tools do
 // not run at all on an S3 deployment, and versions have no reason to grow a second backend.
 func toolVerStore() storage.Storage {
-	return storage.NewFilesystemStorage(config.Cfg.Agent.RootDir)
+	return storage.NewFilesystemStorage(config.Cfg.Storage.RootDir)
 }
 
 // toolVersionTable is the schema-qualified version table name.
@@ -238,7 +238,7 @@ func ReleaseToolVersion(c *gin.Context) {
 		xhttp.ErrCode(c, "common.internal", nil, "failed to build the contract file: "+merr.Error(), "")
 		return
 	}
-	hostDst := filepath.Join(config.Cfg.Agent.RootDir, filepath.FromSlash(dstKey))
+	hostDst := filepath.Join(config.Cfg.Storage.RootDir, filepath.FromSlash(dstKey))
 	if werr := toolfile.WriteAt(hostDst, norm); werr != nil {
 		_ = st.DeletePrefix(ctx, dstKey)
 		xhttp.ErrCode(c, "common.internal", nil, "failed to write the version contract file: "+werr.Error(), "")

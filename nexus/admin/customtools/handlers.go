@@ -43,7 +43,7 @@ const secretMask = "••••"
 // storeFor builds the merged view per request and schema (the directory decides, the table supplies status/configs).
 // No global singleton: schema is request state, and caching one instance would read another tenant's data.
 func storeFor(schema string) *customtoolstore.Store {
-	return customtoolstore.New(config.Cfg.Agent.RootDir, schema)
+	return customtoolstore.New(config.Cfg.Storage.RootDir, schema)
 }
 
 func mustAuth(c *gin.Context) (*auth.AuthInfo, bool) {
@@ -128,7 +128,7 @@ func ListCustomTools(c *gin.Context) {
 	}
 	// Opening the list completes the backfill: a row without TOOL.json gets one written (idempotent; failures are only logged,
 	// and the tool keeps working from its table definition). It sits on the admin side rather than the read path: a read that writes a file is too hidden a side effect.
-	if written, errs := toolfile.EnsureAll(config.Cfg.Agent.RootDir, info.Schema, list); written > 0 || len(errs) > 0 {
+	if written, errs := toolfile.EnsureAll(config.Cfg.Storage.RootDir, info.Schema, list); written > 0 || len(errs) > 0 {
 		xlog.Info("custom tool contracts backfilled schema=%s written=%d errors=%d", info.Schema, written, len(errs))
 		for _, e := range errs {
 			xlog.Error("failed to backfill TOOL.json schema=%s: %s", info.Schema, e)
@@ -140,7 +140,7 @@ func ListCustomTools(c *gin.Context) {
 
 	out := make([]customToolView, 0, len(list))
 	for i := range list {
-		c := toolfile.Load(config.Cfg.Agent.RootDir, info.Schema, &list[i])
+		c := toolfile.Load(config.Cfg.Storage.RootDir, info.Schema, &list[i])
 		v := buildView(&list[i], c)
 		v.CurrentVersion = curVers[list[i].ID]
 		out = append(out, v)
@@ -195,7 +195,7 @@ func GetCustomTool(c *gin.Context) {
 		return
 	}
 	// Merge the contract before reading the entry file: entry may have been changed only in TOOL.json (the table still holds the old value).
-	contract := toolfile.Load(config.Cfg.Agent.RootDir, info.Schema, t)
+	contract := toolfile.Load(config.Cfg.Storage.RootDir, info.Schema, t)
 	body := gin.H{"tool": buildView(t, contract)}
 	if content, cerr := readEntry(info.Schema, t); cerr == nil {
 		body["script"] = content
@@ -295,7 +295,7 @@ func CreateCustomTool(c *gin.Context) {
 	}
 
 	// DB first, files second: if the directory cannot be created the row is rolled back, avoiding a "row without files" half-built tool.
-	if err := toolfile.WriteOf(config.Cfg.Agent.RootDir, info.Schema, t); err != nil {
+	if err := toolfile.WriteOf(config.Cfg.Storage.RootDir, info.Schema, t); err != nil {
 		_ = storeFor(info.Schema).Delete(info.Schema, name)
 		xhttp.ErrCode(c, "common.internal", nil, "failed to write the contract file: "+err.Error(), "")
 		return
@@ -323,7 +323,7 @@ func UpdateCustomTool(c *gin.Context) {
 	}
 	// The **contract in the file** is the baseline this change is applied to: the read path prefers the file,
 	// and starting from the table row would quietly overwrite a hand-edited contract with the old value on one save.
-	toolfile.Load(config.Cfg.Agent.RootDir, info.Schema, cur)
+	toolfile.Load(config.Cfg.Storage.RootDir, info.Schema, cur)
 	var body saveReq
 	if err := c.ShouldBindJSON(&body); err != nil {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
@@ -378,9 +378,9 @@ func UpdateCustomTool(c *gin.Context) {
 		xhttp.ErrCode(c, "common.internal", nil, "failed to update the custom tool: "+err.Error(), "")
 		return
 	}
-	if err := toolfile.WriteOf(config.Cfg.Agent.RootDir, info.Schema, cur); err != nil {
+	if err := toolfile.WriteOf(config.Cfg.Storage.RootDir, info.Schema, cur); err != nil {
 		// On failure the file is deleted: the read path prefers the file, so keeping a stale one would undo this save on the next read.
-		_ = os.Remove(toolfile.Path(config.Cfg.Agent.RootDir, info.Schema, cur.Name))
+		_ = os.Remove(toolfile.Path(config.Cfg.Storage.RootDir, info.Schema, cur.Name))
 		xhttp.ErrCode(c, "tool.contract_write_failed", gin.H{"name": cur.Name},
 			"the settings were saved, but writing the contract file failed (the tool falls back to its table definition): "+err.Error(), "")
 		return
@@ -496,7 +496,7 @@ func RunCustomTool(c *gin.Context) {
 		return
 	}
 
-	rootDir := config.Cfg.Agent.RootDir
+	rootDir := config.Cfg.Storage.RootDir
 	// The workspace lives under the tenant-level runs/: inside root_dir (allowed by the sandboxd mount root),
 	// and a directory left behind by an abnormal exit is swept at startup (see service/agent/janitor.go).
 	workspace := paths.ResolveRunsDir(rootDir, info.Schema, fmt.Sprintf("tryrun-%d", time.Now().UnixNano()))
@@ -557,7 +557,7 @@ func RunCustomTool(c *gin.Context) {
 // script execution itself needs a reachable host path (the sandbox mount source), so this path never worked on S3 anyway.
 
 func toolDir(schema, name string) string {
-	return filepath.Join(paths.ResolveToolsDir(config.Cfg.Agent.RootDir, schema), name)
+	return filepath.Join(paths.ResolveToolsDir(config.Cfg.Storage.RootDir, schema), name)
 }
 
 func entryPath(schema string, t *models.CustomTool) string {

@@ -49,7 +49,7 @@ tenants/{schema}/workspace/{agent}/
 
 | 项 | 位置 / 值 |
 |---|---|
-| 存储根 | `agent.root_dir`（local / nfs / s3 三种 Storage 实现） |
+| 存储根 | `storage.root_dir`（local / nfs 用它做根；s3 用 `storage.s3.bucket` + `prefix`） |
 | 定义目录 | `tenants/{schema}/workspace/{agent}/`、`tenants/{schema}/shared-skills/{skill}/` |
 | 文件工具根 | `Context.StoragePath(rel)` = `tenants/{schema}/workspace/{me}/{rel}` |
 | exec 沙箱 | `Mounts: [{Host: Context.Workspace, Guest: "/data"}]`，cwd = `/data` |

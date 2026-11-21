@@ -613,9 +613,9 @@ type Context struct {
 	// production chain.
 	// The single entry point for the criterion is ChildMode; do not recompute it at each call site.
 	FollowDrafts bool
-	// RootDir is the storage root (agent.root_dir), used to turn a storage key into a host path for sandbox mounts.
+	// RootDir is the storage root (storage.root_dir), used to turn a storage key into a host path for sandbox mounts.
 	RootDir    string
-	Storage    storage.Storage   // file storage backend (root = agent.root_dir)
+	Storage    storage.Storage   // file storage backend (root = storage.root_dir)
 	Agents     AgentManager      // agent instance management (for create_agent/list_agents; may be nil)
 	Skills     SkillsManager     // skill registration and lookup (for the meta tools; may be nil)
 	ToolGrants ToolGrantsManager // agent tool grant read/write (for grant/revoke_agent_tool; may be nil)

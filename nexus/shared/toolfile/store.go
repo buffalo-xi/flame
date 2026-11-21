@@ -206,7 +206,7 @@ func hasFile(rootDir, schema, name string) (bool, error) {
 // cwd — far harder to trace than an outright error, so it is rejected here explicitly.
 func checkRoot(rootDir string) error {
 	if strings.TrimSpace(rootDir) == "" {
-		return fmt.Errorf("the storage root is not initialised (agent.root_dir)")
+		return fmt.Errorf("the storage root is not initialised (storage.root_dir)")
 	}
 	return nil
 }

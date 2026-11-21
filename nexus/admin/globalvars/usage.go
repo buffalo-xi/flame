@@ -62,7 +62,7 @@ var (
 
 func usageStorage() (storage.Storage, error) {
 	usageStoreOnce.Do(func() {
-		usageStore, usageStoreErr = storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
+		usageStore, usageStoreErr = storage.New(config.Cfg.Storage)
 	})
 	return usageStore, usageStoreErr
 }

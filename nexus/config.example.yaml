@@ -101,7 +101,7 @@ sandbox:
 # configures and schedules them.
 # Layout: {dir}/<kind>/<tool>/tool.py + {dir}/<kind>/<tool>/<impl>/plugin.py
 plugin:
-  # Empty = {agent.root_dir}/plugins; an absolute path works too
+  # Empty = {storage.root_dir}/plugins; an absolute path works too
   dir: ""
   # Interpreter command; usually python on Windows
   python: "python"
@@ -110,28 +110,30 @@ plugin:
   # Manifest refresh interval (seconds); a change in the directory mtime triggers an immediate rescan
   refresh_interval: 60
 
-agent:
-  # Tenant workspace root (one schema directory per tenant).
+# The data root of the whole platform: tenants/ (one schema directory per tenant), platform-assets/ (the snapshots of
+# listed assets — they belong to no tenant) and plugins/ all live under it. It is not "one agent's directory".
+storage:
+  # Root of the local / nfs driver (the s3 driver uses bucket + prefix instead).
   # ⚠️ The template gives a relative path; in a real deployment change it to this machine's data volume path.
   root_dir: ./data
-  storage:
-    driver: local  # local nfs s3
-    s3:
-      bucket: agent-platform-data
-      prefix: ""
-      region: cn-north-1
-      endpoint: ""
-      access_key: "${S3_ACCESS_KEY}"
-      secret_key: "${S3_SECRET_KEY}"
-  # Delivery of workspace file "downloads" (affects downloads only; preview and upload are unaffected)
-  http:
-    # With nginx in front, put the internal path prefix here (for example /__files) and let nginx serve downloads
-    # straight from disk (sendfile, Range supported):
-    #   nginx: location /__files/ { internal; alias <root_dir>/; }
-    # Empty = nexus serves them with http.ServeContent (local development needs no nginx).
-    x_accel_prefix: ""
-    # Object storage (driver: s3), optional: when enabled, downloads 302 straight to a presigned URL.
-    presign_download: false
-    presign_probe_key: ""
-    presign_ttl: 300
-    max_download_size: 100
+  driver: local  # local nfs s3
+  s3:
+    bucket: agent-platform-data
+    prefix: ""
+    region: cn-north-1
+    endpoint: ""
+    access_key: "${S3_ACCESS_KEY}"
+    secret_key: "${S3_SECRET_KEY}"
+
+# Delivery of workspace file "downloads" (affects downloads only; preview and upload are unaffected)
+download:
+  # With nginx in front, put the internal path prefix here (for example /__files) and let nginx serve downloads
+  # straight from disk (sendfile, Range supported):
+  #   nginx: location /__files/ { internal; alias <storage.root_dir>/; }
+  # Empty = nexus serves them with http.ServeContent (local development needs no nginx).
+  x_accel_prefix: ""
+  # Object storage (driver: s3), optional: when enabled, downloads 302 straight to a presigned URL.
+  presign_download: false
+  presign_probe_key: ""
+  presign_ttl: 300
+  max_download_size: 100

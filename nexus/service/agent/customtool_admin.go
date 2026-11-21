@@ -38,14 +38,14 @@ type customToolAdmin struct {
 func newCustomToolAdmin(schema string) *customToolAdmin {
 	return &customToolAdmin{
 		schema: schema,
-		store:  customtoolstore.New(config.Cfg.Agent.RootDir, schema),
+		store:  customtoolstore.New(config.Cfg.Storage.RootDir, schema),
 		grants: toolgrantsrepo.NewRepository(),
 	}
 }
 
 // toolDir is the host absolute path of the tool directory: {root}/tenants/{schema}/tools/{name}.
 func (a *customToolAdmin) toolDir(name string) string {
-	return filepath.Join(paths.ResolveToolsDir(config.Cfg.Agent.RootDir, a.schema), name)
+	return filepath.Join(paths.ResolveToolsDir(config.Cfg.Storage.RootDir, a.schema), name)
 }
 
 // Create creates the entity: table row + directory + a minimal runnable skeleton.
@@ -124,7 +124,7 @@ func (a *customToolAdmin) Update(ctx context.Context, name string, in tools.Cust
 	}
 	// Start from the contract in the file and layer this change on top (the read path prefers the file):
 	// starting from the table row would silently overwrite a hand-edited contract in TOOL.json back to the old value.
-	toolfile.Load(config.Cfg.Agent.RootDir, a.schema, cur)
+	toolfile.Load(config.Cfg.Storage.RootDir, a.schema, cur)
 
 	if in.DisplayName != nil {
 		cur.DisplayName = strings.TrimSpace(*in.DisplayName)
@@ -180,7 +180,7 @@ func (a *customToolAdmin) Update(ctx context.Context, name string, in tools.Cust
 	if err := a.writeContract(cur); err != nil {
 		// When the file was not written it must be removed: the read path prefers the file, and keeping the old one would let the next read
 		// overwrite this update with the old contract (the table changed, behaviour did not).
-		_ = os.Remove(toolfile.Path(config.Cfg.Agent.RootDir, a.schema, cur.Name))
+		_ = os.Remove(toolfile.Path(config.Cfg.Storage.RootDir, a.schema, cur.Name))
 		return nil, fmt.Errorf("settings saved, but writing the contract file failed (fell back to the table definition): %w", err)
 	}
 	spec := tools.CustomToolSpecFromModel(cur)
@@ -192,7 +192,7 @@ func (a *customToolAdmin) Update(ctx context.Context, name string, in tools.Cust
 // No diffing here: the file is a few hundred bytes, and an unconditional rewrite has one error path fewer than "read, compare, decide", while
 // also keeping the format stable (one serialisation function).
 func (a *customToolAdmin) writeContract(t *models.CustomTool) error {
-	return toolfile.WriteOf(config.Cfg.Agent.RootDir, a.schema, t)
+	return toolfile.WriteOf(config.Cfg.Storage.RootDir, a.schema, t)
 }
 
 // Delete removes the table row and the directory.
@@ -226,7 +226,7 @@ func (a *customToolAdmin) Delete(ctx context.Context, name string, force bool) (
 	}
 	// The version domain is keyed by name too: leaving it would make "delete then recreate with the same name" hit the old directory when
 	// releasing v1 (the EnsureAbsent precondition reports version exists, an error that points nowhere near here).
-	ver := filepath.Join(config.Cfg.Agent.RootDir,
+	ver := filepath.Join(config.Cfg.Storage.RootDir,
 		filepath.FromSlash(paths.VersionEntityKey(a.schema, paths.VersionTools, name)))
 	if rerr := os.RemoveAll(ver); rerr != nil {
 		return refs, fmt.Errorf("%q was deleted, but cleaning up its version directory failed: %w", name, rerr)

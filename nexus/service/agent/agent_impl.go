@@ -121,7 +121,7 @@ func newAgentImpl(instance *models.Agent, schema string, arguments map[string]an
 	}
 
 	// 1. Build the tool context
-	rootDir := config.Cfg.Agent.RootDir
+	rootDir := config.Cfg.Storage.RootDir
 	userID, _ := arguments["user_id"].(string)
 	sessionID, _ := arguments["session_id"].(string)
 	runID, _ := arguments["run_id"].(string)

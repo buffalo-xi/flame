@@ -475,7 +475,7 @@ func bundledToolTrees(info *auth.AuthInfo, deps assetpack.Deps) ([]assetpack.Pac
 	if len(deps.Tools) == 0 {
 		return nil, nil, nil
 	}
-	store := customtoolstore.New(config.Cfg.Agent.RootDir, info.Schema)
+	store := customtoolstore.New(config.Cfg.Storage.RootDir, info.Schema)
 	trees := make([]assetpack.PackTree, 0, len(deps.Tools))
 	bundles := make([]map[string]any, 0, len(deps.Tools))
 	seen := make(map[string]bool, len(deps.Tools))
@@ -724,7 +724,7 @@ func planTool(info *auth.AuthInfo, name string) (listingPlan, error) {
 	// The table row only supplies status and id (the definition lives in the file); a directory without a row is fine and counts as normal.
 	sourceID := uuid.NewString()
 	status := models.StatusNormal
-	if t, gerr := customtoolstore.New(config.Cfg.Agent.RootDir, info.Schema).Get("", name); gerr == nil && t != nil {
+	if t, gerr := customtoolstore.New(config.Cfg.Storage.RootDir, info.Schema).Get("", name); gerr == nil && t != nil {
 		sourceID = t.ID
 		status = int(t.Status)
 	} else if gerr != nil && !errors.Is(gerr, sql.ErrNoRows) {

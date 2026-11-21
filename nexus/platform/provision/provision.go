@@ -485,7 +485,7 @@ func templateStorage() (storage.Storage, error) {
 			provStoreErr = errors.New("config not loaded")
 			return
 		}
-		provStore, provStoreErr = storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
+		provStore, provStoreErr = storage.New(config.Cfg.Storage)
 	})
 	return provStore, provStoreErr
 }

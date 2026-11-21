@@ -64,7 +64,7 @@ P0 规则：
 | 快照（上架后存） | `{root_dir}/platform-assets/<asset_id>/<build>/` | 平台 |
 | 安装（写目标） | `{root_dir}/tenants/<target_schema>/skills/<installed_name>/` | 目标租户 |
 
-- 新增常量 `paths.PlatformAssetsSubdir = "platform-assets"` 与 `paths.PlatformAssetKey(assetID, build)`；`{root_dir}` 即 `agent.root_dir`。
+- 新增常量 `paths.PlatformAssetsSubdir = "platform-assets"` 与 `paths.PlatformAssetKey(assetID, build)`；`{root_dir}` 即 `storage.root_dir`（平台数据根，不是「某个 agent 的目录」）。
 - 快照是**分发的唯一真源**：安装从这里拷，不回源租户读（跨租户读被存储层断言拦住，且源租户停用/删除后别人就装不了）。
 - 快照目录 = 源目录的镜像（相对路径原样保留），安装整棵拷过去。
 - 该前缀**不在任何沙箱挂载点内**（`/workspace`、`/agent`、`tools/` 都不覆盖），`safePath` 拒绝 `..`，租户侧路径工具天然到不了。

@@ -104,7 +104,7 @@ func servePackage(c *gin.Context, a *sharedassets.Asset, data []byte) {
 
 // packageStorage is platform storage (export, import and peer pulls all point at the same root).
 func packageStorage() (storage.Storage, error) {
-	return storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
+	return storage.New(config.Cfg.Storage)
 }
 
 // ImportAssetPackage POST /platform/asset-imports

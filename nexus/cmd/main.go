@@ -53,6 +53,11 @@ func main() {
 	}
 	defer xlog.Close()
 
+	// The data root may be relative (storage.root_dir is ./data in config.example.yaml) and is therefore resolved against
+	// the startup cwd; printing the value that is actually in effect turns "the tenant data is gone" into an obvious
+	// "this is not the directory I meant".
+	xlog.Info("nexus: storage root=%s driver=%s", cfg.Storage.RootDir, cfg.Storage.Driver)
+
 	// Initialize the Redis client.
 	myredisConfig := &xredis.Config{
 		Mode:     xredis.RedisMode(cfg.Redis.Mode),
@@ -270,7 +275,7 @@ func main() {
 	// The directory is scanned once at startup (a failure is only logged and does not block startup —
 	// plugins are an optional capability), then refreshed in the background every refresh_interval; when
 	// the directory did not change, no python process is started.
-	pluginDir := cfg.Plugin.DirOrDefault(cfg.Agent.RootDir)
+	pluginDir := cfg.Plugin.DirOrDefault(cfg.Storage.RootDir)
 	if err := plugin.EnsureDir(pluginDir); err != nil {
 		xlog.Error("plugin directory not usable dir=%s: %v (skipping plugin load)", pluginDir, err)
 	} else {

@@ -69,7 +69,7 @@ func ensureOwnerAgentModifiable(info *auth.AuthInfo, s *models.Skill) error {
 // getStorage lazily builds the agent storage instance (the same configuration as service/agent.InitStorage).
 func getStorage() (storage.Storage, error) {
 	storeOnce.Do(func() {
-		store, storeErr = storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
+		store, storeErr = storage.New(config.Cfg.Storage)
 	})
 	return store, storeErr
 }

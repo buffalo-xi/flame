@@ -288,7 +288,7 @@ func TestPlugin(c *gin.Context) {
 
 	cfgInfo := config.Cfg.Plugin
 	host := plugin.NewHost(
-		cfgInfo.DirOrDefault(config.Cfg.Agent.RootDir),
+		cfgInfo.DirOrDefault(config.Cfg.Storage.RootDir),
 		cfgInfo.Python,
 		cfgInfo.TimeoutDuration(),
 	)

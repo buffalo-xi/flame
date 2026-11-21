@@ -55,7 +55,7 @@ Consequences (all have actually happened or are reproducible):
 
 | Item | Location / value |
 |---|---|
-| Storage root | `agent.root_dir` (three Storage implementations: local / nfs / s3) |
+| Storage root | `storage.root_dir` (local / nfs use it as the root; s3 uses `storage.s3.bucket` + `prefix`) |
 | Definition directories | `tenants/{schema}/workspace/{agent}/`, `tenants/{schema}/shared-skills/{skill}/` |
 | File tool root | `Context.StoragePath(rel)` = `tenants/{schema}/workspace/{me}/{rel}` |
 | exec sandbox | `Mounts: [{Host: Context.Workspace, Guest: "/data"}]`, cwd = `/data` |

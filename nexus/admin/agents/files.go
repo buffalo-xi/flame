@@ -61,7 +61,7 @@ var (
 // getStorage lazily builds the agent storage instance (the same configuration as service/agent.InitStorage).
 func getStorage() (storage.Storage, error) {
 	storeOnce.Do(func() {
-		store, storeErr = storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
+		store, storeErr = storage.New(config.Cfg.Storage)
 	})
 	return store, storeErr
 }
@@ -623,11 +623,11 @@ var (
 
 // presignAllowed reports whether presigned downloads are usable; false means the fallback (this process sends the bytes).
 func presignAllowed() bool {
-	h := config.Cfg.Agent.HTTP
+	h := config.Cfg.Download
 	if !h.PresignDownload {
 		return false
 	}
-	if config.Cfg.Agent.Storage.Driver != "s3" {
+	if config.Cfg.Storage.Driver != "s3" {
 		return false // local / nfs have no externally reachable temporary link, so signing yields an empty string
 	}
 	if strings.TrimSpace(h.PresignProbeKey) == "" {
@@ -659,12 +659,12 @@ func presignProbePassed() bool {
 		return false
 	}
 
-	key := strings.TrimSpace(config.Cfg.Agent.HTTP.PresignProbeKey)
+	key := strings.TrimSpace(config.Cfg.Download.PresignProbeKey)
 	st, serr := getStorage()
 	if serr != nil {
 		return fail("storage not ready: " + serr.Error())
 	}
-	u, perr := st.PresignedGetURL(context.Background(), key, config.Cfg.Agent.HTTP.PresignTTLDuration(), presignProbeFileName)
+	u, perr := st.PresignedGetURL(context.Background(), key, config.Cfg.Download.PresignTTLDuration(), presignProbeFileName)
 	if perr != nil {
 		return fail("presign: " + perr.Error())
 	}
@@ -702,7 +702,7 @@ func presignDownload(c *gin.Context, st storage.Storage, abs, name string) bool 
 	if !presignAllowed() {
 		return false
 	}
-	u, err := st.PresignedGetURL(context.Background(), abs, config.Cfg.Agent.HTTP.PresignTTLDuration(), name)
+	u, err := st.PresignedGetURL(context.Background(), abs, config.Cfg.Download.PresignTTLDuration(), name)
 	if err != nil || u == "" {
 		return false
 	}
@@ -727,7 +727,7 @@ func ServeDownload(c *gin.Context, st storage.Storage, abs, clean string) {
 		xhttp.ErrCode(c, "agent.file_not_found", nil, "file not found", "")
 		return
 	}
-	limit := config.Cfg.Agent.HTTP.MaxDownloadBytes()
+	limit := config.Cfg.Download.MaxDownloadBytes()
 	if size > limit {
 		xhttp.ErrCode(c, "agent.file_too_large", gin.H{"limit_mb": limit >> 20}, fmt.Sprintf("file too large (limit %d MB)", limit>>20), "")
 		return
@@ -744,7 +744,7 @@ func ServeDownload(c *gin.Context, st storage.Storage, abs, clean string) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 
-	if prefix := config.Cfg.Agent.HTTP.XAccelPrefix; prefix != "" {
+	if prefix := config.Cfg.Download.XAccelPrefix; prefix != "" {
 		c.Header("X-Accel-Redirect", accelPath(prefix, abs))
 		c.Status(http.StatusOK)
 		return

@@ -453,7 +453,7 @@ func suggestFreeSkillName(schema, base string) string {
 // A name clash has two resolutions: by default a suggested name; with req.Overwrite the existing tool is
 // overwritten - the scripts are laid down again and the contract fields come from the bundle, but **the configuration values and the creator are kept** (the configuration is credentials, and the bundle's configs are empty).
 func installTool(c *gin.Context, info *auth.AuthInfo, src *installSource, name string, req installRequest) {
-	store := customtoolstore.New(config.Cfg.Agent.RootDir, info.Schema)
+	store := customtoolstore.New(config.Cfg.Storage.RootDir, info.Schema)
 	_, derr := store.Get("", name)
 	dirExists := derr == nil
 	if derr != nil && !errors.Is(derr, sql.ErrNoRows) {
@@ -614,7 +614,7 @@ func installBundledTools(info *auth.AuthInfo, src *installSource) []string {
 		return []string{"storage not ready, bundled custom tools were not installed: " + serr.Error()}
 	}
 	ctx := context.Background()
-	store := customtoolstore.New(config.Cfg.Agent.RootDir, info.Schema)
+	store := customtoolstore.New(config.Cfg.Storage.RootDir, info.Schema)
 
 	names := make([]string, 0, len(attachments))
 	for name := range attachments {

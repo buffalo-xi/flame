@@ -592,7 +592,7 @@ func tenantStorage() (storage.Storage, error) {
 			tenantStoreErr = errors.New("config not loaded")
 			return
 		}
-		tenantStore, tenantStoreErr = storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
+		tenantStore, tenantStoreErr = storage.New(config.Cfg.Storage)
 	})
 	return tenantStore, tenantStoreErr
 }

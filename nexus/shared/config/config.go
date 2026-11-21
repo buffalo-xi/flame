@@ -21,7 +21,8 @@ type Config struct {
 	JWT      JWTConfig      `yaml:"jwt"`
 	Security SecurityConfig `yaml:"security"`
 	LiteLLM  LiteLLMConfig  `yaml:"litellm"`
-	Agent    AgentConfig    `yaml:"agent"`
+	Storage  StorageConfig  `yaml:"storage"`
+	Download DownloadConfig `yaml:"download"`
 	Sandbox  SandboxConfig  `yaml:"sandbox"`
 	Plugin   PluginConfig   `yaml:"plugin"`
 }
@@ -34,7 +35,7 @@ type Config struct {
 // Which implementation each tenant uses and what its keys are is tenant-level configuration (the DB plugins table) and
 // does not belong here.
 type PluginConfig struct {
-	Dir             string `yaml:"dir"`              // empty = {agent.root_dir}/plugins; an absolute path also works
+	Dir             string `yaml:"dir"`              // empty = {storage.root_dir}/plugins; an absolute path also works
 	Python          string `yaml:"python"`           // interpreter command; empty = python (usually python on Windows)
 	Timeout         int    `yaml:"timeout"`          // per-call timeout in seconds; 0 = 30
 	RefreshInterval int    `yaml:"refresh_interval"` // manifest refresh interval in seconds; 0 = 60
@@ -47,7 +48,7 @@ type PluginConfig struct {
 
 // DirOrDefault returns the plugin root: when dir is empty, {root_dir}/plugins.
 //
-// rootDir is passed in by the caller (config.Agent.RootDir) rather than read from the global Cfg here — that avoids the
+// rootDir is passed in by the caller (config.Storage.RootDir) rather than read from the global Cfg here — that avoids the
 // circular-dependency-flavoured style of "the config package reads the global config".
 func (c PluginConfig) DirOrDefault(rootDir string) string {
 	if d := strings.TrimSpace(c.Dir); d != "" {
@@ -174,15 +175,20 @@ func (c SandboxConfig) endpoint(p string) string {
 	return base + p
 }
 
-// AgentConfig is the agent storage configuration.
-type AgentConfig struct {
-	RootDir string          `yaml:"root_dir"`
-	Storage StorageConfig   `yaml:"storage"`
-	HTTP    AgentHTTPConfig `yaml:"http"`
+// StorageConfig is the data root of the whole platform.
+//
+// It is deliberately not "one agent's directory": tenants/ (one schema directory per tenant), platform-assets/ (the
+// snapshots of listed assets — they belong to no tenant, see paths.PlatformAssetsSubdir) and plugins/ (platform-level
+// Python plugins) all live under RootDir.
+type StorageConfig struct {
+	// RootDir is the root of the local / nfs driver. The s3 driver ignores it: there the root is S3.Bucket + S3.Prefix.
+	RootDir string   `yaml:"root_dir"`
+	Driver  string   `yaml:"driver"` // local / nfs / s3
+	S3      S3Config `yaml:"s3"`
 }
 
-// AgentHTTPConfig is how workspace file "downloads" are delivered (it affects downloads only, not previews or uploads).
-type AgentHTTPConfig struct {
+// DownloadConfig is how workspace file "downloads" are delivered (it affects downloads only, not previews or uploads).
+type DownloadConfig struct {
 	// XAccelPrefix is the nginx internal path prefix (such as /__files). Once configured, downloads are sent by nginx
 	// straight from disk: nexus returns only an X-Accel-Redirect header, spending no application bandwidth and no
 	// goroutine, and Range comes for free.
@@ -216,7 +222,7 @@ type AgentHTTPConfig struct {
 }
 
 // PresignTTLDuration is the presigned lifetime: 5 minutes when it is not configured.
-func (c AgentHTTPConfig) PresignTTLDuration() time.Duration {
+func (c DownloadConfig) PresignTTLDuration() time.Duration {
 	if c.PresignTTL > 0 {
 		return time.Duration(c.PresignTTL) * time.Second
 	}
@@ -224,17 +230,11 @@ func (c AgentHTTPConfig) PresignTTLDuration() time.Duration {
 }
 
 // MaxDownloadBytes is the per-file download limit in bytes: 100 MiB when it is not configured.
-func (c AgentHTTPConfig) MaxDownloadBytes() int64 {
+func (c DownloadConfig) MaxDownloadBytes() int64 {
 	if c.MaxDownloadSize > 0 {
 		return c.MaxDownloadSize << 20
 	}
 	return 100 << 20
-}
-
-// StorageConfig is the storage driver configuration.
-type StorageConfig struct {
-	Driver string   `yaml:"driver"` // local / nfs / s3
-	S3     S3Config `yaml:"s3"`
 }
 
 // S3Config is the S3 connection configuration.
@@ -335,17 +335,17 @@ type RedisConfig struct {
 // Cfg is the global configuration instance.
 var Cfg *Config
 
-// AgentRootDir returns the agent storage root; an unloaded configuration returns an empty string.
+// StorageRootDir returns the platform data root; an unloaded configuration returns an empty string.
 //
 // Why a nil-safe entry point is needed: dereferencing config.Cfg directly would panic at construction time in
 // "construct only, never execute" unit tests (such as a Catalog test that only checks a directory tree). The empty string
 // is not a default value — the consumer (checkRoot in shared/toolfile) reports "storage root is not initialised" outright,
 // rather than quietly reading and writing under the working directory and conjuring a fake directory tree.
-func AgentRootDir() string {
+func StorageRootDir() string {
 	if Cfg == nil {
 		return ""
 	}
-	return Cfg.Agent.RootDir
+	return Cfg.Storage.RootDir
 }
 
 // envPattern matches ${VAR} style environment variable placeholders.
@@ -481,9 +481,9 @@ func setDefaultConfig(config *Config) {
 	// no timeout control, the generic fallback chain applies (Instance.Timeout -> flow_configs.max_timeout -> the code
 	// fallback 300).
 
-	// Agent storage defaults: an empty driver means local
-	if config.Agent.Storage.Driver == "" {
-		config.Agent.Storage.Driver = "local"
+	// Storage defaults: an empty driver means local
+	if config.Storage.Driver == "" {
+		config.Storage.Driver = "local"
 	}
 }
 

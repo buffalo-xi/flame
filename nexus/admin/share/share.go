@@ -3,7 +3,7 @@
 // Terminology (see nexus/docs/terminology.md): the actions are list / delist, the states listed / delisted,
 // the route POST /admin/share/listings and the tables platform.listing_*. UI copy and code use the same word.
 //
-// Why it lives in admin rather than a new process: the whole repository shares one db.DB pool and one agent.root_dir,
+// Why it lives in admin rather than a new process: the whole repository shares one db.DB pool and one storage.root_dir,
 // and a tenant-side API already reads the tenant schema and definition-domain files, so writing the platform schema (explicitly qualified) is enough.
 // The platform side keeps only review and visibility scope; see platform/handler/assets.go.
 //
@@ -51,7 +51,7 @@ var (
 // getStorage lazily builds the storage instance (the same configuration as admin/skills and service/agent).
 func getStorage() (storage.Storage, error) {
 	storeOnce.Do(func() {
-		store, storeErr = storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
+		store, storeErr = storage.New(config.Cfg.Storage)
 	})
 	return store, storeErr
 }

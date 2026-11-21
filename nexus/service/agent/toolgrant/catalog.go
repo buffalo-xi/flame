@@ -232,7 +232,7 @@ func NewCatalog(schema string, grants toolgrants.Repository, isSupervisor bool) 
 		plugins:      pluginsrepo.NewRepository(),
 		// Which custom tools exist comes from the tools/ directory (customtoolstore merges the contract and the policy),
 		// the same source as the execution layer: a tool present there is visible and grantable in the grant catalog.
-		scripts:  customtoolstore.New(config.AgentRootDir(), schema),
+		scripts:  customtoolstore.New(config.StorageRootDir(), schema),
 		policies: pluginpolicy.List,
 	}
 }

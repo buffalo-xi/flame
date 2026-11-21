@@ -279,7 +279,7 @@ tmp_dir: run/tmp
 #
 # The entry must be exactly the host path the caller sees (shared storage with identical paths).
 #   production (Linux): /srv/nexus
-#   local debugging: the agent.root_dir of nexus/config.yaml
+#   local debugging: the storage.root_dir of nexus/config.yaml
 allowed_mount_roots:
   - "D:/proj/flame/nexus/data"
 

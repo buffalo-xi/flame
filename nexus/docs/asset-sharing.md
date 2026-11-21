@@ -73,7 +73,7 @@ P0 rules:
 | Install (write target) | `{root_dir}/tenants/<target_schema>/skills/<installed_name>/` | target tenant |
 
 - New constants `paths.PlatformAssetsSubdir = "platform-assets"` and `paths.PlatformAssetKey(assetID, build)`; `{root_dir}` is
-  `agent.root_dir`.
+  `storage.root_dir` (the platform data root, not a per-agent directory).
 - The snapshot is the **single source of truth for distribution**: install copies from it and never reads back from the source
   tenant (cross-tenant reads are blocked by the storage assertion, and once the source tenant is suspended or deleted nobody
   could install any more).

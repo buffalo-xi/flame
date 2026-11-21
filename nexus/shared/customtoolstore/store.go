@@ -38,7 +38,7 @@ type Store struct {
 	schema  string
 }
 
-// New builds the view. rootDir is the storage root (config.Cfg.Agent.RootDir).
+// New builds the view. rootDir is the storage root (config.Cfg.Storage.RootDir).
 func New(rootDir, schema string) *Store {
 	return &Store{Repository: customtools.NewRepository(), rootDir: rootDir, schema: schema}
 }

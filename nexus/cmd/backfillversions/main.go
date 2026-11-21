@@ -86,9 +86,9 @@ func main() {
 	}
 	defer func() { _ = db.DB.Close() }()
 
-	st, err := storage.New(cfg.Agent.Storage, cfg.Agent.RootDir)
+	st, err := storage.New(cfg.Storage)
 	if err != nil {
-		fail("failed to initialize storage (driver=%s): %v", cfg.Agent.Storage.Driver, err)
+		fail("failed to initialize storage (driver=%s): %v", cfg.Storage.Driver, err)
 	}
 
 	schemas, err := versioning.TenantSchemas()
@@ -119,7 +119,7 @@ func main() {
 		fmt.Printf("  agents:      %s\n", a)
 		s := backfillSkills(ctx, st, schema, *dryRun)
 		fmt.Printf("  skills:      %s\n", s)
-		t := backfillTools(ctx, st, schema, *dryRun, cfg.Agent.RootDir)
+		t := backfillTools(ctx, st, schema, *dryRun, cfg.Storage.RootDir)
 		fmt.Printf("  customtools: %s\n", t)
 
 		if a.failed+s.failed+t.failed > 0 {

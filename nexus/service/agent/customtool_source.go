@@ -29,7 +29,7 @@ type customToolSource struct {
 func newCustomToolSource(schema string, mode tools.DefinitionMode) *customToolSource {
 	return &customToolSource{
 		schema: schema,
-		store:  customtoolstore.New(config.AgentRootDir(), schema),
+		store:  customtoolstore.New(config.StorageRootDir(), schema),
 		mode:   mode,
 	}
 }

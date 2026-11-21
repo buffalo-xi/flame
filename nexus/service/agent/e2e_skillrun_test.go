@@ -87,7 +87,7 @@ func TestE2ERunSkillScript(t *testing.T) {
 	tools.SetSandbox(sb)
 
 	schema := "t0"
-	rootDir := config.Cfg.Agent.RootDir
+	rootDir := config.Cfg.Storage.RootDir
 	// userID goes into a uuid column of the skills table (the creator), so it must be a valid UUID; use an obviously synthetic one.
 	userID := "00000000-0000-4000-8000-000000000001"
 

@@ -377,7 +377,7 @@ func sessionStorage() (storage.Storage, error) {
 			sessStoreErr = fmt.Errorf("config not loaded")
 			return
 		}
-		sessStore, sessStoreErr = storage.New(config.Cfg.Agent.Storage, config.Cfg.Agent.RootDir)
+		sessStore, sessStoreErr = storage.New(config.Cfg.Storage)
 	})
 	return sessStore, sessStoreErr
 }

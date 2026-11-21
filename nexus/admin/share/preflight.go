@@ -450,7 +450,7 @@ func existingEntity(info *auth.AuthInfo, kind assetpack.Kind, name string) any {
 		}
 	case assetpack.KindTool:
 		// A custom tool "exists" by its directory (the same source as the executor and the grant catalog)
-		if _, err := customtoolstore.New(config.Cfg.Agent.RootDir, info.Schema).Get("", name); err == nil {
+		if _, err := customtoolstore.New(config.Cfg.Storage.RootDir, info.Schema).Get("", name); err == nil {
 			return gin.H{"name": name, "can_overwrite": supportsOverwrite(assetpack.KindTool)}
 		}
 	case assetpack.KindWorkflow:

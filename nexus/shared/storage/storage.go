@@ -71,10 +71,13 @@ type SeekableStorage interface {
 }
 
 // New creates the implementation for a driver.
-func New(cfg config.StorageConfig, root string) (Storage, error) {
+//
+// cfg.RootDir is the root of local / nfs; the s3 driver ignores it and uses cfg.S3.Bucket + cfg.S3.Prefix instead (both
+// are "the storage root", one per driver — which is why RootDir lives in this struct and is not a separate argument).
+func New(cfg config.StorageConfig) (Storage, error) {
 	switch cfg.Driver {
 	case "local", "nfs", "":
-		return NewFilesystemStorage(root), nil
+		return NewFilesystemStorage(cfg.RootDir), nil
 	case "s3":
 		return NewS3Storage(cfg.S3)
 	default:
