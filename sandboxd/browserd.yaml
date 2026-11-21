@@ -1,0 +1,59 @@
+# browserd — the standalone browser pool.
+#
+# Why it exists: the browser is not "a shell that draws pictures". It is 200-400 MB, takes seconds to start and keeps
+# login state in its user-data-dir, so it must not share a lifetime with a code-execution sandbox. This service owns the
+# browser only; sandboxd (and its mode: none / nsjail / docker) has nothing to do with it.
+#
+# One session = one Chromium: a worker is never reused across sessions, because that would hand one session's cookies to
+# the next. What is pooled is capacity, not processes.
+
+# The listen address (internal network only).
+listen: "127.0.0.1:27090"
+
+# Bearer token the caller (nexus) must present. Empty means no check — internal network only.
+token: ""
+
+# Log directory.
+log_dir: logs
+
+# How Chromium is started.
+#   process — a plain child process of this service; the container (or the OS user) is the isolation boundary.
+#   docker  — one container per worker; NOT implemented yet (it would only be useful for debugging).
+mode: process
+
+# Maximum number of live browser sessions = the memory ceiling of this service (~workers x 300 MB at full house).
+workers: 2
+
+# How many sessions one tenant may hold at once (0 = no per-tenant cap). Without a cap a single tenant can occupy every
+# worker and make everyone else queue.
+max_per_tenant: 1
+
+# How long a call waits for a free worker before it is rejected with busy. Queueing absorbs short bursts; a timeout keeps
+# a stuck run from piling up.
+queue_timeout_sec: 20
+
+# How long a session survives without a call. A live session keeps a Chromium resident, so this window is short.
+idle_timeout_sec: 300
+
+# Sweep interval of idle reclamation: the real reclaim time falls in (idle, idle + janitor].
+janitor_sec: 30
+
+browser:
+  # The driver. A bare name is resolved through PATH; a path with a separator is a host path.
+  binary: "bin/browserhost.exe"
+
+  # The Chromium executable. Empty = autodetect chromium / chrome / msedge.
+  # In a pool container this is usually "/usr/bin/chromium" (or empty, since the image puts it on PATH).
+  exec_path: ""
+
+  # Parent of the per-session user-data-dir (resolved to an absolute path at startup).
+  profile_root: "run/browserd/profiles"
+
+  # Parent of the per-session download directory (resolved to an absolute path at startup).
+  downloads_root: "run/browserd/downloads"
+
+  # Headless by default. `headless: false` needs a display and therefore allow_headed: true.
+  headless: true
+
+  # Headed browsing is useful when this service runs bare on a developer's desktop, and pointless in a pool container.
+  allow_headed: true
