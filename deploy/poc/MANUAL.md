@@ -69,11 +69,57 @@ Change a password: both console top bars have "password". `plat` is a protected 
 No provider key ships in the image. Until you add one, every page works but the agent fails on the first message — the
 gateway has no model to call.
 
-In the **tenant console**: Settings → **LLM** (the first tab)
+In the **tenant console**: Settings → **LLM** (the first tab). The example below is **DeepSeek over the
+OpenAI-compatible protocol**; for another vendor only the URL and the model identifier change. DeepSeek has no built-in
+preset, so pick the generic `openai_compatible` one — that is the entry point for every OpenAI-protocol vendor.
 
-1. Add a **provider**: a name, an OpenAI-compatible base URL (works for most vendors) and the API key
-2. Add a **model** on top of it: the model identifier (must match the vendor's name), context length, generation params
-3. Saving writes it into the gateway (the LiteLLM container); only then does the agent have a model
+**Step 1: add the LLM provider**
+
+1. Pick **`openai_compatible`** in "choose a preset provider": it fills in the protocol (`openai`, read-only) and a
+   placeholder URL
+2. Provider name: `DeepSeek`
+3. API URL: `https://api.deepseek.com/v1`
+4. API key: `sk-...` (created in the DeepSeek console)
+5. Extra config (JSON): **leave empty**. This one goes into LiteLLM's `litellm_params` — **registration-time**
+   parameters such as Azure's `api_version` or Vertex's `vertex_project`, not the body of each request
+
+**Step 2: add the LLM model** (same page → add LLM model, provider = the DeepSeek one)
+
+| Field | Value | Why |
+|---|---|---|
+| Model name | `deepseek-chat` | the gateway calls `openai/<model name>`, so it **must match the upstream identifier** |
+| Context window | `128000` | per the vendor's docs; used for estimates and truncation |
+| Gateway model name | `deepseek-chat` | the alias clients see; a request carries `<schema>:<this>`; **locked once enabled** |
+| Generation params | enable `max_tokens` / `temperature` / `top_p` as needed | switch-based: only enabled keys are written to `base_params` (absent = not sent, vendor default) |
+| Extra parameters (JSON) | `{"thinking": {"type": "disabled"}}` | see below |
+| Capabilities (JSON) | usually empty | e.g. `{"vision": true}` declares multimodal |
+
+Saving pushes it into the gateway (the LiteLLM container); only then does the agent have a model.
+
+### What `{"thinking": {"type": "disabled"}}` is for
+
+It belongs in the **model's "extra parameters"**, where it is folded into `extra_body` on every request; LiteLLM does not
+validate it and passes it to the upstream as-is (the code comment reads `extra_params all go into extra_body`). So it is
+an **instruction to the upstream: turn this model's reasoning output off and return the answer only**. The same JSON also
+lands in `model_info` (registration metadata), but the copy that takes effect per request is the `extra_body` one.
+
+The demo disables thinking by default for four reasons:
+
+1. **Latency and cost**: reasoning tokens are billed as output tokens and push the first token later;
+2. **Tool calling is steadier**: the agent leans on function calling (files, shell, browser). In reasoning mode a model
+   often writes a long trace first, and some upstreams support tool calls less well in that mode;
+3. **The console and the flows only want the answer**: thinking is rendered as a collapsible "reasoning" block in the
+   console, and an LLM node in a flow usually takes the answer only — reasoning would be pure payload;
+4. **Reproducibility**: the same model writes very differently with thinking on and off.
+
+Two boundaries:
+
+- This system only **passes it through and never validates it**. If the upstream understands it (DeepSeek's
+  OpenAI-compatible endpoint uses `thinking.type` to switch reasoning mode) it takes effect; if not, it is ignored as an
+  unknown field and **nothing breaks** — the only difference is whether the reply contains reasoning. If your endpoint
+  explicitly rejects the parameter, clear the JSON; nothing else depends on it.
+- To watch the reasoning instead, use `{"thinking": {"type": "enabled"}}` (or the vendor's reasoner model); the console
+  renders it as a collapsible "reasoning" block.
 
 Two traps:
 
