@@ -17,7 +17,10 @@
             </div>
           </div>
 
-          <el-form :model="exposeFormData" label-width="64px" :rules="exposeRules" ref="exposeFormRef">
+          <!-- label-width auto: the fixed 64px was sized for three-character Chinese labels;
+               "Endpoint name" / "Description" / "Parameters" need ~90px and were clipped or pushed
+               into the inputs in English. auto lets the widest label of either language decide. -->
+          <el-form :model="exposeFormData" label-width="auto" :rules="exposeRules" ref="exposeFormRef">
             <el-form-item :label="t('flow.endpoints.nameLabel')">
               <el-input :model-value="wf?.name || ''" disabled />
               <div class="field-hint">{{ t('flow.endpoints.nameHint') }}</div>

@@ -15,7 +15,10 @@
             <div class="form-sub">{{ $t('endpoint.newSub') }}</div>
           </div>
 
-          <el-form :model="formData" label-width="64px" :rules="rules" ref="formRef">
+          <!-- label-width auto: the fixed 64px was sized for three-character Chinese labels;
+               "Endpoint name" / "Description" / "Parameters" need ~90px and were clipped or pushed
+               into the inputs in English. auto lets the widest label of either language decide. -->
+          <el-form :model="formData" label-width="auto" :rules="rules" ref="formRef">
             <el-form-item :label="$t('endpoint.nameLabel')">
               <el-input :model-value="agent?.name || ''" disabled />
               <div class="field-hint">{{ $t('endpoint.nameHint') }}</div>
