@@ -7,6 +7,8 @@ console — plus the official LiteLLM image as a second container for the LLM ga
 setup. This is a **proof of concept**, not a deployment: see [Not for production](#not-for-production) before putting it
 anywhere reachable.
 
+Step-by-step walkthrough (accounts, the first model, each console, calling in from outside): [`MANUAL.md`](MANUAL.md).
+
 ## What runs
 
 Two images, one compose project:
