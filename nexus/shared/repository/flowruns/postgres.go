@@ -3,6 +3,7 @@ package flowruns
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"flame/nexus/shared/db"
@@ -25,15 +26,25 @@ func (r *PostgresRepository) SaveRun(schema string, run *models.FlowRunRecord, n
 	}
 	defer tx.Rollback()
 
+	// Empty session / user must be sent as NULL: both columns are uuid, and '' fails with 22P02.
+	var sessionID, userID interface{}
+	if v := strings.TrimSpace(run.SessionID); v != "" {
+		sessionID = v
+	}
+	if v := strings.TrimSpace(run.UserID); v != "" {
+		userID = v
+	}
+
 	// 1. Insert the run record
 	if err := tx.QueryRow(`
 		INSERT INTO `+schema+`.flow_run_records
 			(id, flow_id, status, run_type, result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
-			 run_args, run_limits, run_flow_vars, run_flow_vars_truncated, run_flow_vars_size, drafts)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+			 run_args, run_limits, run_flow_vars, run_flow_vars_truncated, run_flow_vars_size, drafts, session_id, user_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		RETURNING id`,
 		run.ID, run.FlowID, run.Status, run.RunType, run.Result, run.Progress, run.ProgressTruncated, run.ProgressSize, run.ErrMsg, run.NodeCount, run.DurationMs, run.StartedAt, run.FinishedAt,
 		run.RunArgs, run.RunLimits, run.RunFlowVars, run.RunFlowVarsTruncated, run.RunFlowVarsSize, run.Drafts,
+		sessionID, userID,
 	).Scan(&run.ID); err != nil {
 		return err
 	}
@@ -125,7 +136,7 @@ func deleteExcess(tx *sql.Tx, schema, flowId string, draftGroup bool, limit int)
 }
 
 // ListRuns lists one workflow's past runs (newest start first).
-func (r *PostgresRepository) ListRuns(schema string, flowId string, runType string, status string, startFrom, startTo *time.Time, limit int, offset int) ([]*models.FlowRunRecord, int, error) {
+func (r *PostgresRepository) ListRuns(schema string, flowId string, runType string, status string, userID string, sessionID string, startFrom, startTo *time.Time, limit int, offset int) ([]*models.FlowRunRecord, int, error) {
 	// An empty flowId means a cross-flow query (the admin console's "past runs"), in which case the flow_id
 	// condition is omitted.
 	// It cannot be rewritten as flow_id = '': passing an empty string to a uuid column fails with 22P02.
@@ -147,6 +158,20 @@ func (r *PostgresRepository) ListRuns(schema string, flowId string, runType stri
 		args = append(args, status)
 		argIdx++
 	}
+	// An empty userID filters nothing: runs recorded before the column existed, and runs with no identified caller, both
+	// have NULL there and must stay visible in the unfiltered list.
+	if userID != "" {
+		where += fmt.Sprintf(" AND user_id = $%d", argIdx)
+		args = append(args, userID)
+		argIdx++
+	}
+	// An empty sessionID filters nothing: a debug run or a protocol call without a session has NULL there and must stay
+	// visible in the unfiltered list. A non-empty value must be a uuid - an empty string would fail with 22P02.
+	if sessionID != "" {
+		where += fmt.Sprintf(" AND session_id = $%d", argIdx)
+		args = append(args, sessionID)
+		argIdx++
+	}
 	if startFrom != nil {
 		where += fmt.Sprintf(" AND started_at >= $%d", argIdx)
 		args = append(args, *startFrom)
@@ -166,8 +191,10 @@ func (r *PostgresRepository) ListRuns(schema string, flowId string, runType stri
 	}
 
 	// The list
-	// run_type is nullable: COALESCE keeps a legacy NULL from failing the scan (converting NULL to string is unsupported).
-	listSQL := `SELECT id, flow_id, status, COALESCE(run_type, ''), result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
+	// run_type / session_id / user_id are nullable: COALESCE keeps a legacy NULL from failing the scan (converting NULL to
+	// string is unsupported). session_id::text is required - COALESCE on a uuid column and an empty string literal does
+	// not type-check.
+	listSQL := `SELECT id, flow_id, COALESCE(session_id::text, ''), COALESCE(user_id::text, ''), status, COALESCE(run_type, ''), result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
 			run_args, run_limits, run_flow_vars, run_flow_vars_truncated, run_flow_vars_size, drafts
 		FROM ` + schema + `.flow_run_records ` + where +
 		fmt.Sprintf(" ORDER BY started_at DESC, id DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
@@ -182,7 +209,7 @@ func (r *PostgresRepository) ListRuns(schema string, flowId string, runType stri
 	records := make([]*models.FlowRunRecord, 0)
 	for rows.Next() {
 		var rec models.FlowRunRecord
-		if err := rows.Scan(&rec.ID, &rec.FlowID, &rec.Status, &rec.RunType, &rec.Result, &rec.Progress, &rec.ProgressTruncated, &rec.ProgressSize, &rec.ErrMsg,
+		if err := rows.Scan(&rec.ID, &rec.FlowID, &rec.SessionID, &rec.UserID, &rec.Status, &rec.RunType, &rec.Result, &rec.Progress, &rec.ProgressTruncated, &rec.ProgressSize, &rec.ErrMsg,
 			&rec.NodeCount, &rec.DurationMs, &rec.StartedAt, &rec.FinishedAt,
 			&rec.RunArgs, &rec.RunLimits, &rec.RunFlowVars, &rec.RunFlowVarsTruncated, &rec.RunFlowVarsSize,
 			&rec.Drafts); err != nil {
@@ -197,10 +224,10 @@ func (r *PostgresRepository) ListRuns(schema string, flowId string, runType stri
 func (r *PostgresRepository) GetRunDetail(schema string, runID string) (*models.FlowRunRecord, []*models.FlowNodeRecord, error) {
 	var run models.FlowRunRecord
 	err := db.DB.QueryRow(`
-		SELECT id, flow_id, status, COALESCE(run_type, ''), result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
+		SELECT id, flow_id, COALESCE(session_id::text, ''), COALESCE(user_id::text, ''), status, COALESCE(run_type, ''), result, progress, progress_truncated, progress_size, err_msg, node_count, duration_ms, started_at, finished_at,
 			run_args, run_limits, run_flow_vars, run_flow_vars_truncated, run_flow_vars_size, drafts
 		FROM `+schema+`.flow_run_records WHERE id = $1`, runID).Scan(
-		&run.ID, &run.FlowID, &run.Status, &run.RunType, &run.Result, &run.Progress, &run.ProgressTruncated, &run.ProgressSize, &run.ErrMsg,
+		&run.ID, &run.FlowID, &run.SessionID, &run.UserID, &run.Status, &run.RunType, &run.Result, &run.Progress, &run.ProgressTruncated, &run.ProgressSize, &run.ErrMsg,
 		&run.NodeCount, &run.DurationMs, &run.StartedAt, &run.FinishedAt,
 		&run.RunArgs, &run.RunLimits, &run.RunFlowVars, &run.RunFlowVarsTruncated, &run.RunFlowVarsSize,
 		&run.Drafts)
@@ -305,7 +332,7 @@ func (r *PostgresRepository) DeleteRuns(schema, flowId string) (int64, error) {
 // optional and combinable.
 // Unconditional deletion is refused outright: the admin console's bulk clean-up must carry a filter, otherwise one
 // mistaken call wipes the table.
-func (r *PostgresRepository) DeleteRunsByFilter(schema, flowId, status string, startFrom, startTo *time.Time) (int64, error) {
+func (r *PostgresRepository) DeleteRunsByFilter(schema, flowId, status string, userID string, sessionID string, startFrom, startTo *time.Time) (int64, error) {
 	where := ""
 	args := []interface{}{}
 	argIdx := 1
@@ -323,6 +350,12 @@ func (r *PostgresRepository) DeleteRunsByFilter(schema, flowId, status string, s
 	}
 	if status != "" {
 		add("status = $%d", status)
+	}
+	if userID != "" {
+		add("user_id = $%d", userID)
+	}
+	if sessionID != "" {
+		add("session_id = $%d", sessionID)
 	}
 	if startFrom != nil {
 		add("started_at >= $%d", *startFrom)

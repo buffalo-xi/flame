@@ -51,8 +51,9 @@ func TestEffective(t *testing.T) {
 	if got.MaxCallDepth != 2 {
 		t.Errorf("MaxCallDepth = %d, want 2 (the tenant row)", got.MaxCallDepth)
 	}
-	if got.MaxTools != 50 || got.MaxOutputBytes != 64<<10 {
-		t.Errorf("unset fields = %d / %d, want the fallbacks 50 / 65536", got.MaxTools, got.MaxOutputBytes)
+	if got.MaxTools != 30 || got.MaxOutputBytes != 64<<10 || got.MaxRunRecords != 100 || got.MaxSessionRecords != 50 {
+		t.Errorf("unset fields = %d / %d / %d / %d, want the fallbacks 30 / 65536 / 100 / 50",
+			got.MaxTools, got.MaxOutputBytes, got.MaxRunRecords, got.MaxSessionRecords)
 	}
 
 	// No rows at all: everything is the code fallback, exactly as before the table existed.
@@ -75,6 +76,8 @@ func TestValidateTenant(t *testing.T) {
 		{"nil row -> accepted", nil, "", ""},
 		{"-1 -> rejected (this config has no unlimited)", &Row{MaxTools: null(-1)}, CodeInvalidValue, "max_tools"},
 		{"0 -> rejected", &Row{MaxOutputBytes: null(0)}, CodeInvalidValue, "max_output_bytes"},
+		{"run records 0 -> rejected (a log table with no rows kept is a configuration mistake)", &Row{MaxRunRecords: null(0)}, CodeInvalidValue, "max_run_records"},
+		{"run records -1 -> rejected (no unlimited)", &Row{MaxRunRecords: null(-1)}, CodeInvalidValue, "max_run_records"},
 		{"above the system level -> rejected", &Row{MaxIterations: null(101)}, CodeExceedsSystemLimit, "max_iterations"},
 		{"equal to the system level -> accepted", &Row{MaxIterations: null(100)}, "", ""},
 		{"system unset -> the tenant value is accepted", &Row{MaxTools: null(9999)}, "", ""},
@@ -111,13 +114,13 @@ func TestValidateTenant(t *testing.T) {
 	}
 }
 
-// TestRowJSON: a missing row and a row that is entirely unset must render the same four nulls; a missing key would make
+// TestRowJSON: a missing row and a row that is entirely unset must render the same six nulls; a missing key would make
 // the frontend read undefined instead of "not set".
 func TestRowJSON(t *testing.T) {
 	for _, r := range []*Row{nil, {}} {
 		got := r.JSON()
-		if len(got) != 4 {
-			t.Fatalf("Row.JSON() has %d keys, want 4", len(got))
+		if len(got) != len(fieldNames) {
+			t.Fatalf("Row.JSON() has %d keys, want %d", len(got), len(fieldNames))
 		}
 		for _, name := range fieldNames {
 			if v, ok := got[name]; !ok || v != nil {
@@ -132,20 +135,27 @@ func TestRowJSON(t *testing.T) {
 	}
 }
 
-// The fallbacks must equal the hard-coded constants that existed before this package, one for one:
-// with no table, behaviour has to match today's exactly, or "we added a setting" silently becomes a behaviour change.
-func TestFallbackMatchesLegacyConstants(t *testing.T) {
+// Pins the fallback values: they are what an unconfigured tenant actually runs with, so a silent change here changes
+// every tenant's behaviour. The two retention values must also match the flow side, so "how many records" means the same
+// number for both owner types instead of 10000 vs 100 under the same name.
+func TestFallbackValues(t *testing.T) {
 	fb := Fallback()
-	if fb.MaxIterations != 80 {
-		t.Errorf("MaxIterations fallback = %d, want 80 (formerly agent_impl.maxIterations)", fb.MaxIterations)
+	if fb.MaxIterations != 40 {
+		t.Errorf("MaxIterations fallback = %d, want 40 (40 rounds already cover read -> edit -> test -> fix)", fb.MaxIterations)
 	}
 	if fb.MaxCallDepth != 3 {
-		t.Errorf("MaxCallDepth fallback = %d, want 3 (formerly caller.maxCallDepth)", fb.MaxCallDepth)
+		t.Errorf("MaxCallDepth fallback = %d, want 3 (agent -> agent nesting)", fb.MaxCallDepth)
 	}
-	if fb.MaxTools != 50 {
-		t.Errorf("MaxTools fallback = %d, want 50 (formerly toolgrant.DefaultMaxTools)", fb.MaxTools)
+	if fb.MaxTools != 30 {
+		t.Errorf("MaxTools fallback = %d, want 30 (every tool schema costs context in every round)", fb.MaxTools)
 	}
 	if fb.MaxOutputBytes != 64<<10 {
-		t.Errorf("MaxOutputBytes fallback = %d, want 65536 (formerly tools.DefaultMaxOutput)", fb.MaxOutputBytes)
+		t.Errorf("MaxOutputBytes fallback = %d, want 65536 (a quarter of the 256 KB history budget)", fb.MaxOutputBytes)
+	}
+	if fb.MaxRunRecords != 100 {
+		t.Errorf("MaxRunRecords fallback = %d, want 100 (the flow-side default)", fb.MaxRunRecords)
+	}
+	if fb.MaxSessionRecords != 50 {
+		t.Errorf("MaxSessionRecords fallback = %d, want 50 (aligned with flow_configs)", fb.MaxSessionRecords)
 	}
 }

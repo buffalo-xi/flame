@@ -3,6 +3,7 @@ package users
 import (
 	"fmt"
 
+	"flame/nexus/shared/models"
 	"flame/nexus/shared/quota"
 	"flame/tools/xhttp"
 
@@ -28,13 +29,14 @@ import (
 // GetTenantQuota GET /admin/tenantquota
 //
 // It returns everything at once: this tenant's raw row + the system row + the code fallback + the
-// effective values + three usage counters:
+// effective values + the usage counters:
 //   - quota     this tenant's raw row (null = unset, bound to the edit form)
 //   - system    the system row's raw values (null = unset, shown as the "system ceiling")
 //   - fallback  the code fallback (the ceiling when the system row is unset too)
 //   - effective the effective values (computed by the backend; the frontend never redoes truncation)
-//   - usage     current agent / skill / flow counts (the two session values have no cheap "current
-//     usage" and are rendered as "-" by the frontend)
+//   - usage     current agent / skill / flow counts, plus the two session buckets (agent / flow) for
+//     the per-user session-count quota; the per-session storage ceiling still has no cheap "current
+//     usage" and is rendered as "-" by the frontend
 func GetTenantQuota(c *gin.Context) {
 	info, ok := authOf(c)
 	if !ok {
@@ -60,6 +62,7 @@ func GetTenantQuota(c *gin.Context) {
 	agents, _ := quota.CountAgents(info.Schema)
 	skills, _ := quota.CountSkills(info.Schema)
 	flows, _ := quota.CountFlows(info.Schema)
+	sessionsByType, _ := quota.CountSessionsByOwnerType(info.Schema)
 
 	xhttp.OkJSON(c, "Success", gin.H{
 		"quota": gin.H{
@@ -94,6 +97,12 @@ func GetTenantQuota(c *gin.Context) {
 			"agents": agents,
 			"skills": skills,
 			"flows":  flows,
+			// Two buckets, because the session-count quota is per (owner_type, user): a merged total would not say
+			// which bucket is full. A nil map (failed count) reads as 0, like the three counts above.
+			"sessions": gin.H{
+				"agent": sessionsByType[models.SessionOwnerTypeAgent],
+				"flow":  sessionsByType[models.SessionOwnerTypeFlow],
+			},
 		},
 	}, "")
 }

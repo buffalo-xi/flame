@@ -1,0 +1,94 @@
+# Flame PoC — two images, one command:
+#
+#   flame     the stack: postgres, redis, nexus, sandboxd, browserd, nginx, the agent script runtimes
+#   litellm   the upstream LLM gateway, running the official image
+#
+# Why the gateway is not baked into the flame image any more: it used to be a pip install inside a venv, which made the
+# flame image carry ~400 MB of dependencies whose wheel availability had to match whatever Python the base image ships
+# (the 3.13 upgrade would have been gated by uvloop / pydantic-core / orjson wheels). With the official image the
+# version is a tag — pinned and upgradeable on its own — and the flame image is back to "Debian + the services".
+#
+# Verified against docker.litellm.ai/berriai/litellm-database:lts (2026-11): Prisma migrations run on first start,
+# `store_model_in_db` really writes to LiteLLM_ProxyModelTable, and POST /model/new · /model/delete behave exactly as
+# nexus' Provision / Deprovision expect.
+#
+# Usage:
+#   docker compose -f deploy/poc/docker-compose.yml up -d --build
+#
+name: flame-poc
+
+services:
+  flame:
+    build:
+      # The build context is the repository root: every module has `replace flame/tools => ../tools`, and the image
+      # copies tools/ + nexus/ + sandboxd/ + browserd/ + desktop/. Running `docker build` from this directory alone
+      # would not compile.
+      context: ../..
+      dockerfile: deploy/poc/Dockerfile
+      args:
+        # Module proxy for the Go builder stage (see the ARG in the Dockerfile). Upstream by default; on a network where
+        # proxy.golang.org refuses connections, export GOPROXY or put GOPROXY=... in deploy/poc/.env (gitignored).
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    # Published by .github/workflows/poc-image.yml on every push to main that touches the stack. Local builds are tagged
+    # with the same name, so `up -d --build` (compile here) and `pull && up -d` (download) use the same compose file.
+    image: ghcr.io/buffalo-xi/flame-poc:latest
+    container_name: flame
+    # The image is x86-64 only: the builder stage pins GOARCH=amd64 (and the Debian/Chromium layer it produces is amd64).
+    # Without this line an arm64 host builds an arm64 image around amd64 binaries and the container dies with
+    # "exec format error" in the first line of the log. With it, Docker Desktop emulates and the box is merely slow.
+    platform: linux/amd64
+    restart: unless-stopped
+    # supervisord gives postgres up to 30s (stopsignal=INT) and browserd 30s before it exits; Docker's default of 10s
+    # would SIGKILL the container in the middle of that, turning every `compose down` into an unclean shutdown.
+    stop_grace_period: 60s
+    ports:
+      # The only published port, and loopback only: the demo password is baked into the image, so "reachable from the
+      # LAN" is not a feature. Use "27001:27001" instead when somebody else has to open it.
+      # PostgreSQL, redis, litellm and the API stay on the compose network.
+      - "127.0.0.1:27001:27001"
+    # Chromium uses /dev/shm; Docker's 64 MB default makes pages crash at random, which reads as "the browser tool is
+    # broken".
+    shm_size: "1gb"
+    volumes:
+      - flame-data:/data
+      # Prebuilt binaries from deploy/poc/build.ps1 (the "change the code, keep the image" loop). build.ps1 writes the
+      # same two mounts into out/compose-mounts.yml and prints a command that merges it in — prefer that over editing
+      # this file, so the default stays "run what the image contains".
+      # - ./out/bin:/opt/flame/bin-mount:ro
+      # - ./out/dist:/usr/share/nginx/html-mount:ro
+    environment:
+      # Must match the litellm service below: nexus authenticates to the gateway with this key.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-poc-master}
+      JWT_SECRET: ${JWT_SECRET:-poc-only-jwt-secret-change-me-0123456789abcdef}
+      FLAME_VALUE_KEY: ${FLAME_VALUE_KEY:-poc-only-value-key-change-me-0123456789abcdef}
+    # The image carries a HEALTHCHECK (nginx up AND nexus ready); no need to repeat it here.
+
+  litellm:
+    # `litellm-database`, not `litellm`: the plain image has no Prisma, and `store_model_in_db` is what makes
+    # "add a provider → add a model" from the console persist. `lts` follows the newest LTS patch; pin an exact
+    # version (e.g. :v1.108.12) if a byte-for-byte reproducible image matters more than security patches.
+    image: docker.litellm.ai/berriai/litellm-database:lts
+    container_name: flame-litellm
+    # Same architecture as flame. With this line on one service only, an ARM host emulates the product stack while this
+    # one either fails with "exec format error" (no arm64 tag) or runs a different architecture - a confusing split.
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      # Ordering only, not readiness: the flame container is still initialising its cluster when this one starts, and
+      # the proxy exits if the database is not there yet — `restart: unless-stopped` brings it back until it is.
+      - flame
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      # The same file the repository has always had; nothing about it depends on the image it runs in.
+      - ./litellm.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-poc-master}
+      # Encrypts provider keys in the database. It has to stay stable for the life of the volume: change it and every
+      # model's stored key becomes undecryptable — the model is still listed, and every chat fails with an auth error.
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-poc-only-salt-key-0123456789abcdef}
+      # The `litellm` database lives in the flame container's cluster (PostgreSQL is one of the things that container
+      # runs). Trust authentication, compose network only, nothing published.
+      DATABASE_URL: postgresql://postgres@flame:5432/litellm?sslmode=disable
+
+volumes:
+  flame-data:

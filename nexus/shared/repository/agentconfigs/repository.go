@@ -4,14 +4,16 @@ import "database/sql"
 
 // AgentConfig corresponds to one platform.agent_configs row (NULL is expressed with sql.NullInt32).
 //
-// The difference from FlowConfig: these four columns **do not allow -1** (they are all safety valves, see
-// sql/agent_configs.sql).
+// The difference from FlowConfig: these six columns **do not allow -1** (they are all safety valves, see
+// nexus/platform/sql/agent_configs.sql).
 type AgentConfig struct {
-	TenantID       string
-	MaxIterations  sql.NullInt32
-	MaxCallDepth   sql.NullInt32
-	MaxTools       sql.NullInt32
-	MaxOutputBytes sql.NullInt32
+	TenantID          string
+	MaxIterations     sql.NullInt32
+	MaxCallDepth      sql.NullInt32
+	MaxTools          sql.NullInt32
+	MaxOutputBytes    sql.NullInt32
+	MaxRunRecords     sql.NullInt32
+	MaxSessionRecords sql.NullInt32
 }
 
 // Repository is the agent_configs storage interface.

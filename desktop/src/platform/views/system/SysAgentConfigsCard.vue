@@ -43,7 +43,9 @@ const FIELDS = computed(() => [
   { key: 'max_iterations', label: t('platform.system.agentConfigs.max_iterations') },
   { key: 'max_call_depth', label: t('platform.system.agentConfigs.max_call_depth') },
   { key: 'max_tools', label: t('platform.system.agentConfigs.max_tools') },
-  { key: 'max_output_bytes', label: t('platform.system.agentConfigs.max_output_bytes'), ph: t('platform.system.agentConfigs.max_output_bytesPh') }
+  { key: 'max_output_bytes', label: t('platform.system.agentConfigs.max_output_bytes'), ph: t('platform.system.agentConfigs.max_output_bytesPh') },
+  { key: 'max_run_records', label: t('platform.system.agentConfigs.max_run_records'), ph: t('platform.system.agentConfigs.max_run_recordsPh') },
+  { key: 'max_session_records', label: t('platform.system.agentConfigs.max_session_records'), ph: t('platform.system.agentConfigs.max_session_recordsPh') }
 ])
 
 const loading = ref(false)

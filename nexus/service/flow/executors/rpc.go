@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"flame/nexus/service/agent"
 	"flame/nexus/service/flow/core"
 	"flame/nexus/service/rpc/client"
 	"flame/nexus/shared/auth"
@@ -261,6 +262,11 @@ func (e *RpcExecutor) executeEndpoint(
 	}
 
 	if runErr != nil {
+		// A missing default model is a configuration error, the same class the llm node reports: retrying is useless
+		// and on_error can be configured to notice it. Reporting "other" would send people to investigate the platform.
+		if _, isCfg := agent.AsConfigError(runErr); isCfg {
+			return failf(nr, flow.ErrCodeConfig, runErr.Error())
+		}
 		return failf(nr, flow.ErrCodeOther, runErr.Error())
 	}
 

@@ -13,9 +13,9 @@ type Repository interface {
 	SaveRun(schema string, run *models.FlowRunRecord, nodes []*models.FlowNodeRecord, maxRunRecords int) error
 
 	// ListRuns lists a workflow's past runs (newest start first).
-	// An empty runType filters nothing; an empty status filters nothing; a nil startFrom/startTo filters nothing. It
-	// returns the page and the total.
-	ListRuns(schema string, flowId string, runType string, status string, startFrom, startTo *time.Time, limit int, offset int) ([]*models.FlowRunRecord, int, error)
+	// An empty runType / status / userID / sessionID filters nothing; a nil startFrom/startTo filters nothing. An empty
+	// flowId lists across workflows. It returns the page and the total.
+	ListRuns(schema string, flowId string, runType string, status string, userID string, sessionID string, startFrom, startTo *time.Time, limit int, offset int) ([]*models.FlowRunRecord, int, error)
 
 	// GetRunDetail returns one run record with all of its node records (nodes by start time ascending).
 	GetRunDetail(schema string, runID string) (*models.FlowRunRecord, []*models.FlowNodeRecord, error)
@@ -29,11 +29,11 @@ type Repository interface {
 	// removed.
 	DeleteRuns(schema, flowId string) (int64, error)
 
-	// DeleteRunsByFilter deletes run records in bulk by optional criteria (workflow / status / time range), returning the
-	// number of runs removed.
+	// DeleteRunsByFilter deletes run records in bulk by optional criteria (workflow / status / caller / session / time
+	// range), returning the number of runs removed.
 	// Unconditional deletion is refused outright: the admin side's bulk clean-up without a filter would wipe the table on
-	// one mistaken call.
-	DeleteRunsByFilter(schema, flowId, status string, startFrom, startTo *time.Time) (int64, error)
+	// one mistaken call. It must stay in step with ListRuns: the console deletes exactly the set it showed.
+	DeleteRunsByFilter(schema, flowId, status string, userID string, sessionID string, startFrom, startTo *time.Time) (int64, error)
 }
 
 // NewRepository creates the run record storage instance.

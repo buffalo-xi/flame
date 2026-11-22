@@ -14,8 +14,7 @@ import (
 )
 
 // TestResolveWithoutDatabaseFailsOpen: the quota package must never panic when the database is not initialised (unit tests,
-// early startup, a broken deployment). Everything degrades to the code fallback (unlimited for the two session limits) and
-// the checks fail open.
+// early startup, a broken deployment). Everything degrades to the code fallback and the checks fail open.
 func TestResolveWithoutDatabaseFailsOpen(t *testing.T) {
 	if db.DB != nil {
 		t.Skip("db.DB is initialised; this test covers the nil case")
@@ -34,13 +33,29 @@ func TestResolveWithoutDatabaseFailsOpen(t *testing.T) {
 	if err := CheckUserSessions("t0", "agent", "u1"); err != nil {
 		t.Fatalf("CheckUserSessions = %v, want nil (fail-open)", err)
 	}
-	// With an unlimited fallback, a write must not be inspected at all
+	// No storage handle: a write is not inspected at all
 	if ev, err := Admit(context.Background(), nil, "t0", testKey, "", 1024); ev != nil || err != nil {
 		t.Fatalf("Admit = (%v, %v), want (nil, nil)", ev, err)
 	}
 	// Snapshot reads the counter through the PG backend: it must report 0 rather than panic
 	if used, limit := Snapshot(context.Background(), "t0", testKey, ""); used != 0 || limit != fallback.MaxSessionStorageBytes {
 		t.Fatalf("Snapshot = (%d, %d), want (0, %d)", used, limit, fallback.MaxSessionStorageBytes)
+	}
+}
+
+// TestFallbackQuotaValues pins the code defaults: they are what a tenant inherits before anyone configures it, and both
+// session limits used to be -1 here. A finite ceiling is what makes the per-user session check and the storage admission
+// actually fire, so a silent return to -1 would quietly disable them.
+func TestFallbackQuotaValues(t *testing.T) {
+	fb := Fallback()
+	if fb.MaxAgents != 50 || fb.MaxSkills != 100 || fb.MaxFlows != 100 {
+		t.Errorf("resource fallbacks = %d / %d / %d, want 50 / 100 / 100", fb.MaxAgents, fb.MaxSkills, fb.MaxFlows)
+	}
+	if fb.MaxSessionStorageBytes != 1<<30 {
+		t.Errorf("MaxSessionStorageBytes fallback = %d, want 1 GiB", fb.MaxSessionStorageBytes)
+	}
+	if fb.MaxUserSessions != 200 {
+		t.Errorf("MaxUserSessions fallback = %d, want 200", fb.MaxUserSessions)
 	}
 }
 

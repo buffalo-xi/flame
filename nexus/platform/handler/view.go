@@ -6,6 +6,7 @@ package handler
 import (
 	"flame/nexus/platform/repository/pmusers"
 	tenantsrepo "flame/nexus/platform/repository/tenants"
+	"flame/nexus/shared/models"
 	"flame/nexus/shared/quota"
 
 	"github.com/gin-gonic/gin"
@@ -53,6 +54,9 @@ func tenantView(t *tenantsrepo.Tenant) gin.H {
 			"agents": countOrZero(quota.CountAgents(t.Schema)),
 			"skills": countOrZero(quota.CountSkills(t.Schema)),
 			"flows":  countOrZero(quota.CountFlows(t.Schema)),
+			// The session-count quota is bucketed by (owner_type, user_id), so the usage column needs both buckets;
+			// showing one merged number would read as "used 3 of 10" while the real state may be 3 agents + 0 flows.
+			"sessions": sessionCountView(t.Schema),
 		},
 	}
 }
@@ -63,4 +67,17 @@ func countOrZero(n int, err error) int {
 		return 0
 	}
 	return n
+}
+
+// sessionCountView renders the two session buckets the quota page shows ("agent" / "flow"). A failed count reads as 0
+// like the other usage numbers: the list page must not fail as a whole because of one pending tenant.
+func sessionCountView(schema string) gin.H {
+	byType, err := quota.CountSessionsByOwnerType(schema)
+	if err != nil {
+		byType = nil
+	}
+	return gin.H{
+		"agent": byType[models.SessionOwnerTypeAgent],
+		"flow":  byType[models.SessionOwnerTypeFlow],
+	}
 }

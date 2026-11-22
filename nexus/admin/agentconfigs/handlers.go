@@ -16,8 +16,9 @@ import (
 // Agent run limits (the tenant rows of platform.agent_configs).
 //
 // The one difference from the flow limits (admin/flowconfigs): **there is no -1 (unlimited)**.
-// All four are safety valves rather than quotas - max_iterations = -1 would disable the loop guard,
-// so the rule is "an integer >= 1", not the flow side's "-1 or non-negative".
+// All six are safety valves rather than quotas - max_iterations = -1 would disable the loop guard, and
+// max_run_records / max_session_records = -1 would let the run log and the session memory grow without bound - so the
+// rule is "an integer >= 1", not the flow side's "-1 or non-negative".
 // The upper-bound check (never above the system value) matches flows exactly.
 //
 // The rules and the JSON shape live in shared/agentconfig (ValidateTenant / Row.JSON / Effective), which is the same
@@ -34,30 +35,36 @@ func rowFromStore(cfg *agentconfigrepo.AgentConfig) *agentconfig.Row {
 		return nil
 	}
 	return &agentconfig.Row{
-		MaxIterations:  cfg.MaxIterations,
-		MaxCallDepth:   cfg.MaxCallDepth,
-		MaxTools:       cfg.MaxTools,
-		MaxOutputBytes: cfg.MaxOutputBytes,
+		MaxIterations:     cfg.MaxIterations,
+		MaxCallDepth:      cfg.MaxCallDepth,
+		MaxTools:          cfg.MaxTools,
+		MaxOutputBytes:    cfg.MaxOutputBytes,
+		MaxRunRecords:     cfg.MaxRunRecords,
+		MaxSessionRecords: cfg.MaxSessionRecords,
 	}
 }
 
 // storeFromRow is the reverse, for the upsert.
 func storeFromRow(tenantID string, r *agentconfig.Row) *agentconfigrepo.AgentConfig {
 	return &agentconfigrepo.AgentConfig{
-		TenantID:       tenantID,
-		MaxIterations:  r.MaxIterations,
-		MaxCallDepth:   r.MaxCallDepth,
-		MaxTools:       r.MaxTools,
-		MaxOutputBytes: r.MaxOutputBytes,
+		TenantID:          tenantID,
+		MaxIterations:     r.MaxIterations,
+		MaxCallDepth:      r.MaxCallDepth,
+		MaxTools:          r.MaxTools,
+		MaxOutputBytes:    r.MaxOutputBytes,
+		MaxRunRecords:     r.MaxRunRecords,
+		MaxSessionRecords: r.MaxSessionRecords,
 	}
 }
 
 // updateRequest is the tenant config submitted by the frontend (null means unset, stored as NULL).
 type updateRequest struct {
-	MaxIterations  *int32 `json:"max_iterations"`
-	MaxCallDepth   *int32 `json:"max_call_depth"`
-	MaxTools       *int32 `json:"max_tools"`
-	MaxOutputBytes *int32 `json:"max_output_bytes"`
+	MaxIterations     *int32 `json:"max_iterations"`
+	MaxCallDepth      *int32 `json:"max_call_depth"`
+	MaxTools          *int32 `json:"max_tools"`
+	MaxOutputBytes    *int32 `json:"max_output_bytes"`
+	MaxRunRecords     *int32 `json:"max_run_records"`
+	MaxSessionRecords *int32 `json:"max_session_records"`
 }
 
 // toNullInt32 turns *int32 into sql.NullInt32 (nil means unset).
@@ -71,10 +78,12 @@ func toNullInt32(v *int32) sql.NullInt32 {
 // rowFromRequest turns the submitted body into a row (nil means unset).
 func rowFromRequest(req updateRequest) *agentconfig.Row {
 	return &agentconfig.Row{
-		MaxIterations:  toNullInt32(req.MaxIterations),
-		MaxCallDepth:   toNullInt32(req.MaxCallDepth),
-		MaxTools:       toNullInt32(req.MaxTools),
-		MaxOutputBytes: toNullInt32(req.MaxOutputBytes),
+		MaxIterations:     toNullInt32(req.MaxIterations),
+		MaxCallDepth:      toNullInt32(req.MaxCallDepth),
+		MaxTools:          toNullInt32(req.MaxTools),
+		MaxOutputBytes:    toNullInt32(req.MaxOutputBytes),
+		MaxRunRecords:     toNullInt32(req.MaxRunRecords),
+		MaxSessionRecords: toNullInt32(req.MaxSessionRecords),
 	}
 }
 

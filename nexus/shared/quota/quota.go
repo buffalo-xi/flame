@@ -37,13 +37,32 @@ type Limits struct {
 
 // fallback holds the code defaults (used when the table does not exist or has nothing configured).
 //
-// The two session-related limits are -1 (unlimited): a session is a "working venue" rather than a countable asset, and a default limit means
-// that once it is reached not even one round can run (storage 507 / create session 507) - while both can still be tightened explicitly in the
-// system row, the tenant row or user_quotas.
+// These are what a tenant inherits before anyone configures it, so they are sized for a small team's ordinary usage
+// rather than for the maximum that can still be defended (that is the system row's job):
+//
+//	max_agents   50   every agent carries config, tool grants and its own run log
+//	max_skills  100   a skill is a directory with scripts, so each one costs storage
+//	max_flows   100   same as skills
+//
+// The two session limits used to be -1 (unlimited), on the argument that a session is a "working venue" rather than a
+// countable asset. Both are finite now, for two different reasons:
+//
+//	max_session_storage_bytes 1 GiB  unlimited means one session can fill the disk. The original objection - "a limit
+//	                                 means that at the ceiling not even one round can run" - does not hold: Admit
+//	                                 deletes the oldest files until the write fits, and only a single write larger than
+//	                                 the whole ceiling is refused (507).
+//	max_user_sessions         200    unlimited means unlimited session rows and workspace directories, and it made the
+//	                                 per-user check a no-op: CheckUserSessions returns early on -1, so the rule existed
+//	                                 but never fired. 200 per owner type is more than one person opens by hand; a bulk
+//	                                 caller goes through CreateWithID, which reclaims the oldest session instead.
+//
+// Both can still be tightened in the system row, a tenant row or user_quotas.
 var fallback = Limits{
-	MaxAgents: 100, MaxSkills: 300, MaxFlows: 300,
-	MaxSessionStorageBytes: -1, // per-session workspace unlimited
-	MaxUserSessions:        -1, // sessions per user unlimited
+	MaxAgents:              50,
+	MaxSkills:              100,
+	MaxFlows:               100,
+	MaxSessionStorageBytes: 1 << 30, // 1 GiB per session workspace
+	MaxUserSessions:        200,     // sessions per user, counted per owner type
 }
 
 // row corresponds to one quota_configs row; NULL is expressed with the Null types.
@@ -430,6 +449,34 @@ func CountUserSessions(schema, ownerType, userID string) (int, error) {
 		ownerType, userID,
 	).Scan(&n)
 	return n, err
+}
+
+// CountSessionsByOwnerType counts a tenant's sessions grouped by owner type ("agent" / "flow") for the quota page's
+// usage column.
+//
+// One GROUP BY instead of two counts: both numbers are wanted together, and the page shows them side by side because
+// the session-count quota is bucketed by (owner_type, user_id) - "used 3 of 10" only means something per bucket.
+func CountSessionsByOwnerType(schema string) (map[string]int, error) {
+	if db.DB == nil {
+		return nil, errors.New("database is not initialised")
+	}
+	rows, err := db.DB.Query(
+		`SELECT COALESCE(owner_type, ''), COUNT(*) FROM ` + schema + `.sessions GROUP BY owner_type`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]int, 2)
+	for rows.Next() {
+		var ownerType string
+		var n int
+		if err := rows.Scan(&ownerType, &n); err != nil {
+			return nil, err
+		}
+		out[ownerType] = n
+	}
+	return out, rows.Err()
 }
 
 // countRows counts the rows of a table. table is only ever passed from constants inside this package; it never accepts external input.

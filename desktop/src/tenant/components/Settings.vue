@@ -266,7 +266,10 @@ const flowConfigFields = computed(() => FLOW_FIELD_KEYS.map((key) => ({
   desc: t(`settings.flowFields.${key}.desc`)
 })))
 
-const AGENT_FIELD_KEYS = ['max_iterations', 'max_call_depth', 'max_tools', 'max_output_bytes']
+const AGENT_FIELD_KEYS = [
+  'max_iterations', 'max_call_depth', 'max_tools', 'max_output_bytes',
+  'max_run_records', 'max_session_records'
+]
 const agentConfigFields = computed(() => AGENT_FIELD_KEYS.map((key) => ({
   key,
   label: t(`settings.agentFields.${key}.label`),

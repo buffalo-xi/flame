@@ -1,0 +1,118 @@
+# nexus for the PoC (deploy/poc). Container paths only — the developer config stays in nexus/config.yaml.
+#
+# Everything is on 127.0.0.1 inside the container; the only way in is nginx on 27001. The one address that is not
+# loopback is the LLM gateway: it is a second container, reached by its compose service name (litellm:4000).
+
+server:
+  name: nexus
+  port: 27006
+  host: 127.0.0.1
+  read_timeout: 30
+  write_timeout: 30
+  # Served as /static: LLM provider icons and other fixed assets.
+  static_root: "/opt/flame/static"
+
+database:
+  type: postgres
+  host: 127.0.0.1
+  port: 5432
+  username: postgres
+  # Trust authentication on the loopback interface (the container is the boundary). No password on purpose: it cannot
+  # leak, and "connect from outside" is already impossible.
+  password: ""
+  database: flame
+  platform_schema: "platform"
+
+# Hard dependency: without Redis the service answers 503 for everything but /health.
+redis:
+  mode: single
+  addrs:
+    - 127.0.0.1:6379
+  password: ""
+  db: 0
+  pool_size: 10
+  timeout: 1
+  prefix: "nexus"
+
+logging:
+  level: info
+  format: text
+
+jwt:
+  # Injected from the image's ENV (override with `docker run -e JWT_SECRET=...`). It must stay a real random value: it
+  # signs every token, so leaking it means anyone can mint a token for any tenant.
+  secret_key: "${JWT_SECRET}"
+  token_expiry: 600
+  issuer: "nexus@flame"
+
+security:
+  # Encrypts values stored with kind=secret. Same rule as the JWT key: keep it random, keep it stable (changing it makes
+  # already-encrypted values unreadable).
+  value_key: "${FLAME_VALUE_KEY}"
+
+# No consul in this box, and nothing discovers nexus anyway.
+registry:
+  enabled: false
+
+# LiteLLM is a hard dependency: models and provider keys are provisioned *through* it, and without a gateway an agent
+# cannot even be constructed.
+#
+# It runs as a second container (`litellm` in docker-compose.yml, the official litellm-database image), so the URL is
+# the compose service name, not loopback. Its own database still lives in this container's postgres instance: the
+# nexus side connects to it directly to read spend and key state, and the gateway connects to it over the compose
+# network.
+litellm:
+  enabled: true
+  url: "http://litellm:4000"
+  master_key: "${LITELLM_MASTER_KEY}"
+  database: "litellm"
+
+# sandboxd, connected directly. The gateway (sandboxg) only exists to give several sandboxd instances sticky routing and
+# a global quota — neither means anything with one instance.
+#
+# The address is a base URL; nexus composes /v1/exec and /v1/code from it, plus the ws channel /v1/interactive.
+sandbox:
+  url: "ws://127.0.0.1:27081"
+  token: ""
+
+# browserd, connected directly, same reasoning as sandboxd (browserg adds stickiness + the pool-wide per-tenant quota).
+#
+# This base must resolve to the same place as storage.root_dir: browser screenshots and downloads are written under the
+# session's workspace there, and that is what makes them readable by the tenant afterwards.
+browser:
+  url: "ws://127.0.0.1:27091"
+  token: ""
+
+plugin:
+  dir: ""
+  python: "python3"
+  timeout: 30
+  refresh_interval: 60
+
+storage:
+  # Holds tenants/ (one schema directory per tenant), platform-assets/ and plugins/. The same volume is mounted into
+  # sandboxd (allowed_mount_roots) and browserd (workspace_root) at the same absolute path — that shared path is what
+  # makes "the sandbox writes a file, the tenant downloads it" work.
+  root_dir: /data
+  driver: local
+  s3:
+    # driver is local, so these are never read. They are left empty rather than ${S3_*} on purpose: an unset variable
+    # reference fails the config load, and this box has no object storage to point at.
+    bucket: ""
+    prefix: ""
+    region: cn-north-1
+    endpoint: ""
+    access_key: ""
+    secret_key: ""
+
+download:
+  # nginx serves downloads straight from disk (sendfile, Range supported); nexus only sends X-Accel-Redirect.
+  # The nginx location is `location /__files/ { internal; alias /data/; }`.
+  x_accel_prefix: /__files
+  presign_download: false
+  presign_probe_key: ""
+  presign_ttl: 300
+  max_download_size: 100
+
+# The platform administrator is seeded by the SQL bootstrap, not by the service: nexus creates no account on startup.
+# See deploy/poc/postgres/90-admin.sql (login `plat`).

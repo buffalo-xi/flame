@@ -69,7 +69,8 @@ const TQ_FIELD_KEYS = [
   { key: 'max_skills', unit: 'count', usageKey: 'skills' },
   { key: 'max_flows', unit: 'count', usageKey: 'flows' },
   { key: 'max_session_storage_bytes', unit: 'mib' },
-  { key: 'max_user_sessions', unit: 'count' }
+  // Two usage buckets: the quota is per (owner_type, user), so "used N" is only meaningful split by type
+  { key: 'max_user_sessions', unit: 'count', usageKey: 'sessions' }
 ]
 const TQ_FIELDS = computed(() => TQ_FIELD_KEYS.map((f) => ({
   ...f,
@@ -85,8 +86,16 @@ const tqForm = ref({})
 const tqEff = ref({})
 const tqUsage = ref({})
 
-// 用量只有前三项有（会话两项要扫存储才知道，显示 —）
-const tqUsed = (f) => (f.usageKey ? (tqUsage.value[f.usageKey] ?? 0) : '—')
+// Usage: the first three are single numbers; the session count arrives as two buckets (an object) because the quota is
+// per owner type, and the per-session storage cap needs a disk scan, so it stays "-"
+const tqUsed = (f) => {
+  if (!f.usageKey) return '—'
+  const v = tqUsage.value[f.usageKey]
+  if (v && typeof v === 'object') {
+    return t('settings.quota.usageByType', { agent: v.agent ?? 0, flow: v.flow ?? 0 })
+  }
+  return v ?? 0
+}
 
 const tqLimitText = (f, v) => {
   if (v === null || v === undefined) return t('settings.quota.followUpper')
@@ -230,7 +239,7 @@ watch(() => props.active, (active) => {
 .tq-row,
 .tq-row-head {
   display: grid;
-  grid-template-columns: 168px 72px 96px 1fr;
+  grid-template-columns: 168px 132px 96px 1fr;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;

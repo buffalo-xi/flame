@@ -6,7 +6,7 @@ Go 写的多租户 AI Agent 平台。把「智能体 / 技能 / 工具 / 工作�
 
 配套一个 Vue 3 管理台（`desktop/`），租户端与平台端共用一套前端。
 
-> **编译好、开箱即用的版本正在准备中，敬请期待。**
+> **想直接跑起来？** `deploy/poc/` 是一个双容器演示（产品栈 + LiteLLM 网关），用 `docker compose` 一条命令起、只占一个端口——见 [`deploy/poc/README.zh.md`](deploy/poc/README.zh.md)。每次推送都会发布预构建镜像，跑起来不需要工具链。它是概念验证，不是生产部署。
 
 ## 功能
 
@@ -51,6 +51,7 @@ Go 写的多租户 AI Agent 平台。把「智能体 / 技能 / 工具 / 工作�
 | `browserd/` | Go | 独立浏览器池：一个会话一个 Chromium，自带容量上限、租户配额与空闲回收（默认 `:27091`） |
 | `tools/` | Go | 各服务共用的本地库（`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …） |
 | `desktop/` | Vue 3 + Vite | 管理台（开发端口 `:5173`） |
+| `deploy/` | Docker | 部署：`deploy/poc/` 是双镜像演示（产品栈 + LiteLLM 网关） |
 
 依赖方向是单向的：三个服务用 `replace flame/tools => ../tools` 引用本地库，`tools` 不反向依赖任何服务。
 

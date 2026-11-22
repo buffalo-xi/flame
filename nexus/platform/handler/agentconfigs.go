@@ -19,12 +19,13 @@ import (
 //   - "user":        /platform/me/tenants/:schema/agentconfigs  - only tenants under their own name
 //   - system row:    /platform/system/agentconfigs              - global default + hard ceiling
 //
-// The only difference from flow_configs: **no -1 (unlimited)**. All four fields are safety valves, and -1 means tearing the
-// guard down, so the value check is >= 1 (see sql/agent_configs.sql). The rules themselves live in shared/agentconfig, so
+// The only difference from flow_configs: **no -1 (unlimited)**. All six fields are safety valves, and -1 means tearing
+// the guard down, so the value check is >= 1 (see nexus/platform/sql/agent_configs.sql). The rules themselves live in
+// shared/agentconfig, so
 // the tenant-side handler (admin/agentconfigs) cannot drift from this one.
 //
 // The body is a **full replacement**: a field that is absent or null is stored as NULL ("not set"), not left untouched.
-// The desktop forms always submit all four fields; an API caller must do the same or it will clear the ones it omits.
+// The desktop forms always submit all six fields; an API caller must do the same or it will clear the ones it omits.
 //
 // A write must be followed by Invalidate / InvalidateAll, otherwise the runtime waits a whole TTL before seeing the new value.
 var agentRepo = agentrepo.NewRepository()
@@ -35,31 +36,37 @@ func agentRowFromStore(cfg *agentrepo.AgentConfig) *agentconfig.Row {
 		return nil
 	}
 	return &agentconfig.Row{
-		MaxIterations:  cfg.MaxIterations,
-		MaxCallDepth:   cfg.MaxCallDepth,
-		MaxTools:       cfg.MaxTools,
-		MaxOutputBytes: cfg.MaxOutputBytes,
+		MaxIterations:     cfg.MaxIterations,
+		MaxCallDepth:      cfg.MaxCallDepth,
+		MaxTools:          cfg.MaxTools,
+		MaxOutputBytes:    cfg.MaxOutputBytes,
+		MaxRunRecords:     cfg.MaxRunRecords,
+		MaxSessionRecords: cfg.MaxSessionRecords,
 	}
 }
 
 // agentRowFromRequest turns the submitted body into a row to validate / store (nil means "not set", stored as NULL).
 func agentRowFromRequest(req updateAgentConfigsRequest) *agentconfig.Row {
 	return &agentconfig.Row{
-		MaxIterations:  agentNullInt32(req.MaxIterations),
-		MaxCallDepth:   agentNullInt32(req.MaxCallDepth),
-		MaxTools:       agentNullInt32(req.MaxTools),
-		MaxOutputBytes: agentNullInt32(req.MaxOutputBytes),
+		MaxIterations:     agentNullInt32(req.MaxIterations),
+		MaxCallDepth:      agentNullInt32(req.MaxCallDepth),
+		MaxTools:          agentNullInt32(req.MaxTools),
+		MaxOutputBytes:    agentNullInt32(req.MaxOutputBytes),
+		MaxRunRecords:     agentNullInt32(req.MaxRunRecords),
+		MaxSessionRecords: agentNullInt32(req.MaxSessionRecords),
 	}
 }
 
 // agentStoreFromRow is the reverse: the row goes back to the repository shape for the upsert.
 func agentStoreFromRow(tenantID string, r *agentconfig.Row) *agentrepo.AgentConfig {
 	return &agentrepo.AgentConfig{
-		TenantID:       tenantID,
-		MaxIterations:  r.MaxIterations,
-		MaxCallDepth:   r.MaxCallDepth,
-		MaxTools:       r.MaxTools,
-		MaxOutputBytes: r.MaxOutputBytes,
+		TenantID:          tenantID,
+		MaxIterations:     r.MaxIterations,
+		MaxCallDepth:      r.MaxCallDepth,
+		MaxTools:          r.MaxTools,
+		MaxOutputBytes:    r.MaxOutputBytes,
+		MaxRunRecords:     r.MaxRunRecords,
+		MaxSessionRecords: r.MaxSessionRecords,
 	}
 }
 
@@ -75,10 +82,12 @@ func agentErrResponse(c *gin.Context, err error) {
 }
 
 type updateAgentConfigsRequest struct {
-	MaxIterations  *int32 `json:"max_iterations"`
-	MaxCallDepth   *int32 `json:"max_call_depth"`
-	MaxTools       *int32 `json:"max_tools"`
-	MaxOutputBytes *int32 `json:"max_output_bytes"`
+	MaxIterations     *int32 `json:"max_iterations"`
+	MaxCallDepth      *int32 `json:"max_call_depth"`
+	MaxTools          *int32 `json:"max_tools"`
+	MaxOutputBytes    *int32 `json:"max_output_bytes"`
+	MaxRunRecords     *int32 `json:"max_run_records"`
+	MaxSessionRecords *int32 `json:"max_session_records"`
 }
 
 // agentNullInt32 maps nil -> NULL (unset).
@@ -219,7 +228,7 @@ func GetSystemAgentConfigs(c *gin.Context) {
 }
 
 // UpdateSystemAgentConfigs PUT /platform/system/agentconfigs
-// Writes the tenant_id = '' row. It is the top level, so only the validity of the values is checked; there is no "must not
+// Writes the system row (the empty tenant_id). It is the top level, so only the validity of the values is checked; there is no "must not
 // exceed the parent".
 func UpdateSystemAgentConfigs(c *gin.Context) {
 	var req updateAgentConfigsRequest

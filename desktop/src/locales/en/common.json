@@ -66,11 +66,8 @@
     "requestFailed": "[llm-check] Request failed, skipping the hint:",
     "hasDefault": "[llm-check] Default model present:",
     "skipNotice": "[llm-check] Response is not \"missing default model\", skipping the hint:",
-    "noDefault": "[llm-check] No default model found, prompting the user to configure one",
-    "prompt": "This tenant has no default LLM configured, so agents cannot start a conversation. Add a provider and model in Settings → LLM configuration now?",
-    "title": "No LLM configured",
-    "goConfig": "Configure",
-    "later": "Later"
+    "noDefault": "[llm-check] No default model found, navigated to Settings → LLM configuration",
+    "prompt": "This tenant has no default LLM configured, so agents cannot start a conversation. Settings → LLM configuration is open now: add a provider and model to get going."
   },
   "apiError": {
     "network": "Network request failed: {reason}",
@@ -115,7 +112,8 @@
   },
   "running": {
     "tabRunning": "Running now",
-    "tabHistory": "Run history",
+    "tabHistory": "Workflow history",
+    "tabAgentHistory": "Agent history",
     "filterAll": "All",
     "filterAgent": "Agents",
     "filterFlow": "Workflows",

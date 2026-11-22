@@ -125,47 +125,27 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
--- 组引用展开：builtin:exec → builtin:shell / builtin:script
+-- 组引用展开：builtin:exec → builtin:shell / builtin:script（历史动作，已不可执行）
 -- ---------------------------------------------------------------------------
--- 拆分前 builtin:exec 组含 exec / shell / run_skill_script，拆分后只剩 exec。
--- 存量里以「组」形式授权的行、以及自定义组的成员，若引用了 builtin:exec，
--- 会因此静默少掉 shell 与 run_skill_script —— 这里按原语义展开，保持行为不变。
--- 没有这类引用时是空操作；幂等（ON CONFLICT DO NOTHING）。
+-- 拆分前 builtin:exec 组含 exec / shell / run_skill_script，拆分后只剩 exec；当时为了不让存量
+-- 以组形式授权的行「静默少掉 shell 与 run_skill_script」，这里按原语义展开过一遍。
 --
--- ⚠️ 勿重跑这一段：run_skill_script 后来已归回 builtin:exec（见文件头），
--- 现在重跑只会给引用 builtin:exec 的行多补一条展开为空的 builtin:script，
--- 属于脏数据。本节保留仅为记录当时的迁移动作。
-DO $$
-DECLARE t record;
-BEGIN
-    FOR t IN SELECT schema_name FROM platform.tenants LOOP
-        -- ① agent 的组授权：同 agent、同 grant_kind，补两行
-        IF EXISTS (SELECT 1 FROM information_schema.tables
-                    WHERE table_schema = t.schema_name AND table_name = 'agent_tool_grants') THEN
-            EXECUTE format($f$
-                INSERT INTO %I.agent_tool_grants (agent_id, grant_kind, item_type, ref, updated_by, updated_at)
-                SELECT g.agent_id, g.grant_kind, 'group', v.k, g.updated_by, now()
-                  FROM %I.agent_tool_grants g
-                 CROSS JOIN (VALUES ('builtin:shell'), ('builtin:script')) AS v(k)
-                 WHERE g.item_type = 'group' AND g.ref = 'builtin:exec'
-                ON CONFLICT DO NOTHING
-            $f$, t.schema_name, t.schema_name);
-        END IF;
-
-        -- ② 自定义组的成员：原来一个 builtin:exec 成员代表三类工具，展开成三个成员
-        IF EXISTS (SELECT 1 FROM information_schema.tables
-                    WHERE table_schema = t.schema_name AND table_name = 'tool_group_items') THEN
-            EXECUTE format($f$
-                INSERT INTO %I.tool_group_items (group_id, item_type, ref)
-                SELECT i.group_id, 'group', v.k
-                  FROM %I.tool_group_items i
-                 CROSS JOIN (VALUES ('builtin:shell'), ('builtin:script')) AS v(k)
-                 WHERE i.item_type = 'group' AND i.ref = 'builtin:exec'
-                ON CONFLICT DO NOTHING
-            $f$, t.schema_name, t.schema_name);
-        END IF;
-    END LOOP;
-END $$;
+-- ⚠️ 这段 SQL 已经**删除**，不是被注释掉：run_skill_script 后来归回 builtin:exec（见文件头），
+-- 现在再执行它只会给引用 builtin:exec 的行多补一条展开为空的 builtin:script —— 刚开通一个月的
+-- 干净租户会因此凭空多出一条 required 授权，和规范核心集（models.SupervisorCoreGrantRefs 的 6 组）
+-- 对不上。它曾经是 DO 块，而 deploy/poc/entrypoint.sh 现在**每次启动都会重跑整个目录**，
+-- 于是一个只在升级当天正确的动作变成了每次开机都发生的脏数据。
+--
+-- 这个文件的其余部分可以重复执行，本段是唯一例外；需要在新环境重放的场景不存在（新租户由
+-- provision 直接写出 6 组核心授权，没有"待展开"的存量）。
+--
+-- 若某个 2026-09 之前建的库确实还留着未展开的组授权，按下面的形状手工执行一次即可（勿放进本文件）：
+--   INSERT INTO <schema>.agent_tool_grants (agent_id, grant_kind, item_type, ref, updated_by, updated_at)
+--   SELECT g.agent_id, g.grant_kind, 'group', v.k, g.updated_by, now()
+--     FROM <schema>.agent_tool_grants g
+--    CROSS JOIN (VALUES ('builtin:shell'), ('builtin:script')) AS v(k)
+--    WHERE g.item_type = 'group' AND g.ref = 'builtin:exec'
+--   ON CONFLICT DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- ⚠️ 一个**有意**收紧的例外，升级前请确认

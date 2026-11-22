@@ -119,7 +119,9 @@
       "model_enabled_locked": "This model is enabled, so gateway_model cannot be changed. Disable it first.",
       "provider_disabled": "The provider is disabled. Enable it under LLM providers before enabling this model.",
       "gateway_model_required": "gateway_model must not be empty; fill it in before enabling.",
-      "gateway_model_taken": "gateway_model {name} is already used by another enabled model, which makes routing ambiguous. Use a different one."
+      "gateway_model_taken": "gateway_model {name} is already used by another enabled model, which makes routing ambiguous. Use a different one.",
+      "no_default_model": "No default model is configured: add a model and mark it as the default before chatting",
+      "default_model_not_enabled": "The default model is not enabled (its gateway model name is empty): enable it before chatting"
     },
     "user": {
       "password_too_long": "The password is too long; shorten it and try again.",
@@ -243,6 +245,7 @@
       "not_released": "Workflow {name} has no released version yet. Release it in the editor before calling it.",
       "deprecated": "Workflow {name} is deprecated and cannot be called.",
       "duplicate_label": "Node names must be unique: {names}. A name is used by source_ref / call.target references, so a duplicate points at the wrong node; rename before saving.",
+      "node_limit_exceeded": "The diagram has {count} nodes, above this tenant's limit of {limit}. Split it into smaller workflows, or ask an administrator to raise the quota; comments do not count.",
       "description_required": "The workflow description must not be empty."
     },
     "agentconfig": {

@@ -79,6 +79,16 @@
               <span v-if="a.is_supervisor" class="agent-opt-badge">{{ t('chat.supervisor') }}</span>
             </el-option>
           </el-select>
+          <!-- Session -> run history: jump over with the current session instead of pasting a uuid.
+               Disabled without a session (a one-shot run has none to look up). -->
+          <el-button
+            size="small"
+            text
+            :icon="Odometer"
+            :disabled="!currentSessionId"
+            :title="t('chat.viewRunHistory')"
+            @click="openRunHistory"
+          />
           <el-button
             size="small"
             text
@@ -263,6 +273,15 @@
 
         <!-- 输入区 -->
         <div class="chat-input" :style="{ height: inputHeight + 'px' }">
+          <!-- 没有缺省模型：把「为什么发不出去」说在输入框旁边，并给一个直达配置的入口（不是弹窗，
+               因为这条状态会一直存在，直到用户真的配好模型） -->
+          <div v-if="noDefaultModel" class="llm-missing">
+            <el-icon class="llm-missing-icon"><WarningFilled /></el-icon>
+            <span class="llm-missing-text">{{ t('chat.noDefaultModel.hint') }}</span>
+            <el-button v-if="llmStatus" link type="primary" size="small" @click="openModelSettings">
+              {{ t('chat.noDefaultModel.action') }}
+            </el-button>
+          </div>
           <div class="input-card">
             <!-- 附件：+ 触发隐藏的 file input，选中即上传到会话工作区 uploads/ -->
             <input ref="attachInputRef" type="file" multiple class="attach-input" @change="onFilesPicked" />
@@ -321,8 +340,8 @@
                 :type="streaming ? 'danger' : 'primary'"
                 circle
                 :icon="streaming ? VideoPause : Top"
-                :disabled="!streaming && (!selectedAgentId || (!input.trim() && !attachments.length))"
-                :title="streaming ? t('chat.stop') : t('chat.send')"
+                :disabled="!streaming && (noDefaultModel || !selectedAgentId || (!input.trim() && !attachments.length))"
+                :title="streaming ? t('chat.stop') : (noDefaultModel ? t('chat.noDefaultModel.hint') : t('chat.send'))"
                 @click="streaming ? stopRun() : send()"
               />
             </div>
@@ -359,10 +378,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElSelect, ElOption, ElInput, ElButton, ElIcon, ElMessage, ElMessageBox } from 'element-plus'
-import { ChatDotRound, Delete, Document, Plus, Close, Top, ArrowRight, ArrowDown, Loading, CircleCheck, CircleClose, MagicStick, VideoPause, CopyDocument, EditPen } from '@element-plus/icons-vue'
+import { ChatDotRound, Delete, Document, Plus, Close, Top, ArrowRight, ArrowDown, Loading, CircleCheck, CircleClose, MagicStick, VideoPause, CopyDocument, EditPen, WarningFilled, Odometer } from '@element-plus/icons-vue'
 import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import { renderMarkdown } from '../utils/markdown.js'
@@ -380,11 +399,29 @@ const props = defineProps({
   wbWidth: { type: Number, default: 480 },
   sessionPanelOpen: { type: Boolean, default: true },
 })
-const emit = defineEmits(['close-chat', 'session-panel-change', 'wb-resize', 'open-workbench', 'open-entity'])
+const emit = defineEmits(['close-chat', 'session-panel-change', 'wb-resize', 'open-workbench', 'open-entity', 'open-run-history'])
 
 const { t } = useI18n()
 
+// ===== 缺省模型：配置缺失时不要让用户发出一轮注定失败的消息 =====
+// 状态由父级 MainWindow 持有（它登录后已经探过一次，并据此引导到设置页），这里只读 + 请求重新检查：
+// 两个组件各发一次 /llmmodels/default 没有必要。Chat 被单独渲染（没有 MainWindow）时 inject 取不到，
+// 此时按「有模型」处理 —— 宁可让后端报错，也不要凭空禁用输入。
+const llmStatus = inject('llmStatus', null)
+const noDefaultModel = computed(() => !!llmStatus?.noDefaultModel?.value)
+const openModelSettings = () => llmStatus?.openSettings?.()
+const warnNoDefaultModel = () => {
+  ElMessage.warning({ message: t('chat.noDefaultModel.hint'), duration: 6000 })
+}
+
 const closeChat = () => emit('close-chat')
+
+// Current conversation -> the running page's agent history. The parent switches pages and forwards the session
+// (see MainWindow.handleOpenRunHistory).
+const openRunHistory = () => {
+  if (!currentSessionId.value) return
+  emit('open-run-history', currentSessionId.value)
+}
 
 // ===== 会话 → 内容区联动：建 / 改实体就把右侧内容区切过去并定位到它 =====
 // 工具 → 目标页。读类（read_* / list_* / *_run）不抢视图；删除类删完没有目标可看，也不进表。
@@ -1171,6 +1208,11 @@ const uploadAttachments = async (picked) => {
 
 const send = async () => {
   if (streaming.value || uploading.value || !selectedAgentId.value) return
+  // 没有缺省模型：这一轮必然失败，输入内容先留在框里，提示去配置
+  if (noDefaultModel.value) {
+    warnNoDefaultModel()
+    return
+  }
   // 只贴文件不写字也允许：给一句中性指令，免得空消息被后端拒
   const text = input.value.trim() || (attachments.value.length ? t('chat.attachOnlyMessage') : '')
   if (!text) return
@@ -1182,6 +1224,11 @@ const send = async () => {
 // sendMessage 用指定文本发起一轮对话：输入框发送与「编辑后重发」共用同一条路径。
 const sendMessage = async (text) => {
   if (streaming.value || !selectedAgentId.value) return
+  // 与 send() 同一道闸：编辑后重发也走这条路，不能绕过
+  if (noDefaultModel.value) {
+    warnNoDefaultModel()
+    return
+  }
   // 附件随这一轮带走（快照 + 清空）：发送失败也不该留在输入框里重复发送
   const files = attachments.value.slice()
   attachments.value = []
@@ -1239,6 +1286,8 @@ const sendMessage = async (text) => {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    // 是否收到过任何 SSE 帧：一个都没有说明后端在开流前就失败了（见下面的兜底）
+    let sawEvent = false
 
     const handleFrame = (frame) => {
       let event = ''
@@ -1248,6 +1297,7 @@ const sendMessage = async (text) => {
         else if (line.startsWith('data:')) dataStr += line.slice(5).trim()
       }
       if (!event) return
+      sawEvent = true
 
       let data = {}
       try { data = dataStr ? JSON.parse(dataStr) : {} } catch (e) { /* 忽略 */ }
@@ -1301,7 +1351,14 @@ const sendMessage = async (text) => {
         assistantMsg.artifacts = Array.isArray(data.artifacts) ? data.artifacts : []
       } else if (event === 'RUN_ERROR') {
         if (data.duration_ms > 0) assistantMsg.durationMs = data.duration_ms
-        const errText = data.message ? t('chat.runError', { msg: data.message }) : ''
+        // 后端说没有可用模型：把输入区同步成「缺模型」状态（探针可能是登录时的旧结果，
+        // 例如模型在另一个标签页里被删掉了 —— 这里以后端当场的结果为准）
+        if (data.code === 'llm.no_default_model') llmStatus?.markMissing?.()
+        // 有 code 就用语言包：缺省模型 / 模型未启用这类「配置问题」由后端给稳定编码，界面必须本地化；
+        // 没有 code 的运行时错误保持原文，外面仍包一层「本轮执行失败」。
+        const errText = data.code
+          ? formatError({ error: data.code, params: data.params, msg: data.message })
+          : (data.message ? t('chat.runError', { msg: data.message }) : '')
         if (errText) {
           assistantMsg.content += '\n' + errText // 留在 content：复制按钮读的是它
           // 同时进块：模板只在「无 blocks」时渲染 content，
@@ -1322,6 +1379,26 @@ const sendMessage = async (text) => {
         const frame = buffer.slice(0, idx)
         buffer = buffer.slice(idx + 2)
         handleFrame(frame)
+      }
+    }
+
+    // 兜底：一个 SSE 帧都没收到，说明后端在开流之前就失败了（会话配额 507 等仍走 xhttp.ErrCode 的分支），
+    // 此时 body 是一段 JSON 错误体。不解析它就等于「没有消息也没有报错」——正是这一轮要修的症状。
+    if (!sawEvent) {
+      const text = buffer.trim()
+      if (text) {
+        try {
+          const payload = JSON.parse(text)
+          const msg = formatError({
+            error: payload.error,
+            params: payload.params,
+            msg: payload.msg || payload.message
+          })
+          if (msg) {
+            assistantMsg.content = msg
+            appendBlock(assistantMsg.blocks, 'text', msg)
+          }
+        } catch { /* 也不是 JSON：保持原样 */ }
       }
     }
   } catch (e) {
@@ -1992,6 +2069,30 @@ onMounted(async () => {
   /* 命令弹层向上溢出输入区：自身必须放行，它仍落在 .chat-main 的边界内，不会被外层裁掉 */
   position: relative;
   overflow: visible;
+}
+
+/* 缺省模型提示：常驻在输入卡片上方（不是 toast），因为它在用户配好模型之前一直成立 */
+.llm-missing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background-color: #fdf6ec;
+  color: #b88230;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.llm-missing-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.llm-missing-text {
+  flex: 1;
+  min-width: 0;
 }
 
 /* 斜杠命令弹层：贴在输入卡片上方，最多 260px 高，超出滚动 */

@@ -22,7 +22,7 @@
             <span class="col-name-label">{{ f.label }}</span>
             <span v-if="f.desc" class="col-name-desc">{{ f.desc }}</span>
           </span>
-          <span class="col-system">{{ formatValue(systemConfig[f.key]) }}</span>
+          <span class="col-system">{{ formatValue(f.key) }}</span>
           <el-input v-model="tenantConfig[f.key]" :placeholder="t('settings.configTable.inputPlaceholder')" size="small" />
         </div>
       </div>
@@ -63,12 +63,24 @@ const loading = ref(false)
 const saving = ref(false)
 const systemConfig = ref({})
 const tenantConfig = ref({})
+// Code defaults as last resort (agent limits only: that response carries "fallback").
+// Needed because an empty system level means "not set", not "no limit" - the run is still bounded by the default.
+const fallbackConfig = ref({})
 // Stored values the runtime clamps (agent limits only: that response carries "effective").
 // Computed once per load, so a not-yet-saved edit never produces a warning about a value that was never stored.
 const clampNote = ref('')
 
-const formatValue = (v) => {
-  if (v === null || v === undefined || v === '') return t('settings.configTable.unset')
+// "未设置" alone reads like "no limit", which is wrong: an unset system level falls back to a concrete default
+// (100 run records, 65536 output bytes). Say both, otherwise a tenant fills in a value above the default and only
+// finds out from the orange clamp note after saving.
+const formatValue = (key) => {
+  const v = systemConfig.value[key]
+  if (v === null || v === undefined || v === '') {
+    const fb = fallbackConfig.value[key]
+    return (fb === null || fb === undefined)
+      ? t('settings.configTable.unset')
+      : t('settings.configTable.unsetWithFallback', { value: fb })
+  }
   return String(v)
 }
 
@@ -82,6 +94,7 @@ const fetchConfigs = async () => {
     const data = await response.json()
     if (data.code === 200) {
       systemConfig.value = data.data.system || {}
+      fallbackConfig.value = data.data.fallback || {}
       const tenantRow = data.data.tenant || {}
       const obj = {}
       for (const f of props.fields) {

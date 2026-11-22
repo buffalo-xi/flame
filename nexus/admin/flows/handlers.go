@@ -1,7 +1,6 @@
 package flows
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"flame/nexus/service/agent/tools"
 	"flame/nexus/shared/auth"
 	"flame/nexus/shared/flowconfig"
+	"flame/nexus/shared/flowdoc"
 	"flame/nexus/shared/models"
 	"flame/nexus/shared/quota"
 	agentsrepo "flame/nexus/shared/repository/agents"
@@ -183,51 +183,35 @@ func ListFlows(c *gin.Context) {
 // An empty code means the diagram is fine; otherwise the caller turns the triple into an
 // error response (code + params for the locale bundle, msg as the operator diagnostic).
 func validateDiagramLabels(diagram json.RawMessage) (string, gin.H, string) {
-	raw := bytes.TrimSpace(diagram)
-	if len(raw) == 0 {
-		return "", nil, ""
+	doc, ok := flowdoc.Parse(diagram)
+	if !ok {
+		return "", nil, "" // draft shapes are reported at run time
 	}
-	// The canvas submits a JSON string (the front end stringifies once) and tools write an
-	// object; both shapes have to be recognised.
-	if raw[0] == '"' {
-		var s string
-		if err := json.Unmarshal(raw, &s); err != nil {
-			return "", nil, ""
-		}
-		raw = []byte(s)
-	}
-
-	var doc struct {
-		Nodes []struct {
-			ID   string `json:"id"`
-			Type string `json:"type"`
-			Data struct {
-				Label string `json:"label"`
-			} `json:"data"`
-		} `json:"nodes"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return "", nil, "" // shape problems are not ours (an empty or non-object diagram is handled at run time)
-	}
-
-	seen := make(map[string]string, len(doc.Nodes))
-	var dups []string
-	for _, n := range doc.Nodes {
-		label := strings.TrimSpace(n.Data.Label)
-		if label == "" {
-			continue
-		}
-		if first, ok := seen[label]; ok {
-			dups = append(dups, fmt.Sprintf("%s (nodes %s and %s)", label, first, n.ID))
-			continue
-		}
-		seen[label] = n.ID
-	}
+	dups := doc.DuplicateLabels()
 	if len(dups) == 0 {
 		return "", nil, ""
 	}
 	names := strings.Join(dups, "; ")
 	return "flow.duplicate_label", gin.H{"names": names}, "duplicate node labels: " + names
+}
+
+// validateDiagramNodeCount rejects a diagram with more nodes than the tenant quota allows.
+//
+// The node count is a static property of the definition: a run reads a fixed diagram, so a runtime check could never
+// fire. The write boundary is the only place it can be enforced — flow save, asset install and the editor all go
+// through here. Canvas comments are editor annotations that never reach the executor, so they take no part.
+func validateDiagramNodeCount(limits flowconfig.FlowLimits, diagram json.RawMessage) (string, gin.H, string) {
+	doc, ok := flowdoc.Parse(diagram)
+	if !ok {
+		return "", nil, ""
+	}
+	count := doc.CountNodes(flowdoc.CommentNodeType)
+	if limits.MaxNodeCount <= 0 || count <= limits.MaxNodeCount {
+		return "", nil, ""
+	}
+	return "flow.node_limit_exceeded",
+		gin.H{"count": count, "limit": limits.MaxNodeCount},
+		fmt.Sprintf("node count %d exceeds the tenant limit %d", count, limits.MaxNodeCount)
 }
 
 // GetFlow returns one flow instance.
@@ -298,11 +282,9 @@ func CreateFlow(c *gin.Context) {
 		EnvVars           json.RawMessage `json:"env_vars"`
 		FlowVars          json.RawMessage `json:"flow_vars"`
 		Timeout           int             `json:"timeout"`
-		MaxRecursionDepth int             `json:"max_recursion_depth"`
-		MaxNodeCount      int             `json:"max_node_count"`
 		MaxExecCount      int             `json:"max_exec_count"`
-		MaxRunRecords     int             `json:"max_run_records"`
-		MaxSessionRecords int             `json:"max_session_records"`
+		StoreRuns         *bool           `json:"store_runs"`
+		SessionMemory     *bool           `json:"session_memory"`
 		Breakpoints       []string        `json:"breakpoints"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -311,10 +293,15 @@ func CreateFlow(c *gin.Context) {
 	}
 
 	// Apply the flow config defaults and check them against the limits.
-	if err := validateFlowLimits(authInfo.(*auth.AuthInfo), &req.Timeout, &req.MaxRecursionDepth, &req.MaxNodeCount, &req.MaxExecCount, &req.MaxRunRecords, &req.MaxSessionRecords); err != nil {
+	if err := validateFlowLimits(authInfo.(*auth.AuthInfo), &req.Timeout, &req.MaxExecCount); err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
+
+	// A missing flag means "on": older clients never sent them, and defaulting to off would silently stop writing run
+	// records and session memory.
+	storeRuns := req.StoreRuns == nil || *req.StoreRuns
+	sessionMemory := req.SessionMemory == nil || *req.SessionMemory
 
 	// Check the flow description.
 	if err := validateDescription(req.Description); err != nil {
@@ -332,11 +319,9 @@ func CreateFlow(c *gin.Context) {
 		EnvVars:           xsql.JSONB{Data: req.EnvVars},
 		FlowVars:          xsql.JSONB{Data: req.FlowVars},
 		Timeout:           xsql.Int(req.Timeout),
-		MaxRecursionDepth: xsql.Int(req.MaxRecursionDepth),
-		MaxNodeCount:      xsql.Int(req.MaxNodeCount),
 		MaxExecCount:      xsql.Int(req.MaxExecCount),
-		MaxRunRecords:     xsql.Int(req.MaxRunRecords),
-		MaxSessionRecords: xsql.Int(req.MaxSessionRecords),
+		StoreRuns:         storeRuns,
+		SessionMemory:     sessionMemory,
 		Breakpoints:       req.Breakpoints,
 	}
 
@@ -349,6 +334,13 @@ func CreateFlow(c *gin.Context) {
 
 	// Node labels must be unique: a duplicate makes source_ref / call.target / fork_node_id point at the wrong node.
 	if code, params, msg := validateDiagramLabels(req.Diagram); code != "" {
+		xhttp.ErrCode(c, code, params, msg, "")
+		return
+	}
+
+	// The node count is a static property of the definition, so it is checked here rather than at run time. The quota
+	// row is read through the same Redis-backed cache as the limits check above.
+	if code, params, msg := validateDiagramNodeCount(flowconfig.Resolve(authInfo.(*auth.AuthInfo).Schema), req.Diagram); code != "" {
 		xhttp.ErrCode(c, code, params, msg, "")
 		return
 	}
@@ -383,11 +375,9 @@ func CreateFlow(c *gin.Context) {
 		"env_vars":            Instance.EnvVars,
 		"flow_vars":           Instance.FlowVars,
 		"timeout":             Instance.Timeout,
-		"max_recursion_depth": Instance.MaxRecursionDepth,
-		"max_node_count":      Instance.MaxNodeCount,
 		"max_exec_count":      Instance.MaxExecCount,
-		"max_run_records":     Instance.MaxRunRecords,
-		"max_session_records": Instance.MaxSessionRecords,
+		"store_runs":          Instance.StoreRuns,
+		"session_memory":      Instance.SessionMemory,
 	}
 	xhttp.OkJSON(c, "Success", data, "")
 }
@@ -413,11 +403,9 @@ func UpdateFlow(c *gin.Context) {
 		EnvVars           json.RawMessage `json:"env_vars"`
 		FlowVars          json.RawMessage `json:"flow_vars"`
 		Timeout           int             `json:"timeout"`
-		MaxRecursionDepth int             `json:"max_recursion_depth"`
-		MaxNodeCount      int             `json:"max_node_count"`
 		MaxExecCount      int             `json:"max_exec_count"`
-		MaxRunRecords     int             `json:"max_run_records"`
-		MaxSessionRecords int             `json:"max_session_records"`
+		StoreRuns         *bool           `json:"store_runs"`
+		SessionMemory     *bool           `json:"session_memory"`
 		Breakpoints       []string        `json:"breakpoints"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -426,10 +414,15 @@ func UpdateFlow(c *gin.Context) {
 	}
 
 	// Apply the flow config defaults and check them against the limits.
-	if err := validateFlowLimits(authInfo.(*auth.AuthInfo), &req.Timeout, &req.MaxRecursionDepth, &req.MaxNodeCount, &req.MaxExecCount, &req.MaxRunRecords, &req.MaxSessionRecords); err != nil {
+	if err := validateFlowLimits(authInfo.(*auth.AuthInfo), &req.Timeout, &req.MaxExecCount); err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
+
+	// A missing flag means "on": older clients never sent them, and defaulting to off would silently stop writing run
+	// records and session memory.
+	storeRuns := req.StoreRuns == nil || *req.StoreRuns
+	sessionMemory := req.SessionMemory == nil || *req.SessionMemory
 
 	// Check the flow description.
 	if err := validateDescription(req.Description); err != nil {
@@ -447,11 +440,9 @@ func UpdateFlow(c *gin.Context) {
 		EnvVars:           xsql.JSONB{Data: req.EnvVars},
 		FlowVars:          xsql.JSONB{Data: req.FlowVars},
 		Timeout:           xsql.Int(req.Timeout),
-		MaxRecursionDepth: xsql.Int(req.MaxRecursionDepth),
-		MaxNodeCount:      xsql.Int(req.MaxNodeCount),
 		MaxExecCount:      xsql.Int(req.MaxExecCount),
-		MaxRunRecords:     xsql.Int(req.MaxRunRecords),
-		MaxSessionRecords: xsql.Int(req.MaxSessionRecords),
+		StoreRuns:         storeRuns,
+		SessionMemory:     sessionMemory,
 		Breakpoints:       req.Breakpoints,
 	}
 
@@ -481,6 +472,12 @@ func UpdateFlow(c *gin.Context) {
 
 	// Node labels must be unique: a duplicate makes source_ref / call.target / fork_node_id point at the wrong node.
 	if code, params, msg := validateDiagramLabels(req.Diagram); code != "" {
+		xhttp.ErrCode(c, code, params, msg, "")
+		return
+	}
+
+	// The node count is a static property of the definition, so it is checked here rather than at run time.
+	if code, params, msg := validateDiagramNodeCount(flowconfig.Resolve(authInfo.(*auth.AuthInfo).Schema), req.Diagram); code != "" {
 		xhttp.ErrCode(c, code, params, msg, "")
 		return
 	}
@@ -529,11 +526,9 @@ func UpdateFlow(c *gin.Context) {
 		"env_vars":            Instance.EnvVars,
 		"flow_vars":           Instance.FlowVars,
 		"timeout":             Instance.Timeout,
-		"max_recursion_depth": Instance.MaxRecursionDepth,
-		"max_node_count":      Instance.MaxNodeCount,
 		"max_exec_count":      Instance.MaxExecCount,
-		"max_run_records":     Instance.MaxRunRecords,
-		"max_session_records": Instance.MaxSessionRecords,
+		"store_runs":          Instance.StoreRuns,
+		"session_memory":      Instance.SessionMemory,
 	}
 	xhttp.OkJSON(c, "Success", data, "")
 }
@@ -576,6 +571,16 @@ func DeleteFlow(c *gin.Context) {
 		xlog.Info("deleted %d session(s) together with flow schema=%s flow=%s", n, ai.Schema, id)
 	}
 
+	// The run history goes with it. flow_run_records / flow_node_records carry no foreign key (unlike agent_run_records,
+	// which cascades from agents), so without this the rows would survive forever: unreachable from the flow's own pages,
+	// yet still listed by the cross-flow history with a dangling flow_id. Best-effort for the same reason as the sessions
+	// above: the row is already gone, so a failure is logged instead of rolled back.
+	if n, derr := runRepo.DeleteRuns(ai.Schema, id); derr != nil {
+		xlog.Error("failed to delete the run records of the deleted flow schema=%s flow=%s: %v", ai.Schema, id, derr)
+	} else if n > 0 {
+		xlog.Info("deleted %d run record(s) together with flow schema=%s flow=%s", n, ai.Schema, id)
+	}
+
 	xhttp.OkJSON(c, "flow instance deleted successfully", id, "")
 }
 
@@ -589,41 +594,26 @@ func validateDescription(description string) error {
 
 // validateFlowLimits applies the defaults and checks them against the system limits.
 // -1 means unlimited; 0 means "use the system default".
-func validateFlowLimits(authInfo *auth.AuthInfo, timeout, maxRecursionDepth, maxNodeCount, maxExecCount, maxRunRecords, maxSessionRecords *int) error {
+// validateFlowLimits applies the defaults and checks them against the tenant limits.
+// -1 means unlimited; 0 means "use the tenant default".
+//
+// max_recursion_depth and max_node_count are not in the list: both are tenant-level policy and no longer part of the
+// flow definition (the depth limit is read at run time, the node count is checked at the write boundary).
+func validateFlowLimits(authInfo *auth.AuthInfo, timeout, maxExecCount *int) error {
 	limits := flowconfig.Resolve(authInfo.Schema)
 
 	// timeout: reject anything above max (-1 means unlimited).
 	if *timeout > 0 && limits.MaxTimeout > 0 && *timeout > limits.MaxTimeout {
-		return fmt.Errorf("timeout exceeds system limit: %d > %d", *timeout, limits.MaxTimeout)
-	}
-
-	// max_recursion_depth
-	if *maxRecursionDepth > 0 && limits.MaxRecursionDepth > 0 && *maxRecursionDepth > limits.MaxRecursionDepth {
-		return fmt.Errorf("max_recursion_depth exceeds system limit: %d > %d", *maxRecursionDepth, limits.MaxRecursionDepth)
-	}
-
-	// max_node_count
-	if *maxNodeCount > 0 && limits.MaxNodeCount > 0 && *maxNodeCount > limits.MaxNodeCount {
-		return fmt.Errorf("max_node_count exceeds system limit: %d > %d", *maxNodeCount, limits.MaxNodeCount)
+		return fmt.Errorf("timeout exceeds the tenant limit: %d > %d", *timeout, limits.MaxTimeout)
 	}
 
 	// max_exec_count
 	if *maxExecCount > 0 && limits.MaxExecCount > 0 && *maxExecCount > limits.MaxExecCount {
-		return fmt.Errorf("max_exec_count exceeds system limit: %d > %d", *maxExecCount, limits.MaxExecCount)
+		return fmt.Errorf("max_exec_count exceeds the tenant limit: %d > %d", *maxExecCount, limits.MaxExecCount)
 	}
 
-	// max_run_records: 0 stays unset (the system level takes over at run time); reject above the system limit (-1 means unlimited).
-	if *maxRunRecords > 0 && limits.MaxRunRecords > 0 && *maxRunRecords > limits.MaxRunRecords {
-		return fmt.Errorf("max_run_records exceeds system limit: %d > %d", *maxRunRecords, limits.MaxRunRecords)
-	}
-
-	// max_session_records: -1 / 0 disables session memory (allowed); once set it must be >= 1; reject above the system limit.
-	if *maxSessionRecords == 0 {
-		return fmt.Errorf("max_session_records must be >= 1 when set, or -1 to disable")
-	}
-	if *maxSessionRecords > 0 && limits.MaxSessionRecords > 0 && *maxSessionRecords > limits.MaxSessionRecords {
-		return fmt.Errorf("max_session_records exceeds system limit: %d > %d", *maxSessionRecords, limits.MaxSessionRecords)
-	}
+	// Retention is not validated here: the flow only carries the two switches (store_runs / session_memory) and the
+	// counts are the tenant's own quota, so there is no per-flow number that could exceed anything.
 
 	return nil
 }

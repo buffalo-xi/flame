@@ -210,11 +210,15 @@
                   </div>
                   <el-input v-model="quotaForm[row.key]" size="small" class="q-input" :placeholder="t('platform.tenants.phTenantValue')" />
                 </div>
-                <!-- 会话维度：没有「当前用量」可显示（要扫存储才知道），只给生效值与输入框 -->
+                <!-- Session dimension: the session count has a cheap usage figure (two buckets, agent / workflow);
+                     the per-session storage cap would need a disk scan, so only that one row shows usage -->
                 <div v-for="row in quotaExtraRows" :key="row.key" class="quota-row">
                   <span class="q-name">{{ row.label }}</span>
                   <span class="q-text" :title="row.title">{{ row.effectiveText }}</span>
-                  <div class="q-bar-wrap"><span class="q-none">{{ row.hint }}</span></div>
+                  <div class="q-bar-wrap">
+                    <span v-if="row.usedText" class="q-none">{{ row.usedText }} · </span>
+                    <span class="q-none">{{ row.hint }}</span>
+                  </div>
                   <el-input v-model="quotaForm[row.key]" size="small" class="q-input" :placeholder="t('platform.tenants.phTenantValue')" />
                 </div>
               </div>
@@ -618,7 +622,8 @@ const clampedRows = computed(() => quotaRows.value.filter((r) => r.clamped))
 
 // ===== 会话维度配额 =====
 // 空间在界面按 MiB 展示/输入（后端存字节），会话数按个。
-// 这两项没有「当前用量」可显示 —— 用量要扫存储才知道 —— 所以只给生效值与输入框。
+// The session count has a cheap usage figure (the backend aggregates by owner_type, two buckets); the per-session
+// storage cap would need a disk scan, so it still only gets the effective value and the input box.
 const MIB = 1024 * 1024
 const QUOTA_EXTRA = computed(() => [
   { key: 'max_session_storage_bytes', label: t('platform.tenants.quotaExtraStorage'), unit: 'mib' },
@@ -640,16 +645,23 @@ const mibToInput = (v) => {
 
 const quotaExtraRows = computed(() => {
   const cfg = quotaCfg.value
+  const sessions = selectedTenant.value?.usage?.sessions
   return QUOTA_EXTRA.value.map((m) => {
     const eff = cfg.effective?.[m.key]
     const sys = cfg.system?.[m.key]
     const ceiling = sys === null || sys === undefined ? cfg.fallback?.[m.key] : sys
     const text = m.unit === 'mib' ? mibText(eff) : limitText(eff)
     const ceilText = m.unit === 'mib' ? mibText(ceiling) : limitText(ceiling)
+    // Two buckets, because the backend counts sessions per owner_type: a merged number would hide which one is full
+    const usedText =
+      m.key === 'max_user_sessions' && sessions
+        ? t('platform.myTenants.usageByType', { agent: sessions.agent ?? 0, flow: sessions.flow ?? 0 })
+        : ''
     return {
       key: m.key,
       label: m.label,
       effectiveText: text,
+      usedText,
       hint:
         sys === null || sys === undefined
           ? t('platform.tenants.fallbackPrefix', { text: ceilText })
@@ -689,13 +701,17 @@ watch(
   }
 )
 
-// ===== 智能体运行参数（platform.agent_configs 的租户行；系统级只读对照） =====
-// 与工作流运行参数同一套交互；唯一差异是本表不接受 -1（四项都是安全阀，只接受 >= 1）。
+// ===== Agent run parameters (the tenant row of platform.agent_configs; the system row is read-only reference) =====
+// Same interaction as the flow parameters; the only difference is that this table has no -1 (all six entries are
+// safety valves, only >= 1 is accepted). max_run_records caps the agent run log and max_session_records the session
+// memory kept per session.
 const AGENT_FIELDS = computed(() => [
   { key: 'max_iterations', label: t('platform.system.agentConfigs.max_iterations') },
   { key: 'max_call_depth', label: t('platform.system.agentConfigs.max_call_depth') },
   { key: 'max_tools', label: t('platform.system.agentConfigs.max_tools') },
-  { key: 'max_output_bytes', label: t('platform.system.agentConfigs.max_output_bytes') }
+  { key: 'max_output_bytes', label: t('platform.system.agentConfigs.max_output_bytes') },
+  { key: 'max_run_records', label: t('platform.system.agentConfigs.max_run_records') },
+  { key: 'max_session_records', label: t('platform.system.agentConfigs.max_session_records') }
 ])
 const agentLoading = ref(false)
 const agentSaving = ref(false)

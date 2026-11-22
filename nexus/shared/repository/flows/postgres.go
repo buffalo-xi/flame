@@ -135,7 +135,7 @@ func (r *PostgresRepository) ListFlows(authInfo *auth.AuthInfo, req *ListFlowsRe
 	sortClause := "ORDER BY " + strings.Join(sortClauses, ", ")
 
 	// Build the query (diagram is not selected; a NULL placeholder is returned instead)
-	query := "SELECT id, name, NULL as diagram, description, created_at, updated_at, arguments, outputs, NULL as env_vars, NULL as flow_vars, timeout, max_recursion_depth, max_node_count, max_exec_count, max_run_records, max_session_records, created_by, updated_by, (SELECT name FROM " + authInfo.Schema + ".users WHERE id = p.created_by) as created_by_name, (SELECT name FROM " + authInfo.Schema + ".users WHERE id = p.updated_by) as updated_by_name, endpoints, status FROM " + authInfo.Schema + ".flows p" + whereClause + " " + sortClause
+	query := "SELECT id, name, NULL as diagram, description, created_at, updated_at, arguments, outputs, NULL as env_vars, NULL as flow_vars, timeout, max_exec_count, store_runs, session_memory, created_by, updated_by, (SELECT name FROM " + authInfo.Schema + ".users WHERE id = p.created_by) as created_by_name, (SELECT name FROM " + authInfo.Schema + ".users WHERE id = p.updated_by) as updated_by_name, endpoints, status FROM " + authInfo.Schema + ".flows p" + whereClause + " " + sortClause
 	if !all {
 		query += " LIMIT $" + strconv.Itoa(argIndex) + " OFFSET $" + strconv.Itoa(argIndex+1)
 		args = append(args, limit, offset)
@@ -152,7 +152,7 @@ func (r *PostgresRepository) ListFlows(authInfo *auth.AuthInfo, req *ListFlowsRe
 	for rows.Next() {
 		var model models.Flow
 		var endpointsJSON xsql.UUID
-		if err := rows.Scan(&model.ID, &model.Name, &model.Diagram, &model.Description, &model.CreatedAt, &model.UpdatedAt, &model.Arguments, &model.Outputs, &model.EnvVars, &model.FlowVars, &model.Timeout, &model.MaxRecursionDepth, &model.MaxNodeCount, &model.MaxExecCount, &model.MaxRunRecords, &model.MaxSessionRecords, &model.CreatedBy, &model.UpdatedBy, &model.CreatedByName, &model.UpdatedByName, &endpointsJSON, &model.Status); err != nil {
+		if err := rows.Scan(&model.ID, &model.Name, &model.Diagram, &model.Description, &model.CreatedAt, &model.UpdatedAt, &model.Arguments, &model.Outputs, &model.EnvVars, &model.FlowVars, &model.Timeout, &model.MaxExecCount, &model.StoreRuns, &model.SessionMemory, &model.CreatedBy, &model.UpdatedBy, &model.CreatedByName, &model.UpdatedByName, &endpointsJSON, &model.Status); err != nil {
 			return nil, 0, err
 		}
 		if string(endpointsJSON) != "" {
@@ -198,7 +198,7 @@ func (r *PostgresRepository) FindByName(authInfo *auth.AuthInfo, name string) (*
 func (r *PostgresRepository) GetFlow(authInfo *auth.AuthInfo, id string) (*models.Flow, error) {
 	var model models.Flow
 	var endpointsJSON xsql.UUID
-	err := db.DB.QueryRow(`SELECT id, name, diagram, description, created_at, updated_at, arguments, outputs, env_vars, flow_vars, timeout, max_recursion_depth, max_node_count, max_exec_count, max_run_records, max_session_records, created_by, updated_by, (SELECT name FROM `+authInfo.Schema+`.users WHERE id = p.created_by) as created_by_name, (SELECT name FROM `+authInfo.Schema+`.users WHERE id = p.updated_by) as updated_by_name, endpoints, status FROM `+authInfo.Schema+`.flows p WHERE id = $1`, id).Scan(&model.ID, &model.Name, &model.Diagram, &model.Description, &model.CreatedAt, &model.UpdatedAt, &model.Arguments, &model.Outputs, &model.EnvVars, &model.FlowVars, &model.Timeout, &model.MaxRecursionDepth, &model.MaxNodeCount, &model.MaxExecCount, &model.MaxRunRecords, &model.MaxSessionRecords, &model.CreatedBy, &model.UpdatedBy, &model.CreatedByName, &model.UpdatedByName, &endpointsJSON, &model.Status)
+	err := db.DB.QueryRow(`SELECT id, name, diagram, description, created_at, updated_at, arguments, outputs, env_vars, flow_vars, timeout, max_exec_count, store_runs, session_memory, created_by, updated_by, (SELECT name FROM `+authInfo.Schema+`.users WHERE id = p.created_by) as created_by_name, (SELECT name FROM `+authInfo.Schema+`.users WHERE id = p.updated_by) as updated_by_name, endpoints, status FROM `+authInfo.Schema+`.flows p WHERE id = $1`, id).Scan(&model.ID, &model.Name, &model.Diagram, &model.Description, &model.CreatedAt, &model.UpdatedAt, &model.Arguments, &model.Outputs, &model.EnvVars, &model.FlowVars, &model.Timeout, &model.MaxExecCount, &model.StoreRuns, &model.SessionMemory, &model.CreatedBy, &model.UpdatedBy, &model.CreatedByName, &model.UpdatedByName, &endpointsJSON, &model.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -267,8 +267,8 @@ func (r *PostgresRepository) CreateFlow(authInfo *auth.AuthInfo, Instance *model
 		tx.Rollback()
 		return "", fmt.Errorf("failed to encrypt env vars: %w", serr)
 	}
-	_, err = tx.Exec(`INSERT INTO `+authInfo.Schema+`.flows (id, name, diagram, description, arguments, outputs, env_vars, flow_vars, timeout, max_recursion_depth, max_node_count, max_exec_count, max_run_records, max_session_records, created_by, updated_by, endpoints, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, '[]'::jsonb, NOW(), NOW())`,
-		id, Instance.Name, Instance.Diagram, Instance.Description, Instance.Arguments, Instance.Outputs, envVars, Instance.FlowVars, Instance.Timeout, Instance.MaxRecursionDepth, Instance.MaxNodeCount, Instance.MaxExecCount, Instance.MaxRunRecords, Instance.MaxSessionRecords, xsql.UUID(authInfo.ID), xsql.UUID(authInfo.ID))
+	_, err = tx.Exec(`INSERT INTO `+authInfo.Schema+`.flows (id, name, diagram, description, arguments, outputs, env_vars, flow_vars, timeout, max_exec_count, store_runs, session_memory, created_by, updated_by, endpoints, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, '[]'::jsonb, NOW(), NOW())`,
+		id, Instance.Name, Instance.Diagram, Instance.Description, Instance.Arguments, Instance.Outputs, envVars, Instance.FlowVars, Instance.Timeout, Instance.MaxExecCount, Instance.StoreRuns, Instance.SessionMemory, xsql.UUID(authInfo.ID), xsql.UUID(authInfo.ID))
 	if err != nil {
 		tx.Rollback()
 		return "", err
@@ -339,8 +339,8 @@ func (r *PostgresRepository) UpdateFlow(authInfo *auth.AuthInfo, id string, Inst
 		tx.Rollback()
 		return fmt.Errorf("failed to encrypt env vars: %w", serr)
 	}
-	result, err := tx.Exec(`UPDATE `+authInfo.Schema+`.flows SET name = $1, diagram = $2, description = $3, arguments = $4, outputs = $5, env_vars = $6, flow_vars = $7, timeout = $8, max_recursion_depth = $9, max_node_count = $10, max_exec_count = $11, max_run_records = $12, max_session_records = $13, updated_by = $14, updated_at = NOW() WHERE id = $15`,
-		Instance.Name, Instance.Diagram, Instance.Description, Instance.Arguments, Instance.Outputs, envVars, Instance.FlowVars, Instance.Timeout, Instance.MaxRecursionDepth, Instance.MaxNodeCount, Instance.MaxExecCount, Instance.MaxRunRecords, Instance.MaxSessionRecords, xsql.UUID(authInfo.ID), id)
+	result, err := tx.Exec(`UPDATE `+authInfo.Schema+`.flows SET name = $1, diagram = $2, description = $3, arguments = $4, outputs = $5, env_vars = $6, flow_vars = $7, timeout = $8, max_exec_count = $9, store_runs = $10, session_memory = $11, updated_by = $12, updated_at = NOW() WHERE id = $13`,
+		Instance.Name, Instance.Diagram, Instance.Description, Instance.Arguments, Instance.Outputs, envVars, Instance.FlowVars, Instance.Timeout, Instance.MaxExecCount, Instance.StoreRuns, Instance.SessionMemory, xsql.UUID(authInfo.ID), id)
 	if err != nil {
 		tx.Rollback()
 		return err

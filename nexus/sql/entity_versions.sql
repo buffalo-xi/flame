@@ -43,11 +43,9 @@ BEGIN
         env_vars jsonb,
         flow_vars jsonb,
         timeout integer,
-        max_recursion_depth integer,
-        max_node_count integer,
         max_exec_count integer,
-        max_run_records integer,
-        max_session_records integer,
+        store_runs boolean,
+        session_memory boolean,
         is_current boolean NOT NULL DEFAULT false,
         note varchar(200) NOT NULL DEFAULT '',
         created_by uuid,
@@ -139,11 +137,10 @@ BEGIN
     EXECUTE format($f$
       INSERT INTO %I.flow_versions
         (flow_id, version, name, description, diagram, arguments, outputs, env_vars, flow_vars,
-         timeout, max_recursion_depth, max_node_count, max_exec_count, max_run_records,
-         max_session_records, is_current, note, created_by)
+         timeout, max_exec_count, store_runs, session_memory, is_current, note, created_by)
       SELECT f.id, 1, f.name, f.description, f.diagram, f.arguments, f.outputs, f.env_vars,
-             f.flow_vars, f.timeout, f.max_recursion_depth, f.max_node_count, f.max_exec_count,
-             f.max_run_records, f.max_session_records, true, '迁移：建版本表时的当前内容',
+             f.flow_vars, f.timeout, f.max_exec_count, f.store_runs, f.session_memory,
+             true, '迁移：建版本表时的当前内容',
              f.created_by
         FROM %I.flows f
        WHERE NOT EXISTS (SELECT 1 FROM %I.flow_versions v WHERE v.flow_id = f.id)

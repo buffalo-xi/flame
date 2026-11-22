@@ -1,0 +1,30 @@
+# Build context for deploy/poc/Dockerfile (BuildKit picks up "<dockerfile>.dockerignore" automatically).
+#
+# The context is the repository root because every Go module has `replace flame/tools => ../tools`. Everything that is
+# large or irrelevant to compiling is excluded here; the goal is "copy the sources a build needs", nothing else.
+
+.git
+.gitignore
+**/.git
+
+# Local build output and runtime state — never part of an image build.
+deploy/poc/out
+**/node_modules
+**/logs
+**/*.log
+**/*.exe
+sandboxd/bin
+browserd/bin
+sandboxd/sandboxd-linux
+deploy/poc/postgres/*.log
+
+# Tenant data and browser profiles are runtime state, not source.
+nexus/data
+nexus/tmp_hashgen
+**/run
+
+# Editors / OS noise.
+.vscode
+.idea
+**/.DS_Store
+**/Thumbs.db

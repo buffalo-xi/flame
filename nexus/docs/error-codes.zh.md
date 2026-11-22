@@ -57,12 +57,12 @@
 | `tenant` | `tenant.not_found`、`tenant.schema_taken` | `schema_taken` 对应 409 |
 | `endpoint` | `endpoint.not_found`、`endpoint.not_exposed` | 端点域用 expose/retract 用词 |
 | `asset` | `asset.not_found`、`asset.not_available`、`asset.storage_unavailable`、`asset.build_conflict`（`params.build`、`data.existing`） | `not_available` = 存在但未对本租户开放 |
-| `flow` | `flow.not_released`、`flow.deprecated` | 与 `models.StatusDeprecated`「废弃」同词，界面也叫废弃 |
+| `flow` | `flow.not_released`、`flow.deprecated`、`flow.node_limit_exceeded`（`params.count`、`params.limit`） | 与 `models.StatusDeprecated`「废弃」同词，界面也叫废弃。`node_limit_exceeded` = 图里的节点数超过租户配额（`flow_configs.max_node_count`），在保存与资产导入时校验 |
 | `agent` | `agent.call_depth_exceeded`、`agent.not_found` | |
 | `skill` | `skill.not_found`、`skill.not_invocable`、`skill.invalid_command` | `not_invocable` = 技能存在但没开放为用户命令（`user_invocable` 未开）；`invalid_command` = `command_dispatch` 与 `command_tool` 不配套（只接受空值与 `tool`，选 `tool` 必须填目标工具） |
 | `tool` | `tool.not_found`、`tool.contract_readonly` | 自定义工具（`customtools`）；`contract_readonly` 覆盖 TOOL.json 的建 / 改 / 删 / 上传 |
 | `version` | `version.not_found` | 版本域，与 release / rollback / apply 同域 |
-| `llm` | `llm.model_not_found`、`llm.provider_not_found` | |
+| `llm` | `llm.model_not_found`、`llm.provider_not_found`、`llm.no_default_model`、`llm.default_model_not_enabled` | 后两个表示「这一轮跑不起来，因为租户没有可用的默认模型」；属于 `ConfigError`，见「高频路径先改」里的说明 |
 | `user` | `user.not_found`、`user.invalid_role`、`user.invalid_status`、`user.password_too_long` | 平台用户 / 租户用户 |
 | `session` | `session.not_found` | 会话本身；令牌失效是 `auth.session_expired` |
 | `run` | `run.not_found` | 运行台账的记录 |
@@ -126,6 +126,11 @@
    flow 运行入口（RPC 服务端）：`flow.not_released`、`flow.deprecated`，
    走 `writeRPCErrorCode` 落在 `error.data.error`。MCP 服务端按本文末节不改造；
    flow 执行层（executors 的 `rpc_target`）与被调方内部错误仍只有文案（没有编码通道）；
+  **因配置缺失而跑不起来的一轮**只在 agent 层归类一次（`agent.ConfigError`：
+  `llm.no_default_model` / `llm.default_model_not_enabled`），各入口按自己的协议渲染 —— SSE 对话用带 `code` 的
+  `RUN_ERROR` 帧；JSON-RPC 用 `-32002` 加 `error.data.error`；MCP 用 `isError` 结果带那句话（那边没有编码通道）；
+  flow 节点记 `config`；`call_agent` 把带被调方名字的句子当工具结果返回。**一律不报** `common.internal` /
+  `-32603` / `ErrCodeOther`：这是操作者要改配置，报「服务端故障」会把人支到错误的方向；
    端点 / 资产的 HTTP 侧（`admin/svcendpoints`、`platform/handler`）：`endpoint.not_found`、
    `asset.not_found`，参数非法与缺上下文归 `common.invalid_params` / `common.internal`；
    资源类 not found 已扫全库（`ErrJSON(c, "... not found")` 已零残留）：`agent.*`、`skill.*`、

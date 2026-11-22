@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"flame/nexus/shared/globalvars"
 	"flame/nexus/shared/models"
 	"flame/nexus/shared/paths"
+	"flame/nexus/shared/repository/agentruns"
 	llmmodels "flame/nexus/shared/repository/llmmodels"
 	"flame/nexus/shared/repository/sessionrecords"
 	"flame/nexus/shared/repository/sessions"
@@ -34,6 +36,7 @@ import (
 	"flame/nexus/shared/sandboxinfo"
 	"flame/nexus/shared/versioning"
 	"flame/tools/xlog"
+	"flame/tools/xsql"
 
 	"github.com/google/uuid"
 )
@@ -273,13 +276,23 @@ func newAgentImpl(instance *models.Agent, schema string, arguments map[string]an
 		Sandbox:              tools.CurrentSandbox(),
 	}
 
-	// 2. Look up the default LLM model
+	// 2. Look up the default LLM model.
+	//
+	// "Not configured" is a configuration state, not a server fault: it is returned as a ConfigError so every entry
+	// point (SSE chat / JSON-RPC / MCP / a flow node / call_agent) can report "configure a default model" in its own
+	// protocol instead of an internal error carrying a raw SQL message.
 	model, err := llmmodels.NewRepository().GetDefault(&auth.AuthInfo{Schema: schema})
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNoDefaultModel
+		}
 		return nil, fmt.Errorf("get default llm model: %w", err)
 	}
 	if model == nil {
-		return nil, fmt.Errorf("no default llm model configured")
+		return nil, ErrNoDefaultModel
+	}
+	if string(model.GatewayID) == "" {
+		return nil, ErrDefaultModelNotEnabled
 	}
 	maxTokens, _ := model.GetMaxTokens()
 	temperature, _ := model.GetTemperature()
@@ -527,6 +540,11 @@ func (a *agentImpl) Stream(parent context.Context) error {
 	// failure output is empty). Before the rewrite only web chat wrote one and endpoint calls did not - the same session reached through
 	// two entry points had one broken and one working memory, which is exactly the inconsistency being removed.
 	a.startedAt = time.Now()
+	// Two independent tails: memory (session_records, written only for session-bound runs) and the audit log
+	// (agent_run_records, written for every run including stateless MCP / RPC calls). Neither may fail a run
+	// that has already finished, so both only log their own errors.
+	// Order: LIFO puts recordSessionRound first, so the memory row (which freezes elapsedMs) lands before the log row.
+	defer a.recordRun()
 	defer a.recordSessionRound()
 	// The dropped count is normally always 0. A non-zero value means the consumer cannot keep up and the content will be missing
 	// characters - it must leave a trace to look into, rather than being dropped silently as before and leaving no way to explain "why the
@@ -606,7 +624,7 @@ func (a *agentImpl) Stream(parent context.Context) error {
 	}
 
 	// The round cap comes from platform.agent_configs (code fallback 80). Reaching it ends the run - it is the only guard against an
-	// endless loop, which is why the configuration side never accepts -1 (see sql/agent_configs.sql).
+	// endless loop, which is why the configuration side never accepts -1 (see nexus/platform/sql/agent_configs.sql).
 	for i := 0; i < a.limits.MaxIterations; i++ {
 		// A new skill was activated this round -> recompute the tool set: after use_skill, the next inference sees the tools it declares.
 		// The database is only read when something changed (ConsumeSkillsDirty resets the flag), so ordinary rounds cost nothing extra.
@@ -1219,13 +1237,13 @@ func (a *agentImpl) defaultSystemPrompt() string {
 	return fmt.Sprintf("You are agent %s. Call the available tools to complete the task the user asks for.", a.instance.Name)
 }
 
-// Session memory caps: read the latest 50 rounds, 256 KiB in total at most; keep only the latest 100 rounds on write
-// (the same retention policy as web chat before the rewrite).
-const (
-	maxSessionHistoryRecords = 50
-	maxSessionHistoryBytes   = 256 << 10
-	maxSessionRecordKeep     = 100
-)
+// maxSessionHistoryBytes caps how much of the stored history is fed back to the model (the newest round is always kept,
+// see trimHistoryByBudget).
+//
+// How many rounds are stored and read is NOT a constant: agent_configs.max_session_records (see a.limits) is the
+// agent-side counterpart of flow_configs.max_session_records, so both owner types read one number from one place. It used
+// to be a hard-coded 50 / 100 here, which meant the tenant could tune the flow's memory but not the agent's.
+const maxSessionHistoryBytes = 256 << 10
 
 // userContent extracts the user input (preferring the args field).
 func (a *agentImpl) userContent() string {
@@ -1256,7 +1274,7 @@ func (a *agentImpl) loadSessionHistory() []gateway.Message {
 		return nil
 	}
 	recs, err := sessionrecords.NewRepository().ListBySessionPage(
-		a.schema, models.SessionOwnerTypeAgent, a.instance.ID, sid, maxSessionHistoryRecords, nil)
+		a.schema, models.SessionOwnerTypeAgent, a.instance.ID, sid, a.limits.MaxSessionRecords, nil)
 	if err != nil {
 		xlog.Error("failed to read session history session=%s: %v", sid, err)
 		return nil
@@ -1301,14 +1319,7 @@ func (a *agentImpl) recordSessionRound() {
 	// Result status: stopped / failed / completed normally.
 	// Without this column a failed round in the history is "a line with an empty answer", and the user cannot tell whether they pressed
 	// stop, the model died, or a tool errored - they have to ask someone.
-	errMsg := a.GetError()
-	status := models.SessionStatusOK
-	switch {
-	case a.stopped.Load():
-		status = models.SessionStatusStopped
-	case errMsg != "":
-		status = models.SessionStatusFailed
-	}
+	status, errMsg := a.outcome()
 	rec := &models.SessionRecord{
 		OwnerType:  models.SessionOwnerTypeAgent,
 		OwnerID:    a.instance.ID,
@@ -1321,7 +1332,7 @@ func (a *agentImpl) recordSessionRound() {
 		Status:     status,
 		Error:      errMsg,
 	}
-	if err := sessionrecords.NewRepository().Append(a.schema, rec, maxSessionRecordKeep); err != nil {
+	if err := sessionrecords.NewRepository().Append(a.schema, rec, a.limits.MaxSessionRecords); err != nil {
 		xlog.Error("failed to save session record session=%s: %v", sid, err)
 		return
 	}
@@ -1341,6 +1352,82 @@ func (a *agentImpl) recordSessionRound() {
 		return
 	}
 	_ = sessRepo.Touch(a.schema, sid)
+}
+
+// Audit log caps (agent_run_records): the question text and the answer preview are bounded, and the sizes are
+// stored alongside so the page can say "truncated" instead of silently showing a cut. The full answer stays in
+// session_records and is read there by the chat page.
+//
+// How many rows one agent keeps is NOT a constant here: it comes from platform.agent_configs.max_run_records
+// (see a.limits, code fallback 100, the same number as flow_configs), the same place as the other agent run parameters.
+const (
+	maxAgentRunQuestionRunes = 2000
+	maxAgentRunAnswerRunes   = 4000
+)
+
+// outcome reports this run's result. Memory and the run log share it so the two can never disagree on whether
+// a run counted as stopped or failed.
+func (a *agentImpl) outcome() (status, errMsg string) {
+	errMsg = a.GetError()
+	status = models.SessionStatusOK
+	switch {
+	case a.stopped.Load():
+		status = models.SessionStatusStopped
+	case errMsg != "":
+		status = models.SessionStatusFailed
+	}
+	return status, errMsg
+}
+
+// recordRun writes this run into agent_run_records, the audit log behind the admin console's agent history.
+//
+// Unlike recordSessionRound it does not require a session: a stateless MCP / RPC call (no _meta.session_id) is
+// exactly the kind of run an operator needs to trace, and session_records cannot hold it because its
+// session_id is NOT NULL. A write failure only logs - losing a log line must never fail a finished call.
+func (a *agentImpl) recordRun() {
+	if a.toolCtx == nil || a.toolCtx.RunID == "" || a.instance == nil || a.instance.ID == "" {
+		return
+	}
+	status, errMsg := a.outcome()
+	question := a.recordInputText()
+	answer := a.GetResult()
+	answerSize := len([]rune(answer))
+	answerPreview := truncateRunes(answer, maxAgentRunAnswerRunes)
+	finished := xsql.Time(time.Now())
+
+	rec := &models.AgentRunRecord{
+		// The run id is the row id: session_records.run_id holds the same value, so one run has one identity.
+		ID:              a.toolCtx.RunID,
+		AgentID:         a.instance.ID,
+		SessionID:       strings.TrimSpace(a.toolCtx.SessionID),
+		UserID:          strings.TrimSpace(a.toolCtx.UserID),
+		RunType:         a.runType,
+		Status:          status,
+		ErrMsg:          errMsg,
+		DurationMs:      a.GetDurationMs(),
+		StartedAt:       xsql.Time(a.startedAt),
+		FinishedAt:      &finished,
+		Question:        truncateRunes(question, maxAgentRunQuestionRunes),
+		QuestionSize:    len([]rune(question)),
+		Answer:          answerPreview,
+		AnswerTruncated: answerSize > len([]rune(answerPreview)),
+		AnswerSize:      answerSize,
+	}
+	if err := agentruns.NewRepository().SaveRun(a.schema, rec, a.limits.MaxRunRecords); err != nil {
+		xlog.Error("failed to save the agent run record run=%s agent=%s: %v", a.toolCtx.RunID, a.instance.ID, err)
+	}
+}
+
+// truncateRunes cuts s to at most n runes, never in the middle of a multi-byte character.
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }
 
 // sessionMeta reports whether this run is bound to a session: it returns the session id and the owning user (memory is written only when

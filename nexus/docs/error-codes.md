@@ -63,12 +63,12 @@ Constraints:
 | `tenant` | `tenant.not_found`, `tenant.schema_taken` | `schema_taken` maps to 409 |
 | `endpoint` | `endpoint.not_found`, `endpoint.not_exposed` | the endpoint domain uses expose / retract |
 | `asset` | `asset.not_found`, `asset.not_available`, `asset.storage_unavailable`, `asset.build_conflict` (`params.build`, `data.existing`) | `not_available` = exists but is not listed to this tenant |
-| `flow` | `flow.not_released`, `flow.deprecated` | same word as `models.StatusDeprecated`; the UI says "deprecated" too |
+| `flow` | `flow.not_released`, `flow.deprecated`, `flow.node_limit_exceeded` (`params.count`, `params.limit`) | same word as `models.StatusDeprecated`; the UI says "deprecated" too. `node_limit_exceeded` = the diagram is larger than the tenant quota (`flow_configs.max_node_count`), checked on save and on asset install |
 | `agent` | `agent.call_depth_exceeded`, `agent.not_found` | |
 | `skill` | `skill.not_found`, `skill.not_invocable`, `skill.invalid_command` | `not_invocable` = the skill exists but is not open as a user command (`user_invocable` is off); `invalid_command` = `command_dispatch` / `command_tool` disagree (only an empty value and `tool` are valid, and `tool` needs a target) |
 | `tool` | `tool.not_found`, `tool.contract_readonly` | custom tools (`customtools`); `contract_readonly` covers create / update / delete / upload of TOOL.json |
 | `version` | `version.not_found` | the version domain, same domain as release / rollback / apply |
-| `llm` | `llm.model_not_found`, `llm.provider_not_found` | |
+| `llm` | `llm.model_not_found`, `llm.provider_not_found`, `llm.no_default_model`, `llm.default_model_not_enabled` | the last two mean "this run cannot start because the tenant has no usable default model"; they are a `ConfigError`, see the note under "high-frequency paths" |
 | `user` | `user.not_found`, `user.invalid_role`, `user.invalid_status`, `user.password_too_long` | platform users / tenant users |
 | `session` | `session.not_found` | the session itself; token expiry is `auth.session_expired` |
 | `run` | `run.not_found` | a runtime ledger record |
@@ -137,6 +137,12 @@ Three steps, which can be rolled out in batches; every step ships independently:
    the flow run entry points (RPC server): `flow.not_released`, `flow.deprecated` through `writeRPCErrorCode`, landing in
    `error.data.error`. The MCP server is not converted, per the last section;
    the flow execution layer (executors' `rpc_target`) and callee-internal errors still carry copy only (no code channel);
+  **a run that cannot start because of configuration** is classified once, in the agent layer (`agent.ConfigError`:
+  `llm.no_default_model` / `llm.default_model_not_enabled`), and every entry point renders it in its own protocol - SSE
+  chat: a `RUN_ERROR` frame carrying `code`; JSON-RPC: `-32002` plus `error.data.error`; MCP: an `isError` result with the
+  sentence (no code channel there); a flow node: `config`; `call_agent`: the callee-prefixed message as the tool result.
+  It is never reported as `common.internal` / `-32603` / `ErrCodeOther`: the operator has to change a setting, and
+  "server fault" sends them looking in the wrong place;
    the HTTP side of endpoints / assets (`admin/svcendpoints`, `platform/handler`): `endpoint.not_found`,
    `asset.not_found`, with invalid arguments and missing context mapped to `common.invalid_params` / `common.internal`;
    resource-style not-found has been swept repo-wide (`ErrJSON(c, "... not found")` has zero occurrences left): `agent.*`,

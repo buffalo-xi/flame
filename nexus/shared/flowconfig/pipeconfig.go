@@ -23,14 +23,19 @@ type FlowLimits struct {
 // fallback holds the hard-coded default limits (the system-level default while flow_configs is not configured).
 // Semantic convention: NULL = not set (fall back to the next level); -1 = unlimited (infinity, the effective value never
 // falls back).
+//
+// The numbers are the "no one configured this tenant" values, not the smallest allowed ones: a tenant must be able to run
+// an ordinary workflow out of the box. max_loop_times is deliberately close to max_exec_count rather than orders of
+// magnitude above it - a loop body that calls a tool makes every iteration expensive, and max_exec_count is the counter
+// that actually stops the run, so a 10000-iteration default only reads generous.
 var fallback = FlowLimits{
-	MaxTimeout:        300,
-	MaxRecursionDepth: 10,
-	MaxNodeCount:      100,
-	MaxExecCount:      200,
-	MaxLoopTimes:      10000,
-	MaxRunRecords:     100,
-	MaxSessionRecords: 50,
+	MaxTimeout:        300,  // 5 minutes covers a synchronous call; longer runs belong to an async entry point
+	MaxRecursionDepth: 10,   // flow -> flow nesting; each level is an execution stack
+	MaxNodeCount:      100,  // graph size, not run cost: affects saving / editing, so it can stay loose
+	MaxExecCount:      200,  // the only counter that stops a run mid-flight (loops unroll into it)
+	MaxLoopTimes:      1000, // one order of magnitude above max_exec_count, not two
+	MaxRunRecords:     100,  // run history per flow, the same order as the agent side
+	MaxSessionRecords: 50,   // session memory per session; the reader also trims by a 256 KB byte budget
 }
 
 // row maps one flow_configs row, with NULL expressed through sql.NullInt32.
@@ -61,6 +66,52 @@ func Resolve(tenantID string) FlowLimits {
 // falls back to when left empty".
 func Fallback() FlowLimits {
 	return fallback
+}
+
+// DepthLimit returns the effective call-chain depth limit (always positive).
+//
+// The configuration says -1 means "unlimited", but that is deliberately not honoured here: a pure flow cycle has only
+// this one gate (a chain that involves an agent has its own cap), so letting a misconfiguration switch it off would
+// leave the door wide open. A non-positive value therefore falls back to the built-in default, and an anomalous default
+// still becomes 10 — never an unbounded pass.
+//
+// This is the single source for both depth gates: the intra-flow call node and the cross-flow endpoint call.
+func (l FlowLimits) DepthLimit() int {
+	if l.MaxRecursionDepth > 0 {
+		return l.MaxRecursionDepth
+	}
+	if fallback.MaxRecursionDepth > 0 {
+		return fallback.MaxRecursionDepth
+	}
+	return 10
+}
+
+// RunRecordLimit returns how many run records one flow keeps (always positive).
+//
+// The configuration treats -1 as "unlimited", but retention cannot express that downstream: the caller treats 0 as "store
+// nothing" and a non-positive limit as "no trimming", so an "unlimited" value would silently change meaning. It falls back
+// to the built-in default instead.
+func (l FlowLimits) RunRecordLimit() int {
+	return positiveOr(l.MaxRunRecords, fallback.MaxRunRecords)
+}
+
+// SessionRecordLimit returns how many session messages one flow keeps (always positive).
+//
+// Both readers of this number treat a non-positive value as "session memory is off", so "unlimited" must not reach them.
+// Turning memory off is the flow's own session_memory switch, never the quota.
+func (l FlowLimits) SessionRecordLimit() int {
+	return positiveOr(l.MaxSessionRecords, fallback.MaxSessionRecords)
+}
+
+// positiveOr returns v when it is positive, else def, else 1: retention is always a positive number.
+func positiveOr(v, def int) int {
+	if v > 0 {
+		return v
+	}
+	if def > 0 {
+		return def
+	}
+	return 1
 }
 
 func loadRow(tenantID string) (*row, error) {

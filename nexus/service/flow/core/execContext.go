@@ -320,74 +320,12 @@ func (ctx *ExecContext) GetFlowTimeout() int {
 	return result
 }
 
-// ResolveRecursionDepth resolves the maximum recursion depth actually in effect.
-// Rules:
-//  1. Instance.MaxRecursionDepth is -1 (or unset) -> use system_max_recursion_depth
-//  2. both set to a positive value -> min(Instance, system)
-//  3. both <= 0 -> -1 (unlimited, backward compatible)
+// ResolveRecursionDepth returns the call-chain depth limit actually in effect.
+//
+// The limit is tenant-level only: depth is a property of the call graph (which flow calls which), so no single flow
+// definition can declare it. flowconfig.DepthLimit keeps the value positive, so "unlimited" is not reachable here.
 func (ctx *ExecContext) ResolveRecursionDepth() int {
-	instanceDepth := -1
-	if ctx.Flow != nil && ctx.Flow.Instance != nil {
-		instanceDepth = ctx.Flow.Instance.MaxRecursionDepth.Int()
-	}
-
-	sysDepth := ctx.limits().MaxRecursionDepth
-
-	// Neither set / both -1: unlimited
-	if instanceDepth <= 0 && sysDepth <= 0 {
-		return -1
-	}
-
-	// The instance is -1: the system ceiling alone applies
-	if instanceDepth <= 0 {
-		return sysDepth
-	}
-
-	// The system is -1: the instance ceiling alone applies
-	if sysDepth <= 0 {
-		return instanceDepth
-	}
-
-	// Both set: take the smaller
-	if instanceDepth < sysDepth {
-		return instanceDepth
-	}
-	return sysDepth
-}
-
-// ResolveMaxNodeCount resolves the maximum node count actually in effect.
-// The rules match ResolveRecursionDepth:
-//  1. Instance.MaxNodeCount is -1 (or unset) -> use system_max_node_count
-//  2. both set to a positive value -> min(Instance, system)
-//  3. both <= 0 -> -1 (unlimited, backward compatible)
-func (ctx *ExecContext) ResolveMaxNodeCount() int {
-	instanceMax := -1
-	if ctx.Flow != nil && ctx.Flow.Instance != nil {
-		instanceMax = ctx.Flow.Instance.MaxNodeCount.Int()
-	}
-
-	sysMax := ctx.limits().MaxNodeCount
-
-	// Neither set / both -1: unlimited
-	if instanceMax <= 0 && sysMax <= 0 {
-		return -1
-	}
-
-	// The instance is -1: the system ceiling alone applies
-	if instanceMax <= 0 {
-		return sysMax
-	}
-
-	// The system is -1: the instance ceiling alone applies
-	if sysMax <= 0 {
-		return instanceMax
-	}
-
-	// Both set: take the smaller
-	if instanceMax < sysMax {
-		return instanceMax
-	}
-	return sysMax
+	return ctx.limits().DepthLimit()
 }
 
 // ResolveScriptTimeout returns the script execution timeout in seconds.
@@ -439,58 +377,26 @@ func (ctx *ExecContext) ResolveMaxExecCount() int {
 	return sysMax
 }
 
-// ResolveMaxRunRecords resolves the number of run records actually retained.
-// The three-state semantics of the workflow-level max_run_records:
-//   - 0: store nothing (no run record is kept)
-//   - -1: unset / unlimited -> use the system-level MaxRunRecords
-//   - a positive N: keep N, clamped by the system-level ceiling (min)
+// ResolveMaxRunRecords returns how many run records to keep, 0 meaning "store nothing".
+//
+// The workflow only decides whether its runs are recorded at all (store_runs); the count is the tenant quota, so there is
+// no per-flow number to clamp.
 func (ctx *ExecContext) ResolveMaxRunRecords() int {
-	instanceMax := -1
-	if ctx.Flow != nil && ctx.Flow.Instance != nil {
-		instanceMax = ctx.Flow.Instance.MaxRunRecords.Int()
-	}
-
-	// 0 = store nothing
-	if instanceMax == 0 {
+	if ctx.Flow != nil && ctx.Flow.Instance != nil && !ctx.Flow.Instance.StoreRuns {
 		return 0
 	}
-
-	sysMax := ctx.limits().MaxRunRecords
-
-	// The instance is -1 (unset / unlimited) -> the system ceiling applies
-	if instanceMax < 0 {
-		return sysMax
-	}
-
-	// The instance is positive -> clamped by the system ceiling (min)
-	if sysMax > 0 && instanceMax > sysMax {
-		return sysMax
-	}
-	return instanceMax
+	return ctx.limits().RunRecordLimit()
 }
 
-// ResolveMaxSessionRecords resolves the number of session records actually retained.
-// The semantics of the workflow-level max_session_records (different from max_run_records — note the distinction):
-//   - -1: no session memory at all (the switch is off) -> return 0
-//   - 0: an invalid value, treated as no memory
-//   - a positive N: keep N, clamped by the system-level ceiling (min)
+// ResolveMaxSessionRecords returns how many session messages to keep, 0 meaning "no session memory".
+//
+// The workflow only decides whether it is stateless (session_memory); the count is the tenant quota. Both readers treat a
+// non-positive value as "off", which is why 0 is the only way to switch memory off here.
 func (ctx *ExecContext) ResolveMaxSessionRecords() int {
-	instanceMax := -1
-	if ctx.Flow != nil && ctx.Flow.Instance != nil {
-		instanceMax = ctx.Flow.Instance.MaxSessionRecords.Int()
-	}
-
-	// -1 or 0: no session memory
-	if instanceMax <= 0 {
+	if ctx.Flow != nil && ctx.Flow.Instance != nil && !ctx.Flow.Instance.SessionMemory {
 		return 0
 	}
-
-	// The instance is positive -> clamped by the system ceiling (min)
-	sysMax := ctx.limits().MaxSessionRecords
-	if sysMax > 0 && instanceMax > sysMax {
-		return sysMax
-	}
-	return instanceMax
+	return ctx.limits().SessionRecordLimit()
 }
 
 // ResolveRunLimits returns the limits actually in effect for this run (the final values after the three-level resolve).
@@ -499,7 +405,6 @@ func (ctx *ExecContext) ResolveRunLimits() map[string]any {
 	limits := map[string]any{
 		"timeout":             ctx.GetFlowTimeout(),
 		"max_recursion_depth": ctx.ResolveRecursionDepth(),
-		"max_node_count":      ctx.ResolveMaxNodeCount(),
 		"max_exec_count":      ctx.ResolveMaxExecCount(),
 		"max_run_records":     ctx.ResolveMaxRunRecords(),
 		"max_session_records": ctx.ResolveMaxSessionRecords(),

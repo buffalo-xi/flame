@@ -7,8 +7,9 @@ exposes them as callable endpoints (MCP / RPC), and shows everything currently r
 
 Ships with a Vue 3 admin console (`desktop/`), shared by the tenant side and the platform side.
 
-> **Prebuilt, ready-to-run packages are on the way.** A compiled release that starts without a toolchain is being prepared —
-> stay tuned.
+> **Want to run the whole thing?** `deploy/poc/` is a two-container demo (the product stack + the LiteLLM gateway) that
+> starts with `docker compose` and listens on a single port — see [`deploy/poc/README.md`](deploy/poc/README.md). A prebuilt
+> image is published on every push, so running it needs no toolchain. It is a proof of concept, not a production deployment.
 
 ## Features
 
@@ -51,6 +52,7 @@ Ships with a Vue 3 admin console (`desktop/`), shared by the tenant side and the
 | `sandboxg/` | Go | Sandbox gateway: unified `/v1/*` for `nexus`, with load balancing and sticky routing (default `:27080`) |
 | `tools/` | Go | Shared local libraries used by all three services (`xhttp` / `xsql` / `xlog` / `sandbox` / `code` …) |
 | `desktop/` | Vue 3 + Vite | Admin console (dev port `:5173`) |
+| `deploy/` | Docker | Deployment: `deploy/poc/` is the two-image demo (product stack + LiteLLM gateway) |
 
 Dependency direction is one-way: the three services reference the local libraries via `replace flame/tools => ../tools`;
 `tools` never depends back on any service.

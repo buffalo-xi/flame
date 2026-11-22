@@ -164,9 +164,8 @@ func (r *PostgresRepository) ApplyFlowVersionToDraft(authInfo *auth.AuthInfo, fl
 	res, err := tx.Exec(`UPDATE `+authInfo.Schema+`.flows f
 		SET description = v.description, diagram = v.diagram, arguments = v.arguments,
 		    outputs = v.outputs, env_vars = v.env_vars, flow_vars = v.flow_vars,
-		    timeout = v.timeout, max_recursion_depth = v.max_recursion_depth,
-		    max_node_count = v.max_node_count, max_exec_count = v.max_exec_count,
-		    max_run_records = v.max_run_records, max_session_records = v.max_session_records,
+		    timeout = v.timeout, max_exec_count = v.max_exec_count,
+		    store_runs = v.store_runs, session_memory = v.session_memory,
 		    updated_at = now(), updated_by = NULLIF($3, '')::uuid
 		FROM `+authInfo.Schema+`.flow_versions v
 		WHERE f.id = $1 AND v.flow_id = $1 AND v.version = $2`,
@@ -337,11 +336,9 @@ func (r *PostgresRepository) fillVersionState(authInfo *auth.AuthInfo, f *models
 			 OR COALESCE(f.env_vars,  '{}'::jsonb) IS DISTINCT FROM COALESCE(v.env_vars,  '{}'::jsonb)
 			 OR COALESCE(f.flow_vars, '{}'::jsonb) IS DISTINCT FROM COALESCE(v.flow_vars, '{}'::jsonb)
 			 OR f.timeout          IS DISTINCT FROM v.timeout
-			 OR f.max_recursion_depth IS DISTINCT FROM v.max_recursion_depth
-			 OR f.max_node_count   IS DISTINCT FROM v.max_node_count
 			 OR f.max_exec_count   IS DISTINCT FROM v.max_exec_count
-			 OR f.max_run_records  IS DISTINCT FROM v.max_run_records
-			 OR f.max_session_records IS DISTINCT FROM v.max_session_records)
+			 OR f.store_runs       IS DISTINCT FROM v.store_runs
+			 OR f.session_memory   IS DISTINCT FROM v.session_memory)
 		FROM `+authInfo.Schema+`.flows f
 		JOIN `+authInfo.Schema+`.flow_versions v
 		  ON v.flow_id = f.id AND v.is_current
@@ -387,11 +384,10 @@ func releaseFlowVersionTx(tx *sql.Tx, schema, flowID, note, userID string) (int,
 	var createdAt xsql.Time
 	err := tx.QueryRow(`INSERT INTO `+schema+`.flow_versions
 		(flow_id, version, name, description, diagram, arguments, outputs, env_vars, flow_vars,
-		 timeout, max_recursion_depth, max_node_count, max_exec_count, max_run_records,
-		 max_session_records, is_current, note, created_by)
+		 timeout, max_exec_count, store_runs, session_memory, is_current, note, created_by)
 		SELECT f.id, $2, f.name, f.description, f.diagram, f.arguments, f.outputs, f.env_vars,
-		       f.flow_vars, f.timeout, f.max_recursion_depth, f.max_node_count, f.max_exec_count,
-		       f.max_run_records, f.max_session_records, true, $3, NULLIF($4, '')::uuid
+		       f.flow_vars, f.timeout, f.max_exec_count, f.store_runs, f.session_memory,
+		       true, $3, NULLIF($4, '')::uuid
 		  FROM `+schema+`.flows f
 		 WHERE f.id = $1
 		RETURNING created_at`, flowID, next, note, userID).Scan(&createdAt)

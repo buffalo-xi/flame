@@ -39,6 +39,10 @@ const (
 	// errCodeCallLoop means a call loop was detected (f → a → f): the chain itself is cyclic, retrying
 	// cannot succeed, and the client should report "misconfigured cycle" rather than a server fault.
 	errCodeCallLoop = -32001
+	// errCodeConfig means the tenant's configuration cannot start this run (no default model, or a default model that
+	// is not enabled): the caller has to fix a setting, so it must never read as a server fault. Same reasoning as
+	// errCodeQuotaExceeded, and the same implementation-defined range.
+	errCodeConfig = -32002
 )
 
 // rpcRequest is the JSON-RPC request sent by the client.
@@ -559,6 +563,12 @@ func runAgent(w http.ResponseWriter, r *http.Request, authInfo *auth.AuthInfo, a
 	agent.SetReleaseMode(agentArguments)
 	inst, err := agent.NewAgent(agentInst, authInfo.Schema, agentArguments)
 	if err != nil {
+		// Missing / unusable configuration (no default model, a default model without a gateway name) is not a server
+		// fault: it gets its own code plus the translatable application code, the same shape as endpoint.not_found.
+		if ce, isCfg := agent.AsConfigError(err); isCfg {
+			writeRPCErrorCode(w, reqID, errCodeConfig, ce.Code, ce.Params, "%s", ce.Msg)
+			return
+		}
 		// Initialization failed: protocol-level InternalError (MCP return error -> -32603).
 		writeRPCError(w, reqID, errCodeInternalError, "init agent: %v", err)
 		return

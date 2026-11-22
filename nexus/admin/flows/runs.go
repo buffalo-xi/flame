@@ -175,7 +175,10 @@ func ListRuns(c *gin.Context) {
 		}
 	}
 
-	records, total, err := runRepo.ListRuns(schema, flowId, runType, status, startFrom, startTo, limit, offset)
+	// user_id is optional, like the other filters: it narrows this flow's runs to the ones a given user triggered.
+	// session_id is not exposed here: this page lists one workflow's runs from the editor, where "which conversation"
+	// is not a question it answers (the cross-flow history page does).
+	records, total, err := runRepo.ListRuns(schema, flowId, runType, status, c.Query("user_id"), "", startFrom, startTo, limit, offset)
 	if err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return

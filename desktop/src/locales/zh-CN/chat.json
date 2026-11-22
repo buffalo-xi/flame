@@ -11,6 +11,7 @@
     "supervisor": "超级智能体",
     "agentOption": "{name} · 超级智能体",
     "closeChat": "关闭会话",
+    "viewRunHistory": "查看该会话的执行记录",
     "loadEarlier": "查看更早消息",
     "startChat": "开始对话吧",
     "selectAgentToChat": "选择智能体，开始对话",
@@ -70,6 +71,10 @@
     "runError": "[错误] {msg}",
     "stoppedMark": "[已终止]",
     "chatFailed": "对话失败，请重试",
-    "attachOnlyMessage": "请查看我上传的文件。"
+    "attachOnlyMessage": "请查看我上传的文件。",
+    "noDefaultModel": {
+      "hint": "还没有可用的默认模型，暂时无法对话：请先在「设置 → 模型」里添加一个模型并设为默认",
+      "action": "去配置"
+    }
   }
 }

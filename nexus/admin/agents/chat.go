@@ -27,7 +27,8 @@ import (
 // The heartbeat doubles as a half-open connection probe: a failed write means the peer is gone (see ChatAgent).
 const sseKeepAlive = 15 * time.Second
 
-// The session record retention cap lives in the agent layer (service/agent/agent_impl.go maxSessionRecordKeep).
+// The session record retention cap lives in the agent layer (platform.agent_configs.max_session_records, read through
+// service/agent), not here.
 
 // chatRequest is an agent chat request.
 type chatRequest struct {
@@ -53,23 +54,36 @@ func ChatAgent(c *gin.Context) {
 	}
 	ai := authInfo.(*auth.AuthInfo)
 
+	// SSE is set up before the first byte of anything else: from here on every failure is a turn-level failure, and
+	// this endpoint's only client reads `event:` frames. A JSON envelope written here would be dropped on the floor -
+	// which is how "no default model configured" managed to produce an empty bubble with no error at all.
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		xhttp.ErrCode(c, "common.internal", nil, "streaming is not supported by this server", "")
+		return
+	}
+
 	id := c.Param("id")
 
 	var req chatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
+		sendRunError(c, flusher, "common.invalid_params", nil, "Invalid request body")
 		return
 	}
 	message := strings.TrimSpace(req.Message)
 	// Attachments alone may be sent: with an empty body the attachment list says what this turn is about
 	if message == "" && len(req.Files) == 0 {
-		xhttp.ErrCode(c, "agent.message_required", nil, "message is required", "")
+		sendRunError(c, flusher, "agent.message_required", nil, "message is required")
 		return
 	}
 
 	instance, err := repo.GetAgent(ai, id)
 	if err != nil {
-		xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
+		sendRunError(c, flusher, "agent.not_found", nil, "Agent instance not found")
 		return
 	}
 
@@ -113,11 +127,11 @@ func ChatAgent(c *gin.Context) {
 		detail, gerr := mgr.Get(context.Background(), tools.SkillRef{Name: name})
 		switch {
 		case gerr != nil:
-			xhttp.ErrCode(c, "common.internal", nil, "failed to read the skill: "+gerr.Error(), "")
+			sendRunError(c, flusher, "common.internal", nil, "failed to read the skill: "+gerr.Error())
 			return
 		case detail != nil && !detail.UserInvocable:
-			xhttp.ErrCode(c, "skill.not_invocable", map[string]any{"name": name},
-				"the skill "+name+" is not available as a user command", "")
+			sendRunError(c, flusher, "skill.not_invocable", map[string]any{"name": name},
+				"the skill "+name+" is not available as a user command")
 			return
 		case detail != nil:
 			commandName, commandArgs = name, rest
@@ -166,19 +180,13 @@ func ChatAgent(c *gin.Context) {
 	agent.SetFollowDrafts(args, followDrafts)
 	inst, err := agent.NewAgent(instance, ai.Schema, args)
 	if err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "failed to init the agent: "+err.Error(), "")
-		return
-	}
-
-	// SSE headers
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("X-Accel-Buffering", "no")
-
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		xhttp.ErrCode(c, "common.internal", nil, "streaming is not supported by this server", "")
+		// A missing / unusable default model is configuration, not a bug: it carries a code the console translates,
+		// so the user reads "configure a default model" instead of an internal error.
+		if ce, isCfg := agent.AsConfigError(err); isCfg {
+			sendRunError(c, flusher, ce.Code, configParams(ce.Params), ce.Msg)
+			return
+		}
+		sendRunError(c, flusher, "common.internal", nil, "failed to init the agent: "+err.Error())
 		return
 	}
 
@@ -299,6 +307,36 @@ loop:
 // Reading and writing session records all happen in the agent layer (service/agent/agent_impl.go):
 // reading history, storing the turn and refreshing the title live there; an entry point only creates / resolves the session and injects _record_input.
 // That way agents called from web chat, RPC, MCP, call_agent and flow nodes share one memory contract.
+
+// sendRunError reports a failure that happened before the run produced any event, inside the SSE protocol.
+//
+// Why not xhttp.ErrCode: this endpoint always answers text/event-stream, and the chat client only reacts to frames
+// carrying an `event:` line - a bare JSON envelope is dropped silently (the turn ended with an empty bubble and no
+// error, which is exactly how "no default model" was reported). code is the translatable application code, params its
+// copy variables, msg the English diagnostic used as the fallback when the bundle has no entry for the code.
+func sendRunError(c *gin.Context, flusher http.Flusher, code string, params map[string]any, msg string) {
+	data := map[string]interface{}{"message": msg}
+	if code != "" {
+		data["code"] = code
+	}
+	if len(params) > 0 {
+		data["params"] = params
+	}
+	sendSSE(c.Writer, flusher, "RUN_ERROR", data)
+}
+
+// configParams adapts a ConfigError's parameters for the SSE payload: an empty map stays nil, so the frame does not
+// carry an empty "params" object the frontend would have to ignore.
+func configParams(m map[string]string) map[string]any {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
 
 // sendSSE sends one event with standard SSE framing.
 func sendSSE(w http.ResponseWriter, flusher http.Flusher, event string, data interface{}) {

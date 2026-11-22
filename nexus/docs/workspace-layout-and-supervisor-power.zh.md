@@ -444,7 +444,7 @@ RPC / MCP 的 `user_id` 是**恒有**的：`verifyAPIKey` / `verifyOAuth` 只放
 | 当前 agent | `agent` | 该 agent id | 正常一轮结束 |
 | `call_agent` 子 agent | `agent` | 子 agent id | 父会话透传（`caller.go`） |
 | flow 里的 agent 节点 | `agent` | 节点配置的 agent id | `rpc_target.go` 透传同一 sid |
-| flow 自身 | `flow` | 该 flow id | 该 flow 的 `max_session_records > 0` |
+| flow 自身 | `flow` | 该 flow id | 该 flow 的 `session_memory` 开关 |
 
 因此「控制台历史少了几轮」通常不是丢数据，而是**读的是哪条线**的问题：
 
@@ -452,8 +452,9 @@ RPC / MCP 的 `user_id` 是**恒有**的：`verifyAPIKey` / `verifyOAuth` 只放
   中间轮次、flow 自己的记录都不进上下文；
 - 控制台 `GET /admin/sessions/:id/messages` 读的是**会话行 owner 那条线**（`admin/agents/session.go`），
   同样看不到其它线；
-- **flow 的会话记忆默认关闭**：`flows.max_session_records = -1` → `ResolveMaxSessionRecords()` 返回 0，
-  `persistSessionMemory` 直接 return。所以多数租户里 `owner_type='flow'` 的记录根本不存在，
+- **flow 的会话记忆是个开关，不是一个数字**：`flows.session_memory` 决定这个流程有没有记忆（默认开启）；
+  关掉时 `ResolveMaxSessionRecords()` 返回 0，`persistSessionMemory` 直接 return。保留多少条来自租户配额
+  （`flow_configs.max_session_records`）。所以关掉开关的租户里 `owner_type='flow'` 的记录根本不存在，
   排查时先确认这个开关，再怀疑数据丢失。
 
 **归属与访问控制是两件事**：`sessions.owner_*` 只回答「谁建的」（展示/审计），访问控制是
@@ -487,7 +488,7 @@ HAVING count(DISTINCT owner_type) > 1
 不要按「形态不同」去修。
 
 **会话数配额**：上限按 `(owner_type, user_id)` 分桶（用户覆盖值 → 租户值 → 系统行，
-**fallback `-1`（不限）**，要限制就在系统行 / 租户行 / `user_quotas` 显式配正数），
+**fallback `200`（每个桶）**；系统行 / 租户行 / `user_quotas` 只能收紧；`-1` 仍表示不限，但不再是默认），
 两条路径处理不同：
 
 - **控制台**（`sessions.Create`，即 `admin/agents` 的建会话 / 首条消息 / 上传自动建）：超限直接返回 507，

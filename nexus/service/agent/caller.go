@@ -115,7 +115,9 @@ func (c *agentCaller) Call(ctx context.Context, req tools.CallRequest) (string, 
 
 	a, err := NewAgent(inst, c.schema, sub)
 	if err != nil {
-		return "", err
+		// The callee's name is part of the answer: this text becomes the parent model's tool result, and "which hop
+		// failed" is the only thing it cannot infer.
+		return "", fmt.Errorf("agent %q: %w", req.CalleeName, err)
 	}
 	// A session-less child agent lands in a one-shot workspace under runs/{run_id}/ and is reclaimed by Close()
 	// (cleanupEphemeralWorkspace: KillInteractiveRun first, then DeletePrefix; with a session it is skipped and the session directory is left

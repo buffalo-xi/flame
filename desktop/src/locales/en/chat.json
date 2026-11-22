@@ -11,6 +11,7 @@
     "supervisor": "Supervisor",
     "agentOption": "{name} · Supervisor",
     "closeChat": "Close chat",
+    "viewRunHistory": "View this session's runs",
     "loadEarlier": "Load earlier messages",
     "startChat": "Start the conversation",
     "selectAgentToChat": "Select an agent to start",
@@ -70,6 +71,10 @@
     "runError": "[error] {msg}",
     "stoppedMark": "[stopped]",
     "chatFailed": "The conversation failed, please try again",
-    "attachOnlyMessage": "Please look at the file(s) I uploaded."
+    "attachOnlyMessage": "Please look at the file(s) I uploaded.",
+    "noDefaultModel": {
+      "hint": "No default model is available, so the conversation cannot start: add a model in Settings → Models and mark it as the default",
+      "action": "Configure"
+    }
   }
 }

@@ -66,11 +66,8 @@
     "requestFailed": "[llm-check] 请求失败，跳过提示:",
     "hasDefault": "[llm-check] 已有缺省模型:",
     "skipNotice": "[llm-check] 非「缺少默认模型」的响应，跳过提示:",
-    "noDefault": "[llm-check] 未检测到缺省模型，提示用户去配置",
-    "prompt": "当前租户还没有配置缺省大模型，智能体无法开始对话。现在去「设置 → LLM 配置」添加服务商与模型吗？",
-    "title": "未检测到大模型",
-    "goConfig": "去配置",
-    "later": "稍后"
+    "noDefault": "[llm-check] 未检测到缺省模型，已导航到「设置 → LLM 配置」",
+    "prompt": "当前租户还没有配置缺省大模型，智能体无法开始对话。已打开「设置 → LLM 配置」：添加服务商与模型后即可开始。"
   },
   "apiError": {
     "network": "网络请求失败：{reason}",
@@ -115,7 +112,8 @@
   },
   "running": {
     "tabRunning": "运行中",
-    "tabHistory": "运行历史",
+    "tabHistory": "工作流历史",
+    "tabAgentHistory": "智能体历史",
     "filterAll": "全部",
     "filterAgent": "智能体",
     "filterFlow": "工作流",

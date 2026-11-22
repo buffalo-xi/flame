@@ -123,8 +123,9 @@ type Repository interface {
 	UpdateTitle(schema, sessionID, title string) error
 	// Touch refreshes updated_at (called after a turn).
 	Touch(schema, sessionID string) error
-	// EnsureExists makes sure the session with the given id exists: missing means create it with that id, present means
-	// refresh updated_at.
+	// EnsureExists makes sure the session with the given id exists: missing means create it with that id (subject to the
+	// session-count quota), present means refresh updated_at. It does not check visibility: callers must already know the
+	// session belongs to this user.
 	EnsureExists(schema, id, ownerType, ownerID, userID, title string) error
 	// Delete deletes a session (its session_records, workspace directory and usage counter included).
 	Delete(schema, sessionID string) error

@@ -135,8 +135,13 @@ func BuildRunRecord(ec *flow.ExecContext, flowErr error) *models.FlowRunRecord {
 	}
 
 	return &models.FlowRunRecord{
-		ID:                   ec.GetRunID(),
-		FlowID:               ec.GetflowId(),
+		ID:     ec.GetRunID(),
+		FlowID: ec.GetflowId(),
+		// The same two dimensions the agent run log records: which conversation this run belongs to, and who triggered it.
+		// Both come straight from the execution context and are empty when the run has no session or the caller was
+		// resolved without a login user (an API-key call), in which case SaveRun stores NULL.
+		SessionID:            ec.SessionID,
+		UserID:               ec.UserID,
 		Status:               status,
 		RunType:              runType,
 		Result:               ec.GetResult(),

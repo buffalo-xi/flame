@@ -129,7 +129,7 @@
                 </div>
                 <div v-for="row in quotaEditRows" :key="row.key" class="quota-grid-row">
                   <span class="flow-name">{{ row.label }}</span>
-                  <span class="q-usage" :class="{ over: row.over }">{{ row.used === null ? '—' : row.used }}</span>
+                  <span class="q-usage" :class="{ over: row.over }">{{ row.usedText }}</span>
                   <span class="flow-sys">{{ row.systemText }}</span>
                   <el-input v-model="tenantQuota[row.key]" size="small" :placeholder="t('platform.myTenants.phFallbackSystem')" />
                 </div>
@@ -494,13 +494,17 @@ async function submitFlow() {
   }
 }
 
-// ===== 智能体运行参数（platform.agent_configs 的租户行；与工作流运行参数同一套交互） =====
-// 唯一差异：本表没有 -1 —— 四项都是安全阀，只接受 >= 1（后端同样会拒）。
+// ===== Agent run parameters (the tenant row of platform.agent_configs; same interaction as the flow ones) =====
+// The only difference: this table has no -1 — all six entries are safety valves, only >= 1 is accepted (the
+// backend rejects anything else too). max_run_records caps the agent run log and max_session_records the session
+// memory kept per session.
 const AGENT_FIELDS = computed(() => [
   { key: 'max_iterations', label: t('platform.system.agentConfigs.max_iterations') },
   { key: 'max_call_depth', label: t('platform.system.agentConfigs.max_call_depth') },
   { key: 'max_tools', label: t('platform.system.agentConfigs.max_tools') },
-  { key: 'max_output_bytes', label: t('platform.system.agentConfigs.max_output_bytes') }
+  { key: 'max_output_bytes', label: t('platform.system.agentConfigs.max_output_bytes') },
+  { key: 'max_run_records', label: t('platform.system.agentConfigs.max_run_records') },
+  { key: 'max_session_records', label: t('platform.system.agentConfigs.max_session_records') }
 ])
 const agentLoading = ref(false)
 const agentSaving = ref(false)
@@ -584,7 +588,7 @@ const QUOTA_FIELDS = computed(() => [
   { key: 'max_skills', label: t('platform.myTenants.quotaFieldSkills'), unit: 'count', usageKey: 'skills', short: t('platform.myTenants.quotaShortSkills') },
   { key: 'max_flows', label: t('platform.myTenants.quotaFieldFlows'), unit: 'count', usageKey: 'flows', short: t('platform.myTenants.quotaShortFlows') },
   { key: 'max_session_storage_bytes', label: t('platform.myTenants.quotaFieldStorage'), unit: 'mib', short: t('platform.myTenants.quotaShortStorage') },
-  { key: 'max_user_sessions', label: t('platform.myTenants.quotaFieldSessions'), unit: 'count', short: t('platform.myTenants.quotaShortSessions') }
+  { key: 'max_user_sessions', label: t('platform.myTenants.quotaFieldSessions'), unit: 'count', usageKey: 'sessions', short: t('platform.myTenants.quotaShortSessions') }
 ])
 const quotaLoading = ref(false)
 const quotaSaving = ref(false)
@@ -616,17 +620,32 @@ function systemLimitText(f) {
   return quotaText(f, v)
 }
 
-// 配额表的行：标签 / 当前用量 / 系统顶文本 / 是否超限（用量超过生效值标红）
+// Quota table rows: label / current usage / system cap text / whether it is over (usage above the effective value is red).
+// The session count comes as two buckets (agent / workflow) because the backend counts per (owner_type, user); a merged
+// number would hide which bucket is full. "Over" means either bucket is over, and the ceiling is the effective value the
+// backend already computed - the frontend never redoes the min rule.
 const quotaEditRows = computed(() => {
   const tn = selected.value
   if (!tn) return []
   return QUOTA_FIELDS.value.map((f) => {
-    const used = f.usageKey ? (tn.usage?.[f.usageKey] ?? 0) : null
-    const limit = tn.quota?.[f.key]
+    const raw = f.usageKey ? tn.usage?.[f.usageKey] : null
+    const limit = effectiveQuota.value?.[f.key]
+    const limited = typeof limit === 'number' && limit >= 0
+    let usedText = '—'
+    let over = false
+    if (raw && typeof raw === 'object') {
+      const agent = raw.agent ?? 0
+      const flow = raw.flow ?? 0
+      usedText = t('platform.myTenants.usageByType', { agent, flow })
+      over = limited && (agent > limit || flow > limit)
+    } else if (raw !== null && raw !== undefined) {
+      usedText = String(raw)
+      over = limited && raw > limit
+    }
     return {
       ...f,
-      used,
-      over: used !== null && typeof limit === 'number' && limit >= 0 && used > limit,
+      usedText,
+      over,
       systemText: systemLimitText(f)
     }
   })

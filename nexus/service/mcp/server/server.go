@@ -333,6 +333,12 @@ func runAgentTool(authInfo *auth.AuthInfo, agentID string, input map[string]inte
 	agent.SetReleaseMode(agentArguments)
 	inst, err := agent.NewAgent(agentInst, authInfo.Schema, agentArguments)
 	if err != nil {
+		// Missing / unusable configuration (no default model etc.): MCP has no application error code, so report it as
+		// a tool-level error - the caller, or the model behind it, reads the sentence instead of a protocol-level
+		// server fault that says nothing about where to look.
+		if ce, isCfg := agent.AsConfigError(err); isCfg {
+			return errorResult(ce.Msg), nil
+		}
 		return nil, fmt.Errorf("init agent: %w", err)
 	}
 	if inst == nil {

@@ -497,7 +497,7 @@ same thing:
 | the current agent | `agent` | that agent's id | a normal turn ends |
 | `call_agent` sub-agent | `agent` | the sub-agent's id | the parent session passes through (`caller.go`) |
 | agent node inside a flow | `agent` | the agent id configured on the node | `rpc_target.go` passes the same sid through |
-| the flow itself | `flow` | that flow's id | that flow's `max_session_records > 0` |
+| the flow itself | `flow` | that flow's id | that flow's `session_memory` switch |
 
 So "the console history is missing a few turns" is usually not data loss but a question of **which line is being read**:
 
@@ -505,9 +505,10 @@ So "the console history is missing a few turns" is usually not data loss but a q
   turns and the flow's own records never enter the context;
 - the console's `GET /admin/sessions/:id/messages` reads **the line of the session row's owner** (`admin/agents/session.go`),
   and likewise cannot see other lines;
-- **a flow's session memory is off by default**: `flows.max_session_records = -1` → `ResolveMaxSessionRecords()` returns 0 and
-  `persistSessionMemory` returns immediately. So in most tenants `owner_type='flow'` records simply do not exist — check this
-  switch before suspecting data loss.
+- **a flow's session memory is a switch, not a number**: `flows.session_memory` decides whether the flow is stateful at all
+  (on by default); when it is off, `ResolveMaxSessionRecords()` returns 0 and `persistSessionMemory` returns immediately.
+  The number of messages kept comes from the tenant quota (`flow_configs.max_session_records`). So a tenant that turned the
+  switch off has no `owner_type='flow'` records at all — check this switch before suspecting data loss.
 
 **Ownership and access control are two different things**: `sessions.owner_*` only answers "who created it"
 (display / audit); access control is `VisibleToUser(user_id)`. That is why RPC / MCP / flow can reuse a session row created by
@@ -542,8 +543,8 @@ the body is the JSON of the business arguments. Both history replay and the mode
 differ.
 
 **Session-count quota**: the cap is bucketed by `(owner_type, user_id)` (user override → tenant value → system row, with
-**fallback `-1` (unlimited)**; to impose a limit, configure a positive number explicitly in the system row / tenant row /
-`user_quotas`). The two paths behave differently:
+**fallback `200` per bucket**; the system row / tenant row / `user_quotas` can tighten it, and `-1` still means unlimited
+for a deployment that wants no cap at all). The two paths behave differently:
 
 - **console** (`sessions.Create`, i.e. creating a session / first message / auto-create on upload in `admin/agents`): over the
   limit returns 507 and the human deletes old sessions by hand — chat history does not make that decision for the user;

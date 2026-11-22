@@ -55,6 +55,10 @@ $env:PGPASSWORD = $Password
 $steps = @(
     @{ File = 'platform.sql';                Note = 'core platform tables (incl. platform.quota_configs)' }
     @{ File = 'quota_storage.sql';           Note = 'session-quota columns on quota_configs' }
+    @{ File = 'flow_configs.sql';            Note = 'flow run limits (system + tenant rows)' }
+    @{ File = 'agent_configs.sql';           Note = 'agent run limits (system + tenant rows)' }
+    @{ File = 'llm_provider_presets.sql';    Note = 'shared LLM provider presets' }
+    @{ File = 'llm_presets_seed.sql';        Note = 'default presets (idempotent, needs llm_provider_presets)' }
     @{ File = 'tenant_capabilities.sql';     Note = 'per-tenant capability grants' }
     @{ File = 'capability_gates.sql';        Note = 'global kill switch' }
     @{ File = 'capability_code_rename.sql';  Note = 'needs capability_gates' }
@@ -67,7 +71,36 @@ $steps = @(
     @{ File = 'plugin_gates.sql';            Note = 'plugin gates' }
     @{ File = 'tenant_plugins.sql';          Note = 'tenant plugin rows' }
     @{ File = 'customtool_capability_exec.sql'; Note = 'backfills tenant schemas (no-op on an empty DB)' }
+    @{ File = 'flow_run_identity.sql';       Note = 'adds session_id / user_id to flow_run_records (no-op on an empty DB)' }
+    @{ File = 'agent_run_identity.sql';      Note = 'id becomes the run identity in agent_run_records (no-op on an empty DB)' }
+    @{ File = 'agent_run_session_index.sql'; Note = 'session_id index on the agent run log (no-op on an empty DB)' }
+    @{ File = 'zz_limit_defaults.sql';       Note = 'system-row defaults for the three limit tables (idempotent)' }
 )
+
+# ---- Manifest check: does the PoC image carry every script in this directory? ----
+# deploy/poc/Dockerfile copies each script under an explicit name (10-platform.sql, 20-quota_storage.sql, ...) because
+# entrypoint.sh applies the directory in filename order. A script added here and forgotten there breaks no build and no
+# test: the image simply never applies it, an existing /data volume keeps the old schema, and the symptom is a silently
+# empty page (two agent run-log migrations were missing exactly that way).
+$pocDockerfile = Join-Path $repoRoot 'deploy/poc/Dockerfile'
+if (Test-Path $pocDockerfile) {
+    $copied = @(Select-String -Path $pocDockerfile -Pattern 'nexus/platform/sql/([\w_]+\.sql)' -AllMatches |
+        ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    $inDir = @(Get-ChildItem -Path $sqlDir -Filter '*.sql' | Select-Object -ExpandProperty Name | Sort-Object)
+    $absent = @($inDir | Where-Object { $copied -notcontains $_ })
+    $stale = @($copied | Where-Object { $inDir -notcontains $_ })
+    if ($absent.Count -gt 0 -or $stale.Count -gt 0) {
+        if ($absent.Count -gt 0) {
+            Write-Host ("  FAIL  never copied into the PoC image: {0}" -f ($absent -join ', ')) -ForegroundColor Red
+        }
+        if ($stale.Count -gt 0) {
+            Write-Host ("  FAIL  copied by deploy/poc/Dockerfile but not on disk: {0}" -f ($stale -join ', ')) -ForegroundColor Red
+        }
+        Write-Host 'fix the COPY list in deploy/poc/Dockerfile, then re-run' -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host ("sql manifest: all {0} script(s) reach the PoC image" -f $inDir.Count) -ForegroundColor DarkGray
+}
 
 # Kept for the next legacy-table case: SQL that ALTERs a table whose DDL is not in this repository cannot run here.
 $skipped = @()

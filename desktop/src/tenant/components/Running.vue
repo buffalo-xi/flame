@@ -1,11 +1,13 @@
 <template>
-  <div class="running">
-    <!-- 两个 tab 数据源与刷新方式都不一样，所以不混在一张表里：
-         运行中 = 后端跨实例台账（Redis），活着才在，靠轮询刷新；
-         运行历史 = flow_run_records（跑完才落库、长期保留），靠手动查询分页。 -->
+  <div ref="pageRef" class="running">
+    <!-- Three tabs, three data sources, deliberately never one table:
+         running      = the cross-instance ledger (Redis), alive only, polled while visible;
+         history      = flow_run_records (workflow executions, written when a run ends);
+         agentHistory = agent_run_records (agent answers, including stateless MCP / RPC calls with no session). -->
     <el-tabs v-model="tab" class="running-tabs">
       <el-tab-pane :label="$t('running.tabRunning')" name="running" />
       <el-tab-pane :label="$t('running.tabHistory')" name="history" />
+      <el-tab-pane :label="$t('running.tabAgentHistory')" name="agentHistory" />
     </el-tabs>
 
     <!-- 运行台账 = 租户里「正在跑什么」：agent 与 flow 都在这里。
@@ -85,10 +87,24 @@
       </div>
     </template>
 
-    <!-- 历史 tab 首次进入才挂载（挂载即自己拉一次），之后 v-show 保住筛选与已加载的页，
-         切回来只做一次轻量刷新，不重建整个列表 -->
+    <!-- Each history tab mounts on first visit (the component fetches once on mount) and then stays alive
+         behind v-show, so the filters and the already-loaded pages survive a tab switch. -->
     <template v-if="historyMounted">
-      <RunHistory v-show="tab === 'history'" ref="historyRef" class="running-history" />
+      <RunHistory
+        v-show="tab === 'history'"
+        ref="historyRef"
+        :panel-anchor="pageRef"
+        class="running-history"
+      />
+    </template>
+    <template v-if="agentHistoryMounted">
+      <AgentHistory
+        v-show="tab === 'agentHistory'"
+        ref="agentHistoryRef"
+        :preset-session="focusSession"
+        :panel-anchor="pageRef"
+        class="running-history"
+      />
     </template>
   </div>
 </template>
@@ -100,17 +116,35 @@ import { ElMessage, ElMessageBox, ElButton, ElTag } from 'element-plus'
 import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import RunHistory from './RunHistory.vue'
+import AgentHistory from './AgentHistory.vue'
 import { formatError } from '../../locales'
 
 // 列定义与下拉选项都要跟着语言切换重算，所以它们不是常量数组而是 computed ——
 // el-table-v2 的列是渲染函数，locale 变了不会自动重渲染，只有 data（columns）变了才会。
 const { t } = useI18n()
 
+// Detail panels of the two history tabs align to this page box (border box, page padding included), the same
+// way the agent settings window aligns to the editor's full-screen frame
+const pageRef = ref(null)
 // tab：running = 实时台账（轮询）| history = 历史运行记录（按需查询）
 const tab = ref('running')
 // 历史 tab 惰性挂载：没人点进来就不该在进页面时白查一次库；挂载后靠 v-show 留住筛选
 const historyMounted = ref(false)
 const historyRef = ref(null)
+// The agent history is a separate page over a separate table: mounted lazily for the same reason
+const agentHistoryMounted = ref(false)
+const agentHistoryRef = ref(null)
+
+// Cross-page jump from the chat ("view this session's runs"): { session_id, ts }. The payload is rebuilt on every
+// request, so asking twice for the same session still reaches the child's watch.
+const props = defineProps({
+  focusSession: { type: Object, default: null }
+})
+watch(() => props.focusSession, (p) => {
+  if (!p?.session_id) return
+  tab.value = 'agentHistory'
+  agentHistoryMounted.value = true
+}, { immediate: true })
 
 // run_id → 正在终止中（按钮 loading）
 const stopping = ref({})
@@ -403,7 +437,8 @@ const startTimers = () => {
 watch(kind, () => load())
 watch(autoRefresh, schedulePoll)
 
-// 切 tab：台账把秒表和轮询停掉（看不见就别空跑），历史只在已挂载时刷一次
+// Switching tabs stops the ledger's clock and poll (nothing visible, so nothing to poll) and refreshes
+// whichever history page is now on screen - once, and only when it is already mounted.
 watch(tab, (v) => {
   if (v === 'running') {
     load()
@@ -411,20 +446,30 @@ watch(tab, (v) => {
     return
   }
   stopTimers()
+  if (v === 'agentHistory') {
+    if (agentHistoryMounted.value) agentHistoryRef.value?.reload()
+    else agentHistoryMounted.value = true // the component fetches once on mount
+    return
+  }
   if (historyMounted.value) {
     historyRef.value?.reload()
   } else {
-    // 首次进入：挂载时组件的 onMounted 自己会拉，不必在这里再调一次
     historyMounted.value = true
   }
 })
 
-// 页面在 keep-alive 里：进入时拉一次并开表，离开时停表（别在后台空跑轮询）
+// The page lives in keep-alive: refresh on enter and start the clock, stop both on leave.
 onActivated(() => {
   if (tab.value === 'running') {
     load()
     startTimers()
-  } else if (historyMounted.value) {
+    return
+  }
+  if (tab.value === 'agentHistory') {
+    if (agentHistoryMounted.value) agentHistoryRef.value?.reload()
+    return
+  }
+  if (historyMounted.value) {
     historyRef.value?.reload()
   }
 })
@@ -664,4 +709,5 @@ onUnmounted(stopTimers)
   width: 100%;
   white-space: nowrap;
 }
+
 </style>

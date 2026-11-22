@@ -107,40 +107,6 @@
           </div>
           <div class="config-item">
             <div class="config-item-header">
-              <label class="config-label">{{ t('flow.startNode.maxRecursionDepth') }}<span class="limit-hint">/ {{ limitHintText('max_recursion_depth') }}</span></label>
-              <div class="config-controls">
-                <el-input
-                  v-if="isLimitEnabled('max_recursion_depth')"
-                  :model-value="String(flowLimits.max_recursion_depth)"
-                  class="config-input"
-                  type="number"
-                  :max="systemLimits.max_recursion_depth"
-                  @update:model-value="(val) => handleUpdateLimit('max_recursion_depth', val)"
-                  @blur="(e) => clampOnBlur('max_recursion_depth', e)"
-                />
-                <el-switch :model-value="isLimitEnabled('max_recursion_depth')" @update:model-value="(v) => toggleLimit('max_recursion_depth', v)" />
-              </div>
-            </div>
-          </div>
-          <div class="config-item">
-            <div class="config-item-header">
-              <label class="config-label">{{ t('flow.startNode.maxNodeCount') }}<span class="limit-hint">/ {{ limitHintText('max_node_count') }}</span></label>
-              <div class="config-controls">
-                <el-input
-                  v-if="isLimitEnabled('max_node_count')"
-                  :model-value="String(flowLimits.max_node_count)"
-                  class="config-input"
-                  type="number"
-                  :max="systemLimits.max_node_count"
-                  @update:model-value="(val) => handleUpdateLimit('max_node_count', val)"
-                  @blur="(e) => clampOnBlur('max_node_count', e)"
-                />
-                <el-switch :model-value="isLimitEnabled('max_node_count')" @update:model-value="(v) => toggleLimit('max_node_count', v)" />
-              </div>
-            </div>
-          </div>
-          <div class="config-item">
-            <div class="config-item-header">
               <label class="config-label">{{ t('flow.startNode.maxExecCount') }}<span class="limit-hint">/ {{ limitHintText('max_exec_count') }}</span></label>
               <div class="config-controls">
                 <el-input
@@ -160,17 +126,7 @@
             <div class="config-item-header">
               <label class="config-label">{{ t('flow.startNode.runRecords') }}<span class="limit-hint">{{ t('flow.startNode.runRecordsHint', { max: systemLimits.max_run_records }) }}</span></label>
               <div class="config-controls">
-                <el-input
-                  v-if="isLimitEnabled('max_run_records')"
-                  :model-value="String(flowLimits.max_run_records)"
-                  class="config-input"
-                  type="number"
-                  :min="0"
-                  :max="systemLimits.max_run_records"
-                  @update:model-value="(val) => handleUpdateLimit('max_run_records', val)"
-                  @blur="(e) => clampOnBlur('max_run_records', e)"
-                />
-                <el-switch :model-value="isLimitEnabled('max_run_records')" @update:model-value="(v) => toggleLimit('max_run_records', v)" />
+                <el-switch :model-value="flowLimits.store_runs" @update:model-value="(v) => handleUpdateFlag('store_runs', v)" />
               </div>
             </div>
           </div>
@@ -178,17 +134,7 @@
             <div class="config-item-header">
               <label class="config-label">{{ t('flow.startNode.sessionRecords') }}<span class="limit-hint">{{ t('flow.startNode.sessionRecordsHint', { max: systemLimits.max_session_records }) }}</span></label>
               <div class="config-controls">
-                <el-input
-                  v-if="isLimitEnabled('max_session_records')"
-                  :model-value="String(flowLimits.max_session_records)"
-                  class="config-input"
-                  type="number"
-                  :min="1"
-                  :max="systemLimits.max_session_records"
-                  @update:model-value="(val) => handleUpdateLimit('max_session_records', val)"
-                  @blur="(e) => clampOnBlur('max_session_records', e)"
-                />
-                <el-switch :model-value="isLimitEnabled('max_session_records')" @update:model-value="(v) => toggleLimit('max_session_records', v)" />
+                <el-switch :model-value="flowLimits.session_memory" @update:model-value="(v) => handleUpdateFlag('session_memory', v)" />
               </div>
             </div>
           </div>
@@ -238,11 +184,11 @@ const props = defineProps({
   },
   flowLimits: {
     type: Object,
-    default: () => ({ timeout: -1, max_recursion_depth: -1, max_node_count: -1, max_exec_count: -1, max_run_records: -1, max_session_records: -1 })
+    default: () => ({ timeout: -1, max_exec_count: -1, store_runs: true, session_memory: true })
   },
   flowSystemLimits: {
     type: Object,
-    default: () => ({ max_timeout: 300, max_recursion_depth: 50, max_node_count: 1000, max_exec_count: 20000, max_run_records: 100, max_session_records: 50 })
+    default: () => ({ max_timeout: 300, max_exec_count: 20000, max_run_records: 100, max_session_records: 50 })
   }
 })
 
@@ -272,18 +218,15 @@ const lastRunLimitsText = computed(() => {
 // 将系统限制字段映射为 flowLimits 的字段名
 const systemLimits = computed(() => ({
   max_timeout: props.flowSystemLimits.max_timeout,
-  max_recursion_depth: props.flowSystemLimits.max_recursion_depth,
-  max_node_count: props.flowSystemLimits.max_node_count,
   max_exec_count: props.flowSystemLimits.max_exec_count,
+  // Tenant-level retention ceilings: only shown as a hint next to the two switches.
   max_run_records: props.flowSystemLimits.max_run_records,
   max_session_records: props.flowSystemLimits.max_session_records
 }))
 
-// flowLimits key -> systemLimits key 映射
+// flowLimits key -> systemLimits key mapping.
 const SYS_LIMIT_KEY_MAP = {
   timeout: 'max_timeout',
-  max_recursion_depth: 'max_recursion_depth',
-  max_node_count: 'max_node_count',
   max_exec_count: 'max_exec_count',
   max_run_records: 'max_run_records',
   max_session_records: 'max_session_records'
@@ -925,8 +868,8 @@ function toggleLimit(key, enabled) {
  * @param {string} value - 新值
  */
 function handleUpdateLimit(key, value) {
-  // max_run_records 最小值为 0（0=不存储）；max_session_records 最小值为 1（0 非法）；其余字段最小值为 2
-  const minVal = key === 'max_run_records' ? 0 : (key === 'max_session_records' ? 1 : 2)
+  // The smallest meaningful value is 2: 1 and 0 would be indistinguishable from "unset" on these fields.
+  const minVal = 2
   let v = (value === null || value === undefined || value === '') ? minVal : Number(value)
   if (!Number.isFinite(v) || v < minVal) v = minVal
   // 检查系统上限，若超过则回退到最大值
@@ -935,6 +878,16 @@ function handleUpdateLimit(key, value) {
     v = sysMax
   }
   const newLimits = { ...props.flowLimits, [key]: v }
+  emit('update-limits', newLimits)
+}
+
+/**
+ * 切换开关型配置（是否保留运行记录 / 是否有会话记忆）
+ * @param {string} key - 字段名（store_runs / session_memory）
+ * @param {boolean} enabled - 是否启用
+ */
+function handleUpdateFlag(key, enabled) {
+  const newLimits = { ...props.flowLimits, [key]: !!enabled }
   emit('update-limits', newLimits)
 }
 

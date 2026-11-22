@@ -21,7 +21,7 @@
 # base 选型：
 #   node:24-trixie-slim —— node 官方镜像自带 node/npm 与 uid=gid=1000 的 node 用户，
 #   血统为 Debian 13 (trixie)：python3 3.13 / lua5.4 5.4.7 / pandas 2.2.3 / numpy 2.2.4
-#   / openpyxl 3.1.5 / xlrd 2.0.1，比 bookworm 整体新一代。
+#   / openpyxl 3.1.5 / xlrd 2.0.1 / requests / python-docx / beautifulsoup4，比 bookworm 整体新一代。
 #   不用 alpine：musl 会引入第三套运行时语义（本机 Windows、生产 Linux 都是 glibc）。
 #   ⚠️ 若 `node:24-trixie-slim` 不存在，仅把下一行改为 node:24-bookworm-slim，其余不变
 #      （版本表随之回到 python 3.11 / pandas 1.5.3 那一档）。
@@ -60,6 +60,9 @@ RUN set -eux; \
         python3-xlrd \
         python3-pandas \
         python3-numpy \
+        python3-requests \
+        python3-docx \
+        python3-bs4 \
         lua5.4 \
         luarocks \
         fonts-liberation \
@@ -97,7 +100,7 @@ RUN set -eux; \
     command -v pkill pgrep ps; \
     fc-list | grep -qi "noto sans cjk" && echo "cjk fonts ok"; \
     python -c 'import json, struct, sys, csv, zipfile; print("stdlib ok")'; \
-    python -c 'import openpyxl, xlrd, pandas, numpy; print("py-deps ok:", openpyxl.__version__, pandas.__version__)'; \
+    python -c 'import openpyxl, xlrd, pandas, numpy, requests, docx, bs4; print("py-deps ok:", openpyxl.__version__, pandas.__version__, requests.__version__, docx.__version__, bs4.__version__)'; \
     # 每次 execute 都是全新解释器，大包 import 的时间直接落在用户脚本前面。
     # 这里把 pandas 的 import 耗时打进构建日志，方便对比「预编译 pyc 前后」的差距
     # （构建机上的一次性参考值，别拿它当运行时承诺）。
@@ -114,7 +117,7 @@ RUN set -eux; \
       echo "node:   $(node --version)"; \
       echo "npm:    $(npm --version)"; \
       echo "lua:    $(lua -v 2>&1)"; \
-      echo "libs:   $(python -c 'import openpyxl,xlrd,pandas,numpy;print("openpyxl",openpyxl.__version__,"xlrd",xlrd.__version__,"pandas",pandas.__version__,"numpy",numpy.__version__)')"; \
+      echo "libs:   $(python -c 'import openpyxl,xlrd,pandas,numpy,requests,docx,bs4;print("openpyxl",openpyxl.__version__,"xlrd",xlrd.__version__,"pandas",pandas.__version__,"numpy",numpy.__version__,"requests",requests.__version__,"docx",docx.__version__,"bs4",bs4.__version__)')"; \
     } > /etc/flame-versions; \
     cat /etc/flame-versions
 

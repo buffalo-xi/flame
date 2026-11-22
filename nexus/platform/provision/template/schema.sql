@@ -5,6 +5,29 @@ CREATE TABLE agent_relations (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 COMMENT ON TABLE agent_relations IS 'agent 调用授权：无行=不可调用(默认拒绝)；创建者自动获得对新 agent 的调用权';
+CREATE TABLE agent_run_records (
+    id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    session_id uuid,
+    user_id uuid,
+    run_type character varying(16),
+    status character varying(16) DEFAULT 'ok'::character varying NOT NULL,
+    err_msg text DEFAULT ''::text NOT NULL,
+    duration_ms bigint DEFAULT 0 NOT NULL,
+    started_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    finished_at timestamp with time zone,
+    question text DEFAULT ''::text NOT NULL,
+    question_size integer DEFAULT 0 NOT NULL,
+    answer text DEFAULT ''::text NOT NULL,
+    answer_truncated boolean DEFAULT false NOT NULL,
+    answer_size integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+COMMENT ON TABLE agent_run_records IS 'agent run log (audit): one row per run, including stateless calls with no session; independent of session memory';
+COMMENT ON COLUMN agent_run_records.id IS 'run identity; session_records.run_id points here (no separate run_id column: one run is one row)';
+COMMENT ON COLUMN agent_run_records.session_id IS 'NULL = stateless run (no _meta.session_id); session memory never reads this table';
+COMMENT ON COLUMN agent_run_records.status IS 'ok=completed / stopped=terminated on purpose / failed=errored (reason in err_msg)';
+COMMENT ON COLUMN agent_run_records.answer IS 'preview only (bounded); the full answer lives in session_records';
 CREATE TABLE agent_skill_bindings (
     agent_id uuid CONSTRAINT agent_skills_agent_id_not_null NOT NULL,
     skill_id uuid CONSTRAINT agent_skills_skill_id_not_null NOT NULL,
@@ -79,6 +102,8 @@ CREATE TABLE flow_node_records (
 CREATE TABLE flow_run_records (
     id uuid CONSTRAINT pipe_run_records_run_id_not_null NOT NULL,
     flow_id uuid CONSTRAINT pipe_run_records_pipe_id_not_null NOT NULL,
+    session_id uuid,
+    user_id uuid,
     status character varying(32) CONSTRAINT pipe_run_records_status_not_null NOT NULL,
     result text DEFAULT ''::text CONSTRAINT pipe_run_records_result_not_null NOT NULL,
     err_msg text DEFAULT ''::text CONSTRAINT pipe_run_records_err_msg_not_null NOT NULL,
@@ -111,26 +136,23 @@ CREATE TABLE flows (
     env_vars jsonb,
     flow_vars jsonb,
     timeout integer DEFAULT '-1'::integer,
-    max_recursion_depth integer DEFAULT '-1'::integer,
-    max_node_count integer DEFAULT '-1'::integer,
     max_exec_count integer DEFAULT '-1'::integer,
-    max_run_records integer DEFAULT 10,
-    max_session_records integer DEFAULT '-1'::integer,
+    store_runs boolean DEFAULT true NOT NULL,
+    session_memory boolean DEFAULT true NOT NULL,
     created_by uuid,
     updated_by uuid,
     endpoints jsonb DEFAULT '[]'::jsonb,
     status smallint DEFAULT 1 CONSTRAINT flow_instances_status_not_null NOT NULL,
-    CONSTRAINT flow_instances_status_check CHECK ((status = ANY (ARRAY[1, 3])))
+    CONSTRAINT flow_instances_status_check CHECK ((status = ANY (ARRAY[1, 3]))),
+    CONSTRAINT flows_limits_range_check CHECK ((timeout >= '-1'::integer) AND (max_exec_count >= '-1'::integer))
 );
 COMMENT ON COLUMN flows.name IS '名字，唯一';
 COMMENT ON COLUMN flows.diagram IS '流程json';
 COMMENT ON COLUMN flows.description IS '描述';
-COMMENT ON COLUMN flows.timeout IS '超时秒数';
-COMMENT ON COLUMN flows.max_recursion_depth IS '最大递归嵌套深度';
-COMMENT ON COLUMN flows.max_node_count IS '流程允许最大节点总数';
-COMMENT ON COLUMN flows.max_exec_count IS '最大节点累计执行次数';
-COMMENT ON COLUMN flows.max_run_records IS '最大保留得历史执行记录';
-COMMENT ON COLUMN flows.max_session_records IS '最大session记忆数目';
+COMMENT ON COLUMN flows.timeout IS '超时秒数（本流程的设计预算，不得超过租户上限）';
+COMMENT ON COLUMN flows.max_exec_count IS '最大节点累计执行次数（本流程的设计预算，不得超过租户上限）';
+COMMENT ON COLUMN flows.store_runs IS '是否保留历史执行记录（条数是租户配额）';
+COMMENT ON COLUMN flows.session_memory IS '是否有session记忆（条数是租户配额；false = 无状态流程）';
 COMMENT ON COLUMN flows.status IS '1:正常,3:废弃（工作流不设「锁定」：线上由版本管理，废弃自动收回端点）';
 
 -- ===== 实体版本（agent / skill / custom_tool / flow 各一张） =====
@@ -162,11 +184,9 @@ CREATE TABLE flow_versions (
     env_vars jsonb,
     flow_vars jsonb,
     timeout integer,
-    max_recursion_depth integer,
-    max_node_count integer,
     max_exec_count integer,
-    max_run_records integer,
-    max_session_records integer,
+    store_runs boolean,
+    session_memory boolean,
     is_current boolean DEFAULT false NOT NULL,
     note character varying(200) DEFAULT ''::character varying NOT NULL,
     created_by uuid,
@@ -572,6 +592,8 @@ ALTER TABLE ONLY flow_node_records
     ADD CONSTRAINT pipe_node_records_pk PRIMARY KEY (id);
 ALTER TABLE ONLY flow_run_records
     ADD CONSTRAINT pipe_run_records_pk PRIMARY KEY (id);
+ALTER TABLE ONLY agent_run_records
+    ADD CONSTRAINT agent_run_records_pk PRIMARY KEY (id);
 ALTER TABLE ONLY session_records
     ADD CONSTRAINT pipe_session_memory_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY plugins
@@ -625,10 +647,14 @@ ALTER TABLE ONLY flows
 ALTER TABLE ONLY flows
     ADD CONSTRAINT wf_instances_unique UNIQUE (name);
 CREATE INDEX agent_tool_grants_ref_idx ON agent_tool_grants USING btree (ref);
+CREATE INDEX idx_agent_run_records_agent ON agent_run_records USING btree (agent_id, started_at DESC);
+CREATE INDEX idx_agent_run_records_session ON agent_run_records USING btree (session_id, started_at DESC);
 CREATE INDEX idx_agent_skills_agent_id ON skills USING btree (agent_id);
 CREATE INDEX idx_agents_status ON agents USING btree (status);
 CREATE INDEX idx_pipe_node_records_run_status ON flow_node_records USING btree (run_id, status);
 CREATE INDEX idx_pipe_run_records_pipe ON flow_run_records USING btree (flow_id, started_at DESC);
+CREATE INDEX idx_pipe_run_records_user ON flow_run_records USING btree (user_id, started_at DESC);
+CREATE INDEX idx_pipe_run_records_session ON flow_run_records USING btree (session_id);
 CREATE INDEX idx_pipe_session_memory ON session_records USING btree (owner_id, session_id, created_at DESC);
 CREATE INDEX idx_sessions_owner ON sessions USING btree (owner_type, owner_id, updated_at DESC);
 CREATE INDEX idx_sessions_user ON sessions USING btree (owner_type, owner_id, user_id, updated_at DESC);
@@ -645,6 +671,8 @@ CREATE INDEX tool_group_items_ref_idx ON tool_group_items USING btree (ref);
 CREATE UNIQUE INDEX uk_agent_skills_agent_name ON skills USING btree (agent_id, name) WHERE (agent_id IS NOT NULL);
 CREATE UNIQUE INDEX uk_agent_skills_tenant_name ON skills USING btree (name) WHERE (agent_id IS NULL);
 CREATE UNIQUE INDEX users_display_name_idx ON users USING btree (display_name);
+ALTER TABLE ONLY agent_run_records
+    ADD CONSTRAINT agent_run_records_agent_fk FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE;
 ALTER TABLE ONLY agent_relations
     ADD CONSTRAINT agent_relations_callee_fk FOREIGN KEY (callee_id) REFERENCES agents(id) ON DELETE CASCADE;
 ALTER TABLE ONLY agent_relations

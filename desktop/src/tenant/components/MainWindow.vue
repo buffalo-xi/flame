@@ -169,6 +169,7 @@
         @wb-resize="startWbResize"
         @open-workbench="wbOpen = true"
         @open-entity="handleOpenEntity"
+        @open-run-history="handleOpenRunHistory"
       />
 
       <!-- 拖拽分隔条（带折叠按钮） -->
@@ -186,7 +187,7 @@
         <div v-if="activeNav === 'agents' || activeNav === 'wf-instances' || activeNav === 'agent-skills' || activeNav === 'capabilities' || activeNav === 'endpoints' || activeNav === 'settings' || activeNav === 'assets' || activeNav === 'running'">
           <keep-alive>
             <Agents v-if="activeNav === 'agents'" :focus="focus" />
-            <Running v-else-if="activeNav === 'running'" />
+            <Running v-else-if="activeNav === 'running'" :focus-session="runningFocusSession" />
             <Skills v-else-if="activeNav === 'agent-skills'" :focus="focus" />
             <Capabilities v-else-if="activeNav === 'capabilities'" :focus="focus" @nav="handleNav" />
             <Endpoints v-else-if="activeNav === 'endpoints'" @open="handleNav" />
@@ -228,7 +229,7 @@
 
 <script setup>
 import { ref, computed, nextTick, watch, onMounted, onUnmounted, provide } from 'vue'
-import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
+import { ElIcon, ElMessage } from 'element-plus'
 import { Document, Cpu, ChatRound, Setting, SwitchButton, Share, Collection, Tools, Promotion, Lock, Grid, Shop, Odometer } from '@element-plus/icons-vue'
 import apiConfig from '../config/api.js'
 import { getToken, getUser } from '../utils/auth.js'
@@ -419,6 +420,17 @@ const handleOpenEntity = (p) => {
   if (!p || !p.nav) return
   handleNav(p)
   // 内容区被折叠时先展开，否则切了页用户也看不见
+  restoreContent()
+}
+
+// "View this session's runs" from the chat: switch to running -> agent history and carry the session over.
+// The payload is rebuilt on every click (it carries a ts), so asking twice for the same session still reaches
+// the child's watch.
+const runningFocusSession = ref(null)
+const handleOpenRunHistory = (sessionId) => {
+  if (!sessionId) return
+  runningFocusSession.value = { session_id: sessionId, ts: Date.now() }
+  activeNav.value = 'running'
   restoreContent()
 }
 
@@ -784,17 +796,24 @@ onMounted(() => {
   checkDefaultLLM()
 })
 
-// ===== 缺省大模型检查 =====
-// 没配模型的租户，第一句对话会以一条看不懂的后端错误收场。与其让人猜，
-// 不如进控制台就提示并把人送到「设置 → LLM 配置」。
+// ===== Default LLM check =====
+// A tenant without a default model discovers it through an opaque backend error on the first message. Instead of
+// asking "do you want to configure one?", which leaves the console in a state that cannot work, navigating straight
+// to Settings → LLM and saying why is the shortest honest path: the user lands where the fix is, not where the
+// symptom is.
 //
-// 去重用页面级变量而不是 sessionStorage：刷新一次就能重新检查，
-// 「到底有没有提示」这件事不该被上一个标签页的历史标记挡住（排查时尤其致命）。
+// Deduplication stays page-level rather than sessionStorage: a reload re-checks, which is what you want while
+// debugging ("is the guidance actually firing?"). The navigation is idempotent — landing on the same tab twice is
+// indistinguishable from landing once.
 let llmHintShown = false
 
-const checkDefaultLLM = async () => {
-  if (llmHintShown) return
+// 缺省模型是否缺失。同一个事实有两个用处：登录后这一次性引导（下面），以及 Chat 输入区常驻的
+// 「发不出去 + 去配置」状态（通过 provide('llmStatus') 下发给 Chat）。
+const noDefaultModel = ref(false)
 
+// probeDefaultLLM 只回答一个问题：有没有可用的缺省模型。
+// true / false，网络或网关异常返回 null（＝不知道）—— 不知道就不要下结论，否则会把网络故障说成未配置模型。
+const probeDefaultLLM = async () => {
   let body
   try {
     const res = await fetch(apiConfig.admin.llmModels.getDefault, {
@@ -804,40 +823,70 @@ const checkDefaultLLM = async () => {
   } catch (e) {
     // 网络/网关异常不打扰：那不是"没配模型"，提示了反而误导
     console.info(t('llmCheck.requestFailed'), e)
-    return
+    return null
   }
 
   // 后端有缺省模型 → code=200 直接返回；
   // 没有时是业务错误 llm.model_not_found（老后端只有 msg），只认这一种情况
   if (body?.code === 200) {
     console.info(t('llmCheck.hasDefault'), body?.data?.name)
-    return
+    return true
   }
-  // 认编码（llm.model_not_found）；老后端没有 error 字段时退回文案匹配
+  // Recognise the code (llm.model_not_found); an older backend without an `error` field falls back to the message text.
   const noDefault = body?.error
     ? body.error === 'llm.model_not_found'
     : /not found|不存在/i.test(body?.msg || '')
   if (!noDefault) {
     console.info(t('llmCheck.skipNotice'), body?.code, body?.msg)
+    return null
+  }
+  console.info(t('llmCheck.noDefault'))
+  return false
+}
+
+const checkDefaultLLM = async () => {
+  if (llmHintShown) return
+
+  const hasDefault = await probeDefaultLLM()
+  if (hasDefault === null) return
+  noDefaultModel.value = !hasDefault
+  if (hasDefault) return
+
+  llmHintShown = true
+
+  // Already sitting on the LLM tab: the navigation would be a no-op, so only the reason is missing.
+  if (activeNav.value === 'settings' && settingsTab.value === 'llm') {
+    ElMessage.warning({ message: t('llmCheck.prompt'), duration: 8000 })
     return
   }
 
-  llmHintShown = true
-  console.info(t('llmCheck.noDefault'))
+  // Name the tab explicitly: the last visit may have been a different settings section. Settings.vue watches
+  // props.tab, so a kept-alive instance follows along instead of staying on the old section.
+  settingsTab.value = 'llm'
+  setActiveNav('settings')
+  ElMessage.warning({ message: t('llmCheck.prompt'), duration: 8000 })
+}
 
-  try {
-    await ElMessageBox.confirm(
-      t('llmCheck.prompt'),
-      t('llmCheck.title'),
-      { type: 'warning', confirmButtonText: t('llmCheck.goConfig'), cancelButtonText: t('llmCheck.later') }
-    )
-    // 明确点名 llm 页签：用户之前的设置可能停在别的分区
+// 从设置页回来时重探一次：用户可能刚把某个模型设成默认（也可能刚删掉），Chat 的输入区要跟着放开/锁上。
+// 只在离开设置页时探，不进设置页就探；不知道（null）时保留上一次的结论。
+const refreshDefaultLLM = async () => {
+  const hasDefault = await probeDefaultLLM()
+  if (hasDefault !== null) noDefaultModel.value = !hasDefault
+}
+
+watch(activeNav, (next, prev) => {
+  if (prev === 'settings') refreshDefaultLLM()
+})
+
+// Chat 据此禁用发送并常驻提示；openSettings 让它能一键跳到配置位置（而不是让用户自己找）
+provide('llmStatus', {
+  noDefaultModel,
+  markMissing: () => { noDefaultModel.value = true },
+  openSettings: () => {
     settingsTab.value = 'llm'
     setActiveNav('settings')
-  } catch {
-    // 点「稍后」：留在当前页
   }
-}
+})
 
 onUnmounted(() => {
   window.removeEventListener('resize', clampLayout)

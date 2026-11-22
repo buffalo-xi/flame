@@ -1,5 +1,5 @@
 <template>
-  <div class="rh">
+  <div ref="panelAnchorRef" class="rh">
     <!-- 筛选条：这里的条件是「查询 / 导出 / 清理」三者共用的同一份，
          否则很容易出现「看到 300 条、导出 20 条、清理全租户」这种自相矛盾。 -->
     <div class="rh-filters">
@@ -14,6 +14,33 @@
       >
         <el-option v-for="f in flows" :key="f.id" :label="f.name" :value="f.id" />
       </el-select>
+
+      <!-- Caller: who triggered this run. Empty = every caller, including runs with no identity and the history
+           recorded before the column existed. -->
+      <el-select
+        v-model="filter.userId"
+        class="rh-user"
+        size="small"
+        clearable
+        filterable
+        :placeholder="$t('history.placeholderUser')"
+        @change="reload"
+      >
+        <el-option v-for="u in userOptions" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+      </el-select>
+
+      <!-- Session filter: exact match on the session uuid. Most flow runs have no session at all (the debugger, a
+           plain call), so an empty box is the normal case, not a missing one. -->
+      <el-input
+        v-model="filter.sessionId"
+        class="rh-session"
+        size="small"
+        clearable
+        :placeholder="$t('history.placeholderSession')"
+        @change="reload"
+        @clear="reload"
+        @keyup.enter="reload"
+      />
 
       <el-select v-model="filter.status" class="rh-status" size="small" clearable :placeholder="$t('history.placeholderStatus')" @change="reload">
         <el-option :label="$t('history.statusSuccess')" value="success" />
@@ -73,6 +100,12 @@
               </template>
             </el-table-column>
 
+            <el-table-column :label="$t('history.colUser')" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span :class="{ 'rh-muted': !row.user_id }">{{ userText(row) }}</span>
+              </template>
+            </el-table-column>
+
             <el-table-column :label="$t('history.colEntry')" width="96">
               <template #default="{ row }">{{ runTypeLabel(row.run_type) }}</template>
             </el-table-column>
@@ -117,12 +150,32 @@
       <span v-else-if="!loading" class="rh-end">{{ $t('history.noMatch') }}</span>
     </div>
 
-    <!-- 详情抽屉：只做「看清楚这次跑了什么」，节点级变量与日志在
-         工作流编辑器的运行面板里看（那里有完整上下文），这里不重复造一套。 -->
-    <el-drawer v-model="detailVisible" :title="$t('history.detailTitle')" size="620px">
+    <!-- Detail panel: only answers "what did this run actually do". Node-level variables and logs live in the flow
+         editor's run panel (it has the full context); this page does not rebuild that. Same shell and position as
+         the agent settings window. -->
+    <HistoryDetailPanel
+      :visible="detailVisible"
+      :anchor="panelAnchor || panelAnchorRef"
+      :title="$t('history.detailTitle')"
+      @close="detailVisible = false"
+    >
       <div v-if="detail" class="rh-detail">
         <div class="rh-dt-row"><span>{{ $t('history.runId') }}</span><b class="rh-mono">{{ detail.run.id }}</b></div>
         <div class="rh-dt-row"><span>{{ $t('history.colFlow') }}</span><b>{{ detail.flowName || shortId(detail.run.flow_id) }}</b></div>
+        <div class="rh-dt-row"><span>{{ $t('history.colUser') }}</span><b>{{ userText(detail.run) }}</b></div>
+        <div class="rh-dt-row">
+          <span>{{ $t('history.colSession') }}</span>
+          <b class="rh-dt-session">
+            {{ detail.run.session_id ? shortId(detail.run.session_id) : $t('history.noSession') }}
+            <el-button
+              v-if="detail.run.session_id"
+              link
+              type="primary"
+              size="small"
+              @click="filterBySession(detail.run.session_id)"
+            >{{ $t('history.filterThisSession') }}</el-button>
+          </b>
+        </div>
         <div class="rh-dt-row"><span>{{ $t('history.colStatus') }}</span>
           <el-tag size="small" :type="statusType(detail.run.status)" effect="plain">{{ statusText(detail.run.status) }}</el-tag>
         </div>
@@ -158,7 +211,7 @@
           </el-table-column>
         </el-table>
       </div>
-    </el-drawer>
+    </HistoryDetailPanel>
   </div>
 </template>
 
@@ -167,11 +220,18 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete } from '@element-plus/icons-vue'
+import HistoryDetailPanel from './HistoryDetailPanel.vue'
 import { getAuthHeader } from '@/tenant/utils/auth.js'
 import adminApi from '@/tenant/config/admin.js'
+import { userOptions, userOptionLabel, ensureUserOptions } from './settings/useUsers.js'
 import { formatError } from '../../locales'
 
 const { t } = useI18n()
+
+// Page box the detail panel is aligned to (border box, padding included). Falls back to this list's own box.
+const props = defineProps({
+  panelAnchor: { type: Object, default: null }
+})
 
 const PAGE_SIZE = 20
 
@@ -208,6 +268,11 @@ const runTypeLabel = (v) => (RUN_TYPE_KEYS[v] ? t(RUN_TYPE_KEYS[v]) : v || '—'
 
 const filter = reactive({
   flowId: '',
+  // Caller filter: which user triggered the run. Empty = every caller, including runs with no identity.
+  userId: '',
+  // Session filter: which runs belong to this conversation. Exact uuid; empty means every session, including the
+  // runs that have none.
+  sessionId: '',
   status: '',
   // 默认最近 24 小时。注意这是「进页面那一刻」算出的固定区间，挂着不会自己往后滑；
   // 想重新对齐到当前时刻，点一次快捷键即可 —— 界面上看到的始终是两个明确的时间点。
@@ -228,7 +293,23 @@ const offset = ref(0)
 const detailVisible = ref(false)
 const detail = ref(null)
 
+// Anchors the detail panel: it takes this list's top, height and right edge, the way the agent settings
+// window takes the editor's (see HistoryDetailPanel.vue).
+const panelAnchorRef = ref(null)
+
 const shortId = (id) => (id ? String(id).slice(0, 8) : '—')
+
+// Prefer the name the backend joined in; fall back to the short id (the user was deleted after the run) or a muted
+// "no identity" (an API-key / scheduled trigger, or a record written before the column had a value).
+const userNameOf = (id) => {
+  const u = userOptions.value.find((x) => x.id === id)
+  return u ? userOptionLabel(u) : ''
+}
+// The list endpoint already joins the name; the detail payload carries only the id, so it falls back to the module-level
+// user list loaded on mount (and then to the short id).
+const userText = (row) =>
+  row.user_name || (row.user_id ? userNameOf(row.user_id) || shortId(row.user_id) : t('history.noUser'))
+
 const STATUS_KEYS = {
   success: 'history.statusSuccess',
   failed: 'history.statusFailed',
@@ -267,6 +348,9 @@ const spanText = () => {
 const buildParams = () => {
   const p = new URLSearchParams()
   if (filter.flowId) p.set('flow_id', filter.flowId)
+  if (filter.userId) p.set('user_id', filter.userId)
+  const sid = filter.sessionId.trim()
+  if (sid) p.set('session_id', sid)
   if (filter.status) p.set('status', filter.status)
   // 统一 toISOString（UTC，Z 结尾）：后端按 time.RFC3339 解析、timestamptz 比较，前端时区不影响结果
   const [from, to] = filter.span || []
@@ -277,7 +361,8 @@ const buildParams = () => {
 
 // 清理的保护：至少有一个条件。时间段只在「用户自己动过」时才算条件 ——
 // 默认的 24 小时不算，否则一进页面就能清掉最近一天
-const hasCondition = () => !!(filter.flowId || filter.status || (spanTouched.value && filter.span?.length === 2))
+const hasCondition = () => !!(filter.flowId || filter.userId || filter.sessionId.trim() || filter.status
+  || (spanTouched.value && filter.span?.length === 2))
 
 const loadFlows = async () => {
   try {
@@ -323,6 +408,18 @@ const reload = async () => {
 // 点快捷键、手选区间、清空都会走到这里
 const onSpanChange = () => {
   spanTouched.value = true
+  reload()
+}
+
+// Jump from "this run" to "this conversation": the drawer is where the uuid is at hand, and it is the only sane
+// entry point for the filter. The time range is cleared on purpose, because "this session" plus the default 24h
+// window would silently hide the conversation's older runs.
+const filterBySession = (sid) => {
+  if (!sid) return
+  filter.sessionId = sid
+  filter.span = null
+  spanTouched.value = false
+  detailVisible.value = false
   reload()
 }
 
@@ -395,6 +492,9 @@ const cleanup = async () => {
     filter.flowId
       ? t('history.descFlow', { name: flows.value.find((f) => f.id === filter.flowId)?.name || shortId(filter.flowId) })
       : t('history.descFlow', { name: t('history.all') }),
+    filter.userId
+      ? t('history.descUser', { name: userNameOf(filter.userId) || shortId(filter.userId) })
+      : t('history.descUser', { name: t('history.all') }),
     filter.status
       ? t('history.descStatus', { name: statusText(filter.status) })
       : t('history.descStatus', { name: t('history.all') }),
@@ -448,6 +548,8 @@ const exportCsv = async () => {
 
 onMounted(() => {
   loadFlows()
+  // Shared with the settings pages: one module-level list, so a user created elsewhere shows up here too.
+  ensureUserOptions()
   reload()
 })
 
@@ -476,8 +578,11 @@ defineExpose({ reload })
   border-radius: 8px;
 }
 
-.rh-flow { width: 180px; }
+.rh-flow { width: 160px; }
+.rh-user { width: 150px; }
+.rh-session { width: 210px; }
 .rh-status { width: 110px; }
+.rh-muted { color: #a8abb2; }
 /* 起止两个时间 + 分隔符：360px 刚好一屏放得下，再窄就会截断成「…」 */
 .rh-span { width: 360px; }
 .rh-total { font-size: 13px; color: #606266; font-variant-numeric: tabular-nums; }
@@ -514,5 +619,7 @@ defineExpose({ reload })
 .rh-dt-row > span { flex: 0 0 92px; color: #909399; }
 .rh-dt-row > b { font-weight: 500; color: #303133; word-break: break-all; }
 .rh-mono { font-family: Consolas, Monaco, monospace; font-size: 12px; }
+/* Session label plus its "filter by this session" action on one line */
+.rh-dt-session { display: inline-flex; align-items: center; gap: 8px; }
 .rh-dt-title { margin-top: 10px; font-size: 13px; font-weight: 600; color: #303133; }
 </style>

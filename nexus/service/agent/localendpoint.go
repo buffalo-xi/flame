@@ -69,7 +69,8 @@ func (r *localEndpointRunner) Invoke(ctx context.Context, in tools.LocalCall) (a
 
 	// A chain that involves an agent uses the agent depth cap (platform.agent_configs.max_call_depth, default 3, the same source as
 	// call_agent): every return into an agent costs a whole extra LLM round, far more than pure flow orchestration, so it cannot share the
-	// flow-side max_recursion_depth (default 10). Checked before the endpoint lookup: when over the cap, not even the database is touched.
+	// flow-chain max_recursion_depth (tenant-level in flow_configs, 10 by default). Checked before the endpoint lookup: when over the cap,
+	// not even the database is touched.
 	if maxDepth := agentconfig.Resolve(in.Schema).MaxCallDepth; maxDepth > 0 && in.CallDepth >= maxDepth {
 		return nil, fmt.Errorf("agent call depth exceeded (%d levels, cap %d): refusing to call %s",
 			in.CallDepth, maxDepth, in.ToolName)

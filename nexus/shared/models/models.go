@@ -523,11 +523,9 @@ type Flow struct {
 	EnvVars           xsql.JSONB         `json:"env_vars"`
 	FlowVars          xsql.JSONB         `json:"flow_vars"`
 	Timeout           xsql.Int           `json:"timeout"`
-	MaxRecursionDepth xsql.Int           `json:"max_recursion_depth"`
-	MaxNodeCount      xsql.Int           `json:"max_node_count"`
 	MaxExecCount      xsql.Int           `json:"max_exec_count"`
-	MaxRunRecords     xsql.Int           `json:"max_run_records"`
-	MaxSessionRecords xsql.Int           `json:"max_session_records"`
+	StoreRuns         bool               `json:"store_runs"`     // false: keep no run records at all
+	SessionMemory     bool               `json:"session_memory"` // false: a stateless workflow (no session memory)
 	Status            xsql.Int           `json:"status"`      // 1: normal, 3: deprecated (workflows have no locked state, see StatusNormal/StatusDeprecated)
 	Endpoints         []EndpointProtocol `json:"endpoints"`   // endpoint protocols + exposed state (a jsonb column)
 	Breakpoints       []string           `json:"breakpoints"` // breakpoint node_id list (not a DB column; a save replaces flow_breakpoints wholesale)
@@ -542,8 +540,13 @@ type Flow struct {
 
 // FlowRunRecord is a workflow run record (the flow_run_records table).
 type FlowRunRecord struct {
-	ID         string     `json:"id"`
-	FlowID     string     `json:"flow_id"`
+	ID     string `json:"id"`
+	FlowID string `json:"flow_id"`
+	// SessionID / UserID answer "in which conversation" and "who triggered this run", the same two dimensions the agent
+	// run log has always carried. They are nullable: a scheduled or directly-triggered run has no session, and an API-key
+	// caller resolved without a login user has no identity.
+	SessionID  string     `json:"session_id"`
+	UserID     string     `json:"user_id"`
 	Status     string     `json:"status"`   // success/failed/cancelled
 	RunType    string     `json:"run_type"` // debug (the debugger) / preview (a trial run) / task / call
 	Result     string     `json:"result"`
@@ -565,6 +568,36 @@ type FlowRunRecord struct {
 	// The debugger runs the working copy, whose content changes, so this list is the only evidence of "which ones it
 	// actually ran".
 	Drafts []byte `json:"drafts"`
+}
+
+// AgentRunRecord is one agent run (the agent_run_records table).
+//
+// Division of labour with SessionRecord: that table is the **memory** the model reads back as context
+// (full text, grouped per session, trimmed by session), while this one is the **audit log** (one row per
+// run, trimmed per agent, independent of any session). The split exists because session_records.session_id
+// is NOT NULL: MCP / RPC calls that do not pass _meta.session_id write no memory at all, yet they are
+// exactly the calls an operator needs to trace. Deleting a row here never touches a conversation.
+type AgentRunRecord struct {
+	// ID is the run identity, not just a row key: one row is one run, and session_records.run_id carries the same
+	// value. There is deliberately no second run_id column - the two copies could drift, and did.
+	ID        string     `json:"id"`
+	AgentID   string     `json:"agent_id"`
+	SessionID string     `json:"session_id"` // empty = a stateless run (no session)
+	UserID    string     `json:"user_id"`    // who called it; empty when the caller has no identity
+	RunType    string     `json:"run_type"` // call / rpc / mcp / agent / flow
+	Status     string     `json:"status"`   // ok / stopped / failed (the SessionStatus* values)
+	ErrMsg     string     `json:"err_msg"`
+	DurationMs int64      `json:"duration_ms"`
+	StartedAt  xsql.Time  `json:"started_at"`
+	FinishedAt *xsql.Time `json:"finished_at"`
+	// Question is what the model was asked; Answer is only a preview (answer_truncated says so).
+	// The full answer lives in session_records and is read there by the chat page.
+	Question        string    `json:"question"`
+	QuestionSize    int       `json:"question_size"`
+	Answer          string    `json:"answer"`
+	AnswerTruncated bool      `json:"answer_truncated"`
+	AnswerSize      int       `json:"answer_size"`
+	CreatedAt       xsql.Time `json:"created_at"`
 }
 
 // SessionOwnerType is the owner type of session memory.

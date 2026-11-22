@@ -125,27 +125,11 @@ func runEndpoint(
 }
 
 // resolveEndpointDepthLimit is the depth limit of the endpoint call chain (always positive).
-func resolveEndpointDepthLimit(schema string) int {
-	return effectiveEndpointDepthLimit(
-		flowconfig.Resolve(schema).MaxRecursionDepth,
-		flowconfig.Fallback().MaxRecursionDepth,
-	)
-}
-
-// effectiveEndpointDepthLimit narrows the configured value into a positive limit.
 //
-// The config semantics say -1 means "unlimited", but that is deliberately not honoured here: a pure flow cycle
-// has only this one gate (a chain involving agents has max_call_depth), so allowing it to be switched off hands
-// the defence to a single misconfiguration. Every non-positive value therefore falls back, and an anomalous
-// fallback turns into 10 — never an unbounded pass.
-func effectiveEndpointDepthLimit(configured, fallback int) int {
-	if configured > 0 {
-		return configured
-	}
-	if fallback > 0 {
-		return fallback
-	}
-	return 10
+// The narrowing lives in flowconfig.DepthLimit so the intra-flow call node and this cross-flow gate always read the
+// same number: both are tenant-level, and neither accepts "unlimited".
+func resolveEndpointDepthLimit(schema string) int {
+	return flowconfig.Resolve(schema).DepthLimit()
 }
 
 // runFlowEndpoint runs a flow-type endpoint.

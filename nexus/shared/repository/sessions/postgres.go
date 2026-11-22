@@ -166,7 +166,28 @@ func (r *PostgresRepository) Touch(schema, sessionID string) error {
 
 // EnsureExists makes sure the session with the given id exists: missing means create it with that id, present means refresh
 // updated_at.
+//
+// Creating here goes through the session-count quota, like Create does: a session born on this path is counted exactly
+// like any other, so skipping the check let a flow run started outside the protocol entry points (the debugger, an
+// internal call) push the user's count past max_user_sessions with nothing ever refusing it. The check runs only when
+// the row is really missing, so the normal path - refresh updated_at for a session the entry point already created - stays
+// a single statement.
+//
+// It still checks nothing about visibility (that is CreateWithID's job): callers must already know this user may use this
+// session id. It is a "make sure the row is there" helper, not a general-purpose create entry for untrusted input.
 func (r *PostgresRepository) EnsureExists(schema, id, ownerType, ownerID, userID, title string) error {
+	var exists bool
+	if err := db.DB.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM `+schema+`.sessions WHERE id = $1)`, id,
+	).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		if err := quota.CheckUserSessions(schema, ownerType, userID); err != nil {
+			return err
+		}
+	}
+
 	_, err := db.DB.Exec(`
 		INSERT INTO `+schema+`.sessions (id, owner_type, owner_id, user_id, title)
 		VALUES ($1,$2,$3,$4,$5)

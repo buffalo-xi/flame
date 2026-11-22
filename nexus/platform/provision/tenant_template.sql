@@ -131,26 +131,23 @@ CREATE TABLE flows (
     env_vars jsonb,
     flow_vars jsonb,
     timeout integer DEFAULT '-1'::integer,
-    max_recursion_depth integer DEFAULT '-1'::integer,
-    max_node_count integer DEFAULT '-1'::integer,
     max_exec_count integer DEFAULT '-1'::integer,
-    max_run_records integer DEFAULT 10,
-    max_session_records integer DEFAULT '-1'::integer,
+    store_runs boolean DEFAULT true NOT NULL,
+    session_memory boolean DEFAULT true NOT NULL,
     created_by uuid,
     updated_by uuid,
     endpoints jsonb DEFAULT '[]'::jsonb,
     status smallint DEFAULT 1 CONSTRAINT flow_instances_status_not_null NOT NULL,
-    CONSTRAINT flow_instances_status_check CHECK ((status = ANY (ARRAY[1, 3])))
+    CONSTRAINT flow_instances_status_check CHECK ((status = ANY (ARRAY[1, 3]))),
+    CONSTRAINT flows_limits_range_check CHECK ((timeout >= '-1'::integer) AND (max_exec_count >= '-1'::integer))
 );
 COMMENT ON COLUMN flows.name IS '名字，唯一';
 COMMENT ON COLUMN flows.diagram IS '流程json';
 COMMENT ON COLUMN flows.description IS '描述';
-COMMENT ON COLUMN flows.timeout IS '超时秒数';
-COMMENT ON COLUMN flows.max_recursion_depth IS '最大递归嵌套深度';
-COMMENT ON COLUMN flows.max_node_count IS '流程允许最大节点总数';
-COMMENT ON COLUMN flows.max_exec_count IS '最大节点累计执行次数';
-COMMENT ON COLUMN flows.max_run_records IS '最大保留得历史执行记录';
-COMMENT ON COLUMN flows.max_session_records IS '最大session记忆数目';
+COMMENT ON COLUMN flows.timeout IS '超时秒数（本流程的设计预算，不得超过租户上限）';
+COMMENT ON COLUMN flows.max_exec_count IS '最大节点累计执行次数（本流程的设计预算，不得超过租户上限）';
+COMMENT ON COLUMN flows.store_runs IS '是否保留历史执行记录（条数是租户配额）';
+COMMENT ON COLUMN flows.session_memory IS '是否有session记忆（条数是租户配额；false = 无状态流程）';
 COMMENT ON COLUMN flows.status IS '1:正常,3:废弃（工作流不设「锁定」：线上由版本管理，废弃自动收回端点）';
 CREATE TABLE llm_models (
     id uuid CONSTRAINT llm_source_models_id_not_null NOT NULL,

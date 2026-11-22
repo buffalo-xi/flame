@@ -1,0 +1,62 @@
+name: poc-image
+
+# The PoC is a single image plus the upstream LiteLLM image, so a push is enough to make it runnable without a toolchain:
+# this workflow builds deploy/poc/Dockerfile and publishes the result to GHCR.
+#
+# Publishing needs one manual step that no workflow can do: the package is private by default even when the repository is
+# public, so after the first successful run open the package (repository page -> Packages -> flame-poc -> Package
+# settings) and set its visibility to public. Without that, everyone else gets "unauthorized" from `docker pull`.
+on:
+  push:
+    branches: [main]
+    # Only the inputs of the image are worth rebuilding: a docs-only change must not cost ten minutes of runner time.
+    paths:
+      - 'deploy/poc/**'
+      - 'nexus/**'
+      - 'sandboxd/**'
+      - 'browserd/**'
+      - 'tools/**'
+      - 'desktop/**'
+      - '.github/workflows/poc-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: poc-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # the reason this job exists: pushing to ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR requires a lower-case owner; the expansion is Bash and this job runs on ubuntu, so it is available.
+      - id: meta
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/flame-poc" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/poc/Dockerfile
+          # The image is x86-64 only (the Dockerfile pins GOARCH=amd64), and the runner is amd64: no QEMU, no emulation.
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:latest
+            ${{ steps.meta.outputs.image }}:sha-${{ github.sha }}
+          # gha cache keeps the apt / PGDG / chromium / Go / npm layers between runs: first build ~10 min, later 2-3.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            GOPROXY=https://proxy.golang.org,direct

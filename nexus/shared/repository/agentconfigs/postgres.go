@@ -21,7 +21,7 @@ func tableName() string {
 }
 
 // columns are the selected columns (tenant_id excluded).
-const columns = "max_iterations, max_call_depth, max_tools, max_output_bytes"
+const columns = "max_iterations, max_call_depth, max_tools, max_output_bytes, max_run_records, max_session_records"
 
 // Get returns the configuration row of a tenant, or nil when there is none.
 func (r *PostgresRepository) Get(tenantID string) (*AgentConfig, error) {
@@ -30,7 +30,7 @@ func (r *PostgresRepository) Get(tenantID string) (*AgentConfig, error) {
 		`SELECT `+columns+` FROM `+tableName()+` WHERE tenant_id = $1`,
 		tenantID,
 	).Scan(
-		&cfg.MaxIterations, &cfg.MaxCallDepth, &cfg.MaxTools, &cfg.MaxOutputBytes,
+		&cfg.MaxIterations, &cfg.MaxCallDepth, &cfg.MaxTools, &cfg.MaxOutputBytes, &cfg.MaxRunRecords, &cfg.MaxSessionRecords,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -46,15 +46,17 @@ func (r *PostgresRepository) Get(tenantID string) (*AgentConfig, error) {
 func (r *PostgresRepository) Upsert(cfg *AgentConfig) error {
 	_, err := db.DB.Exec(
 		`INSERT INTO `+tableName()+` (
-			tenant_id, max_iterations, max_call_depth, max_tools, max_output_bytes, updated_at
-		) VALUES ($1, $2, $3, $4, $5, NOW())
+			tenant_id, max_iterations, max_call_depth, max_tools, max_output_bytes, max_run_records, max_session_records, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			max_iterations = EXCLUDED.max_iterations,
 			max_call_depth = EXCLUDED.max_call_depth,
 			max_tools = EXCLUDED.max_tools,
 			max_output_bytes = EXCLUDED.max_output_bytes,
+			max_run_records = EXCLUDED.max_run_records,
+			max_session_records = EXCLUDED.max_session_records,
 			updated_at = NOW()`,
-		cfg.TenantID, cfg.MaxIterations, cfg.MaxCallDepth, cfg.MaxTools, cfg.MaxOutputBytes,
+		cfg.TenantID, cfg.MaxIterations, cfg.MaxCallDepth, cfg.MaxTools, cfg.MaxOutputBytes, cfg.MaxRunRecords, cfg.MaxSessionRecords,
 	)
 	return err
 }

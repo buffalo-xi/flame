@@ -1,0 +1,37 @@
+# LiteLLM Proxy for the demo box.
+#
+# This file is mounted into the official `litellm-database` image at /app/config.yaml (see docker-compose.yml) — it is
+# not baked into the Flame image any more, and nothing in it depends on which image runs it.
+#
+# model_list is deliberately empty: no provider key is baked into the image. Models are added at runtime from the
+# console (platform admin → LLM providers → add a provider, then add a model), which provisions them here through the
+# proxy's API. The master key below is what nexus uses to talk to this proxy — it comes from the container environment,
+# and docker-compose.yml hands both services the same value.
+#
+# Two environment variables are read by the proxy but are invisible in this file: DATABASE_URL (below) and
+# LITELLM_SALT_KEY, which encrypts provider keys in the database. The salt key must stay stable for the life of the
+# volume — change it and every stored provider key becomes undecryptable (the model is still listed, every chat then
+# fails with an auth error).
+
+model_list: []
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Repeat the connection string here as well as in the environment: the proxy reads either, and having it visible in the
+  # file is what makes "which database is this proxy writing to" answerable without reading docker-compose.yml.
+  database_url: os.environ/DATABASE_URL
+  # Models live in the proxy's Postgres database, not in this file.
+  #
+  # This is not optional here: nexus provisions every model through the proxy's API (POST /model/new, model_id becomes
+  # the gateway id; POST /model/delete to remove it), so the proxy has to be running with database-backed model
+  # management. Without this flag the config file is the only source of models and "add a provider → add a model" from
+  # the console silently fails to persist. It is also why the image has to be `litellm-database` (Prisma) and not the
+  # plain `litellm` one.
+  #
+  # The database itself (dbname `litellm`) is created by the Flame container's bootstrap in its own postgres cluster, and
+  # arrives here via DATABASE_URL. nexus is pointed at the same database (litellm.database in config/nexus.yaml) because
+  # it reads spend and key state from there.
+  store_model_in_db: true
+
+litellm_settings:
+  drop_params: true

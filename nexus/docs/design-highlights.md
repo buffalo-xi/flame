@@ -79,6 +79,11 @@ runs**.
 
 The agent gate sits **before the endpoint lookup** — once over the limit it does not even query the database.
 
+The flow-chain limit is a **tenant quota** (`platform.flow_configs.max_recursion_depth`), never a field of a flow
+definition: depth is a property of the composed call graph, so no single flow can declare it. Both flow-side gates — the
+cross-flow `runEndpoint` and the intra-flow `call` node — read it through `flowconfig.FlowLimits.DepthLimit`, so they can
+never disagree.
+
 ### "Unlimited" is not accepted here
 
 For other settings `-1` means unlimited (quotas, timeouts), but the depth limits are deliberately narrowed to positive
@@ -150,6 +155,12 @@ A session carries two limits, and both are enforced at write time instead of by 
 - **Sessions per user** — the console refuses with 507 `quota.user_sessions_exceeded` and leaves the choice to the human;
   RPC / MCP sessions are recycled oldest-first instead, because their callers bring their own UUIDs and have no delete API,
   so a plain refusal would lock an integration out forever.
+
+Neither limit is unlimited by default any more: the code fallbacks are 1 GiB per session workspace and 200 sessions per
+user per owner type. Unlimited turned out to be the weaker choice — `Admit` evicts instead of refusing, so a finite ceiling
+does not lock anyone out, while `-1` made the per-user check return early and never fire. The system row is seeded by
+`nexus/platform/sql/zz_limit_defaults.sql` (10 GiB / 1000), so a fresh deployment starts with a real ceiling instead of
+waiting for someone to type it in.
 
 Accounting is `Admit` → write → `Commit`: a failed write charges nothing, so the counter never inflates. A failed scan or a
 failed counter read **fails open** — a broken counter must not cost a user their write.

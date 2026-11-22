@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"flame/nexus/shared/db"
@@ -13,6 +14,7 @@ import (
 	"flame/tools/xsql"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
 
@@ -29,10 +31,15 @@ var historyRepo = flowruns.NewRepository()
 // not use them, and carrying them would turn 20 rows into several MB. Details still come from
 // /admin/flows/:id/runs/:runId.
 type historyItem struct {
-	ID         string     `json:"id"`
-	FlowID     string     `json:"flow_id"`
-	FlowName   string     `json:"flow_name"`
-	Status     string     `json:"status"`
+	ID     string `json:"id"`
+	FlowID string `json:"flow_id"`
+	// SessionID / UserID are empty for runs recorded before the columns existed and for runs that genuinely had no
+	// session or no identified caller; UserName is joined in bulk like FlowName, so one deleted user cannot fail the page.
+	SessionID string `json:"session_id"`
+	UserID    string `json:"user_id"`
+	UserName  string `json:"user_name"`
+	FlowName  string `json:"flow_name"`
+	Status    string `json:"status"`
 	RunType    string     `json:"run_type"`
 	ErrMsg     string     `json:"err_msg"`
 	NodeCount  int        `json:"node_count"`
@@ -41,23 +48,61 @@ type historyItem struct {
 	FinishedAt *xsql.Time `json:"finished_at"`
 }
 
+// historyFilter is the parsed query shared by the list / export / cleanup endpoints. One struct keeps the three in
+// step: what the console showed, what it exported and what it deletes must never describe different sets.
+type historyFilter struct {
+	FlowID    string
+	RunType   string
+	Status    string
+	UserID    string
+	SessionID string
+	From      *time.Time
+	To        *time.Time
+}
+
+// empty reports whether no criterion was given at all; the DELETE path refuses that outright.
+func (f historyFilter) empty() bool {
+	return f.FlowID == "" && f.Status == "" && f.UserID == "" && f.SessionID == "" && f.From == nil && f.To == nil
+}
+
 // historyQuery parses the filters shared by the list / export / cleanup endpoints.
-func historyQuery(c *gin.Context) (flowID, runType, status string, from, to *time.Time) {
-	flowID = c.Query("flow_id")
-	runType = c.Query("run_type")
-	status = c.Query("status")
+//
+// A malformed timestamp or session id is reported as ok=false instead of being dropped: on the DELETE path a silently
+// missing bound widens the deletion beyond what the user saw and confirmed.
+func historyQuery(c *gin.Context) (historyFilter, bool) {
+	f := historyFilter{
+		FlowID:  c.Query("flow_id"),
+		RunType: c.Query("run_type"),
+		Status:  c.Query("status"),
+		// Caller filter: "which runs did this user trigger". Empty means "every caller", including the runs that have no
+		// user at all (recorded before the column existed, or triggered without an identity).
+		UserID: strings.TrimSpace(c.Query("user_id")),
+		// Session filter: which runs belong to this conversation. Runs without a session (the debugger, a protocol call)
+		// have NULL there and stay in the unfiltered list.
+		SessionID: strings.TrimSpace(c.Query("session_id")),
+	}
+	// The session is a uuid column: reject a partial paste here rather than let PostgreSQL answer 22P02 with SQL noise.
+	if f.SessionID != "" {
+		if _, err := uuid.Parse(f.SessionID); err != nil {
+			return f, false
+		}
+	}
 	// The time range is RFC3339, the same convention as flows.ListRuns
 	if v := c.Query("start_from"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			from = &t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return f, false
 		}
+		f.From = &t
 	}
 	if v := c.Query("start_to"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			to = &t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return f, false
 		}
+		f.To = &t
 	}
-	return
+	return f, true
 }
 
 // flowNameMap fetches workflow names in bulk.
@@ -85,18 +130,29 @@ func flowNameMap(schema string, ids []string) map[string]string {
 	return out
 }
 
+// userNameMap lives next to the agent history (agenthistory.go): both pages resolve run callers the same way, and the
+// helper is shared inside this package rather than duplicated.
+
 func toHistoryItems(schema string, records []*models.FlowRunRecord) []*historyItem {
 	ids := make([]string, 0, len(records))
+	userIDs := make([]string, 0, len(records))
 	for _, r := range records {
 		ids = append(ids, r.FlowID)
+		if r.UserID != "" {
+			userIDs = append(userIDs, r.UserID)
+		}
 	}
 	names := flowNameMap(schema, ids)
+	users := userNameMap(schema, userIDs)
 
 	items := make([]*historyItem, 0, len(records))
 	for _, r := range records {
 		items = append(items, &historyItem{
 			ID:         r.ID,
 			FlowID:     r.FlowID,
+			SessionID:  r.SessionID,
+			UserID:     r.UserID,
+			UserName:   users[r.UserID],
 			FlowName:   names[r.FlowID],
 			Status:     r.Status,
 			RunType:    r.RunType,
@@ -127,8 +183,12 @@ func ListHistory(c *gin.Context) {
 		limit = 200
 	}
 
-	flowID, runType, status, from, to := historyQuery(c)
-	records, total, err := historyRepo.ListRuns(info.Schema, flowID, runType, status, from, to, limit, offset)
+	f, ok := historyQuery(c)
+	if !ok {
+		xhttp.ErrCode(c, "common.invalid_params", nil, "start_from / start_to must be RFC3339 timestamps; session_id must be a UUID", "")
+		return
+	}
+	records, total, err := historyRepo.ListRuns(info.Schema, f.FlowID, f.RunType, f.Status, f.UserID, f.SessionID, f.From, f.To, limit, offset)
 	if err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
@@ -154,13 +214,17 @@ func CleanupHistory(c *gin.Context) {
 		return
 	}
 
-	flowID, _, status, from, to := historyQuery(c)
-	if flowID == "" && status == "" && from == nil && to == nil {
-		xhttp.ErrCode(c, "run.filter_required", nil, "provide at least one filter (workflow / status / time range); an unconditional wipe is not allowed", "")
+	f, ok := historyQuery(c)
+	if !ok {
+		xhttp.ErrCode(c, "common.invalid_params", nil, "start_from / start_to must be RFC3339 timestamps; session_id must be a UUID", "")
+		return
+	}
+	if f.empty() {
+		xhttp.ErrCode(c, "run.filter_required", nil, "provide at least one filter (workflow / status / caller / session / time range); an unconditional wipe is not allowed", "")
 		return
 	}
 
-	deleted, err := historyRepo.DeleteRunsByFilter(info.Schema, flowID, status, from, to)
+	deleted, err := historyRepo.DeleteRunsByFilter(info.Schema, f.FlowID, f.Status, f.UserID, f.SessionID, f.From, f.To)
 	if err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
@@ -180,7 +244,11 @@ func ExportHistory(c *gin.Context) {
 		return
 	}
 
-	flowID, runType, status, from, to := historyQuery(c)
+	f, ok := historyQuery(c)
+	if !ok {
+		xhttp.ErrCode(c, "common.invalid_params", nil, "start_from / start_to must be RFC3339 timestamps; session_id must be a UUID", "")
+		return
+	}
 
 	const (
 		exportMax = 5000
@@ -188,7 +256,7 @@ func ExportHistory(c *gin.Context) {
 	)
 	records := make([]*models.FlowRunRecord, 0, pageSize)
 	for offset := 0; offset < exportMax; {
-		batch, total, err := historyRepo.ListRuns(info.Schema, flowID, runType, status, from, to, pageSize, offset)
+		batch, total, err := historyRepo.ListRuns(info.Schema, f.FlowID, f.RunType, f.Status, f.UserID, f.SessionID, f.From, f.To, pageSize, offset)
 		if err != nil {
 			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 			return
@@ -217,8 +285,19 @@ func ExportHistory(c *gin.Context) {
 		return ids
 	}())
 
+	// The caller column mirrors the list: an export is meant to be read next to the page it came from.
+	users := userNameMap(info.Schema, func() []string {
+		ids := make([]string, 0, len(records))
+		for _, r := range records {
+			if r.UserID != "" {
+				ids = append(ids, r.UserID)
+			}
+		}
+		return ids
+	}())
+
 	w := csv.NewWriter(c.Writer)
-	_ = w.Write([]string{"run_id", "flow_id", "flow_name", "status", "run_type",
+	_ = w.Write([]string{"run_id", "flow_id", "flow_name", "status", "run_type", "user",
 		"node_count", "duration_ms", "started_at", "finished_at", "err_msg"})
 	for _, r := range records {
 		finished := ""
@@ -231,6 +310,7 @@ func ExportHistory(c *gin.Context) {
 			names[r.FlowID],
 			r.Status,
 			r.RunType,
+			users[r.UserID],
 			strconv.Itoa(r.NodeCount),
 			strconv.FormatInt(r.DurationMs, 10),
 			time.Time(r.StartedAt).Format("2006-01-02 15:04:05"),

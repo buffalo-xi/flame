@@ -804,11 +804,9 @@ func planWorkflow(info *auth.AuthInfo, id string) (listingPlan, error) {
 		"env_vars":            f.EnvVars.Data,
 		"flow_vars":           f.FlowVars.Data,
 		"timeout":             int(f.Timeout),
-		"max_recursion_depth": int(f.MaxRecursionDepth),
-		"max_node_count":      int(f.MaxNodeCount),
 		"max_exec_count":      int(f.MaxExecCount),
-		"max_run_records":     int(f.MaxRunRecords),
-		"max_session_records": int(f.MaxSessionRecords),
+		"store_runs":          f.StoreRuns,
+		"session_memory":      f.SessionMemory,
 	}
 	// The whole definition goes into FLOW.json, so credentials are scanned across all of it (env_vars and the api_key values in node configs).
 	clean, secretWarnings := assetpack.StripSecrets(assetpack.KindWorkflow, def)

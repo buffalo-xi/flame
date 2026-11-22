@@ -57,6 +57,8 @@ func ValidateWorkflowName(name string) error {
 //	endpoints                 endpoint protocol and listing state are runtime environment
 //	                          configuration, not content
 //	breakpoints               debug breakpoints are local debug state
+//	max_recursion_depth       tenant-level policy (the depth gate reads flow_configs, not the flow)
+//	max_node_count            tenant-level policy (checked against the diagram at install time)
 //
 // Suspected credentials in env_vars and diagram are cleared before packing (see the KindWorkflow
 // branch of StripSecrets).
@@ -71,10 +73,16 @@ type WorkflowSnapshot struct {
 	// The limits deliberately do not use omitempty: -1 is a meaningful "unlimited" value in the
 	// flows table, and omitting the field would be read as 0 by the installer, silently turning
 	// "unlimited" into "limited to 0".
-	Timeout           int `json:"timeout"`
-	MaxRecursionDepth int `json:"max_recursion_depth"`
-	MaxNodeCount      int `json:"max_node_count"`
-	MaxExecCount      int `json:"max_exec_count"`
-	MaxRunRecords     int `json:"max_run_records"`
-	MaxSessionRecords int `json:"max_session_records"`
+	Timeout      int `json:"timeout"`
+	MaxExecCount int `json:"max_exec_count"`
+
+	// Retention: the flow carries only a switch, the count is a tenant quota. These are pointers because
+	// "absent" has to be told apart from an explicit false — a pack written before the switch split carries
+	// max_run_records / max_session_records instead, and the installer derives the switch from those.
+	StoreRuns     *bool `json:"store_runs,omitempty"`
+	SessionMemory *bool `json:"session_memory,omitempty"`
+
+	// Deprecated: legacy per-flow retention counts, read only when the switches above are absent.
+	MaxRunRecords     int `json:"max_run_records,omitempty"`
+	MaxSessionRecords int `json:"max_session_records,omitempty"`
 }

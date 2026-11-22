@@ -18,6 +18,8 @@ import (
 	"flame/nexus/shared/config"
 	"flame/nexus/shared/customtoolstore"
 	"flame/nexus/shared/db"
+	"flame/nexus/shared/flowconfig"
+	"flame/nexus/shared/flowdoc"
 	"flame/nexus/shared/models"
 	"flame/nexus/shared/paths"
 	"flame/nexus/shared/quota"
@@ -1225,20 +1227,32 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 		def.EnvVars = json.RawMessage(merged)
 	}
 
+	// The installing tenant's policy applies to an imported workflow exactly as it does to one saved in the editor: the
+	// node count is checked against the diagram, and every limit is clamped to the tenant ceiling. Without this a pack
+	// could carry values the tenant UI itself would refuse to save.
+	limits := flowconfig.Resolve(info.Schema)
+	if doc, ok := flowdoc.Parse(def.Diagram); ok {
+		if count := doc.CountNodes(flowdoc.CommentNodeType); limits.MaxNodeCount > 0 && count > limits.MaxNodeCount {
+			xhttp.ErrCode(c, "flow.node_limit_exceeded", gin.H{"count": count, "limit": limits.MaxNodeCount},
+				fmt.Sprintf("node count %d exceeds the tenant limit %d", count, limits.MaxNodeCount), "")
+			return
+		}
+	}
+	clampedLimits := clampInstalledLimits(&def.Timeout, &def.MaxExecCount, limits)
+	storeRuns, sessionMemory := resolveRetention(def)
+
 	f := &models.Flow{
-		Name:              name,
-		Description:       xsql.String(def.Description),
-		Diagram:           jsonbFromRaw(def.Diagram),
-		Arguments:         jsonbFromRaw(def.Arguments),
-		Outputs:           jsonbFromRaw(def.Outputs),
-		EnvVars:           jsonbFromRaw(def.EnvVars),
-		FlowVars:          jsonbFromRaw(def.FlowVars),
-		Timeout:           xsql.Int(def.Timeout),
-		MaxRecursionDepth: xsql.Int(def.MaxRecursionDepth),
-		MaxNodeCount:      xsql.Int(def.MaxNodeCount),
-		MaxExecCount:      xsql.Int(def.MaxExecCount),
-		MaxRunRecords:     xsql.Int(def.MaxRunRecords),
-		MaxSessionRecords: xsql.Int(def.MaxSessionRecords),
+		Name:          name,
+		Description:   xsql.String(def.Description),
+		Diagram:       jsonbFromRaw(def.Diagram),
+		Arguments:     jsonbFromRaw(def.Arguments),
+		Outputs:       jsonbFromRaw(def.Outputs),
+		EnvVars:       jsonbFromRaw(def.EnvVars),
+		FlowVars:      jsonbFromRaw(def.FlowVars),
+		Timeout:       xsql.Int(def.Timeout),
+		MaxExecCount:  xsql.Int(def.MaxExecCount),
+		StoreRuns:     storeRuns,
+		SessionMemory: sessionMemory,
 	}
 
 	// Only "normal / deprecated" are valid landing states; on overwrite the default is the target's existing state (an overwrite replaces content, not lifecycle)
@@ -1252,6 +1266,10 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 
 	warnings := []string{
 		"model / tool / sub-flow references in the workflow do not migrate with the asset; check them one by one before running",
+	}
+	if len(clampedLimits) > 0 {
+		warnings = append(warnings,
+			"these limits exceeded this tenant's ceiling and were lowered: "+strings.Join(clampedLimits, ", "))
 	}
 	switch {
 	case prev == nil:
@@ -1303,6 +1321,38 @@ func installWorkflow(c *gin.Context, info *auth.AuthInfo, src *installSource, na
 		}
 	}
 	respondInstalled(c, info, src, name, id, nil, warnings)
+}
+
+// clampInstalledLimits narrows the limits carried by an asset pack to the installing tenant's ceiling, returning the
+// names of the fields that were lowered so the caller can list them in the warnings.
+func clampInstalledLimits(timeout, maxExecCount *int, limits flowconfig.FlowLimits) []string {
+	var clamped []string
+	clamp := func(name string, v *int, ceiling int) {
+		if ceiling > 0 && *v > ceiling {
+			*v = ceiling
+			clamped = append(clamped, name)
+		}
+	}
+	clamp("timeout", timeout, limits.MaxTimeout)
+	clamp("max_exec_count", maxExecCount, limits.MaxExecCount)
+	return clamped
+}
+
+// resolveRetention turns the pack's retention settings into the flow's two switches.
+//
+// A pack written after the switch split carries store_runs / session_memory. An older one carries only the per-flow
+// counts, whose meaning was "0 = store nothing" for run records and "<= 0 = no session memory" for session records;
+// those are derived here so an imported workflow keeps behaving the way it did.
+func resolveRetention(def assetpack.WorkflowSnapshot) (storeRuns, sessionMemory bool) {
+	storeRuns = def.StoreRuns == nil || *def.StoreRuns
+	if def.StoreRuns == nil && def.MaxRunRecords == 0 {
+		storeRuns = false
+	}
+	sessionMemory = def.SessionMemory == nil || *def.SessionMemory
+	if def.SessionMemory == nil && def.MaxSessionRecords <= 0 {
+		sessionMemory = false
+	}
+	return storeRuns, sessionMemory
 }
 
 // jsonbFromRaw turns a raw fragment from FLOW.json into a jsonb column value; an empty fragment / null becomes nil.

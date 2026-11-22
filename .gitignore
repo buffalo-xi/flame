@@ -26,6 +26,13 @@ go.work.sum
 # 交叉编译产物（无扩展名，按路径排除）
 sandboxd/sandboxd-linux
 
+# Host-side build products of the PoC (deploy/poc/build.ps1: bin/, dist/ and the generated compose override)
+deploy/poc/out/
+
+# Local compose overrides (bind mounts, an extra port for psql) — machine-specific, see deploy/poc/README.md
+docker-compose.override.yml
+deploy/poc/docker-compose.override.yml
+
 # 无扩展名的可执行产物与归档包（ELF / RAR / ZIP，逐个点掉）
 /nexus_gw/main
 /desktop/dist.zip
@@ -46,6 +53,7 @@ sandboxg/logs/
 
 # 日志与 Python 缓存
 *.log
+*.err
 __pycache__/
 *.pyc
 

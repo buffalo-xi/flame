@@ -11,9 +11,12 @@ import { getToken } from '../../utils/auth.js'
 const users = ref([])
 const usersLoading = ref(false)
 // 绑定下拉用的用户选项；loadUsers 会一并写回，保证两边同源
-const userOptions = ref([])
+// 既由 useUsers() 返回、也单独导出：AgentHistory / RunHistory 不在 settings 的组件树里，直接按下标引用即可。
+export const userOptions = ref([])
 // 租户级的默认配额（用户行没配覆盖时生效），用于显示「跟随租户（N）」
-const userQuotaDefaults = ref({ sessions: 50, session_storage_bytes: 0 })
+// First-paint only: loadUsers overwrites this with the backend defaults. The initial values mirror the code fallbacks in
+// shared/quota (200 sessions per owner type, 1 GiB per session workspace).
+const userQuotaDefaults = ref({ sessions: 200, session_storage_bytes: 1 << 30 })
 
 /** 卡片主显用户名（name），不显显示名 */
 export const userLabel = (id) => {

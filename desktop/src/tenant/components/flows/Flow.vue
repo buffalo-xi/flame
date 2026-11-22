@@ -156,11 +156,9 @@ const nodePanelLeft = ref('60px')
 const flowArguments = ref(props.instanceProps?.arguments || {})
 const flowLimits = ref({
   timeout: props.instanceProps?.timeout ?? -1,
-  max_recursion_depth: props.instanceProps?.max_recursion_depth ?? -1,
-  max_node_count: props.instanceProps?.max_node_count ?? -1,
   max_exec_count: props.instanceProps?.max_exec_count ?? -1,
-  max_run_records: props.instanceProps?.max_run_records ?? -1,
-  max_session_records: props.instanceProps?.max_session_records ?? -1
+  store_runs: props.instanceProps?.store_runs !== false,
+  session_memory: props.instanceProps?.session_memory !== false
 })
 const flowVariables = ref(props.instanceProps?.flow_vars || {})
 const environmentVariables = ref(props.instanceProps?.env_vars || {})
@@ -485,14 +483,12 @@ watch(() => props.instanceProps?.arguments, (newArgs) => {
 }, { immediate: true, deep: true })
 
 // 监听 instanceProps 的变化，更新 flowLimits
-watch(() => [props.instanceProps?.timeout, props.instanceProps?.max_recursion_depth, props.instanceProps?.max_node_count, props.instanceProps?.max_exec_count, props.instanceProps?.max_run_records, props.instanceProps?.max_session_records], () => {
+watch(() => [props.instanceProps?.timeout, props.instanceProps?.max_exec_count, props.instanceProps?.store_runs, props.instanceProps?.session_memory], () => {
   flowLimits.value = {
     timeout: props.instanceProps?.timeout ?? -1,
-    max_recursion_depth: props.instanceProps?.max_recursion_depth ?? -1,
-    max_node_count: props.instanceProps?.max_node_count ?? -1,
     max_exec_count: props.instanceProps?.max_exec_count ?? -1,
-    max_run_records: props.instanceProps?.max_run_records ?? -1,
-    max_session_records: props.instanceProps?.max_session_records ?? -1
+    store_runs: props.instanceProps?.store_runs !== false,
+    session_memory: props.instanceProps?.session_memory !== false
   }
 }, { immediate: true })
 
@@ -1045,6 +1041,15 @@ const handleNodeSelectFromPanel = (nodeType) => {
 
 // 添加新节点
 const addNode = (nodeType, source = 'toolbar') => {
+  // The node count is a tenant-level quota, enforced at save time as well: blocking it here keeps the user from drawing
+  // a diagram the server would refuse. Canvas comments are annotations and take no part.
+  if (nodeType !== 'comment') {
+    const limit = systemLimits.value.max_node_count
+    if (limit > 0 && nodes.value.filter(n => n.type !== 'comment').length >= limit) {
+      ElMessage.warning(t('flow.canvas.nodeLimitReached', { limit }))
+      return
+    }
+  }
   // 根据isFromHandle的值来决定使用什么source参数
   const actualSource = isFromHandle.value ? 'handle' : source
   
@@ -1513,11 +1518,9 @@ const saveDiagram = async () => {
         env_vars: environmentVariables,
         flow_vars: flowVariables,
         timeout: flowLimits.timeout ?? -1,
-        max_recursion_depth: flowLimits.max_recursion_depth ?? -1,
-        max_node_count: flowLimits.max_node_count ?? -1,
         max_exec_count: flowLimits.max_exec_count ?? -1,
-        max_run_records: flowLimits.max_run_records ?? -1,
-        max_session_records: flowLimits.max_session_records ?? -1
+        store_runs: flowLimits.store_runs !== false,
+        session_memory: flowLimits.session_memory !== false
       })
     })
     // 注意：后端业务错误的响应也是 HTTP 200——成败看 body.code，具体编码看 body.error。

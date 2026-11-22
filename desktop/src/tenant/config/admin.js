@@ -27,6 +27,15 @@ const adminApi = {
   runningHistory: (qs = '') => `${apiBase}/admin/running/history${qs ? `?${qs}` : ''}`,
   runningHistoryExport: (qs = '') => `${apiBase}/admin/running/history/export${qs ? `?${qs}` : ''}`,
 
+  // Agent run history: reads agent_run_records (one row per agent run), a different table from the workflow
+  // history above and shown on its own page. It also covers stateless MCP / RPC calls that carry no session.
+  // List / export / cleanup share one query string (agent_id / status / run_type / start_from / start_to /
+  // limit / offset): three different conditions would mean "seen", "exported" and "deleted" disagree.
+  agentHistory: (qs = '') => `${apiBase}/admin/running/agent-history${qs ? `?${qs}` : ''}`,
+  agentHistoryExport: (qs = '') => `${apiBase}/admin/running/agent-history/export${qs ? `?${qs}` : ''}`,
+  agentHistoryDetail: (id) => `${apiBase}/admin/running/agent-history/${id}`,
+  agentHistoryDelete: (id) => `${apiBase}/admin/running/agent-history/${id}`,
+
   // 智能体API（agents 表）
   agents: {
     base: `${apiBase}/admin/agents/`,

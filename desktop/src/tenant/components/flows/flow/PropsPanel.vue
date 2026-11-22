@@ -314,11 +314,11 @@ const props = defineProps({
   },
   flowLimits: {
     type: Object,
-    default: () => ({ timeout: -1, max_recursion_depth: -1, max_node_count: -1, max_exec_count: -1, max_run_records: -1, max_session_records: -1 })
+    default: () => ({ timeout: -1, max_exec_count: -1, store_runs: true, session_memory: true })
   },
   flowSystemLimits: {
     type: Object,
-    default: () => ({ max_timeout: 300, max_recursion_depth: 50, max_node_count: 1000, max_exec_count: 20000, max_run_records: 100, max_session_records: 50 })
+    default: () => ({ max_timeout: 300, max_exec_count: 20000, max_run_records: 100, max_session_records: 50 })
   },
   flowFlowVariables: {
     type: Object,

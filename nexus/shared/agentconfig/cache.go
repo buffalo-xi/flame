@@ -22,6 +22,10 @@ type rowDTO struct {
 	MaxCallDepth   *int32 `json:"max_call_depth"`
 	MaxTools       *int32 `json:"max_tools"`
 	MaxOutputBytes *int32 `json:"max_output_bytes"`
+	// Every column added to agent_configs must be mirrored here: the cache stores this DTO, so a field missing
+	// from it silently reads as NULL ("not set") and the configured value never reaches the runtime.
+	MaxRunRecords     *int32 `json:"max_run_records"`
+	MaxSessionRecords *int32 `json:"max_session_records"`
 }
 
 // loadRowCached reads one row: a Redis hit returns directly; a miss (or Redis being unusable) goes back to the DB and
@@ -98,10 +102,12 @@ func (r *Row) toDTO() *rowDTO {
 		return nil
 	}
 	return &rowDTO{
-		MaxIterations:  nullToPtr(r.MaxIterations),
-		MaxCallDepth:   nullToPtr(r.MaxCallDepth),
-		MaxTools:       nullToPtr(r.MaxTools),
-		MaxOutputBytes: nullToPtr(r.MaxOutputBytes),
+		MaxIterations:     nullToPtr(r.MaxIterations),
+		MaxCallDepth:      nullToPtr(r.MaxCallDepth),
+		MaxTools:          nullToPtr(r.MaxTools),
+		MaxOutputBytes:    nullToPtr(r.MaxOutputBytes),
+		MaxRunRecords:     nullToPtr(r.MaxRunRecords),
+		MaxSessionRecords: nullToPtr(r.MaxSessionRecords),
 	}
 }
 
@@ -110,10 +116,12 @@ func (d *rowDTO) toRow() *Row {
 		return nil
 	}
 	return &Row{
-		MaxIterations:  ptrToNull(d.MaxIterations),
-		MaxCallDepth:   ptrToNull(d.MaxCallDepth),
-		MaxTools:       ptrToNull(d.MaxTools),
-		MaxOutputBytes: ptrToNull(d.MaxOutputBytes),
+		MaxIterations:     ptrToNull(d.MaxIterations),
+		MaxCallDepth:      ptrToNull(d.MaxCallDepth),
+		MaxTools:          ptrToNull(d.MaxTools),
+		MaxOutputBytes:    ptrToNull(d.MaxOutputBytes),
+		MaxRunRecords:     ptrToNull(d.MaxRunRecords),
+		MaxSessionRecords: ptrToNull(d.MaxSessionRecords),
 	}
 }
 

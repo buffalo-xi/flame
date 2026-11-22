@@ -40,28 +40,6 @@ func TestExtractCallDepthDoesNotMutateInput(t *testing.T) {
 	}
 }
 
-// Configuring -1 ("unlimited") must fall back: a pure flow cycle relies on this one gate, and allowing it to
-// be switched off hands the defence to a single misconfiguration.
-func TestEffectiveEndpointDepthLimit(t *testing.T) {
-	cases := []struct {
-		name                 string
-		configured, fallback int
-		want                 int
-	}{
-		{"a normal value is used as is", 5, 10, 5},
-		{"1 is a legitimate limit", 1, 10, 1},
-		{"-1 falls back", -1, 10, 10},
-		{"0 falls back", 0, 10, 10},
-		{"a zero fallback yields 10", -1, 0, 10},
-		{"a negative fallback yields 10", -1, -1, 10},
-	}
-	for _, tc := range cases {
-		if got := effectiveEndpointDepthLimit(tc.configured, tc.fallback); got != tc.want {
-			t.Errorf("%s: limit = %d, want %d", tc.name, got, tc.want)
-		}
-	}
-}
-
 // Several rpc nodes in one flow share the same CallDepth snapshot: sibling calls do not accumulate.
 //
 // The real guarantee is that ExecContext.CallDepth is written once by NewFlow and no execution path touches it;

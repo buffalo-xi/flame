@@ -276,6 +276,12 @@ func registerActiveRun(execCtx *flow.ExecContext) func() {
 }
 
 // ensureSession makes sure the sessions table has a record for this session_id after a flow run.
+//
+// A session the entry point already created is only refreshed here, so the failure that matters is the one where this
+// run is the first to see the id: EnsureExists then creates it subject to the per-user session-count quota, and a
+// refusal is logged rather than raised - the run has already happened, and aborting it over a bookkeeping row would be a
+// worse outcome than a run whose session is missing from the console list. Its session_records are still written (that
+// table does not depend on the sessions row), so the memory itself is not lost, only its entry in the session list.
 func ensureSession(execCtx *flow.ExecContext) {
 	if execCtx == nil || execCtx.SessionID == "" {
 		return

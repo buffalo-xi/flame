@@ -482,11 +482,9 @@ const instanceProps = ref({
   env_vars: '',
   flow_vars: '',
   timeout: 300,
-  max_recursion_depth: -1,
-  max_node_count: -1,
   max_exec_count: -1,
-  max_run_records: 50,
-  max_session_records: 30
+  store_runs: true,
+  session_memory: true
 })
 
 // 打开新增工作流抽屉
@@ -505,11 +503,9 @@ const addFlow = () => {
     env_vars: '',
     flow_vars: '',
     timeout: 300,
-    max_recursion_depth: -1,
-    max_node_count: -1,
     max_exec_count: -1,
-    max_run_records: 50,
-    max_session_records: 30
+    store_runs: true,
+    session_memory: true
   }
   // 进入全屏模式
   fullScreenMode.value = true
@@ -533,11 +529,9 @@ const applyFlowDetail = (wfData) => {
     env_vars: wfData.env_vars || '',
     flow_vars: wfData.flow_vars || '',
     timeout: wfData.timeout ?? -1,
-    max_recursion_depth: wfData.max_recursion_depth ?? -1,
-    max_node_count: wfData.max_node_count ?? -1,
     max_exec_count: wfData.max_exec_count ?? -1,
-    max_run_records: wfData.max_run_records ?? -1,
-    max_session_records: wfData.max_session_records ?? -1
+    store_runs: wfData.store_runs !== false,
+    session_memory: wfData.session_memory !== false
   }
   // 版本状态以后端为准（头部「v3 / 未发布 / 有改动」不能拿本地状态糊弄）
   releasedVersion.value = wfData.current_version || 0
@@ -912,11 +906,9 @@ const handleBack = () => {
     env_vars: '',
     flow_vars: '',
     timeout: 300,
-    max_recursion_depth: -1,
-    max_node_count: -1,
     max_exec_count: -1,
-    max_run_records: 50,
-    max_session_records: 30
+    store_runs: true,
+    session_memory: true
   }
   // 编辑器里可能新建 / 收回过端点，卡片上的端点与状态要整表刷新才准
   fetchflows()
@@ -1056,11 +1048,9 @@ const handleSave = async () => {
         env_vars: environmentVariables,
         flow_vars: flowVariables,
         timeout: flowLimits.timeout ?? -1,
-        max_recursion_depth: flowLimits.max_recursion_depth ?? -1,
-        max_node_count: flowLimits.max_node_count ?? -1,
         max_exec_count: flowLimits.max_exec_count ?? -1,
-        max_run_records: flowLimits.max_run_records ?? -1,
-        max_session_records: flowLimits.max_session_records ?? -1
+        store_runs: flowLimits.store_runs !== false,
+        session_memory: flowLimits.session_memory !== false
       })
     })
 

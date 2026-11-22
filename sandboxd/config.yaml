@@ -253,7 +253,7 @@ docker:
   #   docker build -t flame/sandbox:latest -f sandboxd/Dockerfile sandboxd
   #
   # Contract: the three interpreters lua5.4 / python3.13 / node24; Python dependencies
-  #   (openpyxl 3.1.5 / xlrd 2.0.1 / pandas 2.2.3 / numpy 2.2.4);
+  #   (openpyxl 3.1.5 / xlrd 2.0.1 / pandas 2.2.3 / numpy 2.2.4, plus requests / python-docx / beautifulsoup4);
   #   procps (for the pkill follow-up strike) + coreutils (resident sleep); non-root; no ENTRYPOINT.
   # The actual versions inside the image can be checked: docker run --rm flame/sandbox:latest cat /etc/flame-versions
   #

@@ -1,0 +1,48 @@
+# browserd for the PoC (deploy/poc).
+#
+# One session = one Chromium, never reused across sessions: reusing a profile would hand one session's cookies to the
+# next. What is pooled is capacity (workers), not processes.
+
+# Must resolve to the same place as nexus's storage.root_dir — this is where the driver writes screenshots and downloads
+# (its cwd is the session's workspace inside this root), and that shared path is what makes them readable by the tenant.
+#
+# Startup warns when the root has no tenants/ subdirectory; on a brand-new box that is expected (the first tenant
+# creation makes it), so the warning is harmless.
+workspace_root: /data
+
+listen: "127.0.0.1:27091"
+token: ""
+log_dir: /var/log/flame
+
+# process — Chromium is a plain child of this service; the container is the isolation boundary.
+# docker  — one container per worker (not implemented yet).
+mode: process
+
+# Live browser sessions = the memory ceiling (~300 MB each at full house). Raise it only with the RAM to back it.
+workers: 2
+
+# No gateway in this box, so the per-tenant cap is enforced here (behind browserg it must stay 0 — a cap counted inside
+# one instance multiplies by the instance count).
+max_per_tenant: 1
+
+queue_timeout_sec: 20
+# A live session keeps Chromium resident, so the idle window is short. Reclaim happens in (idle, idle + janitor].
+idle_timeout_sec: 300
+janitor_sec: 30
+
+browser:
+  # The driver binary (absolute: the driver itself runs with cwd = the session's workspace, so a relative path would be
+  # looked up inside the tenant's directory).
+  binary: /opt/flame/bin/browserhost
+  # Empty = autodetect chromium / chrome / msedge. The image installs Debian's chromium on PATH.
+  exec_path: ""
+  # Parent of the per-session user-data-dir. Deliberately NOT under workspace_root: the profile is this service's private
+  # state and is deleted when the session ends, while the workspace belongs to the tenant.
+  profile_root: /var/lib/flame/profiles
+  headless: true
+  # No display in a container, and headed browsing has no meaning in a pool.
+  allow_headed: false
+
+# No consul: nexus connects to this one instance directly.
+registry:
+  enabled: false

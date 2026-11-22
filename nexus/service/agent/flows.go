@@ -11,6 +11,8 @@ import (
 
 	"flame/nexus/service/agent/tools"
 	"flame/nexus/shared/auth"
+	"flame/nexus/shared/flowconfig"
+	"flame/nexus/shared/flowdoc"
 	"flame/nexus/shared/models"
 	"flame/nexus/shared/quota"
 	agents "flame/nexus/shared/repository/agents"
@@ -70,14 +72,10 @@ func (m *flowsManager) Exists(ctx context.Context, name string) (bool, error) {
 
 // A newly created workflow keeps the editor's "new workflow" defaults (the initial form in frontend Flows.vue).
 //
-// Why the zero values must not be stored: at runtime max_run_records = 0 means "keep no run records at all", and max_session_records = 0 means
-// "no session memory". Leaving zeros would make a tool-created flow show an empty run-record page forever, and whoever triages it would only
-// conclude "this flow has never run".
-const (
-	defaultFlowTimeout           = 300 // seconds
-	defaultFlowMaxRunRecords     = 50
-	defaultFlowMaxSessionRecords = 30
-)
+// Both retention switches are on: with store_runs off the run-record page stays empty forever and whoever triages it would
+// only conclude "this flow has never run"; with session_memory off a conversation with a session_id silently loses its
+// memory. The counts behind them are tenant quotas, not per-flow values.
+const defaultFlowTimeout = 300 // seconds
 
 // Create creates a workflow; when Endpoints is non-empty it also exposes those protocols as endpoints.
 func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, error) {
@@ -96,6 +94,17 @@ func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, 
 		return "", errors.New("workflow description cannot be empty")
 	}
 
+	// The node count is a tenant-level quota and a static property of the diagram, so a tool-created workflow is held to
+	// the same rule as one saved in the editor (canvas comments do not count).
+	if doc, ok := flowdoc.Parse(in.Diagram); ok {
+		if limit := flowconfig.Resolve(m.schema).MaxNodeCount; limit > 0 {
+			if count := doc.CountNodes(flowdoc.CommentNodeType); count > limit {
+				return "", fmt.Errorf("the diagram has %d nodes, above this tenant's limit of %d; split it into smaller workflows",
+					count, limit)
+			}
+		}
+	}
+
 	// Quota: the same criterion as agent creation (CountFlows queries the database directly rather than adding a method to the repository
 	// interface for one count)
 	cnt, err := quota.CountFlows(m.schema)
@@ -111,11 +120,9 @@ func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, 
 		Diagram:           xsql.JSONB{Data: in.Diagram},
 		Description:       xsql.String(description),
 		Timeout:           defaultFlowTimeout,
-		MaxRecursionDepth: -1,
-		MaxNodeCount:      -1,
 		MaxExecCount:      -1,
-		MaxRunRecords:     defaultFlowMaxRunRecords,
-		MaxSessionRecords: defaultFlowMaxSessionRecords,
+		StoreRuns:         true,
+		SessionMemory:     true,
 	}
 	if len(in.Arguments) > 0 {
 		// Entry argument declaration: once exposed, the endpoint's input_schema is taken from this column

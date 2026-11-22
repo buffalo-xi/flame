@@ -172,6 +172,15 @@ func SetupRoutes(router *gin.RouterGroup) {
 		runningGroup.GET("/history", runs.ListHistory)
 		runningGroup.DELETE("/history", runs.CleanupHistory)
 		runningGroup.GET("/history/export", runs.ExportHistory)
+		// Agent run history: a separate table (agent_run_records) and a separate page. It covers every agent
+		// run, including stateless MCP / RPC calls that carry no session and therefore have no memory row.
+		// Never merged with the workflow history above: one row there is an execution of nodes, one row here
+		// is an answer from an agent.
+		runningGroup.GET("/agent-history", runs.ListAgentHistory)
+		runningGroup.DELETE("/agent-history", runs.CleanupAgentHistory)
+		runningGroup.GET("/agent-history/export", runs.ExportAgentHistory)
+		runningGroup.GET("/agent-history/:id", runs.GetAgentHistory)
+		runningGroup.DELETE("/agent-history/:id", runs.DeleteAgentHistory)
 	}
 
 	// Agent routes (the agents table)
@@ -428,7 +437,7 @@ func SetupRoutes(router *gin.RouterGroup) {
 	}
 
 	// Agent run parameters (platform.agent_configs, system defaults + tenant configuration)
-	// The same semantics as flowconfigs, except this table does not accept -1 (all four fields are safety valves)
+	// The same semantics as flowconfigs, except this table does not accept -1 (all six fields are safety valves)
 	agentconfigsGroup := router.Group("/agentconfigs")
 	{
 		agentconfigsGroup.GET("/", agentconfigs.GetAgentConfigs)
