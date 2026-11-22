@@ -77,7 +77,16 @@ need network access to a Go module proxy and an npm registry; 5–10 minutes, an
 docker compose -f deploy/poc/docker-compose.yml up -d --build
 ```
 
-Either way, open <http://localhost:27001> and sign in as **`plat` / `12345678`**.
+Either way, open <http://localhost:27001>. One port serves **two consoles with two different accounts**, which is the part
+that catches people out:
+
+- **`plat` / `12345678`** — the **platform administrator**: creates tenants, adds LLM providers and models. **Start here.**
+  The platform console lists the demo tenant `t0`, and that list is how you switch into it.
+- **`primary` / `12345678`** — the administrator **inside** `t0`: the tenant console (agents, skills, workflows, chat, and
+  that tenant's own providers / models / connections). It is a tenant account, so it sees no other tenant and none of the
+  platform's tenant or user administration.
+- **`user01` / `12345678`** — a platform account with role `user` that owns `t0`; sign in with it to see the non-admin
+  platform view (the tenants it owns, no admin pages).
 
 Three settings in `docker-compose.yml` are easy to overlook and not optional:
 
