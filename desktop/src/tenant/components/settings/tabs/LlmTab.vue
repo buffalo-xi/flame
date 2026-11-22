@@ -234,7 +234,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Edit, Delete, CopyDocument, Plus, Refresh, Remove, ChatDotRound } from '@element-plus/icons-vue'
@@ -659,6 +659,13 @@ const fetchLLMModels = async () => {
     llmModelLoading.value = false
   }
 }
+
+// Every mutation on this tab can flip "is there a usable default model": enabling one (provision),
+// disabling it, marking another as default, deleting a provider. The chat pane's banner follows
+// MainWindow's probe only, so ask it to re-probe once the model list is reloaded. A watch rather than a
+// line inside each action: a future mutation path cannot forget to call it.
+const llmStatus = inject('llmStatus', null)
+watch(llmModelsData, () => { llmStatus?.refresh?.() })
 
 // 打开添加LLM模型对话框（可传入服务商 ID 自动带入）
 const openAddLLMModelDialog = (providerId) => {

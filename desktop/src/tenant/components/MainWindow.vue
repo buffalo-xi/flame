@@ -872,8 +872,12 @@ const checkDefaultLLM = async () => {
   ElMessage.warning({ message: t('llmCheck.prompt'), duration: 8000 })
 }
 
-// 从设置页回来时重探一次：用户可能刚把某个模型设成默认（也可能刚删掉），Chat 的输入区要跟着放开/锁上。
-// 只在离开设置页时探，不进设置页就探；不知道（null）时保留上一次的结论。
+// Re-probe whenever the answer may have changed. Two triggers, both needed:
+//   - leaving Settings: the user may have set a default model or deleted one;
+//   - the settings tab asking for it (llmStatus.refresh): the chat pane stays visible while Settings is
+//     open, so "went away and came back" is not the only way the state can change. Enabling the default
+//     model on the right used to leave the banner on the left until the page was reloaded.
+// A null probe result (network / gateway failure) keeps the previous conclusion.
 const refreshDefaultLLM = async () => {
   const hasDefault = await probeDefaultLLM()
   if (hasDefault !== null) noDefaultModel.value = !hasDefault
@@ -883,10 +887,12 @@ watch(activeNav, (next, prev) => {
   if (prev === 'settings') refreshDefaultLLM()
 })
 
-// Chat 据此禁用发送并常驻提示；openSettings 让它能一键跳到配置位置（而不是让用户自己找）
+// Chat disables sending and keeps the banner from this; openSettings jumps straight to the fix, and
+// refresh lets a child (the LLM tab) report that the models changed.
 provide('llmStatus', {
   noDefaultModel,
   markMissing: () => { noDefaultModel.value = true },
+  refresh: refreshDefaultLLM,
   openSettings: () => {
     settingsTab.value = 'llm'
     setActiveNav('settings')
