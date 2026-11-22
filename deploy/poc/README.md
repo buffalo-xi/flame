@@ -55,19 +55,29 @@ Requirements: Docker Desktop (or Docker Engine), ~3 GB of images (flame ≈ 1.2 
 x86-64 host — the image pins `GOARCH=amd64`, and `docker-compose.yml` declares `platform: linux/amd64` so an ARM machine
 runs it under emulation instead of failing with `exec format error`.
 
+Get the files first — every command below is relative to the repository root, and the compose file mounts `./litellm.yaml`
+from its own directory (and, when building, uses the repository root as its context), so the folder has to be whole:
+
 ```bash
-docker compose -f deploy/poc/docker-compose.yml up -d --build
+git clone https://github.com/buffalo-xi/flame.git
+cd flame
 ```
 
-Nothing to compile? Every push to `main` that touches the stack publishes a prebuilt amd64 image
-(`ghcr.io/buffalo-xi/flame-poc:latest`), so pulling it and starting is enough — same compose file, no toolchain, no build:
+Then either **pull the published image** (no Go, no Node, no build — this is the normal way to try it):
 
 ```bash
 docker compose -f deploy/poc/docker-compose.yml pull
 docker compose -f deploy/poc/docker-compose.yml up -d
 ```
 
-Then open <http://localhost:27001> and sign in as **`plat` / `12345678`**.
+or **build it yourself** (the build runs inside the image's builder stages, so the host needs no toolchain — but it does
+need network access to a Go module proxy and an npm registry; 5–10 minutes, and the first run of each is the slow one):
+
+```bash
+docker compose -f deploy/poc/docker-compose.yml up -d --build
+```
+
+Either way, open <http://localhost:27001> and sign in as **`plat` / `12345678`**.
 
 Three settings in `docker-compose.yml` are easy to overlook and not optional:
 

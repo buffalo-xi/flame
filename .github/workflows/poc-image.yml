@@ -12,6 +12,8 @@ on:
     # Only the inputs of the image are worth rebuilding: a docs-only change must not cost ten minutes of runner time.
     paths:
       - 'deploy/poc/**'
+      # The README pair lives in the same directory: documenting the demo must not rebuild a 2 GB image.
+      - '!deploy/poc/**/*.md'
       - 'nexus/**'
       - 'sandboxd/**'
       - 'browserd/**'

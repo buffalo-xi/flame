@@ -41,18 +41,27 @@
 
 要求：Docker Desktop（或 Docker Engine）、约 3 GB 镜像（flame ≈ 1.2 GB + litellm 1.73 GB）、4 GB 内存、x86-64 宿主——镜像固定 `GOARCH=amd64`，`docker-compose.yml` 里声明了 `platform: linux/amd64`，所以 ARM 机器走模拟而不是报 `exec format error`。
 
+先拿到文件：下面所有命令都相对于仓库根目录，而且 compose 文件会从自己所在目录挂载 `./litellm.yaml`（构建时又把仓库根当上下文），所以这个目录必须是完整的：
+
 ```bash
-docker compose -f deploy/poc/docker-compose.yml up -d --build
+git clone https://github.com/buffalo-xi/flame.git
+cd flame
 ```
 
-不想编译？每次推 `main` 且动到这套栈时都会发布预构建的 amd64 镜像（`ghcr.io/buffalo-xi/flame-poc:latest`），拉下来直接起即可——同一个 compose 文件，不需要工具链、不需要构建：
+然后二选一：**拉预构建镜像**（不需要 Go / Node，也不需要构建，只想试功能就走这条）：
 
 ```bash
 docker compose -f deploy/poc/docker-compose.yml pull
 docker compose -f deploy/poc/docker-compose.yml up -d
 ```
 
-然后打开 <http://localhost:27001>，用 **`plat` / `12345678`** 登录。
+或者**自己构建**（编译发生在镜像的构建阶段，宿主不需要工具链，但要能访问 Go 模块代理与 npm 源；5–10 分钟，首次最慢）：
+
+```bash
+docker compose -f deploy/poc/docker-compose.yml up -d --build
+```
+
+两种方式之后都一样：打开 <http://localhost:27001>，用 **`plat` / `12345678`** 登录。
 
 `docker-compose.yml` 里有三处「看着可选其实必需」的配置：
 
