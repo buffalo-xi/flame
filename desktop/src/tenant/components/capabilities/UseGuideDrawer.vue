@@ -1,20 +1,13 @@
 <template>
-  <!-- 端点「怎么用」说明面板。
-       外壳与「智能体编辑 → 设置」面板同款：teleport 到 body + fixed 贴容器右侧、
-       无遮罩、左侧拖拽条可调宽、点击面板外关闭（细节见 AgentSettingsPanel.vue）。
-       两种打开方式：
-         open()        通用说明（工具条入口），示例里用 <端点名> 占位
-         open(row)     某个端点的专属说明，示例按该行的协议 / 入参 schema 生成 -->
-  <teleport to="body">
-    <div v-if="visible" ref="panelRef" class="ug-panel" :style="panelStyle">
-      <div class="panel-resizer" @mousedown="startResize"></div>
-      <div class="panel-header">
-        <span class="panel-title">{{ title }}</span>
-        <span class="close-icon" @click="visible = false">&#xd7;</span>
-      </div>
-
-      <div class="panel-body">
-        <div class="ug">
+  <!-- Endpoint "how to use" panel: content only.
+       The shell (teleport, docked to the container's right edge, drag-to-widen, ESC / click-outside
+       close) is src/help/HelpDrawer.vue, shared with the help topics — one copy of that geometry
+       instead of two that drift apart.
+       Two ways in:
+         open()         generic explanation (toolbar entry), examples use <endpoint> placeholders
+         open(row)      per-endpoint explanation, examples generated from the row's protocol / schema -->
+  <HelpDrawer :visible="visible" :title="title" :anchor-el="anchorEl" @close="visible = false">
+    <div class="ug">
           <!-- ===== 接入信息 ===== -->
           <section class="ug-sec">
             <div class="ug-title">{{ t('endpointGuide.accessTitle') }}</div>
@@ -107,22 +100,21 @@
               <li>{{ t('endpointGuide.noteCredScope') }}</li>
             </ul>
           </section>
-        </div>
-      </div>
     </div>
-  </teleport>
+  </HelpDrawer>
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { getUser } from '../../utils/auth.js'
 import { apiBase } from '../../config/base.js'
-import { useEscClose } from '../../composables/useEscClose'
+import HelpDrawer from '../../../help/HelpDrawer.vue'
 
-const props = defineProps({
-  // 面板贴哪个容器的右侧（通常是端点页根元素）；null 时退化为整个视口
+defineProps({
+  // Container the drawer docks to (usually the endpoints root); null falls back to the viewport.
+  // Read in the template only — the shell owns the geometry.
   anchorEl: { type: Object, default: null }
 })
 
@@ -132,8 +124,6 @@ const visible = ref(false)
 const row = ref(null)
 
 const emit = defineEmits(['open'])
-
-useEscClose(visible, () => { visible.value = false })
 
 const schema = computed(() => getUser()?.schema || '<tenant>')
 
@@ -168,75 +158,6 @@ const toolRef = computed(() => {
 const toolRefHint = computed(() =>
   row.value?.protocol !== 'rpc' ? t('endpointGuide.reasonMcp') : t('endpointGuide.reasonAgent')
 )
-
-// ===== 面板几何（对齐 AgentSettingsPanel 的 settingsRect / startSettingsResize） =====
-const panelRef = ref(null)
-const panelWidth = ref(460)
-const panelRect = ref({ top: 0, left: 0, width: 460, height: 600 })
-const panelStyle = computed(() => ({
-  top: panelRect.value.top + 'px',
-  left: panelRect.value.left + 'px',
-  width: panelRect.value.width + 'px',
-  height: panelRect.value.height + 'px'
-}))
-
-const updateRect = () => {
-  const el = props.anchorEl
-  const r = el
-    ? el.getBoundingClientRect()
-    : { top: 0, right: window.innerWidth, height: window.innerHeight }
-  // 容器比面板窄时贴窗口左边缘，保证整块可见（已脱离容器裁剪）
-  const width = Math.min(panelWidth.value, window.innerWidth)
-  panelRect.value = {
-    top: r.top,
-    left: Math.max(0, r.right - width),
-    width,
-    height: r.height || window.innerHeight
-  }
-}
-
-// 拖拽改宽：向左拖变宽（380~760）
-const startResize = (e) => {
-  const startX = e.clientX
-  const startWidth = panelWidth.value
-  const onMouseMove = (ev) => {
-    const deltaX = startX - ev.clientX
-    panelWidth.value = Math.max(380, Math.min(startWidth + deltaX, 760))
-    updateRect()
-  }
-  const onMouseUp = () => {
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
-  }
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
-}
-
-// 点击面板外部关闭（下拉/提示等 teleport 到 body 的浮层不算外部）
-const onOutsideClick = (e) => {
-  const target = e.target
-  if (target.closest && (target.closest('.el-overlay') || target.closest('.el-popper'))) return
-  if (panelRef.value && !panelRef.value.contains(target)) visible.value = false
-}
-
-watch(visible, (v) => {
-  if (v) {
-    // nextTick 延迟绑定，避免打开按钮的 mousedown 立即触发关闭
-    nextTick(() => {
-      document.addEventListener('mousedown', onOutsideClick)
-      updateRect()
-    })
-    window.addEventListener('resize', updateRect)
-  } else {
-    document.removeEventListener('mousedown', onOutsideClick)
-    window.removeEventListener('resize', updateRect)
-  }
-})
-
-onUnmounted(() => {
-  document.removeEventListener('mousedown', onOutsideClick)
-  window.removeEventListener('resize', updateRect)
-})
 
 // ===== 示例内容生成 =====
 
@@ -362,69 +283,9 @@ defineExpose({ open })
 </script>
 
 <style scoped>
-/* ===== 外壳：与智能体设置面板同一套 ===== */
-.ug-panel {
-  /* teleport 到 body + fixed：脱离 .endpoints 的 overflow:hidden，位置按端点页容器 rect 计算 */
-  position: fixed;
-  z-index: 3200;
-  background: #ffffff;
-  border-radius: 6px 0 0 6px;
-  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.2);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.panel-resizer {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  background: transparent;
-  z-index: 10;
-}
-
-.panel-resizer:hover {
-  background: #e0e0e0;
-}
-
-.panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 16px;
-  color: black;
-  gap: 12px;
-}
-
-.panel-title {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.close-icon {
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  font-size: 18px;
-}
-
-.close-icon:hover {
-  background: rgba(0, 0, 0, 0.1);
-}
-
-.panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  min-height: 0;
-  /* 预留滚动条位置：内容高度变化时不会左右晃动 */
-  scrollbar-gutter: stable;
-}
-
-/* ===== 内容 ===== */
+/* ===== Content =====
+   The panel shell lives in src/help/HelpDrawer.vue; only what this panel renders itself is styled
+   here, and scoped styles still reach it because these elements are ours, not v-html output. */
 .ug {
   display: flex;
   flex-direction: column;
