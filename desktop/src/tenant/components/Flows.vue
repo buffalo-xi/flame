@@ -187,6 +187,8 @@
         >
           <el-icon><component :is="listSearchOpen ? Close : Search" /></el-icon>
         </el-button>
+        <!-- 页面级帮助：列表页与编辑器各要点的总览 -->
+        <HelpButton topic="page-flows" />
         <!-- 导入：从资产包装一个工作流。次要动作，不抢「新增」的主色 -->
         <el-button class="header-import-btn" @click="importVisible = true" round :title="t('flow.list.importFlow')">
           <el-icon><Upload /></el-icon>
@@ -334,6 +336,7 @@ import {
 } from '../utils/flowFormat.js'
 import Flow from './flows/Flow.vue'
 import FlowEndpointsPanel from './flows/FlowEndpointsPanel.vue'
+import HelpButton from '../../help/HelpButton.vue'
 import { formatError } from '../../locales'
 import { formatDateTime } from '@/utils/datetime.js'
 

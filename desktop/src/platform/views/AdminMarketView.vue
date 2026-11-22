@@ -7,6 +7,8 @@
       <div class="list-pane">
         <div class="lp-bar">
           <span class="lp-count">{{ t('platform.market.peerCount', { count: peers.length }) }}</span>
+          <!-- 页面级帮助：对端字段、拉取与导入、两个「免审」的区别 -->
+          <HelpButton topic="page-platform-market" />
           <div class="lp-bar-right">
             <el-button size="small" type="primary" @click="openPeerForm()">
               <el-icon><Plus /></el-icon>
@@ -229,6 +231,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
 import { api } from '../api'
+import HelpButton from '../../help/HelpButton.vue'
 
 const { t } = useI18n()
 

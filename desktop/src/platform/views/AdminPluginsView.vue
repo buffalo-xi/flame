@@ -12,7 +12,11 @@
   <div class="section">
     <div class="split">
       <aside class="plug-nav">
-        <div class="nav-caption">{{ t('platform.plugins.navPluginsCaption') }}</div>
+        <!-- 页面级帮助入口：左栏标题右侧的「?」，开的是整页说明（本页 tab 在顶栏，页内没有标题行） -->
+        <div class="nav-caption nav-caption-row">
+          <span>{{ t('platform.plugins.navPluginsCaption') }}</span>
+          <HelpButton topic="page-platform-plugins" />
+        </div>
         <div
           v-for="p in plugins"
           :key="p.name"
@@ -249,6 +253,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api'
 import { capabilityLabelKey } from '../../locales'
+import HelpButton from '../../help/HelpButton.vue'
 
 // 一次取全：插件清单 + 租户列表 + 各租户原始行 + 租户启用状态。
 // 矩阵要同时看「平台给没给」与「租户开没开」，逐个租户请求会让页面一闪一闪。
@@ -656,6 +661,14 @@ onMounted(load)
   font-size: 12px;
   color: #909399;
   padding: 6px 8px;
+}
+
+/* 标题 + 帮助入口同一行：caption 原本是纯文本，这里只把它改成 flex 容器 */
+.nav-caption-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 /* 第二组导航（能力）与插件清单之间留一条视觉分隔 */

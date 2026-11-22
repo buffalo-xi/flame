@@ -26,6 +26,9 @@
           </el-select>
           <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('common.refresh') }}</el-button>
 
+          <!-- 页面级帮助：六张卡与配额口径的总览 -->
+          <HelpButton topic="page-platform-tenants" />
+
           <div class="lp-bar-right">
             <el-button size="small" type="primary" :icon="Plus" @click="openCreate">{{ t('platform.tenants.newTenant') }}</el-button>
           </div>
@@ -337,7 +340,7 @@
                       <span v-else class="muted">{{ t('platform.tenants.capRowUnset') }}</span>
                     </template>
                     <el-button v-if="cap.row !== null && cap.row !== undefined" link size="small"
-                               @click="resetCapability(cap.key)">{{ t('platform.plugins.clearSettings') }}</el-button>
+                               @click="resetCapability(cap.key)">{{ t('platform.tenants.capResetRow') }}</el-button>
                   </div>
                 </div>
               </div>
@@ -482,6 +485,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { api } from '../api'
 import { capabilityLabelKey } from '../../locales'
+import HelpButton from '../../help/HelpButton.vue'
 
 const emit = defineEmits(['count', 'session-expired'])
 
@@ -956,7 +960,7 @@ async function resetCapability(key) {
   const tn = selectedTenant.value
   if (!tn) return
   try {
-    await ElMessageBox.confirm(t('platform.tenants.resetCapConfirm', { key }), t('platform.plugins.clearSettings'), {
+    await ElMessageBox.confirm(t('platform.tenants.resetCapConfirm', { key }), t('platform.tenants.capResetRow'), {
       type: 'info'
     })
   } catch {

@@ -29,6 +29,9 @@
           </el-select>
           <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('common.refresh') }}</el-button>
 
+          <!-- 页面级帮助：三种账号状态与四条保护规则 -->
+          <HelpButton topic="page-platform-users" />
+
           <div class="lp-bar-right">
             <el-button size="small" type="primary" :icon="Plus" @click="openCreate">{{ t('platform.users.newUser') }}</el-button>
           </div>
@@ -268,6 +271,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { api } from '../api'
 import { getUser } from '../auth'
+import HelpButton from '../../help/HelpButton.vue'
 
 const emit = defineEmits(['count', 'session-expired'])
 

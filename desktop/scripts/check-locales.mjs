@@ -12,7 +12,11 @@
 //     does the same;
 //   - placeholder sets must match: dropping {name} renders as "password must be at least   characters";
 //   - an empty value is a problem too: an empty string and a missing key are both blank on screen.
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+//
+// Help topics (Markdown under src/help/<locale>/) are checked here for the same reason: they are
+// per-language content, the fallback to English hides a missing file, and a topic that no registry
+// entry links to is invisible content nobody will ever read.
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -102,9 +106,60 @@ for (const lang of languages) {
   }
 }
 
+// ---------------------------------------------------------------- help topics
+// Help content is Markdown under src/help/<locale>/ (see src/help/topics.js for why it is not in the
+// bundles), so it never passes the checks above. It needs the same two guarantees:
+//   - a language must not be missing a topic: helpBody() falls back to English, so a missing file
+//     shows English prose inside a Chinese UI and nobody ever notices;
+//   - the structure must stay aligned: a section added to one language and forgotten in the other is
+//     the same defect as a dropped placeholder, just harder to see.
+// Plus one guarantee the bundles do not need: every topic file must be reachable from the registry,
+// otherwise it was written but is not linked from anywhere.
+const HELP_DIR = join(HERE, '..', 'src', 'help')
+
+const helpFiles = (lang) => {
+  const dir = join(HELP_DIR, lang)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((f) => f.endsWith('.md')).sort()
+}
+
+const headingCount = (path) => (readFileSync(path, 'utf8').match(/^#{1,6}\s+\S/gm) || []).length
+
+const baselineHelp = helpFiles(BASELINE)
+
+for (const lang of languages) {
+  if (lang === BASELINE) continue
+  const files = helpFiles(lang)
+  for (const missing of baselineHelp.filter((f) => !files.includes(f))) {
+    problems.push(`help/${lang} is missing ${missing}`)
+  }
+  for (const extra of files.filter((f) => !baselineHelp.includes(f))) {
+    problems.push(`help/${lang} has the extra topic ${extra}`)
+  }
+  for (const file of baselineHelp.filter((f) => files.includes(f))) {
+    const want = headingCount(join(HELP_DIR, BASELINE, file))
+    const got = headingCount(join(HELP_DIR, lang, file))
+    if (want !== got) problems.push(`help/${lang}/${file} has ${got} heading(s), baseline has ${want}`)
+  }
+}
+
+// Registry coverage: `topics: ['a', 'b']` in topics.js is the only place a topic becomes reachable.
+const topicsSource = readFileSync(join(HELP_DIR, 'topics.js'), 'utf8')
+const registered = new Set(
+  [...topicsSource.matchAll(/topics:\s*\[([^\]]*)\]/g)]
+    .flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]))
+)
+for (const file of baselineHelp) {
+  const slug = file.replace(/\.md$/, '')
+  if (!registered.has(slug)) problems.push(`help topic ${slug} is not listed in src/help/topics.js`)
+}
+for (const slug of registered) {
+  if (!baselineHelp.includes(`${slug}.md`)) problems.push(`src/help/topics.js lists ${slug}, but ${BASELINE}/${slug}.md does not exist`)
+}
+
 if (problems.length) {
   console.error(
-    `[locales] ${problems.length} problem(s) (baseline ${BASELINE}, ${languages.length} language(s) x ${baselineFiles.length} file(s)):`
+    `[locales] ${problems.length} problem(s) (baseline ${BASELINE}, ${languages.length} language(s) x ${baselineFiles.length} file(s), ${baselineHelp.length} help topic(s)):`
   )
   for (const problem of problems) console.error('  - ' + problem)
   process.exit(1)
@@ -115,4 +170,7 @@ if (languages.length === 1) {
 }
 console.log(
   `[locales] ${languages.length} language(s) x ${baselineFiles.length} file(s): files, keys, placeholders and empty values match`
+)
+console.log(
+  `[help] ${languages.length} language(s) x ${baselineHelp.length} topic(s): files, headings and registry coverage match`
 )

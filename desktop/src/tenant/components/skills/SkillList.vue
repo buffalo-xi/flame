@@ -70,6 +70,8 @@
       <el-icon><Upload /></el-icon>
       <span>{{ $t('skill.import') }}</span>
     </el-button>
+    <!-- 页面级帮助：私有技能、可见性、工具依赖的区别 -->
+    <HelpButton topic="page-skills" />
     <!-- 窄档（sm/xs）只留 +，文字由 CSS 收起；title 兜住"这是干嘛的" -->
     <el-button class="header-create-btn" type="primary" @click="emit('create')" round :title="$t('skill.createTip')">
       <el-icon><Plus /></el-icon>
@@ -189,6 +191,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Search, Refresh, Edit, Delete, CircleCheck, CircleClose, ArrowDown, Close, CaretRight, Upload, Download } from '@element-plus/icons-vue'
 import { useHeaderCompact } from '../../utils/useHeaderCompact.js'
+import HelpButton from '../../../help/HelpButton.vue'
 
 const { t } = useI18n()
 

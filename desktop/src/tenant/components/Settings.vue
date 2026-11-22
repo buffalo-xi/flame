@@ -24,6 +24,8 @@
           </div>
         </div>
       </div>
+      <!-- 页面级帮助：十一个分区的分工，以及两处密钥框语义相反 -->
+      <HelpButton topic="page-settings" />
     </div>
 
     <div class="settings-body">
@@ -191,6 +193,7 @@ import ConnectionTab from './settings/tabs/ConnectionTab.vue'
 import GlobalVarsTab from './settings/tabs/GlobalVarsTab.vue'
 import { useBindings } from './settings/useBindings.js'
 import { useUsers } from './settings/useUsers.js'
+import HelpButton from '../../help/HelpButton.vue'
 
 
 const props = defineProps({

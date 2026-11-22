@@ -1,0 +1,16 @@
+{
+  "help": {
+    "open": "Help",
+    "indexTitle": "Help center",
+    "searchPlaceholder": "Search topics",
+    "back": "Back to the list",
+    "empty": "No matching topic",
+    "missing": "This topic is still being written; try another one.",
+    "count": "{n} topic(s)",
+    "groupConcept": "Concepts",
+    "groupTenant": "Tenant console",
+    "groupPlatform": "Platform console",
+    "groupPitfall": "Common misreadings",
+    "close": "Close"
+  }
+}

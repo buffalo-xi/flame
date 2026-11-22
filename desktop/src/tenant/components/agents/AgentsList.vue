@@ -65,6 +65,8 @@
     >
       <el-icon><component :is="listSearchOpen ? Close : Search" /></el-icon>
     </el-button>
+    <!-- 页面级帮助：列表 / 编辑区 / 设置面板的分工（内容见 src/help/zh-CN/page-agents.md） -->
+    <HelpButton topic="page-agents" />
     <!-- 导入：从资产包装一个智能体。次要动作，不抢「新增」的主色 -->
     <el-button class="header-import-btn" @click="emit('import')" round :title="$t('agent.importTip')">
       <el-icon><Upload /></el-icon>
@@ -197,6 +199,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Search, Delete, CircleCheck, CircleClose, Connection, ArrowDown, Close, Refresh, Upload, Download } from '@element-plus/icons-vue'
 import { useHeaderCompact } from '../../utils/useHeaderCompact.js'
+import HelpButton from '../../../help/HelpButton.vue'
 
 // 脚本侧文案（状态元信息、悬停提示、分组名、空态）要在切换语言后重算，
 // 所以它们都得走 t()，不能再用模块级常量存中文字符串。

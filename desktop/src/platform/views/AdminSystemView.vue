@@ -4,6 +4,12 @@
   <div class="section">
     <div class="split">
       <aside class="sys-nav">
+        <!-- 左卡头：这一页没有页内标题，给它一行「系统设置」+ 页面级帮助。
+             单独一个 ? 会占掉一整行且没有落点，和「插件与能力」左卡的 caption 同款才不突兀 -->
+        <div class="sys-caption">
+          <span>{{ t('platform.app.navSystem') }}</span>
+          <HelpButton topic="page-platform-system" />
+        </div>
         <div
           v-for="d in DOMAINS"
           :key="d.key"
@@ -43,6 +49,7 @@ import SysFlowConfigsCard from './system/SysFlowConfigsCard.vue'
 import SysAgentConfigsCard from './system/SysAgentConfigsCard.vue'
 import SysQuotaCard from './system/SysQuotaCard.vue'
 import SysLlmPresetsCard from './system/SysLlmPresetsCard.vue'
+import HelpButton from '../../help/HelpButton.vue'
 
 const { t } = useI18n()
 
@@ -145,6 +152,18 @@ function goto(key) {
 
 .sys-nav:hover::-webkit-scrollbar-thumb {
   background: rgba(144, 147, 153, 0.4);
+}
+
+/* 左卡头：域导航的标题行，右侧挂页面级帮助（同「插件与能力」的 .nav-caption-row）。
+   标题用顶栏那个 tab 名，避免再编一个新词 */
+.sys-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 6px 6px;
+  font-size: 12px;
+  color: #909399;
 }
 
 .nav-item {

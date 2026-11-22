@@ -26,6 +26,9 @@
             <el-option :label="t('platform.users.statusPending')" value="pending" />
           </el-select>
           <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('common.refresh') }}</el-button>
+
+          <!-- 页面级帮助：哪些能自助、哪些必须找平台管理员 -->
+          <HelpButton topic="page-my-tenants" />
         </div>
 
         <div v-loading="loading" class="t-list">
@@ -136,7 +139,7 @@
               </div>
 
               <div class="blk-tip">
-                {{ t('platform.myTenants.quotaTip1') }}<b>{{ t('platform.myTenants.quotaTipBold') }}</b>{{ t('platform.myTenants.quotaTip2') }}
+                {{ t('platform.myTenants.quotaTip') }}
               </div>
               <div class="blk-foot">
                 <span class="tip">{{ t('platform.myTenants.currentEffective', { text: effectiveQuotaText }) }}</span>
@@ -279,6 +282,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, Refresh, Search } from '@element-plus/icons-vue'
 import { api } from '../api'
+import HelpButton from '../../help/HelpButton.vue'
 
 // count：把租户数上抛给顶栏导航的标签（「我的租户 (N)」，与管理员页同款）
 const emit = defineEmits(['count', 'session-expired'])

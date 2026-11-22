@@ -42,6 +42,10 @@
           <el-icon><Back /></el-icon>
           <span>{{ t('platform.app.backToConsole') }}</span>
         </button>
+        <!-- 帮助中心：按主题列表（概念 / 功能页 / 常见误判），内容与各页标题旁的「?」同源。
+             自带 top-bar 按钮样式（本组件多根，父级 scoped 样式不会作用到它） -->
+        <HelpIndex scope="platform" />
+
         <el-dropdown trigger="click" @command="changeLocale">
           <button class="top-btn" :title="t('common.language')">
             <span>{{ localeShort }}</span>
@@ -103,6 +107,7 @@ import { api } from './api'
 import { clearAuth, getToken, getUser, saveAuth } from './auth'
 import { hasDeskSession } from '../mode'
 import LocaleMenu from '../LocaleMenu.vue'
+import HelpIndex from '../help/HelpIndex.vue'
 import { currentLocale, currentLocaleShort, setLocale } from '../locales'
 import { setTitle } from '../title'
 import AdminConsole from './views/AdminConsole.vue'

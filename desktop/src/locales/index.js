@@ -21,6 +21,7 @@ import zhWorkbench from './zh-CN/workbench.json'
 import zhChat from './zh-CN/chat.json'
 import zhFlow from './zh-CN/flow.json'
 import zhPlatform from './zh-CN/platform.json'
+import zhHelp from './zh-CN/help.json'
 import enCommon from './en/common.json'
 import enError from './en/error.json'
 import enHistory from './en/history.json'
@@ -35,6 +36,7 @@ import enWorkbench from './en/workbench.json'
 import enChat from './en/chat.json'
 import enFlow from './en/flow.json'
 import enPlatform from './en/platform.json'
+import enHelp from './en/help.json'
 
 // 可选语言。label 用各自语言写，切换菜单里不出现「英文」这种译文；
 // short 是顶栏按钮上的短码（中 / EN / 日本語 → 日），加语言时一起补。
@@ -67,12 +69,12 @@ const i18n = createI18n({
     'zh-CN': {
       ...zhCommon, ...zhError, ...zhHistory, ...zhAgents,
       ...zhEndpoints, ...zhSkills, ...zhVersion, ...zhAsset, ...zhTools, ...zhSettings,
-      ...zhWorkbench, ...zhChat, ...zhFlow, ...zhPlatform
+      ...zhWorkbench, ...zhChat, ...zhFlow, ...zhPlatform, ...zhHelp
     },
     en: {
       ...enCommon, ...enError, ...enHistory, ...enAgents,
       ...enEndpoints, ...enSkills, ...enVersion, ...enAsset, ...enTools, ...enSettings,
-      ...enWorkbench, ...enChat, ...enFlow, ...enPlatform
+      ...enWorkbench, ...enChat, ...enFlow, ...enPlatform, ...enHelp
     }
   }
 })

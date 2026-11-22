@@ -132,6 +132,10 @@
           <span>{{ $t('nav.settings') }}</span>
         </button>
 
+        <!-- 帮助中心：按主题列表（概念 / 功能页 / 常见误判），内容与各页标题旁的「?」同源。
+             自带 top-bar 按钮样式（本组件多根，父级 scoped 样式不会作用到它） -->
+        <HelpIndex scope="tenant" />
+
         <el-dropdown trigger="click" @command="setLocale">
           <button class="logout-button" :title="$t('common.language')">
             <span>{{ localeShort }}</span>
@@ -234,6 +238,7 @@ import { Document, Cpu, ChatRound, Setting, SwitchButton, Share, Collection, Too
 import apiConfig from '../config/api.js'
 import { getToken, getUser } from '../utils/auth.js'
 import LocaleMenu from '../../LocaleMenu.vue'
+import HelpIndex from '../../help/HelpIndex.vue'
 import { currentLocale, currentLocaleShort, setLocale } from '../../locales'
 import Agents from './Agents.vue'
 import AssetMarket from './AssetMarket.vue'

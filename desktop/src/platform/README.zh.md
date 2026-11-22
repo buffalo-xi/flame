@@ -37,7 +37,8 @@ src/
 
 ## 边界规则（改动本子树时必须遵守）
 
-**允许 import**：`vue`、`element-plus`、同目录内文件、`src/mode.js`
+**允许 import**：`vue`、`element-plus`、同目录内文件、`src/mode.js`，以及两棵子树共用的中性根模块 —— `src/locales/**`、
+`src/help/**`（帮助抽屉与主题注册表；它内部引用 `src/utils/markdown.js` 与 `src/composables/useEscClose.js`，两者同理中性）
 
 **禁止 import**
 

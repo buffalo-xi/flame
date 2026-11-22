@@ -27,6 +27,8 @@
         </button>
       </div>
       <div class="am-header-actions">
+        <!-- 页面级帮助：安装 / 上架 / 我的资产 / 远端市场的分工 -->
+        <HelpButton topic="page-market" />
         <el-button size="small" :loading="loading" @click="reload">
           <el-icon><Refresh /></el-icon>
           {{ t('assetMarket.refresh') }}
@@ -531,6 +533,7 @@ import { getToken } from '../utils/auth.js'
 import { publishAssetVersion, ASSET_KIND_SUFFIX } from '../utils/assetTransfer.js'
 import AssetDepCheck from './AssetDepCheck.vue'
 import AssetInstallResult from './AssetInstallResult.vue'
+import HelpButton from '../../help/HelpButton.vue'
 import { formatError } from '../../locales'
 
 const { t } = useI18n()

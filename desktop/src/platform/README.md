@@ -38,7 +38,9 @@ src/
 
 ## Boundary rules (bind every change in this subtree)
 
-**Allowed imports**: `vue`, `element-plus`, files in the same directory, `src/mode.js`
+**Allowed imports**: `vue`, `element-plus`, files in the same directory, `src/mode.js`, and the neutral root modules both subtrees
+share — `src/locales/**`, `src/help/**` (help drawer + topic registry; it pulls `src/utils/markdown.js` and
+`src/composables/useEscClose.js`, which are neutral for the same reason)
 
 **Forbidden imports**
 

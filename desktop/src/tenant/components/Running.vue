@@ -37,6 +37,9 @@
 
         <el-button size="small" :loading="loading" @click="load">{{ $t('running.refresh') }}</el-button>
 
+        <!-- 页面级帮助：三个页签是三张表，以及 24 小时区间的两个坑 -->
+        <HelpButton topic="page-running" />
+
         <span class="running-count">
           {{ $t('running.count', { total: rows.length }) }}<template v-if="visibleRows.length !== rows.length">{{ $t('running.countShown', { shown: visibleRows.length }) }}</template>
         </span>
@@ -117,6 +120,7 @@ import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import RunHistory from './RunHistory.vue'
 import AgentHistory from './AgentHistory.vue'
+import HelpButton from '../../help/HelpButton.vue'
 import { formatError } from '../../locales'
 
 // 列定义与下拉选项都要跟着语言切换重算，所以它们不是常量数组而是 computed ——

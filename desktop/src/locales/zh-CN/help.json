@@ -1,0 +1,16 @@
+{
+  "help": {
+    "open": "帮助",
+    "indexTitle": "帮助中心",
+    "searchPlaceholder": "搜索主题",
+    "back": "返回目录",
+    "empty": "没有匹配的主题",
+    "missing": "这篇帮助还在写，先看其他主题。",
+    "count": "共 {n} 个主题",
+    "groupConcept": "概念",
+    "groupTenant": "租户控制台",
+    "groupPlatform": "平台管理台",
+    "groupPitfall": "常见误判",
+    "close": "关闭"
+  }
+}

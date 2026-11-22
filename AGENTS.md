@@ -98,6 +98,26 @@ Every document under `nexus/docs/` now follows this shape (`asset-sharing`, `des
 `i18n-plan`, `sandbox-design`, `tenant-template-pack`, `terminology`, `workspace-layout-and-supervisor-power`). Do not
 half-translate a file in place — add or update the `.zh.md` mirror in the same commit.
 
+## In-app help (desktop): one topic per screen, gated by the build
+
+The desktop app ships its own help — a `?` on each screen plus a help center in the top bar. Rules:
+
+- **content**: `desktop/src/help/{zh-CN,en}/<slug>.md`, one file per topic per locale; the first `# heading` is the
+  drawer title, so renaming a topic is one edit, not two. zh-CN is the baseline (same as the locale bundles) — this
+  is the one place where the desktop rule differs from `nexus/docs/`, where English is primary;
+- **reachable**: a topic must be listed in `desktop/src/help/topics.js` *and* linked from its screen with
+  `<HelpButton topic="…" />`. A file nobody links to is invisible content;
+- **same commit**: changing a user-visible flow obliges updating the topic that describes it, and moving a long
+  inline explanation into help means deleting it from the bundle — one fact, one place. A help topic that
+  describes last month's flow is worse than no topic at all;
+- **short inline, long in help**: an inline hint keeps one conclusion sentence next to the control; the reasoning,
+  the failure modes and the exceptions go into the topic;
+- **gate**: `npm run check:locales` (wired into `prebuild`) checks the help file set, heading counts and registry
+  coverage in addition to the JSON bundles;
+- **shared modules**: `desktop/src/help/**`, `src/utils/markdown.js` and `src/composables/useEscClose.js` are neutral
+  root modules — both subtrees import them, and neither subtree may import the other (see
+  `desktop/src/platform/README.md`).
+
 ## Module map
 
 Six Go modules wired together with `replace`, no `go.work`:

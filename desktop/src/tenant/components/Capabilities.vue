@@ -20,6 +20,8 @@
           <span class="cap-count">({{ customCount }})</span>
         </button>
       </div>
+      <!-- 页面级帮助：三个 tab 的说明在同一篇里（内容见 src/help/zh-CN/page-tenant-tools.md） -->
+      <HelpButton topic="page-tenant-tools" />
       <div class="cap-hint">
         <strong>{{ t('capabilities.hintTools') }}</strong>{{ t('capabilities.hintToolsDesc') }}
         <strong>{{ t('capabilities.hintPlugins') }}</strong>{{ t('capabilities.hintPluginsDesc') }}
@@ -42,6 +44,7 @@ import { Tools, Grid, Document } from '@element-plus/icons-vue'
 import ToolsTab from './capabilities/ToolsTab.vue'
 import PluginsTab from './capabilities/PluginsTab.vue'
 import CustomToolsTab from './capabilities/CustomToolsTab.vue'
+import HelpButton from '../../help/HelpButton.vue'
 
 // 转发子页面的跳转请求给 MainWindow：
 //   nav 字符串（如 'settings'）→ 只切页

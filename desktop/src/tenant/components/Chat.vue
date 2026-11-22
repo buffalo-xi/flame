@@ -79,6 +79,8 @@
               <span v-if="a.is_supervisor" class="agent-opt-badge">{{ t('chat.supervisor') }}</span>
             </el-option>
           </el-select>
+          <!-- 页面级帮助：会话列表、工具调用卡片、停止与编辑的语义 -->
+          <HelpButton topic="page-chat" />
           <!-- Session -> run history: jump over with the current session instead of pasting a uuid.
                Disabled without a session (a one-shot run has none to look up). -->
           <el-button
@@ -388,6 +390,7 @@ import { renderMarkdown } from '../utils/markdown.js'
 import { sessionContext, requestOpenWsFile } from '../store/sessionContext.js'
 import Workbench from './Workbench.vue'
 import { formatError } from '../../locales'
+import HelpButton from '../../help/HelpButton.vue'
 
 // 右侧工作台：开关与宽度由父级 MainWindow 持有，这里只负责渲染与拖拽事件转发。
 // chatVisible 用于「会话已关闭、但工作台仍开着」时，只隐藏会话侧栏与对话区。

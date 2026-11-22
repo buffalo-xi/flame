@@ -74,6 +74,9 @@
         </el-input>
         <el-button size="small" :icon="Upload" @click="openImport">{{ t('platform.assets.importPackage') }}</el-button>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('common.refresh') }}</el-button>
+        <!-- 页面级帮助：三个标签、审核与上架策略、下架≠删除。
+             外面这层只为离右边缘留白 —— HelpButton 是多根组件，父级给的类传不到它的根元素上 -->
+        <span class="sub-bar-help"><HelpButton topic="page-platform-assets" /></span>
       </div>
     </div>
 
@@ -576,6 +579,7 @@ import {
   Upload
 } from '@element-plus/icons-vue'
 import { api } from '../api'
+import HelpButton from '../../help/HelpButton.vue'
 
 const emit = defineEmits(['count', 'session-expired'])
 
@@ -1223,6 +1227,14 @@ onMounted(async () => {
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* 帮助入口是这一排的最后一项：紧贴容器右边缘会被看成「被挤出去」，
+   留 6px 空白；左侧间距交给 .sub-bar-right 自己的 gap */
+.sub-bar-help {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
 }
 
 /* ===== 筛选控件：抄「资产市场 → 本地市场」那一套（.am-chip / .am-origin / .am-search）===== */
