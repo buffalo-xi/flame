@@ -40,11 +40,11 @@
       "notePlaceholder": "Add a node description..."
     },
     "nodeProps": {
-      "handlerPlaceholderToolCall": "-- data arrives through input:\n-- input.result      - tool result text\n-- input.is_error    - whether it failed (true/false)\n-- input.error       - error message (only on failure)\n-- input.progress    - full progress array\n-- input.done        - end-of-stream marker (true)\n--\n-- this script also runs for each progress item as it arrives:\n-- input.progress     - that progress item as an object\n-- input.progress_raw - that progress item as raw JSON\n--\n-- the fixed output variables result / progress / error are always written by the node,\n-- returning those names from the script is ignored. The script only handles custom output variables:\n-- return { myVar = value }  (strings are appended, other types overwrite)",
-      "handlerPlaceholderHttp": "-- response data arrives through input:\n-- input.mode     - \"complete\" | \"sse_stream\"\n-- input.status   - HTTP status code\n-- input.headers  - response headers (object)\n-- input.body     - response body\n-- input.event    - SSE event object {id, event, data}\n-- input.done     - stream-closed marker (true/false)\n--\n-- the fixed output variables mode / status / headers / body / sse_events / stream_finished\n-- are written by the node; do not set them in the script. The script only writes custom output variables:\n-- return { text = input.body }   (strings are appended, other types overwrite)",
-      "handlerPlaceholderLlmSse": "-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done\n-- the fixed variables content / reasoning_content / tool_calls are accumulated by the node, do not write them\n-- called once per frame and stateless: input.content is that frame's delta\n-- the script only writes custom output variables: strings are appended, other types overwrite\nreturn { answer = input.content }",
-      "handlerPlaceholderLlmComplete": "-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done\n-- the fixed variables content / reasoning_content / tool_calls are written by the node, do not write them\n-- the script only writes custom output variables: strings are appended, other types overwrite\nreturn { answer = input.content }",
-      "handlerScriptDefault": "-- write the response handling script here\nreturn { content = input.content }",
+      "handlerPlaceholderToolCall": "-- data arrives through input:\n-- input.result      - tool result text\n-- input.is_error    - whether it failed (true/false)\n-- input.error       - error message (only on failure)\n-- input.progress    - full progress array\n-- input.done        - end-of-stream marker (true)\n--\n-- this script also runs for each progress item as it arrives:\n-- input.progress     - that progress item as an object\n-- input.progress_raw - that progress item as raw JSON\n--\n-- the fixed output variables result / progress / error are always written by the node,\n-- returning those names from the script is ignored. The script only handles custom output variables:\n-- {'return { myVar = value }'}  (strings are appended, other types overwrite)",
+      "handlerPlaceholderHttp": "-- response data arrives through input:\n-- input.mode     - \"complete\" | \"sse_stream\"\n-- input.status   - HTTP status code\n-- input.headers  - response headers (object)\n-- input.body     - response body\n-- input.event    - SSE event object {'{id, event, data}'}\n-- input.done     - stream-closed marker (true/false)\n--\n-- the fixed output variables mode / status / headers / body / sse_events / stream_finished\n-- are written by the node; do not set them in the script. The script only writes custom output variables:\n-- {'return { text = input.body }'}   (strings are appended, other types overwrite)",
+      "handlerPlaceholderLlmSse": "-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done\n-- the fixed variables content / reasoning_content / tool_calls are accumulated by the node, do not write them\n-- called once per frame and stateless: input.content is that frame's delta\n-- the script only writes custom output variables: strings are appended, other types overwrite\n{'return { answer = input.content }'}",
+      "handlerPlaceholderLlmComplete": "-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done\n-- the fixed variables content / reasoning_content / tool_calls are written by the node, do not write them\n-- the script only writes custom output variables: strings are appended, other types overwrite\n{'return { answer = input.content }'}",
+      "handlerScriptDefault": "-- write the response handling script here\n{'return { content = input.content }'}",
       "tabConfig": "Settings",
       "tabResult": "Last run",
       "noteTitle": "About this node",
@@ -128,7 +128,7 @@
     },
     "memoryNode": {
       "outputSection": "Output variables",
-      "outputHint": "Each record is { role, content, timestamp } and can be spliced into an LLM context directly",
+      "outputHint": "Each record is {'{ role, content, timestamp }'} and can be spliced into an LLM context directly",
       "limitSection": "Record limit",
       "maxRecords": "Take at most N records",
       "systemLimit": "/ system max {max}",
@@ -223,7 +223,7 @@
       "label": "Model (gateway_model)",
       "default": "Default model",
       "paramsSection": "Model parameters",
-      "paramsPlaceholder": "Extra parameters JSON, e.g. {\"reasoning_effort\":\"low\"}"
+      "paramsPlaceholder": "Extra parameters JSON, e.g. {'{\"reasoning_effort\":\"low\"}'}"
     },
     "mcpNode": {
       "section": "MCP settings",
@@ -232,7 +232,7 @@
       "tool": "Tool",
       "toolPlaceholder": "Select a tool",
       "subscribeProgress": "Subscribe to progress",
-      "argsLabel": "Arguments (JSON, string values support the {{.input.xxx}} template)",
+      "argsLabel": "Arguments (JSON, string values support the {'{{.input.xxx}}'} template)",
       "progressHint": {
         "p1": "When off the call runs synchronously and receives no progress (the fixed output variable ",
         "p2": " is always an empty array);",
@@ -249,7 +249,7 @@
       "modeStream": "Streaming",
       "contextSection": "Context (messages)",
       "noMessages": "No messages yet",
-      "messagePlaceholder": "Templates: {{.input.name}} input / {{.local.name}} local / {{.output.name}} output",
+      "messagePlaceholder": "Templates: {'{{.input.name}}'} input / {'{{.local.name}}'} local / {'{{.output.name}}'} output",
       "hint": {
         "p3": "In streaming mode the script is called per frame and is stateless; ",
         "p4": " is the delta of this frame, and the node accumulates it."
@@ -293,7 +293,7 @@
       "endpoint": "Endpoint",
       "endpointPlaceholder": "Select an endpoint",
       "subscribeProgress": "Subscribe to progress",
-      "argsLabel": "Arguments (JSON, string values support the {{.input.xxx}} template)",
+      "argsLabel": "Arguments (JSON, string values support the {'{{.input.xxx}}'} template)",
       "progressHint": {
         "p1": "When off the call runs synchronously and receives no progress (the fixed output variable ",
         "p2": " is always an empty array);",
@@ -333,7 +333,7 @@
       "secretPlaceholder": "Variable value",
       "secretHint": "A value is set but never shown; leaving the field empty keeps it. To clear it, delete and recreate the variable.",
       "deprecatedBefore": "This type is deprecated: add an entry in the node input variables, pick \"Global variables\" as the source, and reference it in templates with ",
-      "deprecatedTemplate": "{{ .input.variableName }}",
+      "deprecatedTemplate": "{'{{ .input.variableName }}'}",
       "deprecatedAfter": ".",
       "kindText": "Text",
       "kindNumber": "Number",
@@ -476,7 +476,7 @@
       "varError": "Call error message",
       "loopVarIndex": "Loop index",
       "loopVarItem": "Loop item",
-      "intentPrompt": "You classify the user's intent from the conversation history and the user input.\n\nConversation history:\n{{json .input.messages}}\n\nUser input:\n{{.input.input}}",
+      "intentPrompt": "You classify the user's intent from the conversation history and the user input.\n\nConversation history:\n{'{{json .input.messages}}'}\n\nUser input:\n{'{{.input.input}}'}",
       "returnOnlyInFunction": "A return node can only be created inside a function node"
     },
     "debugLog": {

@@ -40,11 +40,11 @@
       "notePlaceholder": "输入节点说明..."
     },
     "nodeProps": {
-      "handlerPlaceholderToolCall": "-- 数据通过 input 传入：\n-- input.result      - 工具返回文本\n-- input.is_error    - 是否错误 (true/false)\n-- input.error       - 错误信息（仅出错时）\n-- input.progress    - 全量进度数组\n-- input.done        - 收尾标记 (true)\n--\n-- 逐条 progress 到达时也会执行本脚本：\n-- input.progress     - 本条进度结构化对象\n-- input.progress_raw - 本条原始 JSON 字符串\n--\n-- 固定输出变量 result / progress / error 一律由节点自动写入，\n-- 脚本里 return 这三个名字会被忽略。脚本只处理自定义输出变量：\n-- return { myVar = value }  (string 追加到变量末尾、非 string 覆盖)",
-      "handlerPlaceholderHttp": "-- 响应数据通过 input 传入：\n-- input.mode     - \"complete\" | \"sse_stream\"\n-- input.status   - HTTP 状态码\n-- input.headers  - 响应头（对象）\n-- input.body     - 响应体\n-- input.event    - SSE 事件对象 {id, event, data}\n-- input.done     - 流关闭标记 (true/false)\n--\n-- 固定输出变量 mode / status / headers / body / sse_events / stream_finished\n-- 由节点自动写入，脚本不要写它们；脚本只写自定义输出变量：\n-- return { text = input.body }   (string 追加、非 string 覆盖)",
-      "handlerPlaceholderLlmSse": "-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done\n-- 固定变量 content / reasoning_content / tool_calls 由节点累积写入，脚本不要写它们\n-- 逐帧调用、无状态：input.content 是本帧增量\n-- 脚本只写自定义输出变量：string 追加、非 string 覆盖\nreturn { answer = input.content }",
-      "handlerPlaceholderLlmComplete": "-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done\n-- 固定变量 content / reasoning_content / tool_calls 由节点自动写入，脚本不要写它们\n-- 脚本只写自定义输出变量：string 追加、非 string 覆盖\nreturn { answer = input.content }",
-      "handlerScriptDefault": "-- 在这里编写响应处理脚本\nreturn { content = input.content }",
+      "handlerPlaceholderToolCall": "-- 数据通过 input 传入：\n-- input.result      - 工具返回文本\n-- input.is_error    - 是否错误 (true/false)\n-- input.error       - 错误信息（仅出错时）\n-- input.progress    - 全量进度数组\n-- input.done        - 收尾标记 (true)\n--\n-- 逐条 progress 到达时也会执行本脚本：\n-- input.progress     - 本条进度结构化对象\n-- input.progress_raw - 本条原始 JSON 字符串\n--\n-- 固定输出变量 result / progress / error 一律由节点自动写入，\n-- 脚本里 return 这三个名字会被忽略。脚本只处理自定义输出变量：\n-- {'return { myVar = value }'}  (string 追加到变量末尾、非 string 覆盖)",
+      "handlerPlaceholderHttp": "-- 响应数据通过 input 传入：\n-- input.mode     - \"complete\" | \"sse_stream\"\n-- input.status   - HTTP 状态码\n-- input.headers  - 响应头（对象）\n-- input.body     - 响应体\n-- input.event    - SSE 事件对象 {'{id, event, data}'}\n-- input.done     - 流关闭标记 (true/false)\n--\n-- 固定输出变量 mode / status / headers / body / sse_events / stream_finished\n-- 由节点自动写入，脚本不要写它们；脚本只写自定义输出变量：\n-- {'return { text = input.body }'}   (string 追加、非 string 覆盖)",
+      "handlerPlaceholderLlmSse": "-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done\n-- 固定变量 content / reasoning_content / tool_calls 由节点累积写入，脚本不要写它们\n-- 逐帧调用、无状态：input.content 是本帧增量\n-- 脚本只写自定义输出变量：string 追加、非 string 覆盖\n{'return { answer = input.content }'}",
+      "handlerPlaceholderLlmComplete": "-- input.mode / input.content / input.reasoning_content / input.tool_calls / input.done\n-- 固定变量 content / reasoning_content / tool_calls 由节点自动写入，脚本不要写它们\n-- 脚本只写自定义输出变量：string 追加、非 string 覆盖\n{'return { answer = input.content }'}",
+      "handlerScriptDefault": "-- 在这里编写响应处理脚本\n{'return { content = input.content }'}",
       "tabConfig": "配置",
       "tabResult": "执行结果",
       "noteTitle": "节点说明",
@@ -128,7 +128,7 @@
     },
     "memoryNode": {
       "outputSection": "输出变量",
-      "outputHint": "每条为 { role, content, timestamp }，可直接拼进 LLM 上下文",
+      "outputHint": "每条为 {'{ role, content, timestamp }'}，可直接拼进 LLM 上下文",
       "limitSection": "条数限制",
       "maxRecords": "最多取 N 条",
       "systemLimit": "/ 系统上限 {max}",
@@ -223,7 +223,7 @@
       "label": "模型 (gateway_model)",
       "default": "缺省模型",
       "paramsSection": "大模型参数",
-      "paramsPlaceholder": "附加参数 JSON，如 {\"reasoning_effort\":\"low\"}"
+      "paramsPlaceholder": "附加参数 JSON，如 {'{\"reasoning_effort\":\"low\"}'}"
     },
     "mcpNode": {
       "section": "MCP 配置",
@@ -232,7 +232,7 @@
       "tool": "工具",
       "toolPlaceholder": "选择工具",
       "subscribeProgress": "订阅进度",
-      "argsLabel": "参数 (JSON，字符串值支持 {{.input.xxx}} 模板)",
+      "argsLabel": "参数 (JSON，字符串值支持 {'{{.input.xxx}}'} 模板)",
       "progressHint": {
         "p1": "关闭时同步执行、不接收 progress（固定输出变量 ",
         "p2": " 恒为空数组）；",
@@ -249,7 +249,7 @@
       "modeStream": "流式",
       "contextSection": "上下文 (messages)",
       "noMessages": "暂无消息",
-      "messagePlaceholder": "支持模板：{{.input.变量名}} 输入 / {{.local.变量名}} 局部 / {{.output.变量名}} 输出",
+      "messagePlaceholder": "支持模板：{'{{.input.变量名}}'} 输入 / {'{{.local.变量名}}'} 局部 / {'{{.output.变量名}}'} 输出",
       "hint": {
         "p3": "流式模式下脚本逐帧调用且无状态，",
         "p4": " 是本帧增量，累积由节点完成。"
@@ -293,7 +293,7 @@
       "endpoint": "端点",
       "endpointPlaceholder": "选择端点",
       "subscribeProgress": "订阅进度",
-      "argsLabel": "参数 (JSON，字符串值支持 {{.input.xxx}} 模板)",
+      "argsLabel": "参数 (JSON，字符串值支持 {'{{.input.xxx}}'} 模板)",
       "progressHint": {
         "p1": "关闭时同步执行、不接收 progress（固定输出变量 ",
         "p2": " 恒为空数组）；",
@@ -333,7 +333,7 @@
       "secretPlaceholder": "变量值",
       "secretHint": "已设置值：界面上不回显，留空保存即沿用原值；要清掉只能删掉这个变量重建",
       "deprecatedBefore": "该类型已废弃：请在节点的输入变量里新增一项，来源选「全局变量」，模板里用 ",
-      "deprecatedTemplate": "{{ .input.变量名 }}",
+      "deprecatedTemplate": "{'{{ .input.变量名 }}'}",
       "deprecatedAfter": " 引用。",
       "kindText": "文本",
       "kindNumber": "数字",
@@ -476,7 +476,7 @@
       "varError": "调用错误信息",
       "loopVarIndex": "循环下标",
       "loopVarItem": "循环对象",
-      "intentPrompt": "你是意图分类器，请根据对话历史和用户输入判断用户意图。\n\n对话历史：\n{{json .input.messages}}\n\n用户输入：\n{{.input.input}}",
+      "intentPrompt": "你是意图分类器，请根据对话历史和用户输入判断用户意图。\n\n对话历史：\n{'{{json .input.messages}}'}\n\n用户输入：\n{'{{.input.input}}'}",
       "returnOnlyInFunction": "返回节点只能创建在函数节点内部"
     },
     "debugLog": {
