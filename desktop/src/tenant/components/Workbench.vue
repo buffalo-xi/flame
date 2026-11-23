@@ -140,7 +140,11 @@
               <span class="wb-ws-name">{{ e.name }}</span>
               <span class="wb-ws-size">{{ e.is_dir ? t('workbench.folder') : fmtSize(e.size) }}</span>
               <span class="wb-ws-time" :title="fmtWsTimeFull(e.mod_time)">{{ fmtWsTime(e.mod_time) }}</span>
-              <!-- 重命名与删除：.stop 是必须的 —— 父层的点击是「进目录 / 开预览」 -->
+              <!-- 下载、重命名与删除：.stop 是必须的 —— 父层的点击是「进目录 / 开预览」。
+                   目录不可下载，所以只有文件行有这一个图标 -->
+              <el-icon v-if="!wsSelectMode && !e.is_dir" class="wb-ws-dl"
+                       :title="t('workbench.download')"
+                       @click.stop="downloadWsEntry(e)"><Download /></el-icon>
               <el-icon v-if="!wsSelectMode" class="wb-ws-edit"
                        :title="e.is_dir ? t('workbench.renameDir') : t('workbench.renameFile')"
                        @click.stop="wsRename(e)"><EditPen /></el-icon>
@@ -254,6 +258,7 @@
               </span>
               <span class="wb-ws-size">{{ fmtSize(f.size) }}</span>
               <span class="wb-ws-time" :title="fmtWsTimeFull(f.mod_time)">{{ fmtWsTime(f.mod_time) }}</span>
+              <el-icon class="wb-ws-dl" :title="t('workbench.download')" @click.stop="downloadWsEntry(f)"><Download /></el-icon>
               <el-icon class="wb-ws-edit" :title="t('workbench.renameFile')" @click.stop="wsRename(f, true)"><EditPen /></el-icon>
               <el-icon class="wb-ws-del" :title="t('workbench.deleteFile')" @click.stop="wsRemoveRecent(f)"><Delete /></el-icon>
             </div>
@@ -693,7 +698,7 @@ const wsRename = async (e, fromRecent = false) => {
 
 // 最近文件没有多选态，直接预读；点删除图标不必把文件内容读一遍
 const onWsRecentPointerDown = (f, ev) => {
-  if (ev && ev.target && ev.target.closest && ev.target.closest('.wb-ws-del, .wb-ws-edit')) return
+  if (ev && ev.target && ev.target.closest && ev.target.closest('.wb-ws-dl, .wb-ws-del, .wb-ws-edit')) return
   if (typeof f.size === 'number' && f.size >= 0 && f.size <= DATA_DRAG_MAX) ensureDragData(f)
   prewarmWsTicket(f)
 }
@@ -1219,7 +1224,7 @@ const ensureDragData = async (e) => {
 const onWsItemPointerDown = (e, ev) => {
   if (!e || e.is_dir || wsSelectMode.value) return
   // 删除按钮的 pointerdown 也会冒泡到这里：点删除没必要去把文件内容读一遍
-  if (ev && ev.target && ev.target.closest && ev.target.closest('.wb-ws-del, .wb-ws-edit')) return
+  if (ev && ev.target && ev.target.closest && ev.target.closest('.wb-ws-dl, .wb-ws-del, .wb-ws-edit')) return
   // 两条路都备上：data: 备失败（接口 4xx / 读盘失败）时还能退回票据
   if (typeof e.size === 'number' && e.size >= 0 && e.size <= DATA_DRAG_MAX) ensureDragData(e)
   prewarmWsTicket(e)
@@ -1407,6 +1412,14 @@ const loadWsFileTab = async (t) => {
 const downloadWsFile = (t) => {
   if (!t || t.type !== 'wsfile' || !t.payload) return
   downloadFile(t.payload)
+}
+
+// 列表行里的下载：工作区与「最近的文件」共用。列表项不是标签对象，
+// 会话信息直接在上下文里，所以只把 path 转一手；票与落盘仍走 downloadFile 那一条路
+const downloadWsEntry = (e) => {
+  const { agentId, sessionId } = sessionContext
+  if (!agentId || !sessionId || !e || e.is_dir || !e.path) return
+  downloadFile({ agentId, sessionId, path: e.path })
 }
 
 // 签一张短时下载票并拼成导航 URL（票 60s 有效，见 admin/agents/download_ticket.go）。
@@ -1984,35 +1997,34 @@ const onFrameLoad = (ev) => {
   font-variant-numeric: tabular-nums;
 }
 
-/* 删除按钮：常态半透明（触屏上也能看见、够得着），行悬停才显形。
-   刻意不做成"悬停才出现"——删除是破坏性操作，藏起来反而更容易误触旁边的行 */
+/* 行尾三个操作图标（下载 / 重命名 / 删除）：同排同尺寸。
+   常态半透明（触屏上也能看见、够得着），行悬停才显形 —— 删除是破坏性操作，
+   刻意不做成"悬停才出现"，藏起来反而更容易误触旁边的行。
+   行内 gap 只有 8px，三个 14px 图标挨在一起会挤成一团，所以每个再补 6px：
+   图标之间实际 14px，第一个图标也顺带与时间列拉开距离 */
+.wb-ws-item .wb-ws-dl,
+.wb-ws-item .wb-ws-edit,
 .wb-ws-item .wb-ws-del {
   flex-shrink: 0;
+  margin-left: 6px;
   font-size: 14px;
   color: #c0c4cc;
   opacity: 0.35;
   transition: opacity 0.15s, color 0.15s;
 }
+.wb-ws-item:hover .wb-ws-dl,
+.wb-ws-item:hover .wb-ws-edit,
 .wb-ws-item:hover .wb-ws-del {
   opacity: 1;
 }
-.wb-ws-item .wb-ws-del:hover {
-  color: #f56c6c;
-}
 
-/* 重命名按钮：与删除同排同尺寸，但只是中性操作 —— 悬停给蓝色而不是红色 */
-.wb-ws-item .wb-ws-edit {
-  flex-shrink: 0;
-  font-size: 14px;
-  color: #c0c4cc;
-  opacity: 0.35;
-  transition: opacity 0.15s, color 0.15s;
-}
-.wb-ws-item:hover .wb-ws-edit {
-  opacity: 1;
-}
+/* 悬停各自给色：中性操作（下载 / 重命名）蓝，破坏性的删除红 */
+.wb-ws-item .wb-ws-dl:hover,
 .wb-ws-item .wb-ws-edit:hover {
   color: #409eff;
+}
+.wb-ws-item .wb-ws-del:hover {
+  color: #f56c6c;
 }
 
 /* 多选入口：轻量文字按钮，与「上一级 / 刷新」图标同一排 */
