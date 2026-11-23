@@ -73,7 +73,7 @@ DeepSeek 没有内置预设，所以用通用预设 `openai_compatible`——它
 
 1. 左侧「选择预设服务商」里点 **openai_compatible**：协议会被填成 `openai`（该字段只读），地址先给一个占位值
 2. 服务商名称：`DeepSeek`
-3. 接入地址：`https://api.deepseek.com/v1`
+3. 接入地址：`https://api.deepseek.com`
 4. API Key：`sk-...`（在 DeepSeek 开放平台创建）
 5. 额外配置 (JSON)：**留空**。这个字段进的是 LiteLLM 的 `litellm_params`（**注册期**参数，如 Azure 的
    `api_version`、Vertex 的 `vertex_project`），不是每次请求的请求体——别把模型参数写在这里
@@ -82,16 +82,20 @@ DeepSeek 没有内置预设，所以用通用预设 `openai_compatible`——它
 
 | 字段 | 填什么 | 说明 |
 |---|---|---|
-| 模型名称 | `deepseek-chat` | 网关按 `openai/<模型名称>` 调上游，所以**必须与上游模型标识一致** |
+| 模型名称 | `deepseek-flash` | 网关按 `openai/<模型名称>` 调上游，所以**必须与上游模型标识一致** |
 | 上下文窗口 | `128000` | 按供应商文档填，用于前端估算与截断 |
-| 网关模型名 | `deepseek-chat` | 客户端看到的别名，实际请求是 `<租户>:<这个名字>`；**启用后不可改**，先确认再启用 |
+| 网关模型名 | `deepseek-flash` | 客户端看到的别名，实际请求是 `<租户>:<这个名字>`；**启用后不可改**，先确认再启用 |
 | 基础生成参数 | 按需开 `max_tokens` / `temperature` / `top_p` | 开关式：只有打开的项才写进 `base_params`（不存在＝不传，用供应商默认） |
-| 额外参数 (JSON) | `{"thinking": {"type": "disabled"}}` | 见下一小节 |
+| 额外参数 (JSON) | `{"thinking": {"type": "disabled"}}` | DeepSeek 的写法，见下一小节；换厂商要换成该厂商的开关 |
 | 能力配置 (JSON) | 一般留空 | 例如 `{"vision": true}` 声明多模态 |
 
 保存后同步进网关（LiteLLM 容器），智能体这时才有模型可用。
 
 ### `{"thinking": {"type": "disabled"}}` 是干什么的
+
+这一行是 **DeepSeek 的扩展字段，不是本系统的通用要求**。换别家模型时按该厂商自己的规则写：OpenAI 推理模型用
+`reasoning_effort`，Anthropic 是「不传 `thinking` 就是关」，Qwen / GLM 等各有各的开关；不确定就**留空**——
+本系统只透传、不校验，不填也照样能正常调用。
 
 它写在**模型的「额外参数」**里，请求时被塞进 `extra_body`，LiteLLM 不校验、原样转给上游（代码里的注释就是
 `extra_params all go into extra_body`）。所以它是一句**给上游的指令：关掉这个模型的思考（reasoning）输出，只返回

@@ -78,7 +78,7 @@ preset, so pick the generic `openai_compatible` one — that is the entry point 
 1. Pick **`openai_compatible`** in "choose a preset provider": it fills in the protocol (`openai`, read-only) and a
    placeholder URL
 2. Provider name: `DeepSeek`
-3. API URL: `https://api.deepseek.com/v1`
+3. API URL: `https://api.deepseek.com`
 4. API key: `sk-...` (created in the DeepSeek console)
 5. Extra config (JSON): **leave empty**. This one goes into LiteLLM's `litellm_params` — **registration-time**
    parameters such as Azure's `api_version` or Vertex's `vertex_project`, not the body of each request
@@ -87,16 +87,21 @@ preset, so pick the generic `openai_compatible` one — that is the entry point 
 
 | Field | Value | Why |
 |---|---|---|
-| Model name | `deepseek-chat` | the gateway calls `openai/<model name>`, so it **must match the upstream identifier** |
+| Model name | `deepseek-flash` | the gateway calls `openai/<model name>`, so it **must match the upstream identifier** |
 | Context window | `128000` | per the vendor's docs; used for estimates and truncation |
-| Gateway model name | `deepseek-chat` | the alias clients see; a request carries `<schema>:<this>`; **locked once enabled** |
+| Gateway model name | `deepseek-flash` | the alias clients see; a request carries `<schema>:<this>`; **locked once enabled** |
 | Generation params | enable `max_tokens` / `temperature` / `top_p` as needed | switch-based: only enabled keys are written to `base_params` (absent = not sent, vendor default) |
-| Extra parameters (JSON) | `{"thinking": {"type": "disabled"}}` | see below |
+| Extra parameters (JSON) | `{"thinking": {"type": "disabled"}}` | DeepSeek syntax, see below; another vendor needs its own switch |
 | Capabilities (JSON) | usually empty | e.g. `{"vision": true}` declares multimodal |
 
 Saving pushes it into the gateway (the LiteLLM container); only then does the agent have a model.
 
 ### What `{"thinking": {"type": "disabled"}}` is for
+
+This line is **a DeepSeek extension field, not a requirement of this system**. With another vendor, use that vendor's own
+knob: `reasoning_effort` for OpenAI reasoning models, "no `thinking` field means off" for Anthropic, and Qwen / GLM and
+friends each have their own; when unsure, **leave it empty** — this system only passes the field through and never
+validates it, so the model works without it.
 
 It belongs in the **model's "extra parameters"**, where it is folded into `extra_body` on every request; LiteLLM does not
 validate it and passes it to the upstream as-is (the code comment reads `extra_params all go into extra_body`). So it is
