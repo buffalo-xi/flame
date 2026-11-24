@@ -447,6 +447,12 @@ later, with a log nobody connects to the install.
 installation (data plane → SQL → seed → executors → application plane), and folding it into one script would let a
 half-created database race the new code.
 
+The configuration it leaves in `/etc/flame` is five files, and the difference matters when editing one: `sandboxd`,
+`browserd`, `sandboxg` and `browserg` are **rendered** from `config/*.yaml` in the release (their `${VAR}` cannot be
+expanded by the services themselves), `redis.conf` is rendered for the same reason, and `nexus.yaml` is **copied
+verbatim** — nexus expands its placeholders from its own environment. All five are created only when missing; an
+upgrade keeps what is on the host unless `--force-config` is passed.
+
 ### 7.1 Preflight
 
 | Check | Command | Consequence when missing |

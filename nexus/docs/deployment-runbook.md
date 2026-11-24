@@ -469,7 +469,7 @@ installation is 7.1.
 # 1) preflight: either it passes or it names what is missing (it changes nothing)
 sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
 
-# 2) place: release, units, wrapper, the four rendered configs and redis.conf; a first run also writes
+# 2) place: release, units, wrapper, the four rendered configs, nexus.yaml and redis.conf; a first run also writes
 #    /etc/flame/flame.env. --images points at the directory holding the image tarball: it docker-loads first.
 sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/dist
 #    ... or, with the images published to a registry (`./scripts/images.sh push --tag "$FLAME_TAG" --registry <ns>`):

@@ -89,7 +89,7 @@ deploy/prod/
 │  ├─ flame                          the wrapper installed to /usr/local/bin
 │  ├─ build.sh  images.sh           products and images (images.sh also does push, and save/load for offline delivery)
 │  ├─ release.sh                    one command: products + images + both tarballs + SHA256SUMS
-│  ├─ install.sh                    preflight, placement, rendering, units, image import
+│  ├─ install.sh                    preflight, placement, rendering + nexus.yaml, units, image import
 │  ├─ migrate.sh  migrate-apply.sh  platform SQL (ordered list, `--check` compares the file set)
 │  ├─ bootstrap.sh  smoke.sh        one-shot seed (+ v1 backfill) / end-to-end call with a real answer
 │  └─ dev-up.sh                     the local trial: up, seed, executor; --smoke adds the end-to-end check

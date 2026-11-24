@@ -7,10 +7,10 @@
 #   sudo ./scripts/install.sh --tag 2026.12.01 --registry ghcr.io/acme/flame
 #
 # Idempotent: running it twice with the same tag only refreshes files. It never touches /etc/flame/flame.env,
-# the rendered service configurations or /srv/flame/data once they exist - those carry host policy, secrets and
-# tenant data, and an upgrade must not overwrite them. Pass --force-config to re-render the four generated
-# configurations from the release's templates (it overwrites the files, nowhere else). --registry is the one thing
-# that does edit flame.env (the FLAME_IMAGE_NS line): compose has to ask for the same names it pulled.
+# the service configurations or /srv/flame/data once they exist - those carry host policy, secrets and tenant
+# data, and an upgrade must not overwrite them. Pass --force-config to re-render the four templates and reinstall
+# nexus.yaml (it overwrites the files, nowhere else). --registry is the one thing that does edit flame.env (the
+# FLAME_IMAGE_NS line): compose has to ask for the same names it pulled.
 #
 # It does not start anything: starting is explicit, and the order matters (data plane, migrate, bootstrap,
 # executors, application plane). See the runbook, section 7.
@@ -321,7 +321,8 @@ set -a
 set +a
 
 # ---------------------------------------------------------------------------
-# Rendered configuration. Only the four files that do not expand ${VAR} themselves, plus redis.conf.
+# Host configuration. Four files are rendered from the release templates, redis.conf is rendered for the same
+# reason (neither can expand ${VAR} itself), and nexus.yaml is copied verbatim.
 # ---------------------------------------------------------------------------
 # render() comes from lib.sh. Mode 0640 root:flame: the executor and gateway files carry SANDBOX_TOKEN /
 # BROWSER_TOKEN / the Redis password, and the unit reads them as user flame.
@@ -342,6 +343,17 @@ if [ -f /etc/flame/redis.conf ] && [ "$force_config" -eq 0 ]; then
 else
     log "rendering /etc/flame/redis.conf"
     render "$release/config/redis/redis.conf.tmpl" /etc/flame/redis.conf 0640
+fi
+
+# nexus.yaml is the fifth configuration and the only one that is not rendered: nexus expands ${VAR} in it from its own
+# environment, so the file is copied as shipped. It has to exist - compose bind-mounts the absolute path, and Docker
+# creates a directory where the source is missing, which reaches the operator as "nexus cannot load its config".
+dst=/etc/flame/nexus.yaml
+if [ -f "$dst" ] && [ "$force_config" -eq 0 ]; then
+    log "$dst exists, keeping it (--force-config reinstalls)"
+else
+    log "installing $dst"
+    install -m 0640 "$release/config/nexus.yaml" "$dst"
 fi
 
 # /etc/flame is 0750 root:root; the files inside have to be readable by the unit's user.

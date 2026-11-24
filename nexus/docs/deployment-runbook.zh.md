@@ -458,7 +458,7 @@ shell 工具能执行但看不到租户文件。正式部署走下面的 7.1。
 # 1) 前置检查：要么通过，要么点名缺什么（它不改任何东西）
 sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
 
-# 2) 落位：release、unit、包装脚本、渲染好的四份配置与 redis.conf；首次运行会生成 /etc/flame/flame.env
+# 2) 落位：release、unit、包装脚本、渲染好的四份配置、nexus.yaml 与 redis.conf；首次运行会生成 /etc/flame/flame.env
 #    --images 指向镜像 tar 所在目录，它会先 docker load
 sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/dist
 #    ……或者镜像已发布到 registry（`./scripts/images.sh push --tag "$FLAME_TAG" --registry <ns>`）：

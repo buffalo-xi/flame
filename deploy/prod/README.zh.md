@@ -82,7 +82,7 @@ deploy/prod/
 │  ├─ flame                          安装到 /usr/local/bin 的包装脚本
 │  ├─ build.sh  images.sh           产物与镜像（images.sh 另有 push，以及 save/load 做离线交付）
 │  ├─ release.sh                    一条命令：产物 + 镜像 + 两个 tar + SHA256SUMS
-│  ├─ install.sh                    前置检查、落位、渲染、装 unit、导入镜像
+│  ├─ install.sh                    前置检查、落位、渲染 + nexus.yaml、装 unit、导入镜像
 │  ├─ migrate.sh  migrate-apply.sh  平台 SQL（固定顺序，--check 校验文件集合）
 │  ├─ bootstrap.sh  smoke.sh        一次性种子（含 v1 回填）/ 端到端调用并断言拿到回答
 │  └─ dev-up.sh                     本机试跑：拉起、种子、执行器；--smoke 另外跑端到端自检
