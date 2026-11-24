@@ -39,29 +39,35 @@ Tier 2 opens **no** data-plane port: executors never talk to PostgreSQL or Redis
 /opt/flame/
 ├─ current -> releases/<ver>
 ├─ releases/<ver>/
-│  ├─ bin/{nexus,seedpoc,sandboxd,codehost,browserd,browserhost,backfillversions}
-│  ├─ static/            # nexus static assets
-│  ├─ web/               # desktop build output
-│  ├─ sql/               # platform SQL, applied in filename order
+│  ├─ bin/{sandboxd,codehost,browserd,browserhost}   # native units only
 │  ├─ compose.yaml
 │  └─ compose.multi-host.yaml
-└─ data -> /srv/flame/data
+└─ rootfs/<ver>/          # nsjail rootfs, exported from flame/sandbox:<ver> (§5.3)
 
 /etc/flame/
 ├─ flame.env             # secrets, addresses, switches (chmod 600)
-├─ nexus/config.yaml
-├─ sandboxd/config.yaml
-├─ browserd/config.yaml
-├─ sandboxg/config.yaml
-└─ browserg/config.yaml
+├─ nexus.yaml
+├─ sandboxd.yaml
+├─ sandboxd.env          # CONSUL_HTTP_TOKEN, when ACLs are on
+├─ browserd.yaml
+├─ sandboxg.yaml
+├─ browserg.yaml
+└─ tls/{fullchain,privkey}.pem   # optional; present enables 27443
 
 /srv/flame/data/{tenants,platform-assets,plugins}
-/srv/flame/run/tmp/      # sandboxd tmp_dir, host-local, exclusive
+/var/lib/flame/sandboxd/tmp/       # sandboxd tmp_dir, host-local, exclusive
+/var/lib/flame/browserd/profiles/  # Chromium profiles, host-local
+/var/log/flame/<service>/
 ```
 
-`nexus` takes **no `-config` flag**: it reads `config.yaml` from its working directory, so its container's working
-directory is `/etc/flame/nexus` and `server.static_root` must be the absolute `/opt/flame/static`. The other four
-services accept `-config`.
+Containers come from images, natives from the release directory: `flame/nexus:<tag>`, `flame/gateway:<tag>` and
+`flame/web:<tag>` are pulled or built once, while `releases/<ver>/bin` holds only the two executors that run as systemd
+units. Both sides carry the same `FLAME_TAG`, which is why a release is one number, not two.
+
+`nexus` takes **no `-config` flag**: it reads `./config.yaml` from its working directory, so the container sets
+`working_dir: /etc/flame` and mounts `/etc/flame/nexus.yaml` as `/etc/flame/config.yaml`. `server.static_root` stays
+`/opt/flame/static` — inside the image, not a bind mount. The other four services accept `-config` and read
+`/etc/flame/<name>.yaml` directly.
 
 ## 4. Ports and dependencies
 
@@ -85,7 +91,7 @@ servers, and a unique `-node` name per server; a single server publishes neither
 ### 5.1 `/etc/flame/flame.env` (0600)
 
 ```bash
-FLAME_VERSION=1.4.0
+FLAME_TAG=2026.12.01               # the one version number: image tags and releases/<ver>
 FLAME_BIND_IP=127.0.0.1            # tiers 2/3: this host's intranet IP
 COMPOSE_FILE=compose.yaml          # tier 3: compose.yaml:compose.multi-host.yaml
 
@@ -96,7 +102,7 @@ FLAME_VALUE_KEY=<openssl rand -base64 48>
 LITELLM_MASTER_KEY=sk-<random>
 SANDBOX_TOKEN=<random>
 BROWSER_TOKEN=<random>
-SEED_PASSWORD=<random>
+FLAME_ADMIN_PASSWORD=<random>      # bootstrap: the `plat` password; 12345678 is the PoC default and must not survive
 
 FLAME_DB_HOST=postgres
 FLAME_REDIS_ADDR=redis:6379
@@ -105,7 +111,7 @@ FLAME_SANDBOXG_HOST=sandboxg
 FLAME_BROWSERG_HOST=browserg
 ```
 
-### 5.2 `/etc/flame/nexus/config.yaml` (full `${VAR}` expansion)
+### 5.2 `/etc/flame/nexus.yaml` (full `${VAR}` expansion, mounted as `config.yaml`)
 
 ```yaml
 server:
@@ -157,13 +163,13 @@ must be present in `flame.env`.
 ### 5.3 `sandboxd` / `browserd` (rendered, no `${VAR}`)
 
 ```yaml
-# /etc/flame/sandboxd/config.yaml
+# /etc/flame/sandboxd.yaml
 listen: "0.0.0.0:27081"
 token: "${SANDBOX_TOKEN}"
 mode: docker
 allowed_mount_roots:
   - "/srv/flame/data"
-tmp_dir: "/srv/flame/run/tmp"
+tmp_dir: "/var/lib/flame/sandboxd/tmp"
 docker:
   image: flame/sandbox:<ver>
   network: bridge
@@ -179,7 +185,7 @@ registry:
 ```
 
 ```yaml
-# /etc/flame/browserd/config.yaml
+# /etc/flame/browserd.yaml
 listen: "0.0.0.0:27091"
 token: "${BROWSER_TOKEN}"
 workspace_root: "/srv/flame/data"
@@ -187,7 +193,7 @@ browser:
   # Nested, not top level: a flat `profile_root` is not a known key and is ignored,
   # and the default (`run/browserd/profiles`, relative to the cwd) fills a disk nobody watches.
   # Per session, and deliberately outside the tenant tree - it holds cookies for that session only.
-  profile_root: "/srv/browser/profiles"
+  profile_root: "/var/lib/flame/browserd/profiles"
 registry:
   enabled: true
   type: consul
@@ -195,13 +201,16 @@ registry:
   service_name: browserd
 ```
 
-Render them once (they live in `/etc/flame`, which upgrades do not overwrite). The templates use the same `${VAR}` form
+`install.sh` renders them once from `deploy/prod/config/<name>.yaml` into `/etc/flame/<name>.yaml`; doing it by hand is
+the same command. They live in `/etc/flame`, which upgrades do not overwrite. The templates use the same `${VAR}` form
 nexus does — `envsubst` with no list would also eat nginx-style `$` in the file, so name the variables:
 
 ```bash
 set -a; . /etc/flame/flame.env; set +a
-envsubst '${SANDBOX_TOKEN} ${BROWSER_TOKEN} ${REDIS_PASSWORD}' \
-  < /opt/flame/current/templates/sandboxd.yaml > /etc/flame/sandboxd/config.yaml
+for n in sandboxd browserd sandboxg browserg; do
+  envsubst '${SANDBOX_TOKEN} ${BROWSER_TOKEN} ${REDIS_PASSWORD}' \
+    < deploy/prod/config/"$n".yaml > /etc/flame/"$n".yaml
+done
 ```
 
 These four services read their yaml literally — `${VAR}` left in place is not expanded at runtime, so an unrendered
@@ -265,7 +274,7 @@ Registration rules worth repeating:
 ### 5.4 `sandboxg` / `browserg`
 
 ```yaml
-# /etc/flame/sandboxg/config.yaml
+# /etc/flame/sandboxg.yaml
 listen: ":27080"
 sandbox_token: "${SANDBOX_TOKEN}"
 redis: { addr: "redis:6379", password: "${REDIS_PASSWORD}", db: 0 }
@@ -294,17 +303,19 @@ services:
     ports: ["${FLAME_BIND_IP:-127.0.0.1}:8500:8500"]
 
   postgres:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
       POSTGRES_DB: flame
+    shm_size: 256mb                        # the default 64 MB /dev/shm breaks parallel queries
     volumes:
       - flame-pg:/var/lib/postgresql/data
       - /srv/flame/pg-init:/docker-entrypoint-initdb.d:ro
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes",
+              "--maxmemory-policy", "noeviction"]
     volumes: ["flame-redis:/data"]
 
   litellm:
@@ -314,19 +325,37 @@ services:
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
 
   nexus:
-    working_dir: /etc/flame/nexus          # nexus reads ./config.yaml from here
+    image: flame/nexus:${FLAME_TAG}
+    working_dir: /etc/flame               # nexus reads ./config.yaml from here
     volumes:
-      - ./bin:/opt/flame/bin:ro
-      - ./static:/opt/flame/static:ro
-      - /etc/flame/nexus:/etc/flame/nexus:ro
+      - /etc/flame/nexus.yaml:/etc/flame/config.yaml:ro
       - /srv/flame/data:/srv/flame/data
 
+  sandboxg:
+    image: flame/gateway:${FLAME_TAG}
+    volumes: ["/etc/flame/sandboxg.yaml:/etc/flame/config.yaml:ro"]
+
+  browserg:
+    image: flame/gateway:${FLAME_TAG}
+    volumes: ["/etc/flame/browserg.yaml:/etc/flame/config.yaml:ro"]
+
   web:
+    image: flame/web:${FLAME_TAG}
     ports: ["27001:80", "27443:443"]
-    # downloads are X-Accel-Redirect (`download.x_accel_prefix`): nginx sends the bytes itself,
-    # so it needs the same tree nexus reads — `location /__files/ { alias /srv/flame/data/; }`
-    volumes: ["/srv/flame/data:/srv/flame/data:ro"]
+    volumes:
+      - /srv/flame/data:/srv/flame/data:ro   # X-Accel-Redirect: nginx sends the bytes itself
+      - /etc/flame/tls:/etc/nginx/tls:ro     # optional; present enables 27443
 ```
+
+Two one-shot jobs also live in this file and are never started by `up -d` — they sit behind the `jobs` profile, so they
+are invoked as `flame --profile jobs run --rm <name>`: `migrate` — the `postgres` image running psql over
+`releases/<ver>/sql`, with `90-admin.sql` applied last — and `bootstrap` — the `flame/nexus` image with an overridden
+entrypoint. Both need nexus's `user: "1000:1000"` and the `/srv/flame/data` mount,
+or the files they write end up owned by a uid neither nexus nor the sandbox can read.
+
+Images, not a release directory: nothing in the application plane is bind-mounted from `/opt/flame` any more. A new
+`FLAME_TAG` changes the image each container references, which is what makes Compose recreate it — no `--force-recreate`
+needed, and `releases/` matters only to the two systemd units.
 
 `/srv/flame/pg-init/00-roles.sql` runs once, on an empty data volume. The image runs it with `ON_ERROR_STOP=1`, and
 `POSTGRES_DB: flame` has already created that database — so it is handed over, not created again:
@@ -374,31 +403,22 @@ location /        { proxy_pass http://nexus:27006; }
 ## 7. First boot
 
 ```bash
-# 1) directories and shared storage
-install -d -o flame -g flame /srv/flame/data/{tenants,platform-assets,plugins} /srv/flame/run/tmp
-install -d /etc/flame/{nexus,sandboxd,browserd,sandboxg,browserg}
-install -m 600 /dev/null /etc/flame/flame.env     # fill in §5.1
+# 1) place the release, the images and the units; the preflight either passes or names what is missing
+sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
+docker image inspect flame/nexus:"$FLAME_TAG" >/dev/null   # and flame/gateway, flame/web
 
-# 2) release and the current symlink
-tar -C /opt/flame/releases -xzf flame-<ver>.tar.gz
-ln -sfn /opt/flame/releases/<ver> /opt/flame/current
-
-# 3) render the four rendered configs (§5.3 / §5.4), one envsubst per template
+# 2) fill in /etc/flame/flame.env (§5.1), then render the four executed or containerised configs (§5.3 / §5.4)
 #    there is no -check flag: a bad config shows up as a startup error, so start the service and read the log
 
-# 4) data plane first
+# 3) data plane first
 flame up -d consul postgres redis litellm
 
-# 5) platform SQL, filename order, idempotent
-for f in /opt/flame/current/sql/*.sql; do
-  flame exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres psql -U flame -d flame -v ON_ERROR_STOP=1 -f - < "$f"
-done
+# 4) platform SQL, then the t0 seed — both are one-shot compose services, both idempotent
+flame --profile jobs run --rm migrate
+flame --profile jobs run --rm bootstrap    # writes /etc/flame/initial-credentials.txt, 0600, owned by flame
 
-# 6) seed (never keep the default demo password in production)
-flame run --rm --entrypoint /opt/flame/bin/seedpoc nexus \
-  -config /etc/flame/nexus/config.yaml -schema t0 -password "$SEED_PASSWORD"
-
-# 7) application plane
+# 5) native executors, then the application plane
+systemctl enable --now flame-sandboxd flame-browserd
 flame up -d
 flame ps
 ```
@@ -414,7 +434,8 @@ Requires=docker.service
 [Service]
 User=flame
 EnvironmentFile=-/etc/flame/flame.env
-ExecStart=/opt/flame/current/bin/sandboxd -config /etc/flame/sandboxd/config.yaml
+EnvironmentFile=-/etc/flame/sandboxd.env       # CONSUL_HTTP_TOKEN, when ACLs are on
+ExecStart=/opt/flame/current/bin/sandboxd -config /etc/flame/sandboxd.yaml
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
@@ -457,10 +478,10 @@ The gateways need no change: their discovery pulls from Consul, so the new insta
 New host:
 
 ```bash
-# docker, the shared mount, /opt/flame/current, the flame user
-install -d /etc/flame/sandboxd
-envsubst '${SANDBOX_TOKEN}' < /opt/flame/current/templates/sandboxd.yaml > /etc/flame/sandboxd/config.yaml
-# registry.address -> the first host's intranet IP; service_addr left empty
+# docker, the shared mount, /opt/flame/current (bin only), the flame user
+install -d -o flame -g flame /var/lib/flame/sandboxd/tmp
+# copy /etc/flame/sandboxd.yaml from the first host, then edit registry.address to its intranet IP
+# service_addr stays empty: it is derived from listen, and the ID follows the address
 systemctl enable --now flame-sandboxd
 ```
 
@@ -497,11 +518,11 @@ First host — publish everything the replica needs, because it is **not** on `f
 flame up -d
 ```
 
-New host — the same release, one container:
+New host — no release directory at all, just an env file, a config and the image:
 
 ```bash
-# 1) release dir (bin/ + static/ - nexus serves /static from it), the flame wrapper,
-#    /etc/flame/flame.env with this host's FLAME_BIND_IP, the same COMPOSE_FILE and the same secrets
+# 1) the flame wrapper, /opt/flame/current (compose files only), /etc/flame/flame.env with this host's
+#    FLAME_BIND_IP, the same COMPOSE_FILE, the same FLAME_TAG and the same secrets
 # 2) overlay: publish this host's own 27006 and nothing else - that is what nginx dials
 #    nexus: { ports: ["${FLAME_BIND_IP:?set FLAME_BIND_IP}:27006:27006"] }
 # 3) start one service, not the stack: a bare `flame up -d` would also create
@@ -509,7 +530,7 @@ New host — the same release, one container:
 flame up -d nexus
 ```
 
-Config: the first host's `config.yaml` with the addresses rewritten —
+Config: the first host's `nexus.yaml` with the addresses rewritten —
 
 ```yaml
 server:  { host: 0.0.0.0, port: 27006, static_root: /opt/flame/static }
@@ -530,8 +551,9 @@ not a startup error). These three are the ones that look local and are not:
 | `security.value_key` | encrypted `global_vars` cannot be decrypted; empty derives it from `jwt.secret_key` |
 | `storage.root_dir` + mount | files come and go, downloads 404 |
 
-Do **not** bring the replica up through the image entrypoint — that is the psql DDL loop — and do not run `seedpoc` there;
-`nexus` itself has no migrate subcommand. PostgreSQL / Redis / LiteLLM do not belong on this host either.
+Do **not** run `migrate` or `bootstrap` here: both are one-shot jobs that belong to the first host (§7), and two hosts
+applying DDL at once is exactly the lock wait the split exists to avoid. PostgreSQL / Redis / LiteLLM do not belong on this
+host either.
 
 If you also enable `registry` on the replica, give each host its **own bare IP** in `registry.service_addr`. The service
 ID is derived from that address (`<name>-<addr>-<port>`), the default is `http://localhost`, and the health check URL is
@@ -629,24 +651,27 @@ Adding a replica is a separate, heavier step with its own checklist: §8.2.
 ## 10. Upgrade and revert
 
 ```bash
-# upgrade
-tar -C /opt/flame/releases -xzf flame-<new>.tar.gz
-for f in /opt/flame/releases/<new>/sql/*.sql; do
-  flame exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres psql -U flame -d flame -v ON_ERROR_STOP=1 -f - < "$f"
-done
-ln -sfn /opt/flame/releases/<new> /opt/flame/current
-flame up -d --force-recreate nexus
-systemctl restart flame-sandboxd flame-browserd
+# upgrade: build, then move one version number — containers follow the image tag, natives follow the symlink
+./scripts/build.sh
+./scripts/images.sh --tag "$FLAME_TAG"
+sudo ./scripts/install.sh --tag "$FLAME_TAG"        # places releases/<ver>, repoints current, reloads the units
+flame --profile jobs run --rm migrate               # SQL before the new code runs
+flame up -d sandboxg browserg nexus web             # the image reference changed, so Compose recreates each
+systemctl restart flame-sandboxd flame-browserd     # re-exec through the repointed symlink
 
 # revert to the previous release (not the version-domain "rollback")
-ln -sfn /opt/flame/releases/<old> /opt/flame/current
-flame up -d --force-recreate nexus
+sudo ./scripts/install.sh --tag "<old>"
+flame up -d sandboxg browserg nexus web
+systemctl restart flame-sandboxd flame-browserd
 ```
 
-`--force-recreate` is not optional: `./bin` and `./static` are bind mounts whose source is the `current` symlink, and
-Docker resolves it once, when the container is created. The declared path is identical before and after the switch, so a
-plain `flame up -d` sees no change and leaves the old container running the old binary. The systemd units re-exec the
-path on every start, which is why `restart` is enough for them.
+No `--force-recreate` is needed on the container side: the service definition changes (`image: flame/nexus:<new>`), which
+is exactly the per-service config hash Compose compares, and nothing in the application plane is bind-mounted from
+`/opt/flame` any more. The two natives are the opposite case — their unit path is unchanged, so only `install.sh` repointing
+`current` plus a `restart` makes them run the new binary.
+
+`bootstrap` is not part of an ordinary upgrade: it exists to create t0 on an empty database and is idempotent, but running
+it after every release only re-prints credentials nobody asked for.
 
 `mode: nsjail` adds one step: a rootfs belongs to an image generation (§5.3), so build the new one, point `rootfs:` at
 it, then restart `flame-sandboxd`. Skipping it leaves the jail on the previous interpreters while docker mode — if that is
@@ -656,9 +681,9 @@ impossible without rebuilding.
 Constraint: SQL is additive only (new tables, new columns). A destructive change makes the old code run on a new schema,
 and a revert stops being safe. Take a database dump before every migration.
 
-With a replica (§8.2) the SQL runs once, but the release steps run on every host: each one has its own
-`/opt/flame/current`, so `ln -sfn` and `flame up -d --force-recreate nexus` are repeated there. Upgrade one host at a time
-and keep nginx pointed at the host already upgraded, not at one still on the old release.
+With a replica (§8.2) `migrate` runs once, on the first host, but every host repeats `install.sh --tag` and
+`flame up -d nexus`: each has its own `FLAME_TAG`, its own `current` symlink and its own local images. Upgrade one host at a
+time and keep nginx pointed at the host already upgraded, not at one still on the old tag.
 
 ## 11. Backup
 
@@ -679,13 +704,16 @@ and keep nginx pointed at the host already upgraded, not at one still on the old
   (tokens can only arrive through `CONSUL_HTTP_TOKEN`; none of the four service configs exposes a token field)
 - the PostgreSQL DSN hardcodes `sslmode=disable` and the Redis client has no TLS fields: cross-host only inside a
   controlled network until those gaps are closed
-- `seedpoc`'s demo password is for the PoC; production passes `-password "$SEED_PASSWORD"` and rotates on first login
+- `bootstrap`'s defaults (`12345678`, the fixed key `sk-poc-t0-primary`) are the PoC's values: pass `FLAME_ADMIN_PASSWORD`,
+  rotate the key, and delete `initial-credentials.txt` once it has been used
 
 ## 13. Acceptance checks
 
 | Check | Command | Expected |
 |---|---|---|
 | containers | `flame ps` | all running / healthy |
+| images for this tag | `docker image inspect flame/nexus:$FLAME_TAG flame/gateway:$FLAME_TAG flame/web:$FLAME_TAG` | all three present |
+| platform SQL | `./scripts/migrate.sh --check` | the file set equals the execution list |
 | entry point | `curl -sI http://localhost:27001/` | 200 |
 | api health | `curl -s http://localhost:27001/health` | 200 once `db` / `redis` / `litellm` / `sandbox` are all up; a 503 body names the missing one |
 | registration | `curl -s 'localhost:8500/v1/health/service/sandboxd?passing=1'` | one entry per executor, all passing |
