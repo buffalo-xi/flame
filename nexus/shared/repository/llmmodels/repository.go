@@ -64,7 +64,7 @@ type LLMModelRepository interface {
 	// ListAll returns every LLM model of the tenant (no paging, for batch work such as a gateway sync).
 	ListAll(authInfo *auth.AuthInfo) ([]models.LLMModel, error)
 
-	// DeleteCascade deletes a model and clears llm_model_id on the agents that reference it (same transaction).
+	// DeleteCascade deletes a model row. Nothing references a model by id, so no reference needs clearing.
 	DeleteCascade(authInfo *auth.AuthInfo, id string) error
 
 	// CountEnabledByGatewayModel counts the enabled models (non-empty gateway_id) sharing a gateway_model.

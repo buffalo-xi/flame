@@ -93,13 +93,14 @@ docker compose -f deploy/poc/docker-compose.yml logs -f
 | `user01` | `12345678` | 平台 `user` 角色，演示租户的负责人 |
 | `primary` | `12345678` | `t0` 租户**内部**的管理员（开通时交接的那个账号） |
 
-租户 `t0`（“Demo tenant”）已经存在，带预装的 `main` 智能体、四个内置技能，能力也全部打开。apikey
+租户 `t0`（“Demo tenant”）已经存在，带预装的 `main` 智能体、四个内置技能、预置的 LLM 供应商 `DeepSeek` 与模型
+`deepseek-flash`（还没有密钥，供应商是停用状态），能力也全部打开。apikey
 `sk-poc-t0-primary` 绑定在 `primary` 上，所以 `/service/mcp/t0`、`/service/rpc/t0` 认
 `Authorization: Bearer sk-poc-t0-primary`。注意这句话的边界：凭证是就绪的，但租户还没有**已 expose** 的端点，
 所以 `tools/list` 现在是空表——端点列表只包含 `exposed = true` 的那些。
 
 1. **登录。** 用 `plat` / `12345678` 进入平台管理台，里面能看到 `t0`；进这个租户用 `primary` / `12345678`。
-2. **加模型。** 设置 → LLM：先加一个供应商（多数厂商给一个 OpenAI 兼容的 base_url + key 就行），再在它下面加一个模型。这一步才是真正把模型 provision 进 LiteLLM 的动作——没有它，控制台一切正常但每次回答都失败。
+2. **把密钥填进预置模型。** 设置 → LLM 里已经有供应商 `DeepSeek`（停用、没有密钥）和模型 `deepseek-flash`：打开供应商填上自己的 key、保存、启用，然后在模型那一行点「启用」（这一步才是真正把模型注册进 LiteLLM 的动作），最后点「设为默认」。换厂商同理：就着预置的改，或者删掉自己加。没做完之前，控制台一切正常但每次回答都失败。
 3. **开聊。** 打开 `main` 智能体发一条消息。它已经能用文件、shell 和浏览器。
 
 镜像里**不带任何供应商密钥**：没有任何敏感信息被烤进镜像，第 2 步就是你填自己 key 的地方。从控制台继续新建租户照旧可用——`t0` 只是一个已经摆在那里的演示。

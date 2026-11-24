@@ -3,6 +3,7 @@ package llmproviders
 import (
 	"database/sql"
 	"fmt"
+	"reflect"
 
 	"flame/nexus/service/llm/gateway"
 	"flame/nexus/shared/auth"
@@ -10,6 +11,7 @@ import (
 	"flame/nexus/shared/models"
 	"flame/nexus/shared/repository/llmproviders"
 	"flame/tools/xhttp"
+	"flame/tools/xlog"
 	"flame/tools/xsql"
 
 	"github.com/gin-gonic/gin"
@@ -84,6 +86,13 @@ func CreateLLMProvider(c *gin.Context) {
 }
 
 // UpdateLLMProvider updates a provider.
+// UpdateLLMProvider updates a provider.
+//
+// An enabled provider is read-only apart from being disabled. Its url / protocol / api_key / extra_config were copied
+// into every model's litellm_params when that model was provisioned, so editing them in place would leave the gateway
+// on the old values while the console shows the new ones - the exact failure that looks like "I saved it and nothing
+// changed". Disabling is what makes an edit take effect, and disabling cascades: the provider's enabled models are
+// deprovisioned at the gateway and lose their gateway_id, so re-enabling them registers them again with the new values.
 func UpdateLLMProvider(c *gin.Context) {
 	authInfo, exists := c.Get("authInfo")
 	if !exists {
@@ -92,6 +101,7 @@ func UpdateLLMProvider(c *gin.Context) {
 	}
 
 	id := c.Param("id")
+	schema := authInfo.(*auth.AuthInfo).Schema
 
 	var req struct {
 		Name        string     `json:"name"`
@@ -107,17 +117,7 @@ func UpdateLLMProvider(c *gin.Context) {
 		return
 	}
 
-	llmProvider := models.LLMProvider{
-		Name:        req.Name,
-		URL:         xsql.String(req.URL),
-		Protocol:    xsql.String(req.Protocol),
-		APIKey:      xsql.String(req.APIKey),
-		Icon:        xsql.String(req.Icon),
-		Enabled:     xsql.Bool(req.Enabled),
-		ExtraConfig: req.ExtraConfig,
-	}
-
-	err := repo.Update(authInfo.(*auth.AuthInfo), id, &llmProvider)
+	current, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "llm.provider_not_found", nil, "LLM provider not found", "")
@@ -127,7 +127,129 @@ func UpdateLLMProvider(c *gin.Context) {
 		return
 	}
 
-	xhttp.OkJSON(c, "Success", nil, "")
+	// An enabled provider only accepts the transition to disabled; any other change has to wait for that.
+	if bool(current.Enabled) && req.Enabled {
+		if req.Name != current.Name ||
+			req.URL != string(current.URL) ||
+			req.Protocol != string(current.Protocol) ||
+			req.APIKey != string(current.APIKey) ||
+			req.Icon != string(current.Icon) ||
+			!jsonValueEqual(req.ExtraConfig, current.ExtraConfig) {
+			xhttp.ErrCode(c, "llm.provider_locked", nil,
+				"the provider is enabled; disable it before editing", "")
+			return
+		}
+	}
+
+	// Disabling cascades. The gateway call comes first: a failure returns here and leaves both sides untouched.
+	enabledModels, err := listEnabledModels(schema, id)
+	if err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to load the provider's models: "+err.Error(), "")
+		return
+	}
+	cascade := bool(current.Enabled) && !req.Enabled
+	if cascade {
+		if gateway.Current == nil {
+			xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
+			return
+		}
+		for _, m := range enabledModels {
+			if derr := gateway.Current.Deprovision(schema,
+				gateway.ModelInput{GatewayID: m.gatewayID}, gateway.ProviderInput{}); derr != nil {
+				xhttp.ErrCode(c, "common.internal", nil,
+					"Deprovision failed for model "+m.name+": "+derr.Error(), "")
+				return
+			}
+		}
+	}
+
+	// One transaction: the provider row and the cleared gateway ids move together, so a model can never point at a
+	// record the gateway no longer has.
+	tx, err := db.DB.Begin()
+	if err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, "Failed to begin transaction", "")
+		return
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if cascade {
+		for _, m := range enabledModels {
+			if _, err := tx.Exec(fmt.Sprintf(
+				`UPDATE %s.llm_models SET gateway_id = NULL WHERE id = $1 AND gateway_id = $2`, schema),
+				m.id, m.gatewayID); err != nil {
+				xhttp.ErrCode(c, "common.internal", nil, "Failed to clear gateway id: "+err.Error(), "")
+				return
+			}
+		}
+	}
+
+	result, err := tx.Exec(fmt.Sprintf(`UPDATE %s.llm_providers SET name = $1, url = $2, protocol = $3, api_key = $4,
+		icon = $5, enabled = $6, extra_config = $7 WHERE id = $8`, schema),
+		req.Name, req.URL, req.Protocol, req.APIKey, req.Icon, req.Enabled, req.ExtraConfig, id)
+	if err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+		xhttp.ErrCode(c, "llm.provider_not_found", nil, "LLM provider not found", "")
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	tx = nil
+
+	xhttp.OkJSON(c, "Success", gin.H{"deprovisioned": len(enabledModels)}, "")
+}
+
+// providerModel is the slice of a model row this file needs when a provider is disabled.
+type providerModel struct {
+	id        string
+	name      string
+	gatewayID string
+}
+
+// listEnabledModels returns the provider's models that are currently provisioned at the gateway.
+func listEnabledModels(schema, providerID string) ([]providerModel, error) {
+	rows, err := db.DB.Query(fmt.Sprintf(
+		`SELECT id, name, gateway_id FROM %s.llm_models WHERE provider_id = $1 AND gateway_id IS NOT NULL AND gateway_id <> ''`,
+		schema), providerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []providerModel
+	for rows.Next() {
+		var m providerModel
+		if err := rows.Scan(&m.id, &m.name, &m.gatewayID); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// jsonValueEqual compares two JSONB values by content: a value read from the database and one decoded from a request
+// are different Go types ([]byte vs json.RawMessage), so a byte comparison would report a change that is not there.
+func jsonValueEqual(a, b xsql.JSONB) bool {
+	if a.IsNil() && b.IsNil() {
+		return true
+	}
+	var av, bv any
+	if err := a.Unmarshal(&av); err != nil {
+		return false
+	}
+	if err := b.Unmarshal(&bv); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
 }
 
 // DeleteLLMProvider deletes a provider.
@@ -167,24 +289,28 @@ func DeleteLLMProvider(c *gin.Context) {
 	}
 	rows.Close()
 
-	// 1. Deregister at the gateway (outside the transaction): any failure returns early and leaves the DB as it was, keeping both sides consistent.
-	//    Deprovision is idempotent, so a record the gateway never had also counts as success.
+	// 1. Deregister at the gateway (outside the transaction). Deprovision is idempotent, so a record the gateway
+	// never had also counts as success. A gateway that cannot be reached must not make the provider undeletable:
+	// the records left behind are cleaned up by the next sync, which removes the gateway rows this tenant no
+	// longer references. Failures are collected and reported back so the console can say so.
+	var gatewayErrors []string
 	for _, pm := range providerModels {
 		if !pm.gatewayID.Valid || pm.gatewayID.String == "" {
 			continue
 		}
 		if gateway.Current == nil {
-			xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
-			return
+			gatewayErrors = append(gatewayErrors, "gateway not initialized")
+			break
 		}
 		if derr := gateway.Current.Deprovision(schema,
 			gateway.ModelInput{GatewayID: pm.gatewayID.String}, gateway.ProviderInput{}); derr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "Deprovision failed for model "+pm.id+": "+derr.Error(), "")
-			return
+			gatewayErrors = append(gatewayErrors, pm.id+": "+derr.Error())
+			xlog.Error("DeleteLLMProvider: deprovision of model %s (%s) failed: %v", pm.id, pm.gatewayID.String, derr)
 		}
 	}
 
-	// 2. Transaction: unlink the agent references -> delete the models -> delete the provider.
+	// 2. Transaction: delete the models -> delete the provider. Nothing references a model row by id: agents have no
+	// llm_model_id column, they run on the tenant's default model.
 	tx, err := db.DB.Begin()
 	if err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, "Failed to begin transaction", "")
@@ -196,14 +322,6 @@ func DeleteLLMProvider(c *gin.Context) {
 		}
 	}()
 
-	// agents.llm_model_id has no foreign key, so it must be cleared explicitly or deleting the model leaves a dangling reference.
-	for _, pm := range providerModels {
-		if _, err := tx.Exec(
-			fmt.Sprintf(`UPDATE %s.agents SET llm_model_id = NULL WHERE llm_model_id = $1`, schema), pm.id); err != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "Failed to update agent instances", "")
-			return
-		}
-	}
 	for _, pm := range providerModels {
 		if _, err := tx.Exec(
 			fmt.Sprintf(`DELETE FROM %s.llm_models WHERE id = $1`, schema), pm.id); err != nil {
@@ -233,7 +351,7 @@ func DeleteLLMProvider(c *gin.Context) {
 	}
 	tx = nil
 
-	xhttp.OkJSON(c, "LLM provider deleted successfully", id, "")
+	xhttp.OkJSON(c, "LLM provider deleted successfully", gin.H{"id": id, "gateway_errors": gatewayErrors}, "")
 }
 
 // ListLLMProviders lists providers.

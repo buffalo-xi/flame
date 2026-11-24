@@ -67,3 +67,28 @@ INSERT INTO agent_skill_bindings (agent_id, skill_id) VALUES
     ('a0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000012'),
     ('a0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000013'),
     ('a0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000014');
+
+-- The LLM provider: DeepSeek over the OpenAI-compatible protocol.
+--
+-- api_key is intentionally empty: the key belongs to the tenant's own account and is entered once in the console. What is
+-- seeded is the address, the protocol and the icon, so nobody has to look them up.
+--
+-- enabled=false because a keyless provider is not configured yet - it cannot serve a single call, so showing it as
+-- "enabled" would be a claim the console cannot back. It also keeps the first edit short: an enabled provider is
+-- read-only (its url / key were copied into the gateway record of every model enabled under it), so seeding it enabled
+-- would force the operator to disable it before filling in the key.
+INSERT INTO llm_providers (id, name, url, protocol, api_key, icon, note, enabled, extra_config)
+VALUES
+    ('a0000000-0000-4000-8000-000000000021', 'DeepSeek', 'https://api.deepseek.com', 'openai',
+     '', '/static/llm/compatible.png', '', false, '{}'::jsonb);
+
+-- 配套模型。name 同时是发给上游的模型名（LiteLLM 侧写作 openai/<name>），gateway_model 是网关里的别名
+-- （<schema>:<gateway_model>）；两者一致最省心，上游若换了名字只需改 name。
+-- extra_params 关掉深度思考，让普通对话走快路径；context_window 按 120k token 预填，实际可用的窗口以账户为准。
+-- is_default=false：没有 key 之前不该占着默认位置，否则所有调用都会失败。
+INSERT INTO llm_models (id, name, provider_id, gateway_model, is_default, context_window, extra_params,
+                        capabilities, base_params)
+VALUES
+    ('a0000000-0000-4000-8000-000000000022', 'deepseek-flash',
+     'a0000000-0000-4000-8000-000000000021', 'deepseek-flash', false, 120000,
+     '{"thinking": {"type": "disabled"}}'::jsonb, '{}'::jsonb, '{}'::jsonb);

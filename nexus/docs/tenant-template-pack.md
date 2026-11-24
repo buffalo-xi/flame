@@ -80,6 +80,7 @@ out half-built:
 | Source | Content |
 | --- | --- |
 | `nexus/sql/main_core_tool_grants.sql` | main's 6 required groups: `builtin:file` / `exec` / `shell` / `agent` / `skill` / `agent-admin` |
+| same (`seed.sql`) | one LLM provider `DeepSeek` (protocol `openai`, `https://api.deepseek.com`, icon `/static/llm/compatible.png`, **empty `api_key`**, **`enabled = false`**: a keyless provider cannot serve a call, and an enabled provider is read-only, so seeding it enabled would block the first edit) plus its model `deepseek-flash` (`gateway_model` the same, `context_window` 120000, `extra_params` `{"thinking": {"type": "disabled"}}`, `is_default = false` so a keyless model never takes the default slot) |
 | `nexus/sql/supervisor_on_demand_groups.sql` | the supervisor agent's 5 allow groups: `builtin:skill-own` / `skill-admin` / `tool-grant` / `custom-tool` / `flow-admin` |
 | same | skill tool dependencies: `skill-authoring`→`skill-own`+`skill-admin`; `agent-authoring`→`tool-grant`+`skill-admin`; `custom-tool-authoring`→`custom-tool`; `flow-authoring`→`flow-admin` |
 | same | main binds these four skills (the starter kit; its system prompt carries their descriptions) |
@@ -93,6 +94,8 @@ Fixed uuids (the grant / binding rows in the seed reference them):
 | skill `agent-authoring` | `a0000000-0000-4000-8000-000000000012` |
 | skill `custom-tool-authoring` | `a0000000-0000-4000-8000-000000000013` |
 | skill `flow-authoring` | `a0000000-0000-4000-8000-000000000014` |
+| LLM provider `DeepSeek` | `a0000000-0000-4000-8000-000000000021` |
+| LLM model `deepseek-flash` | `a0000000-0000-4000-8000-000000000022` (references the provider above) |
 
 The single source of truth for the protected-skill list is `protectedSkills` in `shared/models/protected.go`
 (`models.ProtectedSkillNames()` exposes a read-only copy). **When adding a protected skill, both seed.sql and files/ must be

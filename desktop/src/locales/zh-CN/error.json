@@ -116,12 +116,13 @@
       "preset_not_found": "预设不存在",
       "model_not_found": "模型不存在",
       "provider_not_found": "模型提供方不存在",
+      "provider_locked": "服务商已启用，需先停用才能修改",
       "model_enabled_locked": "模型已启用，gateway_model 不可修改，请先禁用",
       "provider_disabled": "服务商已停用，请先在「LLM 服务商」里启用后再启用模型",
       "gateway_model_required": "网关模型名（gateway_model）不能为空，请填写后再启用",
       "gateway_model_taken": "网关模型名 {name} 已被其它启用中的模型使用，会导致路由歧义，请换一个",
       "no_default_model": "还没有配置默认模型：先在「模型」里添加一个模型并设为默认，再开始对话",
-      "default_model_not_enabled": "默认模型还没有启用（缺少网关模型名），先在「模型」里启用它再开始对话"
+      "default_model_not_enabled": "默认模型还没有启用（它还没有网关模型 ID，即没配置到网关），先在「模型」里启用它再开始对话"
     },
     "user": {
       "password_too_long": "密码过长，请缩短后重试。",

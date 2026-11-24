@@ -116,8 +116,11 @@ func UpdateLLMModel(c *gin.Context) {
 		return
 	}
 
-	// For an enabled model, gateway_model becomes the LiteLLM model_name and changing it breaks routing, so it must be disabled first.
-	// Only that field is blocked - name / context / parameters may change, and "sync" pushes them to the gateway.
+	// An enabled model is provisioned at the gateway, with this row's values baked into litellm_params when it was
+	// provisioned. Editing it in place would leave the gateway on the old values while the console shows the new ones,
+	// so an enabled row is read-only apart from is_default - choosing the default model is an operation, not a
+	// configuration. Disable it first: that deprovisions the gateway record and clears gateway_id, and enabling it
+	// again registers it with the new values.
 	existing, err := repo.GetByID(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -127,8 +130,9 @@ func UpdateLLMModel(c *gin.Context) {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
-	if string(existing.GatewayID) != "" && req.GatewayModel != string(existing.GatewayModel) {
-		xhttp.ErrCode(c, "llm.model_enabled_locked", nil, "the model is enabled, so gateway_model cannot be changed; disable it first", "")
+	if string(existing.GatewayID) != "" && !sameExceptDefault(req.Name, req.ContextWindow, req.ProviderID,
+		req.GatewayModel, req.BaseParams, req.ExtraParams, req.Capabilities, existing) {
+		xhttp.ErrCode(c, "llm.model_enabled_locked", nil, "the model is enabled; disable it before editing", "")
 		return
 	}
 
@@ -156,6 +160,34 @@ func UpdateLLMModel(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", nil, "")
 }
 
+// sameExceptDefault reports whether the submitted fields match the stored row in everything but is_default.
+func sameExceptDefault(name string, contextWindow xsql.Int, providerID, gatewayModel string,
+	baseParams, extraParams, capabilities xsql.JSONB, existing *models.LLMModel) bool {
+	return name == existing.Name &&
+		contextWindow == existing.ContextWindow &&
+		providerID == existing.ProviderID &&
+		gatewayModel == string(existing.GatewayModel) &&
+		jsonbEqual(baseParams, existing.BaseParams) &&
+		jsonbEqual(extraParams, existing.ExtraParams) &&
+		jsonbEqual(capabilities, existing.Capabilities)
+}
+
+// jsonbEqual compares two jsonb values by content: a value read from the database and one decoded from a request are
+// different Go types ([]byte vs json.RawMessage), so a byte comparison would report a change that is not there.
+func jsonbEqual(a, b xsql.JSONB) bool {
+	if a.IsNil() && b.IsNil() {
+		return true
+	}
+	var av, bv any
+	if err := a.Unmarshal(&av); err != nil {
+		return false
+	}
+	if err := b.Unmarshal(&bv); err != nil {
+		return false
+	}
+	return jsonValueEqual(av, bv)
+}
+
 // DeleteLLMModel deletes an LLM model.
 // An enabled model (non-empty gateway_id) is deprovisioned on the gateway first, so LiteLLM keeps no orphan record;
 // then the agent references are cleared and the row deleted in one transaction.
@@ -178,16 +210,17 @@ func DeleteLLMModel(c *gin.Context) {
 		return
 	}
 
-	// 1. if enabled, deprovision first (a network call, outside the transaction). Deprovision is idempotent, so a missing model still counts as success
+	// 1. Deprovision first when the model is enabled. A gateway that cannot be reached must not make the row
+	// undeletable: the record left behind is cleaned up by the next sync, which removes the gateway rows this
+	// tenant no longer references. The failure is still reported back so the console can say so.
+	var gatewayErr string
 	if gatewayID := string(m.GatewayID); gatewayID != "" {
 		if gateway.Current == nil {
-			xhttp.ErrCode(c, "common.internal", nil, "gateway not initialized", "")
-			return
-		}
-		if derr := gateway.Current.Deprovision(info.Schema,
+			gatewayErr = "gateway not initialized"
+		} else if derr := gateway.Current.Deprovision(info.Schema,
 			gateway.ModelInput{GatewayID: gatewayID}, gateway.ProviderInput{}); derr != nil {
-			xhttp.ErrCode(c, "common.internal", nil, "deprovision failed: "+derr.Error(), "")
-			return
+			gatewayErr = derr.Error()
+			xlog.Error("DeleteLLMModel: deprovision of %q (%s) failed: %v", m.Name, gatewayID, derr)
 		}
 	}
 
@@ -197,11 +230,12 @@ func DeleteLLMModel(c *gin.Context) {
 			xhttp.ErrCode(c, "llm.model_not_found", nil, "LLM model not found", "")
 			return
 		}
+		xlog.Error("DeleteLLMModel: deleting %q (%s) failed: %v", m.Name, id, err)
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
 
-	xhttp.OkJSON(c, "LLM model deleted successfully", id, "")
+	xhttp.OkJSON(c, "LLM model deleted successfully", gin.H{"id": id, "gateway_error": gatewayErr}, "")
 }
 
 // ListLLMModels returns the LLM model list.

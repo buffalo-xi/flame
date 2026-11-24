@@ -10,7 +10,7 @@ It does not cover production deployment, clusters, TLS or SSO — see "Known lim
 
 1. [Running it in five minutes](#1-running-it-in-five-minutes)
 2. [Two consoles, three accounts](#2-two-consoles-three-accounts)
-3. [The one thing you must do first: connect a model](#3-the-one-thing-you-must-do-first-connect-a-model)
+3. [The one thing you must do first: put a key in the seeded model](#3-the-one-thing-you-must-do-first-put-a-key-in-the-seeded-model)
 4. [Verify the agent](#4-verify-the-agent)
 5. [The tenant side in six parts](#5-the-tenant-side-in-six-parts)
 6. [The platform side in four parts](#6-the-platform-side-in-four-parts)
@@ -64,28 +64,32 @@ The part that catches people out: **the console login asks for a tenant as well*
 
 Change a password: both console top bars have "password". `plat` is a protected account — its password cannot be changed.
 
-## 3. The one thing you must do first: connect a model
+## 3. The one thing you must do first: put a key in the seeded model
 
-No provider key ships in the image. Until you add one, every page works but the agent fails on the first message — the
-gateway has no model to call.
+No provider key ships in the image. Tenant `t0` comes with one provider and one model already seeded, but the key is
+empty and the model is not enabled yet:
 
-In the **tenant console**: Settings → **LLM** (the first tab). The example below is **DeepSeek over the
-OpenAI-compatible protocol**; for another vendor only the URL and the model identifier change. DeepSeek has no built-in
-preset, so pick the generic `openai_compatible` one — that is the entry point for every OpenAI-protocol vendor.
+| Seeded | Contents |
+|---|---|
+| Provider | `DeepSeek`, protocol `openai`, `https://api.deepseek.com`, key empty, **disabled**, icon `/static/llm/compatible.png` |
+| Model | `deepseek-flash`, context window 120000, extra parameters `{"thinking": {"type": "disabled"}}`, not enabled, not the default |
 
-**Step 1: add the LLM provider**
+In the **tenant console**: Settings → **LLM**, in this order:
 
-1. Pick **`openai_compatible`** in "choose a preset provider": it fills in the protocol (`openai`, read-only) and a
-   placeholder URL
-2. Provider name: `DeepSeek`
-3. API URL: `https://api.deepseek.com`
-4. API key: `sk-...` (created in the DeepSeek console)
-5. Extra config (JSON): **leave empty**. This one goes into LiteLLM's `litellm_params` — **registration-time**
-   parameters such as Azure's `api_version` or Vertex's `vertex_project`, not the body of each request
+1. **Fill in the key** — the seeded provider is disabled (a keyless provider cannot serve a call), so the pencil on
+   its card opens an editable form. Put `sk-...` (created in the DeepSeek console) into API key, leave everything else
+   as seeded, save.
+2. **Enable the provider** — click "Enable" on the card. From then on it is read-only: its URL and key were copied into
+   the gateway record of every model enabled under it, so changing them again starts with a disable.
+3. **Enable the model** — click "Enable" on the `deepseek-flash` row. This is the step that registers it on the
+   gateway (the LiteLLM container); saving a model on its own does not.
+4. **Make it the default** — click "Set as default" on the same row. Without a default model the page shows a warning
+   and chatting cannot start.
 
-**Step 2: add the LLM model** (same page → add LLM model, provider = the DeepSeek one)
+For another vendor, edit the seeded rows in place (disable → edit → enable) or delete them and add your own. The
+fields that matter when you rebuild them:
 
-| Field | Value | Why |
+| Field | Example | Why |
 |---|---|---|
 | Model name | `deepseek-flash` | the gateway calls `openai/<model name>`, so it **must match the upstream identifier** |
 | Context window | `128000` | per the vendor's docs; used for estimates and truncation |
@@ -94,7 +98,9 @@ preset, so pick the generic `openai_compatible` one — that is the entry point 
 | Extra parameters (JSON) | `{"thinking": {"type": "disabled"}}` | DeepSeek syntax, see below; another vendor needs its own switch |
 | Capabilities (JSON) | usually empty | e.g. `{"vision": true}` declares multimodal |
 
-Saving pushes it into the gateway (the LiteLLM container); only then does the agent have a model.
+Provider-side fields: the API URL and the key. **Extra config (JSON)** goes into LiteLLM's `litellm_params` —
+**registration-time** parameters such as Azure's `api_version` or Vertex's `vertex_project`, not the body of each
+request — so leave it empty for a plain OpenAI-compatible endpoint.
 
 ### What `{"thinking": {"type": "disabled"}}` is for
 
@@ -250,7 +256,7 @@ compose override, then `docker restart flame`. See the README.
 | The page does not load, `ps` shows `127.0.0.1:27001->27001/tcp` | the port is loopback-only; use `http://localhost:27001` here, or change the mapping for another machine |
 | `port is already allocated` | something else owns 27001; change the left side of the mapping |
 | `healthy` never arrives | the first run needs 2-3 minutes; `logs -f` shows which step it is on |
-| Login works, the first message fails | no model connected, see 3 |
+| Login works, the first message fails | the seeded model has no key or is not enabled, see 3 |
 | The model is listed but calls fail with auth/decrypt errors | `LITELLM_SALT_KEY` changed; stored keys are undecryptable, re-enter them |
 | `/service/...` answers 405 | your image is older than this manual (nginx has no `/service/` route); use a newer image or add the location |
 | Agent history is always empty | the data volume predates a table/column; `down -v` and start over (8) |

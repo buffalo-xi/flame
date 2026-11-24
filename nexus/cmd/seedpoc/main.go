@@ -2,8 +2,8 @@
 //
 //	plat      platform administrator (the account the console is entered with)
 //	user01    a platform "user" that owns the demo tenant
-//	t0        the demo tenant: template tables, the preinstalled `main` agent, the four protected skills, and its own
-//	          first administrator (the primary user)
+//	t0        the demo tenant: template tables, the preinstalled `main` agent, the four protected skills, the seeded
+//	          LLM provider / model (keyless DeepSeek + deepseek-flash), and its own first administrator (the primary user)
 //	          every platform capability switched on (exec / shell / code / browser / egress)
 //	          an apikey credential bound to that primary user, usable against the tenant's MCP and RPC endpoints
 //
@@ -80,6 +80,10 @@ func main() {
 
 	if err := verifySystemAssets(*schema); err != nil {
 		fatal("check the preinstalled assets of %s: %v", *schema, err)
+	}
+
+	if err := ensureLLMSeed(*schema); err != nil {
+		fatal("seed the llm configuration of %s: %v", *schema, err)
 	}
 
 	for _, capability := range capabilities {
@@ -202,6 +206,57 @@ func verifySystemAssets(schema string) error {
 		if !exists {
 			return fmt.Errorf("skill %q is missing", name)
 		}
+	}
+	return nil
+}
+
+// The fixed identifiers the tenant template seeds (platform/provision/template/seed.sql); keep the two in step.
+const (
+	llmSeedProviderID = "a0000000-0000-4000-8000-000000000021"
+	llmSeedModelID    = "a0000000-0000-4000-8000-000000000022"
+)
+
+// ensureLLMSeed fills in the seeded LLM configuration for a tenant that predates it: a keyless, disabled DeepSeek
+// provider plus its model. A tenant created by this box gets the pair from the template; an existing t0 does not,
+// because provisioning never re-runs - and without it the LLM page looks empty, which reads as a broken install.
+//
+// enabled=false on purpose: without a key the provider cannot serve a call, and an enabled provider is read-only, so a
+// keyless seed must not block the very first edit.
+//
+// ON CONFLICT DO NOTHING on both statements: a provider or model the operator already configured is never touched.
+// The model is attached by provider name rather than by the seeded id, so it still lands under the right provider
+// when the seeded provider was skipped because a same-named row already existed.
+func ensureLLMSeed(schema string) error {
+	res, err := db.DB.Exec(`INSERT INTO `+schema+`.llm_providers
+		(id, name, url, protocol, api_key, icon, note, enabled, extra_config)
+		VALUES ($1, 'DeepSeek', 'https://api.deepseek.com', 'openai',
+		        '', '/static/llm/compatible.png', '', false, '{}'::jsonb)
+		ON CONFLICT DO NOTHING`, llmSeedProviderID)
+	if err != nil {
+		return fmt.Errorf("seed the llm provider: %w", err)
+	}
+	seeded, _ := res.RowsAffected()
+
+	res, err = db.DB.Exec(`INSERT INTO `+schema+`.llm_models
+		(id, name, provider_id, gateway_model, is_default, context_window, extra_params, capabilities, base_params)
+		SELECT $1, 'deepseek-flash', p.id, 'deepseek-flash', false, 120000,
+		       '{"thinking": {"type": "disabled"}}'::jsonb, '{}'::jsonb, '{}'::jsonb
+		  FROM `+schema+`.llm_providers p
+		 WHERE p.name = 'DeepSeek'
+		 LIMIT 1
+		ON CONFLICT DO NOTHING`, llmSeedModelID)
+	if err != nil {
+		return fmt.Errorf("seed the llm model: %w", err)
+	}
+	modelsSeeded, _ := res.RowsAffected()
+
+	// Reported one by one: on an existing tenant the provider is usually the only one inserted, because a model of the
+	// same name already sits under the operator's own provider and the unique constraint keeps it there.
+	if seeded > 0 {
+		fmt.Printf("seedpoc: seeded the LLM provider DeepSeek (no api key yet)\n")
+	}
+	if modelsSeeded > 0 {
+		fmt.Printf("seedpoc: seeded the LLM model deepseek-flash (not enabled, not default)\n")
 	}
 	return nil
 }

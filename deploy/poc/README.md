@@ -120,17 +120,21 @@ to create by hand:
 | `user01` | `12345678` | platform `user` role, owner of the demo tenant |
 | `primary` | `12345678` | administrator *inside* the `t0` tenant (the account provisioning hands over) |
 
-The tenant `t0` ("Demo tenant") already exists with the preinstalled `main` agent, the four built-in skills and every
-capability switched on. An apikey `sk-poc-t0-primary` is bound to `primary`, so `/service/mcp/t0` and `/service/rpc/t0`
+The tenant `t0` ("Demo tenant") already exists with the preinstalled `main` agent, the four built-in skills, the seeded
+LLM provider `DeepSeek` and model `deepseek-flash` (no key yet, provider disabled), and every capability switched on. An
+apikey
+`sk-poc-t0-primary` is bound to `primary`, so `/service/mcp/t0` and `/service/rpc/t0`
 accept `Authorization: Bearer sk-poc-t0-primary`. Note what that does and does not mean: the credential is ready, but the
 tenant has no *exposed* endpoint yet, so `tools/list` comes back empty until you expose one (endpoints only list what
 has `exposed = true`).
 
 1. **Sign in.** `plat` / `12345678` enters the platform console, which lists `t0`; entering that tenant uses
    `primary` / `12345678`.
-2. **Add a model.** Settings → LLM: add a provider (an OpenAI-compatible base URL + key works for most vendors), then
-   add a model on top of it. This is what provisions the model into LiteLLM — without it the console works but every
-   answer fails, because there is no gateway model to call.
+2. **Fill in the seeded model.** Settings → LLM already lists the provider `DeepSeek` (disabled, no key) and the model
+   `deepseek-flash`. Open the provider, paste your key, save, enable it, then enable the model (that is the step that
+   registers it on the gateway) and mark it as the default. Another vendor works the same way: edit the seeded rows in
+   place, or delete them and add your own provider and model. Until then the console works but every answer fails,
+   because there is no gateway model to call.
 3. **Chat.** Open the `main` agent and send a message. It can already use files, shell and a browser in this box.
 
 No provider key ships in the image: nothing sensitive is baked in, and step 2 is where you supply yours. Creating more

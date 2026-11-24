@@ -22,7 +22,7 @@ nexus/platform/
 ├─ repository/{tenants,pmusers}/  platform schema 的数据访问
 ├─ provision/                     开通编排 + template/ 模板包（//go:embed，必须在本包目录下）
 │                                 template/schema.sql  表结构
-│                                 template/seed.sql    main + 受保护技能 + 授权绑定
+│                                 template/seed.sql    main + 受保护技能 + 授权绑定 + DeepSeek 供应商与模型
 │                                 template/files/      定义域文件（AGENT.md / SKILL.md）
 └─ sql/                           platform.sql（平台两张表，DBA 执行）
 ```

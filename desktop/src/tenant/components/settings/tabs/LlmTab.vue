@@ -16,6 +16,11 @@
             </div>
           </div>
 
+          <!-- No default model: chatting cannot start at all, and the row buttons are easy to overlook -->
+          <el-alert v-if="!llmModelLoading && llmModelsData.length > 0 && !hasDefaultModel"
+                    :title="t('settings.llm.noDefaultModel')" type="warning"
+                    :closable="false" show-icon class="no-default-hint" />
+
           <div v-loading="llmProviderLoading" class="provider-list">
             <div v-for="p in llmProvidersData" :key="p.id" class="provider-card">
               <div class="provider-head">
@@ -30,7 +35,19 @@
                 </div>
                 <div class="item-actions">
                   <el-button link type="success" :icon="Plus" :title="t('settings.llm.addModel')" @click="openAddLLMModelDialog(p.id)" />
-                  <el-button link type="primary" :icon="Edit" @click="openEditLLMProviderDialog(p)" />
+                  <!-- An enabled provider opens read-only: its url/key are already inside every model's gateway record,
+                       so it is worth looking at but cannot be saved until the provider is disabled -->
+                  <el-button link type="primary" :icon="Edit"
+                             :title="p.enabled !== false ? t('settings.llm.providerLocked') : ''"
+                             @click="openEditLLMProviderDialog(p)" />
+                  <el-button v-if="p.enabled !== false" link type="warning" size="small"
+                             :loading="p._toggling" @click="toggleLLMProvider(p, false)">
+                    {{ t('settings.llm.providerDisable') }}
+                  </el-button>
+                  <el-button v-else link type="success" size="small"
+                             :loading="p._toggling" @click="toggleLLMProvider(p, true)">
+                    {{ t('settings.llm.providerEnable') }}
+                  </el-button>
                   <el-button link type="danger" :icon="Delete" @click="deleteLLMProvider(p)" />
                 </div>
               </div>
@@ -47,8 +64,8 @@
                 <div v-for="m in modelsOf(p.id)" :key="m.id" class="model-item">
                   <div class="model-info">
                     <span class="model-name">{{ m.name }}</span>
-                    <el-tag v-if="m.is_default" size="small" type="success" effect="light">{{ t('settings.llm.defaultTag') }}</el-tag>
-                    <el-tag v-if="m.gateway_id" size="small" type="success" effect="light">{{ t('settings.llm.enabledTag') }}</el-tag>
+                    <el-tag v-if="m.is_default" size="small" type="warning" effect="dark">{{ t('settings.llm.defaultTag') }}</el-tag>
+                    <el-tag v-if="m.gateway_id" size="small" type="success" effect="dark">{{ t('settings.llm.enabledTag') }}</el-tag>
                     <el-tag v-else size="small" type="info" effect="light">{{ t('settings.llm.disabledTag') }}</el-tag>
                   </div>
                   <div class="model-params">
@@ -59,11 +76,20 @@
                       <span v-if="Object.prototype.hasOwnProperty.call(m.base_params, 'top_p')">{{ t('settings.llm.modelTopP', { value: m.base_params.top_p }) }}</span>
                     </template>
                     <span v-else>{{ t('settings.llm.noGenParams') }}</span>
+                    <!-- Only the gateway model name: the gateway ID is an implementation detail, visible in the panel -->
                     <span v-if="m.gateway_id" class="model-gateway-id">
-                      {{ t('settings.llm.modelGateway', { id: m.gateway_id, model: m.gateway_model }) }}
+                      {{ t('settings.llm.modelGatewayModel', { model: m.gateway_model }) }}
                     </span>
                   </div>
                   <div class="item-actions">
+                    <!-- Choosing the default is an operation, not a configuration: an enabled model allows it too.
+                         Warning-coloured to match the default tag it produces -->
+                    <el-button
+                      v-if="!m.is_default"
+                      link type="warning" size="small"
+                      :loading="m._defaulting"
+                      @click="setDefaultLLMModel(m)"
+                    >{{ t('settings.llm.setDefault') }}</el-button>
                     <el-button
                       v-if="!m.gateway_id"
                       link type="success" size="small"
@@ -93,7 +119,7 @@
     <!-- 服务商 / 模型编辑面板：坐标由父级 useSidePanel 提供 -->
     <!-- LLM 服务商 -->
     <SidePanel :visible="llmProviderDialogVisible" :title="llmProviderDialogTitle"
-               :panel-style="sidePanel.styleFor(820)"
+               :panel-style="sidePanel.styleFor(500)"
                @close="llmProviderDialogVisible = false" @resize="sidePanel.startResize">
       <div class="provider-form-layout">
         <!-- 左侧：预设服务商卡片列表（仅新增时显示，编辑模式隐藏） -->
@@ -129,7 +155,9 @@
         </aside>
         <!-- 右侧：服务商表单 -->
         <div class="provider-form-main">
-          <el-form label-position="top">
+          <el-alert v-if="providerLocked" :title="t('settings.llm.providerLocked')" type="info"
+                    :closable="false" show-icon class="locked-hint" />
+          <el-form label-position="top" :disabled="providerLocked">
             <el-form-item :label="t('settings.llm.providerName')" required>
               <el-input v-model="llmProviderSettings.sourceName" :placeholder="t('settings.llm.providerNamePlaceholder')" />
             </el-form-item>
@@ -145,9 +173,7 @@
             <el-form-item :label="t('settings.llm.icon')">
               <el-input v-model="llmProviderSettings.icon" :placeholder="t('settings.llm.iconPlaceholder')" />
             </el-form-item>
-            <el-form-item :label="t('settings.llm.enabled')">
-              <el-switch v-model="llmProviderSettings.enabled" />
-            </el-form-item>
+            <!-- No enable switch here: the card owns enable / disable, and an enabled provider is read-only anyway -->
             <el-form-item :label="t('settings.llm.extraConfig')">
               <el-input type="textarea" v-model="llmProviderSettings.extraConfigText"
                         :placeholder="t('settings.llm.extraConfigPlaceholder', { example: jsonExampleRegion })"
@@ -157,8 +183,11 @@
         </div>
       </div>
       <template #footer>
-        <el-button @click="llmProviderDialogVisible = false">{{ t('settings.llm.cancel') }}</el-button>
-        <el-button type="primary" @click="saveLLMProviderSettings">{{ t('settings.llm.save') }}</el-button>
+        <!-- Read-only: there is nothing to save, so the footer offers just the way out -->
+        <el-button @click="llmProviderDialogVisible = false">
+          {{ providerLocked ? t('settings.llm.close') : t('settings.llm.cancel') }}
+        </el-button>
+        <el-button v-if="!providerLocked" type="primary" @click="saveLLMProviderSettings">{{ t('settings.llm.save') }}</el-button>
       </template>
     </SidePanel>
 
@@ -167,29 +196,38 @@
                :panel-style="sidePanel.styleFor(500)"
                @close="llmModelDialogVisible = false" @resize="sidePanel.startResize">
       <el-form label-position="top">
+        <!-- An enabled model is provisioned at the gateway with these values baked in, so the backend rejects every
+             edit except the default flag. Disabling it clears gateway_id and unlocks the fields again. -->
+        <el-alert v-if="modelLocked" :title="t('settings.llm.modelLocked')" type="warning"
+                  :closable="false" show-icon class="locked-hint" />
         <el-form-item :label="t('settings.llm.modelName')" required>
-          <el-input v-model="llmModelSettings.name" :placeholder="t('settings.llm.modelNamePlaceholder')" />
+          <el-input v-model="llmModelSettings.name" :placeholder="t('settings.llm.modelNamePlaceholder')"
+                    :disabled="modelLocked" />
         </el-form-item>
         <el-form-item :label="t('settings.llm.contextWindow')">
-          <el-input-number v-model="llmModelSettings.contextWindow" :placeholder="t('settings.llm.contextWindowPlaceholder')" />
+          <el-input-number v-model="llmModelSettings.contextWindow" :disabled="modelLocked"
+                           :placeholder="t('settings.llm.contextWindowPlaceholder')" />
         </el-form-item>
         <!-- 基础生成参数：开关 + 值，仅开启的参数会写入 base_params（键存在=使用，键不存在=未使用） -->
         <div class="gen-param-row">
-          <el-switch v-model="llmGenParams.maxTokens.enabled" />
+          <el-switch v-model="llmGenParams.maxTokens.enabled" :disabled="modelLocked" />
           <span class="gen-param-label">{{ t('settings.llm.maxTokensLabel') }}</span>
-          <el-input-number v-model="llmGenParams.maxTokens.value" :disabled="!llmGenParams.maxTokens.enabled"
+          <el-input-number v-model="llmGenParams.maxTokens.value"
+                           :disabled="modelLocked || !llmGenParams.maxTokens.enabled"
                            :placeholder="t('settings.llm.maxTokensPlaceholder')" :min="0" />
         </div>
         <div class="gen-param-row">
-          <el-switch v-model="llmGenParams.temperature.enabled" />
+          <el-switch v-model="llmGenParams.temperature.enabled" :disabled="modelLocked" />
           <span class="gen-param-label">{{ t('settings.llm.temperatureLabel') }}</span>
-          <el-input-number v-model="llmGenParams.temperature.value" :disabled="!llmGenParams.temperature.enabled"
+          <el-input-number v-model="llmGenParams.temperature.value"
+                           :disabled="modelLocked || !llmGenParams.temperature.enabled"
                            :min="0" :max="1" :step="0.1" :placeholder="t('settings.llm.temperaturePlaceholder')" />
         </div>
         <div class="gen-param-row">
-          <el-switch v-model="llmGenParams.topP.enabled" />
+          <el-switch v-model="llmGenParams.topP.enabled" :disabled="modelLocked" />
           <span class="gen-param-label">{{ t('settings.llm.topPLabel') }}</span>
-          <el-input-number v-model="llmGenParams.topP.value" :disabled="!llmGenParams.topP.enabled"
+          <el-input-number v-model="llmGenParams.topP.value"
+                           :disabled="modelLocked || !llmGenParams.topP.enabled"
                            :min="0" :max="1" :step="0.1" :placeholder="t('settings.llm.topPPlaceholder')" />
         </div>
         <el-form-item :label="t('settings.llm.providerLabel')" required>
@@ -199,35 +237,32 @@
         <el-form-item v-if="llmModelSettings.gatewayId" :label="t('settings.llm.gatewayModelId')">
           <el-input :model-value="llmModelSettings.gatewayId" disabled />
         </el-form-item>
-        <el-form-item :label="t('settings.llm.gatewayModelName')" :disabled="!!llmModelSettings.gatewayId">
+        <el-form-item :label="t('settings.llm.gatewayModelName')" :disabled="modelLocked">
           <el-input
             v-model="llmModelSettings.gatewayModel"
             :placeholder="t('settings.llm.gatewayModelPlaceholder')"
-            :disabled="!!llmModelSettings.gatewayId"
+            :disabled="modelLocked"
           />
-          <template v-if="llmModelSettings.gatewayId" #help>
+          <template v-if="modelLocked" #help>
             {{ t('settings.llm.gatewayModelLocked') }}
           </template>
         </el-form-item>
-        <div class="form-row-2">
-          <el-form-item :label="t('settings.llm.setDefault')">
-            <el-switch v-model="llmModelSettings.isDefault" />
-          </el-form-item>
-        </div>
         <el-form-item :label="t('settings.llm.extraParams')">
           <el-input type="textarea" v-model="llmModelSettings.extraParamsText"
                     :placeholder="t('settings.llm.extraParamsPlaceholder', { example: jsonExampleThinking })"
-                    :rows="4" />
+                    :rows="4" :disabled="modelLocked" />
         </el-form-item>
         <el-form-item :label="t('settings.llm.capabilities')">
           <el-input type="textarea" v-model="llmModelSettings.capabilitiesText"
                     :placeholder="t('settings.llm.capabilitiesPlaceholder', { example: jsonExampleVision })"
-                    :rows="4" />
+                    :rows="4" :disabled="modelLocked" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="llmModelDialogVisible = false">{{ t('settings.llm.cancel') }}</el-button>
-        <el-button type="primary" @click="saveLLMModelSettings">{{ t('settings.llm.save') }}</el-button>
+        <el-button @click="llmModelDialogVisible = false">
+          {{ modelLocked ? t('settings.llm.close') : t('settings.llm.cancel') }}
+        </el-button>
+        <el-button v-if="!modelLocked" type="primary" @click="saveLLMModelSettings">{{ t('settings.llm.save') }}</el-button>
       </template>
     </SidePanel>
   </div>
@@ -285,6 +320,9 @@ const currentLLMProvider = ref(null)
 // 标题跟着 current 判断（有值 = 编辑）：做成 computed，切语言时才跟着变
 const llmProviderDialogTitle = computed(() =>
   currentLLMProvider.value ? t('settings.llm.dialogEditProvider') : t('settings.llm.dialogAddProvider'))
+// An enabled provider is view-only: its url / key are already inside every model's gateway record, so the form opens
+// disabled and the footer offers no save. Disabling the provider from its card is what unlocks editing.
+const providerLocked = computed(() => !!currentLLMProvider.value && currentLLMProvider.value.enabled !== false)
 
 // LLM服务商预设数据
 const llmProviderPresetsData = ref([])
@@ -312,6 +350,12 @@ const llmModelSettings = ref({
   extraParamsText: '',
   capabilitiesText: ''
 })
+
+// An enabled model has a gateway_id, and every field except the default flag is read-only until it is disabled
+const modelLocked = computed(() => !!llmModelSettings.value.gatewayId)
+
+// Without a default model the chat pane refuses to start, so the page says it above the list, not only in the rows
+const hasDefaultModel = computed(() => llmModelsData.value.some((m) => !!m.is_default))
 
 // 生成参数的 UI 态：开关 + 值。仅开启的参数在保存时写入 base_params
 const llmGenParams = ref({
@@ -571,6 +615,72 @@ const saveLLMProviderSettings = async () => {
   }
 }
 
+// Enable / disable a provider from its card. Disabling cascades on the backend: every enabled model under it is
+// deprovisioned at the gateway and loses its gateway_id, which is what unlocks editing the provider itself.
+const toggleLLMProvider = async (provider, nextEnabled) => {
+  if (!nextEnabled) {
+    try {
+      await ElMessageBox.confirm(
+        t('settings.llm.providerDisableConfirm', { name: provider.name }),
+        t('settings.llm.tipTitle'),
+        {
+          confirmButtonText: t('settings.llm.providerDisable'),
+          cancelButtonText: t('settings.llm.cancel'),
+          type: 'warning'
+        }
+      )
+    } catch {
+      return
+    }
+  }
+
+  provider._toggling = true
+  try {
+    const token = getToken()
+    // The update endpoint takes the whole row, so send the values we already have plus the new enabled flag
+    const response = await fetch(`${apiConfig.admin.llmProviders.base}${provider.id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        name: provider.name,
+        url: provider.url,
+        api_key: provider.api_key,
+        protocol: provider.protocol || 'openai-compatible',
+        icon: provider.icon || '',
+        enabled: nextEnabled,
+        extra_config: provider.extra_config || {}
+      })
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    const data = await checkBizOk(response)
+    const deprovisioned = data?.data?.deprovisioned ?? 0
+    ElMessage.success({
+      message: nextEnabled
+        ? t('settings.llm.providerEnableSucceeded', { name: provider.name })
+        : t('settings.llm.providerDisableSucceeded', { name: provider.name, n: deprovisioned }),
+      duration: 1500
+    })
+    // Disabling clears the gateway_id of the cascaded models, so both lists have to be reloaded
+    await fetchLLMProviders()
+    await fetchLLMModels()
+  } catch (error) {
+    ElMessage.error({
+      message: t('settings.llm.toggleProviderFailed', { msg: error.message }),
+      duration: 5000,
+      offset: 20,
+      showClose: true
+    })
+    console.error('toggle llm provider failed:', error)
+  } finally {
+    provider._toggling = false
+  }
+}
+
 // 删除LLM服务商
 const deleteLLMProvider = async (source) => {
   try {
@@ -601,11 +711,22 @@ const deleteLLMProvider = async (source) => {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
+    // A business failure arrives as HTTP 200 with code != 200; without this check the provider would look deleted
+    const data = await checkBizOk(response)
+    const leftover = data?.data?.gateway_errors?.length ?? 0
 
-    ElMessage.success({
-      message: t('settings.llm.providerDeleted'),
-      duration: 700
-    })
+    if (leftover) {
+      ElMessage.warning({
+        message: t('settings.llm.deleteProviderGatewayLeftover', { n: leftover }),
+        duration: 4000,
+        showClose: true
+      })
+    } else {
+      ElMessage.success({
+        message: t('settings.llm.providerDeleted'),
+        duration: 700
+      })
+    }
     // 重新获取LLM服务商列表
     await fetchLLMProviders()
     // 重新获取LLM模型列表
@@ -736,6 +857,7 @@ const saveLLMModelSettings = async () => {
     base_params: buildBaseParams(),
     provider_id: llmModelSettings.value.providerId,
     gateway_model: llmModelSettings.value.gatewayModel,
+    // Carried through unchanged: the row's "set as default" button owns this flag, the form never edits it
     is_default: llmModelSettings.value.isDefault,
     extra_params: extraParams,
     capabilities: capabilities
@@ -816,11 +938,22 @@ const deleteLLMModel = async (model) => {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
+    // A business failure arrives as HTTP 200 with code != 200; without this check the row would look deleted
+    const data = await checkBizOk(response)
 
-    ElMessage.success({
-      message: t('settings.llm.modelDeleted'),
-      duration: 700
-    })
+    if (data?.data?.gateway_error) {
+      // The row is gone but its gateway record survived; the next sync removes that leftover
+      ElMessage.warning({
+        message: t('settings.llm.deleteModelGatewayLeftover', { name: model.name }),
+        duration: 4000,
+        showClose: true
+      })
+    } else {
+      ElMessage.success({
+        message: t('settings.llm.modelDeleted'),
+        duration: 700
+      })
+    }
     // 重新获取LLM模型列表
     await fetchLLMModels()
   } catch (error) {
@@ -833,6 +966,52 @@ const deleteLLMModel = async (model) => {
     console.error('delete llm model failed:', error)
   } finally {
     llmModelLoading.value = false
+  }
+}
+
+// Mark a model as the default from its row. The update endpoint takes the whole row and clears the flag on every
+// other model, so the payload is the row as the list returned it: sending {} for a jsonb column that is NULL in the
+// database would read as a change and trip the "enabled model is read-only" guard.
+const setDefaultLLMModel = async (model) => {
+  model._defaulting = true
+  try {
+    const token = getToken()
+    const response = await fetch(`${apiConfig.admin.llmModels.base}${model.id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        name: model.name,
+        context_window: model.context_window,
+        base_params: model.base_params ?? null,
+        provider_id: model.provider_id,
+        gateway_model: model.gateway_model || '',
+        is_default: true,
+        extra_params: model.extra_params ?? null,
+        capabilities: model.capabilities ?? null
+      })
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    await checkBizOk(response)
+    ElMessage.success({
+      message: t('settings.llm.setDefaultSucceeded', { name: model.name }),
+      duration: 1500
+    })
+    await fetchLLMModels()
+  } catch (error) {
+    ElMessage.error({
+      message: t('settings.llm.setDefaultFailed', { msg: error.message }),
+      duration: 5000,
+      offset: 20,
+      showClose: true
+    })
+    console.error('set default llm model failed:', error)
+  } finally {
+    model._defaulting = false
   }
 }
 
@@ -1339,8 +1518,9 @@ watch(() => props.active, (active) => {
   gap: 16px;
   height: 100%;
 }
+/* The panel is as wide as the model one (500px), so the preset column keeps to a strip: the form needs the rest */
 .provider-preset-aside {
-  width: 250px;
+  width: 168px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1361,6 +1541,15 @@ watch(() => props.active, (active) => {
   flex: 1;
   max-height: none;
   align-content: start;
+}
+/* Tighter cards so a two-line name / protocol still fits the narrower strip */
+.provider-preset-aside .preset-card {
+  padding: 8px 10px;
+  gap: 8px;
+}
+.provider-preset-aside .preset-logo {
+  width: 28px;
+  height: 28px;
 }
 .provider-form-main {
   flex: 1;
@@ -1403,14 +1592,14 @@ watch(() => props.active, (active) => {
   scrollbar-color: rgba(0, 0, 0, 0.2) transparent; /* Firefox */
 }
 
-/* 表单项横排 */
-.form-row-2 {
-  display: flex;
-  gap: 16px;
+/* Read-only notice sits above the form it explains */
+.locked-hint {
+  margin-bottom: 14px;
 }
-.form-row-2 > .el-form-item {
-  flex: 1;
-  min-width: 0;
+
+/* Missing-default warning sits between the page head and the provider list */
+.no-default-hint {
+  margin-bottom: 16px;
 }
 
 /* 生成参数：开关 + 标签 + 值 横排 */

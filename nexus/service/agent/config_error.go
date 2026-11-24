@@ -34,11 +34,15 @@ var (
 		Code: "llm.no_default_model",
 		Msg:  "no default LLM model is configured: mark one model as the default in the console first",
 	}
-	// ErrDefaultModelNotEnabled: the default row exists but has no gateway model name, so the gateway cannot route
-	// it. Same rule as the flow llm node (see service/flow/executors/llm.go): calling it would fail deeper with a
-	// far less actionable message.
+	// ErrDefaultModelNotEnabled: the default row exists but was never provisioned, so it has no gateway id and the
+	// gateway cannot route it. Same rule as the flow llm node (see service/flow/executors/llm.go): calling it would
+	// fail deeper with a far less actionable message.
+	//
+	// The condition is an empty gateway_id, not an empty gateway_model: the seeded model already carries a
+	// gateway_model, so a message about "the gateway model name" sends the reader looking at a field that is
+	// filled in correctly.
 	ErrDefaultModelNotEnabled = &ConfigError{
 		Code: "llm.default_model_not_enabled",
-		Msg:  "the default LLM model is not enabled (its gateway model name is empty): enable it in the console first",
+		Msg:  "the default LLM model is not enabled (it has no gateway id because it was never provisioned): provision it in the console first",
 	}
 )

@@ -68,7 +68,7 @@ Constraints:
 | `skill` | `skill.not_found`, `skill.not_invocable`, `skill.invalid_command` | `not_invocable` = the skill exists but is not open as a user command (`user_invocable` is off); `invalid_command` = `command_dispatch` / `command_tool` disagree (only an empty value and `tool` are valid, and `tool` needs a target) |
 | `tool` | `tool.not_found`, `tool.contract_readonly` | custom tools (`customtools`); `contract_readonly` covers create / update / delete / upload of TOOL.json |
 | `version` | `version.not_found` | the version domain, same domain as release / rollback / apply |
-| `llm` | `llm.model_not_found`, `llm.provider_not_found`, `llm.no_default_model`, `llm.default_model_not_enabled` | the last two mean "this run cannot start because the tenant has no usable default model"; they are a `ConfigError`, see the note under "high-frequency paths" |
+| `llm` | `llm.model_not_found`, `llm.provider_not_found`, `llm.no_default_model`, `llm.default_model_not_enabled` | the last two mean "this run cannot start because the tenant has no usable default model"; they are a `ConfigError`, see the note under "high-frequency paths". `no_default_model` = no row is marked `is_default`; `default_model_not_enabled` = the default row exists but was never provisioned (empty `gateway_id`) |
 | `user` | `user.not_found`, `user.invalid_role`, `user.invalid_status`, `user.password_too_long` | platform users / tenant users |
 | `session` | `session.not_found` | the session itself; token expiry is `auth.session_expired` |
 | `run` | `run.not_found` | a runtime ledger record |

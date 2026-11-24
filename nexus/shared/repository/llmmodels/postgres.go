@@ -459,27 +459,11 @@ func (r *PostgresRepository) ListAll(authInfo *auth.AuthInfo) ([]models.LLMModel
 	return results, rows.Err()
 }
 
-// DeleteCascade deletes an LLM model and clears llm_model_id on the agents that reference it.
-// agents.llm_model_id has no foreign key constraint (see the FOREIGN KEY list in tenant_template.sql), so without an
-// explicit cleanup a dangling reference is left behind. A missing model returns sql.ErrNoRows.
+// DeleteCascade deletes an LLM model. The name is kept for the interface, but nothing references a model row by id:
+// agents carry no llm_model_id column (they run on the tenant's default model), so the delete is a single statement.
+// A missing model returns sql.ErrNoRows.
 func (r *PostgresRepository) DeleteCascade(authInfo *auth.AuthInfo, id string) error {
-	tx, err := db.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if tx != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	// Release the references first
-	if _, err := tx.Exec(
-		fmt.Sprintf(`UPDATE %s.agents SET llm_model_id = NULL WHERE llm_model_id = $1`, authInfo.Schema), id); err != nil {
-		return err
-	}
-
-	result, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s.llm_models WHERE id = $1`, authInfo.Schema), id)
+	result, err := db.DB.Exec(fmt.Sprintf(`DELETE FROM %s.llm_models WHERE id = $1`, authInfo.Schema), id)
 	if err != nil {
 		return err
 	}
@@ -490,11 +474,6 @@ func (r *PostgresRepository) DeleteCascade(authInfo *auth.AuthInfo, id string) e
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
-
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	tx = nil
 	return nil
 }
 

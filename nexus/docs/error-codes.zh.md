@@ -62,7 +62,7 @@
 | `skill` | `skill.not_found`、`skill.not_invocable`、`skill.invalid_command` | `not_invocable` = 技能存在但没开放为用户命令（`user_invocable` 未开）；`invalid_command` = `command_dispatch` 与 `command_tool` 不配套（只接受空值与 `tool`，选 `tool` 必须填目标工具） |
 | `tool` | `tool.not_found`、`tool.contract_readonly` | 自定义工具（`customtools`）；`contract_readonly` 覆盖 TOOL.json 的建 / 改 / 删 / 上传 |
 | `version` | `version.not_found` | 版本域，与 release / rollback / apply 同域 |
-| `llm` | `llm.model_not_found`、`llm.provider_not_found`、`llm.no_default_model`、`llm.default_model_not_enabled` | 后两个表示「这一轮跑不起来，因为租户没有可用的默认模型」；属于 `ConfigError`，见「高频路径先改」里的说明 |
+| `llm` | `llm.model_not_found`、`llm.provider_not_found`、`llm.no_default_model`、`llm.default_model_not_enabled` | 后两个表示「这一轮跑不起来，因为租户没有可用的默认模型」；属于 `ConfigError`，见「高频路径先改」里的说明。`no_default_model` = 没有任何 `is_default` 的行；`default_model_not_enabled` = 默认行在、但没配置到网关（`gateway_id` 为空） |
 | `user` | `user.not_found`、`user.invalid_role`、`user.invalid_status`、`user.password_too_long` | 平台用户 / 租户用户 |
 | `session` | `session.not_found` | 会话本身；令牌失效是 `auth.session_expired` |
 | `run` | `run.not_found` | 运行台账的记录 |

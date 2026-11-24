@@ -7,7 +7,7 @@
 //     CREATE SCHEMA "<schema>"
 //     SELECT set_config('search_path', $1, true)   - transaction-scoped, parameterised (no string concatenation)
 //     run the template package's template/schema.sql   - every table definition
-//     run the template package's template/seed.sql     - main + protected skills + grant bindings
+//     run the template package's template/seed.sql     - main + protected skills + grant bindings + the DeepSeek provider and model
 //     INSERT INTO users ...                            - the tenant's first manage user
 //     materialise the template package's template/files/ - write the definition-domain files under tenants/<schema>/
 //     INSERT INTO platform.tenants ...                 - the registry row (platform schema, explicitly qualified)
@@ -55,7 +55,8 @@ import (
 // specific tenant):
 //
 //	template/schema.sql  every table definition (converted from a t0 dump; object names carry no schema prefix)
-//	template/seed.sql    rows for the preinstalled assets (main + four protected skills + grants / bindings, fixed uuids)
+//	template/seed.sql    rows for the preinstalled assets (main + four protected skills + grants / bindings + one LLM provider
+//	                     and its model, fixed uuids)
 //	template/files/      definition-domain files (agents/main/AGENT.md, skills/<name>/SKILL.md)
 //
 // It lives under this package because //go:embed can only embed this package and its subdirectories.

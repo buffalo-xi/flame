@@ -76,6 +76,7 @@ var templateAssets embed.FS
 | `nexus/sql/supervisor_on_demand_groups.sql` | 超级智能体的 5 个 allow 组：`builtin:skill-own` / `skill-admin` / `tool-grant` / `custom-tool` / `flow-admin` |
 | 同上 | 技能工具依赖：`skill-authoring`→`skill-own`+`skill-admin`；`agent-authoring`→`tool-grant`+`skill-admin`；`custom-tool-authoring`→`custom-tool`；`flow-authoring`→`flow-admin` |
 | 同上 | main 绑定这四份技能（起步套件，system prompt 会带上它们的说明） |
+| 同上（`seed.sql`） | 一个大模型供应商 `DeepSeek`（协议 `openai`、`https://api.deepseek.com`、图标 `/static/llm/compatible.png`、**`api_key` 留空**、**`enabled = false`**：没有 key 本来就调不通，而启用态的供应商是只读的，种成启用会挡住第一次填 key）及其模型 `deepseek-flash`（`gateway_model` 同名，`context_window` 120000，`extra_params` 为 `{"thinking": {"type": "disabled"}}`，`is_default = false`，避免一个没有 key 的模型占住默认位） |
 
 固定 uuid（seed 里的授权行 / 绑定行靠它引用）：
 
@@ -86,6 +87,8 @@ var templateAssets embed.FS
 | skill `agent-authoring` | `a0000000-0000-4000-8000-000000000012` |
 | skill `custom-tool-authoring` | `a0000000-0000-4000-8000-000000000013` |
 | skill `flow-authoring` | `a0000000-0000-4000-8000-000000000014` |
+| 供应商 `DeepSeek` | `a0000000-0000-4000-8000-000000000021` |
+| 模型 `deepseek-flash` | `a0000000-0000-4000-8000-000000000022`（引用上面的供应商） |
 
 受保护技能名单的真源是 `shared/models/protected.go` 的 `protectedSkills`
 （`models.ProtectedSkillNames()` 提供只读副本）。**加一个保护技能时，seed.sql 与 files/ 都要补**。

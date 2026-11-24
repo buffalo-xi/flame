@@ -23,7 +23,7 @@ nexus/platform/
 ├─ repository/{tenants,pmusers}/  data access for the platform schema
 ├─ provision/                     provisioning orchestration + template/ pack (//go:embed, must stay under this package)
 │                                 template/schema.sql  tables
-│                                 template/seed.sql    main + protected skills + grants / bindings
+│                                 template/seed.sql    main + protected skills + grants / bindings + the DeepSeek provider/model
 │                                 template/files/      definition-domain files (AGENT.md / SKILL.md)
 └─ sql/                           platform.sql (the two platform tables, run by a DBA)
 ```
