@@ -56,9 +56,11 @@ Three things must line up with the deployment, or the browser tool silently stop
 nexus side: `browser.url` (empty = this deployment has no browser) and `browser.token`.
 
 **Registration**: `registry.enabled: true` announces this instance to consul/nacos after HTTP is up and keeps it alive, so
-browserg discovers it on its next pull — starting a second instance needs no gateway restart. An unreachable registry does
-not stop this service; it only makes the instance invisible to discovery, so list it in the gateway's static `backends`
-too if that must not happen.
+browserg discovers it on its next pull — starting a second instance needs no gateway restart. `service_addr` may be left
+empty: it is derived from `listen`, and its port always follows `listen`. The service ID defaults to
+`<name>-<address>-<port>`, so several nodes registering with the **same** agent stay distinct without any configuration. An
+unreachable registry does not stop this service; it only makes the instance invisible to discovery, so list it in the
+gateway's static `backends` too if that must not happen.
 
 ## Behaviour worth knowing
 

@@ -12,12 +12,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -139,16 +137,24 @@ func main() {
 	// HTTP is up, so consul's /healthz probe succeeds on the first try.
 	var registrar xregistry.Registrar
 	if cfg.Registry.Enabled {
-		rc := registryConfig(cfg)
-		reg, err := xregistry.NewRegistrar(rc)
-		if err != nil {
-			xlog.Error("sandboxd: create registrar: %v", err)
+		if cfg.Registry.ServicePort != 0 {
+			xlog.Error("sandboxd: registry.service_port is ignored: the advertised port always follows listen (%s); "+
+				"remove it from the config", cfg.Listen)
+		}
+		rc, rerr := registryConfig(cfg)
+		if rerr != nil {
+			xlog.Error("sandboxd: service registration disabled: %v", rerr)
+		} else if reg, nerr := xregistry.NewRegistrar(rc); nerr != nil {
+			xlog.Error("sandboxd: create registrar: %v", nerr)
 		} else {
 			registrar = reg
 			if err := reg.Register(); err != nil {
 				xlog.Error("sandboxd: register: %v (will retry via KeepRegistered)", err)
 			} else {
-				xlog.Info("sandboxd: registered to %s as service %s", rc.Type, rc.ServiceName)
+				// Print the final registration, not the configured one: the address is now derived
+				// when unset, and a derived value nobody can see is a guess nobody can correct.
+				xlog.Info("sandboxd: registered to %s as %s (%s:%d, health %s)",
+					rc.Type, rc.ServiceID, rc.ServiceAddr, rc.ServicePort, rc.HealthCheckPath)
 			}
 			// Self-healing keepalive: periodically confirm the registration state; both an eviction (registry
 			// disconnect) and an initial failure heal themselves.
@@ -256,9 +262,12 @@ func cleanOrphans(iso sandbox.Sandbox) error {
 }
 
 // registryConfig turns sandboxd's registry config into xregistry's registrar config.
-// ServiceAddr must be given explicitly as an address the gateway can reach (listen may be 127.0.0.1, which is
-// unreachable across machines); ServicePort defaults to the one parsed out of listen.
-func registryConfig(cfg *daemon.Config) *xregistry.RegistrarConfig {
+//
+// The advertised address is resolved in one place: service_addr when set, otherwise derived from
+// listen (see xregistry.ResolveAdvertise). The port always follows listen. A loopback address is
+// rejected when the registry is remote — a remote agent probing 127.0.0.1 probes itself, and the
+// service then stays "registered but critical" forever.
+func registryConfig(cfg *daemon.Config) (*xregistry.RegistrarConfig, error) {
 	name := cfg.Registry.ServiceName
 	if name == "" {
 		name = "sandboxd"
@@ -267,18 +276,24 @@ func registryConfig(cfg *daemon.Config) *xregistry.RegistrarConfig {
 	if path == "" {
 		path = "/healthz"
 	}
-	port := cfg.Registry.ServicePort
-	if port == 0 {
-		if _, p, err := net.SplitHostPort(cfg.Listen); err == nil {
-			port, _ = strconv.Atoi(p)
-		}
+
+	addr, port, err := xregistry.ResolveAdvertise(cfg.Registry.ServiceAddr, cfg.Listen, cfg.Registry.AdvertiseIface)
+	if err != nil {
+		return nil, err
 	}
+	if xregistry.IsLoopbackHost(addr) && !xregistry.IsLocalRegistry(cfg.Registry.Address) {
+		return nil, fmt.Errorf("registry.service_addr resolves to the loopback address %q while the registry (%s) is "+
+			"remote: the remote agent would probe itself; set registry.service_addr to this host's intranet IP",
+			addr, cfg.Registry.Address)
+	}
+
 	return &xregistry.RegistrarConfig{
 		Type:            xregistry.Type(cfg.Registry.Type),
 		Address:         cfg.Registry.Address,
 		ServiceName:     name,
-		ServiceAddr:     cfg.Registry.ServiceAddr,
+		ServiceID:       cfg.Registry.ServiceID,
+		ServiceAddr:     addr,
 		ServicePort:     port,
 		HealthCheckPath: path,
-	}
+	}, nil
 }

@@ -15,15 +15,25 @@ token: ""
 # ---------------------------------------------------------------------------
 # Service registration (optional, off by default): register this service with consul/nacos for sandboxg to discover.
 # A single instance connected directly (nexus talks to sandboxd) does not need it; only multiple sandboxg instances do.
-# Note that service_addr must be an address the gateway can reach (the intranet IP across machines, never 127.0.0.1).
+# service_addr may be left empty: it is derived from listen (a concrete bind address is used as-is, a wildcard goes
+# through advertise_iface, then the hostname). When written it must be an address the gateway can reach, never 127.0.0.1
+# unless the registry itself is local — a loopback value with a remote registry refuses to start.
 # ---------------------------------------------------------------------------
 registry:
   enabled: true
   type: "consul"
   address: "localhost:8500"
   service_name: "sandboxd"
-  service_addr: "127.0.0.1"
-  service_port: 27081        # defaults to the listen port
+  # The address the gateway dials: "host" or "host:port". Empty = derive it from listen: a concrete bind address is
+  # used as-is, a wildcard bind falls back to advertise_iface and then to the hostname. A loopback value is rejected
+  # when the registry is remote, because the remote agent would only probe itself.
+  # service_addr: "10.0.0.12"
+  # Only needed when listen binds a wildcard (0.0.0.0) and the hostname does not resolve to the intranet address.
+  # advertise_iface: "eth0"
+  # The ID is derived as "<service_name>-<advertised address>-<port>", unique per host. Set it only when an external
+  # system needs a fixed name.
+  # service_id: "sandbox-primary"
+  # service_port no longer exists: the advertised port always follows listen.
   health_check_path: "/healthz"
 # Log directory
 log_dir: logs

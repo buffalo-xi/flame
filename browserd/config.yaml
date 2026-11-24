@@ -90,9 +90,14 @@ registry:
   type: consul                  # consul | nacos
   address: "localhost:8500"
   service_name: "browserd"
-  # The address **browserg dials**. listen is often 127.0.0.1, which is unreachable across machines, so write the real
-  # host here (for example 192.168.1.20).
-  service_addr: "127.0.0.1"
-  # 0 = the port parsed out of listen.
-  service_port: 0
+  # The address **browserg dials**: "host" or "host:port". Empty = derive it from listen: a concrete bind address is
+  # used as-is, a wildcard bind falls back to advertise_iface and then to the hostname. A loopback value is rejected
+  # when the registry is remote, because the remote agent would only probe itself.
+  # service_addr: "192.168.1.20"
+  # Only needed when listen binds a wildcard (0.0.0.0) and the hostname does not resolve to the intranet address.
+  # advertise_iface: "eth0"
+  # The ID is derived as "<service_name>-<advertised address>-<port>", unique per host. Set it only when an external
+  # system needs a fixed name.
+  # service_id: "browser-primary"
+  # service_port no longer exists: the advertised port always follows listen.
   health_check_path: "/healthz"

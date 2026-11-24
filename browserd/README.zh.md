@@ -52,8 +52,9 @@ docker build -t flame/browserd:latest .
 nexus 侧：`browser.url`（留空 = 该部署没有浏览器）与 `browser.token`。
 
 **服务注册**：`registry.enabled: true` 会让本实例在 HTTP 起来之后注册到 consul/nacos 并持续保活，browserg 下一次拉取
-就能发现它 —— 起第二个实例不需要重启网关。注册中心不可达不会影响本服务提供能力，只是让它对发现不可见；如果这一点
-不能接受，就同时把它留在网关的静态 `backends` 里。
+就能发现它 —— 起第二个实例不需要重启网关。`service_addr` 可以留空，由 `listen` 推导；注册端口恒随 `listen`。服务 ID
+默认是 `<名称>-<地址>-<端口>`，多台机器注册到**同一个** agent 也不会互相覆盖，不需要手配。注册中心不可达不会影响本服务
+提供能力，只是让它对发现不可见；如果这一点不能接受，就同时把它留在网关的静态 `backends` 里。
 
 ## 需要知道的行为
 

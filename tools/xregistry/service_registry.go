@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -98,7 +99,14 @@ func NewRegistrar(cfg *RegistrarConfig) (Registrar, error) {
 // applyRegistrarDefaults fills in the registration defaults.
 func applyRegistrarDefaults(cfg *RegistrarConfig) {
 	if cfg.ServiceID == "" {
-		cfg.ServiceID = fmt.Sprintf("%s-%d", cfg.ServiceName, cfg.ServicePort)
+		// The ID is the key of the agent's local service table, so "name-port" collides the
+		// moment two machines register with the same agent. Folding the advertised address in
+		// makes the default unique per host without asking anyone to configure an ID.
+		if addr := strings.TrimSpace(cfg.ServiceAddr); addr != "" {
+			cfg.ServiceID = fmt.Sprintf("%s-%s-%d", cfg.ServiceName, idSafe(addr), cfg.ServicePort)
+		} else {
+			cfg.ServiceID = fmt.Sprintf("%s-%d", cfg.ServiceName, cfg.ServicePort)
+		}
 	}
 	if cfg.HealthCheckPath == "" {
 		cfg.HealthCheckPath = "/health"
@@ -112,6 +120,12 @@ func applyRegistrarDefaults(cfg *RegistrarConfig) {
 	if cfg.HealthCheckDeregisterAfter == "" {
 		cfg.HealthCheckDeregisterAfter = "30s"
 	}
+}
+
+// idSafe makes an address usable inside a service ID: the colon of "host:port" and the brackets of
+// an IPv6 literal become dashes.
+func idSafe(addr string) string {
+	return strings.NewReplacer(":", "-", "[", "", "]", "").Replace(addr)
 }
 
 // --- nacos placeholder: the interface is in place, the implementation follows via nacos-sdk-go ---

@@ -251,10 +251,26 @@ type RegistryConfig struct {
 	Address string `yaml:"address"`
 	// ServiceName is the service name (sandboxd by default).
 	ServiceName string `yaml:"service_name"`
-	// ServiceAddr is the externally reachable address (the gateway connects to this; use the intranet IP across
-	// machines, 127.0.0.1 locally).
+	// ServiceID is this instance's identity inside the registry; empty means
+	// "<service_name>-<advertised address>-<port>", which is unique per host automatically.
+	//
+	// Set it only when an external system needs a stable, human-chosen name: the ID is the key of the agent's
+	// local service table, so a value that does not include the host makes two machines overwrite each other.
+	ServiceID string `yaml:"service_id"`
+	// ServiceAddr is the address the gateway should dial: "host" or "host:port". Empty means derive it from
+	// listen (a concrete bind address is used as-is; a wildcard bind falls back to AdvertiseIface, then to
+	// the hostname's first non-loopback address).
+	//
+	// It is not the same thing as Listen and cannot be replaced by it: a wildcard bind (0.0.0.0) says nothing
+	// about which address is reachable from another machine.
 	ServiceAddr string `yaml:"service_addr"`
-	// ServicePort is the external port (the port of listen by default).
+	// AdvertiseIface names the network interface to take the advertised address from when listen binds a
+	// wildcard address. Empty means the hostname's first non-loopback address.
+	AdvertiseIface string `yaml:"advertise_iface"`
+	// ServicePort is deprecated and ignored: the advertised port always follows listen, because a
+	// registration whose port differs from the listener is a configuration error in every deployment that
+	// does not also remap the port. The field stays so an old file can be told so instead of silently losing
+	// the value.
 	ServicePort int `yaml:"service_port"`
 	// HealthCheckPath is the health check path (/healthz by default).
 	HealthCheckPath string `yaml:"health_check_path"`
