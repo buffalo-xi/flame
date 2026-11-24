@@ -59,6 +59,21 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# ensure_local <namespaced image> - make sure it exists locally, retagging from the default `flame/...` name when the
+# build ran without --registry. "Build here, push there" is the normal order, and rebuilding only to change a tag would
+# waste the same minutes for nothing. Returns non-zero when neither name is in the daemon.
+ensure_local() {
+    local img=$1 plain
+    docker image inspect "$img" >/dev/null 2>&1 && return 0
+    case $img in
+        "$ns"/*) plain="flame/${img#"$ns"/}" ;;
+        *) return 1 ;;
+    esac
+    docker image inspect "$plain" >/dev/null 2>&1 || return 1
+    log "tagging $plain as $img"
+    docker tag "$plain" "$img"
+}
+
 case "$cmd" in
     build)
         [ -n "$tag" ] || die "--tag is required (the same value as FLAME_TAG)"
@@ -103,6 +118,8 @@ case "$cmd" in
         [ "$with_sandbox" -eq 1 ] || list=$(printf '%s\n' "$list" | grep -v '/sandbox:')
         # shellcheck disable=SC2046
         for img in $list; do
+            ensure_local "$img" \
+                || die "$img is not in the local docker daemon (docker pull $img, or ./scripts/images.sh build --tag $tag)"
             log "pushing $img"
             docker push "$img"
         done
@@ -124,7 +141,7 @@ case "$cmd" in
         # target host starts a service: check first, name the missing image, say which pull fixes it.
         # shellcheck disable=SC2046
         for img in $list; do
-            docker image inspect "$img" >/dev/null 2>&1 \
+            ensure_local "$img" \
                 || die "$img is not in the local docker daemon (docker pull $img, or ./scripts/images.sh build --tag $tag)"
         done
 

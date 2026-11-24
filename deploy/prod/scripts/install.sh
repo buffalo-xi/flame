@@ -61,6 +61,15 @@ ok()   { printf '  \033[32mok\033[0m    %s\n' "$*"; }
 bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; failed=$((failed + 1)); }
 note() { printf '  \033[33mwarn\033[0m  %s\n' "$*"; }
 
+# resolve_image <ref> - is that tag really on the registry? Nothing is pulled: `docker manifest inspect` asks the
+# registry itself, which is what lets --check keep its promise. The --insecure retry is for a plain-HTTP intranet
+# registry - the daemon-wide insecure-registries setting does not apply to this command - and costs one request
+# everywhere else.
+resolve_image() {
+    docker manifest inspect "$1" >/dev/null 2>&1 && return 0
+    docker manifest inspect --insecure "$1" >/dev/null 2>&1
+}
+
 log "checking prerequisites"
 command -v docker >/dev/null || die "docker is not installed"
 if docker info >/dev/null 2>&1; then ok "docker daemon reachable"; else bad "docker daemon not reachable"; fi
@@ -88,7 +97,7 @@ elif [ -n "$registry" ]; then
     # later without a twenty-minute pull first. A manifest miss here is "wrong tag", "wrong namespace" or "not logged
     # in", and all three are cheap to fix now.
     for img in $(flame_runtime_images "$FLAME_IMAGE_NS" "$tag"); do
-        if docker manifest inspect "$img" >/dev/null 2>&1; then
+        if resolve_image "$img"; then
             ok "registry image $img"
         else
             bad "cannot resolve $img (docker login, wrong --registry, or the tag was never pushed)"
