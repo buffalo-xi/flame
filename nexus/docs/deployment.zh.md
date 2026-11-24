@@ -2,11 +2,13 @@
 
 中文 | [English](deployment.md)
 
-> 状态：**设计定稿，未验证**。标 `TODO(verify)` 的是估算值，不是实测结果。
+> 状态：**产物已落，未验证**。`deploy/prod/` 已经存在（compose、unit、四个镜像定义、脚本、配置模板），本文件
+> 继续承载设计与依据；标 `TODO(verify)` 的仍是估算值，不是实测结果。
 > 范围：一台普通 Linux 主机可运行整套产品；扩展到多机时，本方案只提供组件与旋钮，由使用者决定起几个实例、
 > 用哪个端口。
 >
-> §5.1 里的 `deploy/prod/` 清单是**规格说明**，不是当前已存在的文件清单。
+> §5.1 是产物的实际形状。产物与文档不一致时，以 `deploy/prod/` 为准，并把本文档改过来——规格说明一旦和文件
+> 分家，读者就只剩下猜。
 >
 > 逐条可执行的命令、配置与验收项见 [`deployment-runbook.zh.md`](deployment-runbook.zh.md)。
 
@@ -57,7 +59,7 @@
 | 12 | PostgreSQL 18 用官方镜像 | 版本与上游一致、跨发行版一致；数据仍须本地块存储 |
 | 13 | TLS 在 nginx 终止，nexus 只跑明文 | nexus 没有 TLS 代码；nginx 本来就是必需件；证书一份而非每台一份 |
 | 14 | 27001 全能力，27443 可选叠加 | 证书缺失时 `listen ... ssl` 会让 nginx 起不来，TLS 只能是叠加项 |
-| 15 | 产物含 3 个原生二进制；`seedpoc` 不进产物 | 其余二进制进镜像；`seedpoc` 是演示播种器 |
+| 15 | 产物含 4 个裸跑二进制（sandboxd / codehost / browserd / browserhost）；其余二进制进镜像；`seedpoc` 不再作为独立产物出现 | 裸跑只需要这四个；`seedpoc` 的实现在产物里叫 `bootstrap`，进 nexus 镜像（§7.2），演示那个名字不再出现在 release 里 |
 | 16 | 配置与租户数据不进镜像 | 日常运营（建技能、改 AGENT.md、上架资产）不需要重建任何镜像 |
 | 17 | 专用 dockerd 可选，v1 默认不做 | 随包提供 `flame-docker.service`，需要更强隔离时手动启用 |
 | 18 | 镜像与原生二进制共用同一版本号 | 两条轨道不能有两条版本线 |
@@ -164,9 +166,11 @@ flowchart TB
 
 | 镜像 | 内容 | 说明 |
 |---|---|---|
-| `flame/nexus` | nexus、backfillversions、**bootstrap**、插件运行所需的 Python 与依赖 | 宿主不再需要 Python；bootstrap 必须与 provision 同源，见 §7.2 |
-| `flame/gateway` | sandboxg、browserg（同一镜像，靠 `ARG`/入口参数区分） | distroless 级别，无 shell |
-| `flame/web` | nginx 配置 + 前端产物 | 证书与共享存储挂载进来，不打进镜像 |
+| `flame/base` | Python 3 与插件依赖、`curl`（健康检查） | 一年变一两次；application 层因此只有一层 |
+| `flame/nexus` | nexus、backfillversions、**bootstrap**（`FROM flame/base`） | 宿主不再需要 Python；bootstrap 必须与 provision 同源，见 §7.2 |
+| `flame/gateway` | sandboxg、browserg（同一镜像，靠 compose 的 `command` 区分） | `scratch`，无 shell、无 entrypoint：入口由 compose 指定 |
+| `flame/web` | nginx 配置 + 前端产物 | 证书与共享存储挂载进来，不打进镜像；TLS 块由入口脚本按证书存在与否接入 |
+| `flame/sandbox` | `sandboxd/Dockerfile` 构建（Debian 13 + lua/python/node + Python 包 + codehost） | 只有一份构建定义；`build.sh` 先把 codehost 放进它的构建上下文 |
 | `postgres:18.<minor>` | 官方 | 命名卷 + initdb.d 脚本 |
 | `redis:7-alpine` | 官方 | requirepass + AOF |
 | `hashicorp/consul` | 官方 | 单节点 server；多 server 时 `retry_join` |
@@ -176,62 +180,86 @@ flowchart TB
 
 ## 5. 目录布局
 
-### 5.1 仓库内（`deploy/prod/`，待创建）
+### 5.1 仓库内（`deploy/prod/`）
 
 ```
 deploy/prod/
-├─ README.md / README.zh.md            前置检查、快速开始、决策记录
-├─ compose.yaml                        单机容器编排（nexus / 网关 / web / PG / Redis / LiteLLM / consul）
+├─ README.md / README.zh.md            前置检查、快速开始、三个易踩点、本版缺口
+├─ compose.yaml                        单机容器编排（nexus / 网关 / web / PG / Redis / LiteLLM / consul + 两个作业）
 ├─ compose.multi-host.yaml             多机叠加：只写内网端口，由 COMPOSE_FILE 决定加不加载
-├─ build.sh                            3 个原生二进制 + 前端 → out/
+├─ compose.dev.yaml                    本机试跑叠加：.devrun 路径 + 命名卷；永不用于部署
 ├─ images/
-│  ├─ nexus.Dockerfile                 nexus + backfillversions + 插件 Python 依赖
-│  ├─ gateway.Dockerfile               sandboxg / browserg 同构
-│  ├─ web.Dockerfile                   nginx + dist + 站点配置
-│  └─ sandbox.Dockerfile               复用 sandboxd/Dockerfile 的构建上下文
+│  ├─ base.Dockerfile                  flame/base：Python 运行时与插件依赖，很少变
+│  ├─ nexus.Dockerfile                 nexus + bootstrap + backfillversions + static（FROM base，一层）
+│  ├─ gateway.Dockerfile               sandboxg / browserg 同构，scratch，无 shell
+│  └─ web.Dockerfile                   nginx + dist + 站点配置
 ├─ config/
-│  ├─ nexus.yaml                       全部写成 ${VAR}
-│  ├─ sandboxd.yaml                    mode + registry + docker/nsjail 两段并存
-│  ├─ sandboxg.yaml                    discovery + sandbox_token + backends 种子
+│  ├─ nexus.yaml                       全部写成 ${VAR}，由 nexus 从自己的环境展开
+│  ├─ litellm.yaml                     store_model_in_db + master key；没有它配模型会静默不生效
+│  ├─ sandboxd.yaml                    mode + registry + docker/nsjail（nsjail 段注释保留）
+│  ├─ sandboxg.yaml                    discovery + sandbox_token + backends（空，不写回环种子）
 │  ├─ browserd.yaml                    共享 workspace_root + 本地 profile_root
 │  ├─ browserg.yaml                    discovery + max_per_tenant + redis
 │  ├─ nginx/
 │  │  ├─ flame-common.conf             map，http 级只定义一次
 │  │  ├─ flame-locations.inc           业务 location，两个入口共用
 │  │  ├─ flame-http.conf               listen 27001，全能力
-│  │  └─ flame-tls.conf                listen 27443 ssl，可选
-│  ├─ postgres/
-│  │  ├─ 10-litellm-db.sql             initdb.d：只建库与角色，不跑平台 SQL
-│  │  └─ 90-admin.sql                  首个平台管理员 plat；由 migrate 最后应用，不进文件集合比对
-│  └─ redis/redis.conf                 requirepass + appendonly yes
+│  │  ├─ flame-tls.conf                listen 27443 ssl，可选
+│  │  └─ flame-enable-tls.sh           容器启动时按证书存在与否软链 TLS 配置块
+│  ├─ postgres/10-litellm-db.sql       initdb.d：只建 litellm 库；平台 SQL 不在这里
+│  └─ redis/redis.conf.tmpl            requirepass + appendonly yes，渲染时替换口令
 ├─ env/
-│  ├─ flame.env.example                版本 tag、密钥、路径，以及部署形态开关（FLAME_BIND_IP / COMPOSE_FILE）
+│  ├─ flame.env.example                版本 tag、密钥、两种 consul 视角、部署形态开关
 │  ├─ sandboxd.env.example             CONSUL_HTTP_TOKEN（yaml 没有 token 字段；地址走 registry.address）
-│  └─ SECRETS.md                       每个变量的影响面与轮换风险
+│  └─ SECRETS.md / SECRETS.zh.md       每个变量的影响面与轮换风险
 ├─ systemd/
-│  ├─ flame.service                    `docker compose up -d`（容器唯一入口）
-│  ├─ flame-migrate.service            oneshot，`compose run --rm migrate`
-│  ├─ flame-sandboxd.service           裸跑，After=docker.service
+│  ├─ flame.service                    `flame up -d`（容器唯一入口）
+│  ├─ flame-migrate.service            oneshot，跑 scripts/migrate.sh；无 [Install]，永不随之开机
+│  ├─ flame-sandboxd.service           裸跑，Requires=docker.service
 │  ├─ flame-browserd.service           裸跑
-│  └─ flame-docker.service             可选，默认不 enable
+│  └─ flame-docker.service             可选，默认不 enable（单独 daemon，不接线则无效果）
 ├─ scripts/
-│  ├─ build.sh      images.sh     install.sh
-│  ├─ init-db.sh    migrate.sh    health.sh
-├─ sql -> ../../nexus/platform/sql     软链；唯一真相
-└─ docs/                               等验证有实测数字后再补
+│  ├─ lib.sh                           log/die、密钥生成、配置渲染器（install 与 dev-up 共用）
+│  ├─ flame                            包装脚本：读 env、展开 COMPOSE_FILE，装到 /usr/local/bin
+│  ├─ build.sh     images.sh           交叉编译 + 四个镜像；images.sh 另有 save / load 做离线交付
+│  ├─ install.sh                       前置检查（--check）、落 release、渲染配置、装 unit、导入镜像
+│  ├─ migrate.sh   migrate-apply.sh    宿主编排作业 / 容器内按依赖序执行 SQL（--check 校验文件集合）
+│  ├─ bootstrap.sh health.sh           一次性种子作业（种子后回填 v1）/ 13 节验收检查
+│  ├─ smoke.sh                        端到端：登录→配模型→发布→暴露→用 API key 调一次，断言回答里含发出的串
+│  └─ dev-up.sh                       本机试跑：拉起、种子、本机 sandboxd、应用面；down/purge/status/logs
+└─ out/                                构建产物：bin、static、web、sql（gitignored）
 ```
+
+三处与早期草案不同，都是产物定型时改的：
+
+- **没有 `images/sandbox.Dockerfile`**：沙箱镜像直接用 `sandboxd/Dockerfile`，只有一份构建定义。它 `COPY
+  bin/codehost-linux`，所以 `build.sh` 先把 codehost 放进那个构建上下文。
+- **没有 `sql -> ../../nexus/platform/sql` 软链**：软链在 Windows 检出与打包时都不可靠。`build.sh` 把
+  `nexus/platform/sql` 复制到 `out/sql`，`migrate-apply.sh` 里的执行清单与 `scripts/verify-sql.ps1` 逐字对齐，
+  `--check` 要求文件集合**相等**——唯一真相仍在仓库那一处。
+- **没有 `90-admin.sql`**：平台管理员 `plat` 由 `bootstrap` 作业创建（`seedpoc` 的 `ensurePlatformUser` 用同一套
+  bcrypt 写入），而不是 migrate 末尾追加一段 SQL。这样 `FLAME_ADMIN_PASSWORD` 才真的生效：SQL 里的哈希是常量，
+  先由 SQL 建号会让种子作业永远"已存在、不改口令"。
 
 ### 5.2 机器上（`install.sh` 幂等创建）
 
 ```
-/opt/flame/releases/<ver>/{bin,static,web,compose*.yaml}  +  current -> releases/<ver>
+/opt/flame/releases/<ver>/{bin,static,web,sql,scripts,config,systemd,compose*.yaml}
+/opt/flame/current -> releases/<ver>
 /opt/flame/rootfs/<ver>/                                  nsjail rootfs，从镜像导出
-/etc/flame/{flame.env, sandboxd.yaml, sandboxd.env, browserd.yaml}
+/etc/flame/{flame.env, nexus.yaml, sandboxd.yaml, sandboxd.env, browserd.yaml,
+            sandboxg.yaml, browserg.yaml, redis.conf}
 /etc/flame/tls/{fullchain,privkey}.pem                    可选，存在即启用 27443
+/etc/flame/initial-credentials.txt                        bootstrap 写出，0600；轮换后删掉
 /srv/flame/data/{tenants,platform-assets,plugins}
-/var/lib/flame/{sandboxd/tmp, browserd/profiles}
+/srv/flame/pg-init/10-litellm-db.sql                      只在空数据卷上执行
+/var/lib/flame/{nexus/logs, sandboxd/tmp, browserd/profiles}
 /var/log/flame/<service>/
 ```
+
+`/etc/flame/redis.conf` 与四份执行器/网关 yaml 是**渲染出来的一次性产物**：`install.sh` 只在文件不存在时生成，
+`--force-config` 才会覆盖。升级因此不会冲掉宿主策略与口令；要改策略就改 `/etc/flame/<name>.yaml` 并重启对应
+单元，不要改 release 里的模板。
 
 `/opt/flame/rootfs/<ver>` 一份目录对应一代镜像，而且是**导出**来的、不是另造的：内容直接来自 `flame/sandbox:<ver>`，
 两种模式因此不可能漂移。导出过程有两件事不会跟过来——`docker export` 不带设备节点，所以 `/dev/null`、`/dev/zero`、
@@ -244,8 +272,10 @@ Docker 侧的持久状态：`flame-pg`、`flame-redis`、`flame-consul` 三个�
 
 ### 5.3 三处不对称
 
-- **nexus 没有 `-config` 参数**：它读工作目录下的 `./config.yaml`，所以容器里用 `working_dir: /etc/flame`，
-  配置以文件挂载。其余四个服务接受 `-config <path>`。
+- **nexus 没有 `-config` 参数**：它读工作目录下的 `./config.yaml`，所以容器里用 `working_dir:
+  /var/lib/flame/nexus`，配置挂成 `./config.yaml`。工作目录**不放在 `/etc/flame`**：`xlog` 会在工作目录下建
+  `logs/`，而容器里的 `/etc/flame` 是配置的家；放进一个可写目录再把 `logs` 从宿主挂进去，日志才不会随容器重建
+  消失。其余四个服务接受 `-config <path>`。
 - **共享存储在容器里必须同名挂载**（`/srv/flame/data:/srv/flame/data`）。挂到别的路径不会报错，只会与
   sandboxd 看到的两份不同。
 - **执行器走 `releases/` 软链，容器走镜像 tag**。两者共用同一个版本号。
@@ -258,15 +288,15 @@ Docker 侧的持久状态：`flame-pg`、`flame-redis`、`flame-consul` 三个�
 
 | 服务 | 要点 |
 |---|---|
-| `compose.yaml` | 所有容器加入 `flame-net`；只有 `web` 有对外 `ports`，`consul` 另发 `${FLAME_BIND_IP}:8500:8500`（单机回环、多机内网）；PG / Redis / LiteLLM 的 `ports` 只出现在 `compose.multi-host.yaml`，单机不加载；`nexus`/`web` 挂 `/srv/flame/data:/srv/flame/data`；`web` 另挂证书；`postgres` 挂命名卷与 `initdb.d`；`consul` 挂 `flame-consul`；两个网关**和 `consul`** 都要加 `extra_hosts: host.docker.internal:host-gateway`——健康检查是从 consul 发出的，它也得能解析 `service_addr` |
-| nexus | `sandbox.url` → `ws://sandboxg:27080`、`browser.url` → `ws://browserg:27090`（容器服务名）；`storage.root_dir=/srv/flame/data`；`download.x_accel_prefix=/__files`；`db.host=postgres`、`redis.addrs=[redis:6379]`、`litellm.url=http://litellm:4000`（跨机时这几个改首台内网地址，见 §9.4） |
+| `compose.yaml` | 所有容器加入 `flame-net`；只有 `web` 有对外 `ports`（`${FLAME_PUBLISH_IP}:27001:27001` 与 `${FLAME_TLS_IP}:27443:27443`——容器内端口与宿主一致，暴露范围由变量决定），`consul` 另发 `${FLAME_BIND_IP}:8500:8500`（单机回环、多机内网）；PG / Redis / LiteLLM 的 `ports` 只出现在 `compose.multi-host.yaml`，单机不加载；`nexus`/`web` 挂 `/srv/flame/data:/srv/flame/data`；`web` 另挂证书；`postgres` 挂命名卷与 `initdb.d`；`redis` 挂渲染出的 `/etc/flame/redis.conf`；`nexus` 与 `bootstrap` 用 `env_file: /etc/flame/flame.env`（配置文件里的 `${VAR}` 由它们自己展开）；所有 Go 服务设 `XLOG_CONSOLE=1`，否则日志只进文件、`docker logs` 是空的；两个网关**和 `consul`** 都要加 `extra_hosts: host.docker.internal:host-gateway`——健康检查是从 consul 发出的，它也得能解析 `service_addr` |
+| nexus | `sandbox.url` → `ws://sandboxg:27080`、`browser.url` → `ws://browserg:27090`（容器服务名）；`storage.root_dir=/srv/flame/data`；`download.x_accel_prefix=/__files`；`db.host=postgres`（用户 `flame`）、`redis.addrs=[redis:6379]`、`litellm.url=http://litellm:4000`（跨机时这几个改首台内网地址，见 §9.4）；配置挂成 `/var/lib/flame/nexus/config.yaml`，工作目录与它同层（见 §5.3） |
 | sandboxd | `mode` 是开关；`allowed_mount_roots` 必须与 nexus 的 `storage.root_dir` **字面相等**；`tmp_dir` 机器本地且独占；`listen` 用 `0.0.0.0:27081`；`registry.service_addr` 留空即从 `listen` 推导（具体 IP 直接用，通配则走 `advertise_iface` 或主机名），推导失败或指向回环而注册中心在远端时**启动即拒绝**；`service_port` 已移除（端口恒随 `listen`）；`service_id` 默认是 `<名称>-<地址>-<端口>`，无需手配 |
 | consul | 单节点 server（`-bootstrap-expect=1`），数据在 `flame-consul`；8500 绑 `${FLAME_BIND_IP}`（单机回环、多机内网），容器内用 `consul:8500`；执行器的 ID 默认按地址派生、天然唯一，不必手配；开 ACL 时执行器用 `CONSUL_HTTP_TOKEN`。要抗单点就在其它宿主机起同镜像的 server，`retry_join` 指向首个节点 |
 | sandboxg | `discovery.type=consul` + `discovery.address=consul:8500` + `sandbox_token` **必填**；`backends` 种子只作兜底，且**不能写 `127.0.0.1`**（容器里的回环是网关自己），要么删掉、要么写 `host.docker.internal:27081`；`sticky_ttl_sec ≥ interactive_idle_sec + 2×janitor_sec` |
 | browserd | `workspace_root` 与 nexus 存储根同一目录；`profile_root` 机器本地；`max_per_tenant: 0` |
 | browserg | `max_per_tenant` 是唯一生效点；Redis 必需 |
 | nginx | 27001 全能力入口：静态站、`/nexus/` 去前缀、`/service/` 保留前缀、`/__files/` 的 `internal` + `alias`、WS 升级；27443 是可选 TLS 叠加，见 §6.4 |
-| PostgreSQL | `/docker-entrypoint-initdb.d` **只在数据目录为空时执行**，故只建角色与 `litellm` 库；平台 SQL 交给 `migrate.sh`；命名卷而非绑定挂载（避开 uid 999 权限坑）；`shm_size` ≥ 256 MB，否则并行查询在 64 MB 的 `/dev/shm` 上失败 |
+| PostgreSQL | `POSTGRES_USER=flame` 让 initdb 直接建出这个角色与口令，因此不需要"建角色 + 移交所有权"的脚本；`/docker-entrypoint-initdb.d` **只在数据目录为空时执行**，故只建 `litellm` 库；平台 SQL 交给 `migrate.sh`；命名卷而非绑定挂载（避开 uid 999 权限坑），且卷挂在 `/var/lib/postgresql` 而不是 `/var/lib/postgresql/data`——18 的镜像把 `PGDATA` 挪到了 `/var/lib/postgresql/18/docker`，挂在旧路径上会静默地不再持久化；`shm_size` ≥ 256 MB，否则并行查询在 64 MB 的 `/dev/shm` 上失败 |
 | Redis | `requirepass` + `appendonly yes`；`noeviction`（缓存与配额计数混用） |
 
 ### 6.2 七条硬约束
@@ -344,16 +374,24 @@ map $http_x_forwarded_proto $fwd_proto { default $scheme; https https; }
 ## 7. 安装
 
 ```bash
-./scripts/build.sh                                  # 3 个原生二进制 + 前端
-./scripts/images.sh --tag $FLAME_TAG                # 4 个镜像 + sandbox 镜像与 rootfs
-sudo ./scripts/install.sh --tag $FLAME_TAG --check  # 前置检查 + 落位 + 装 unit
-docker compose up -d postgres redis litellm         # 数据面先起
-./scripts/migrate.sh                                # compose run --rm migrate
-docker compose run --rm bootstrap                   # 平台管理员 + t0 种子，见 §7.2
-systemctl enable --now flame-sandboxd flame-browserd
-docker compose up -d                                # nexus / 网关 / web
-./scripts/health.sh
+# 构建机（有 go 与 node）
+./scripts/build.sh                                  # 原生二进制 + 前端 + SQL 副本 → out/
+./scripts/images.sh build --tag $FLAME_TAG          # base / nexus / gateway / web + sandbox 镜像
+./scripts/images.sh save  --tag $FLAME_TAG --dir /srv/flame/release-images   # 离线交付
+
+# 目标机（root）
+sudo ./scripts/install.sh --tag $FLAME_TAG --check                       # 只检查，不改任何东西
+sudo ./scripts/install.sh --tag $FLAME_TAG --images /srv/flame/release-images
+flame up -d consul postgres redis litellm           # 数据面先起
+./scripts/migrate.sh                                # 平台 SQL；--check 只校验文件集合
+flame --profile jobs run --rm bootstrap             # 平台管理员 + t0 种子，见 §7.2
+systemctl start flame-sandboxd flame-browserd       # 两个裸跑执行器
+flame up -d                                         # nexus / 网关 / web
+./scripts/health.sh                                 # §13 的验收项，失败即点名
 ```
+
+`install.sh` 只落位、渲染配置、装 unit 并 `enable`，**不启动任何东西**：启动顺序本身就是安装的一部分（数据面 →
+SQL → 种子 → 执行器 → 应用面），把它塞进一个脚本等于让半成品数据库和新代码赛跑。
 
 ### 7.1 前置检查
 
@@ -379,11 +417,13 @@ docker compose up -d                                # nexus / 网关 / web
 
 | schema | 种子内容 | 来源 |
 |---|---|---|
-| `platform` | 平台表结构、供应商预设（`llm_provider_presets` / `llm_presets_seed`）、限额默认值（`zz_limit_defaults`）、能力闸门（`capability_gates` / `plugin_gates` / `tenant_plugins`）、首个平台管理员 `plat` | `nexus/platform/sql/*.sql` 按依赖序执行，最后追加 `config/postgres/90-admin.sql` |
-| `t0` | 租户表结构、物化到磁盘的定义域文件（`main` 的 `AGENT.md`、四个受保护技能）、注册行、租户管理员、全部能力、API key | `docker compose run --rm bootstrap`，等价于 PoC 的 `seedpoc` |
+| `platform` | 平台表结构、供应商预设（`llm_provider_presets` / `llm_presets_seed`）、限额默认值（`zz_limit_defaults`）、能力闸门（`capability_gates` / `plugin_gates` / `tenant_plugins`） | `nexus/platform/sql/*.sql` 按 `migrate-apply.sh` 的依赖序执行（与 `verify-sql.ps1` 同一份清单，`--check` 要求文件集合相等） |
+| `t0` | 租户表结构、物化到磁盘的定义域文件（`main` 的 `AGENT.md`、四个受保护技能）、预置的 LLM 供应商与模型（`DeepSeek` 空密钥、`deepseek-flash`）、注册行、租户管理员、全部能力、API key | `docker compose run --rm bootstrap`，等价于 PoC 的 `seedpoc` |
 
-**`platform` 是纯 SQL，`t0` 必须是命令**——这不是取舍，PoC 就是这么分的：`90-admin.sql` 只建账号；t0 的
-`AGENT.md` 与技能文件由 `seedpoc` 经 `provision.Provision` 物化，因为 SQL 写不出文件。
+**`platform` 的表结构是纯 SQL，账号与 `t0` 必须是命令**——这不是取舍：t0 的 `AGENT.md` 与技能文件由
+`provision.Provision` 物化，SQL 写不出文件；而平台账号的哈希必须由 `account.HashPassword` 生成，SQL 里只能写死
+一个常量哈希。PoC 用 `90-admin.sql` 建 `plat`，代价是那个口令无法在安装时指定——正式版把它交给 `bootstrap`，
+`FLAME_ADMIN_PASSWORD` 才真的生效。
 
 `bootstrap` 做的事（与 `seedpoc` 等价，全部幂等）：
 
@@ -395,6 +435,7 @@ docker compose up -d                                # nexus / 网关 / web
 | 4 | 校验 `main` 仍是 supervisor、四个受保护技能仍在 | 失败即退出——这是"控制台空着"的根因 |
 | 5 | 给 t0 打开**全部**能力（`capability.All()`，与 PoC 同源同一份清单） | 幂等 |
 | 6 | 为 t0 主用户建 API key，默认 `sk-poc-t0-primary` | 已存在则复用 |
+| 7 | 补齐 t0 的预置 LLM 配置：供应商 `DeepSeek`（空密钥、停用）与模型 `deepseek-flash`。上面新建的租户已从模板拿到这两行，这一步是给种子出现之前就存在的 t0 补——它的 `provision` 不会再执行 | `ON CONFLICT DO NOTHING`，操作者自己配过的供应商/模型一律不覆盖 |
 
 **与 PoC 的差别只有两处，且都不改变种子内容**：
 
@@ -414,9 +455,9 @@ docker compose up -d                                # nexus / 网关 / web
 **已存在时不覆盖**是刻意的：覆盖会冲掉管理员对 t0 的编辑。模板更新后刷新 t0 的定义域文件用 `tenantmigrate`
 （§11 第 8 项），不是 bootstrap。
 
-**compose 里因此有两个一次性服务**：`migrate`（`postgres` 镜像跑 psql，最后追加 `90-admin.sql`）与 `bootstrap`
-（`flame/nexus` 镜像覆盖 `entrypoint`）。两者都要与 nexus 相同的 `user: "1000:1000"` 与存储挂载——否则 bootstrap
-写出的文件属主不对，nexus 与沙箱都读不了。
+**compose 里因此有两个一次性服务**（都挂在 `jobs` profile 后，`up -d` 不会启动它们）：`migrate`（`postgres` 镜像
+跑 psql，按清单执行 `releases/<ver>/sql`）与 `bootstrap`（`flame/nexus` 镜像覆盖 `entrypoint` 去跑种子脚本）。
+两者都要与 nexus 相同的 `user: "1000:1000"` 与存储挂载——否则 bootstrap 写出的文件属主不对，nexus 与沙箱都读不了。
 
 ---
 
@@ -444,12 +485,12 @@ docker compose up -d                                # nexus / 网关 / web
 
 ```bash
 ./scripts/build.sh
-./scripts/images.sh --tag 2026.12.01
+./scripts/images.sh build --tag 2026.12.01
 ./scripts/migrate.sh                 # 先迁移
 # 改 /etc/flame/flame.env: FLAME_TAG=2026.12.01
-docker compose up -d sandboxg browserg
-docker compose up -d nexus
-docker compose up -d web
+sudo ./scripts/install.sh --tag 2026.12.01   # 落 releases/<ver>、重指 current、重载 unit
+flame up -d sandboxg browserg nexus web
+systemctl restart flame-sandboxd flame-browserd   # 单元路径没变，只有 restart 才会跑新二进制
 ```
 
 回滚就是把 `FLAME_TAG` 改回去 + `compose up -d`。旧镜像留在本机，不依赖网络。原生二进制回滚是改
@@ -651,7 +692,7 @@ rootfs / image），`registry.*` 不在其中；`browserd` / `sandboxg` / `brows
 
 | 级 | 内容 | 通过标准 |
 |---|---|---|
-| V0 | 构建 | 3 个原生二进制为静态 ELF；4 个镜像可 `inspect` |
+| V0 | 构建 | 4 个裸跑二进制为静态 ELF；5 个镜像（base / nexus / gateway / web / sandbox）可 `inspect` |
 | V1 | 数据面 + nexus | `docker compose ps` 全绿；`/health` 200；`consul catalog services` 含 `sandboxd` / `browserd` |
 | V2 | sandboxd `mode=docker` | `go test ./isolate -run Docker` 全绿；网关能通过 `host.docker.internal` 拨通 |
 | V3 | browserd | `open → snapshot → kill`；截图落在 `workspace_root` |
@@ -733,8 +774,14 @@ var runtimeEnv = []string{
 
 ---
 
-## 待确认
+## 产物定型时拍板的三件事
 
-1. 共享存储路径是否就用 `/srv/flame/data`？
-2. 镜像 tag 用完整日期（`2026.11.24`）还是语义化版本（`1.2.0`）？
-3. 专用 dockerd（`--isolated-docker`）是 v1 的开关，还是只给 unit 文件？
+1. **共享存储路径就用 `/srv/flame/data`。** 它已经被四份配置硬编码（`sandboxd.allowed_mount_roots`、
+   `browserd.workspace_root`、`nexus.storage.root_dir`、nginx 的 `alias`），改它要同时动五处，而名字本身不带来
+   任何收益。要换位置就在安装时整体替换，不要只改一处。
+2. **镜像 tag 用日期（`2026.12.01`）。** `FLAME_TAG` 是这条产品线唯一的版本号，回退是把它改回去；日期天然可比较、
+   可排序，也不需要有人判断"这次改动算不算 minor"。语义化版本只在同一个 tag 要表达多种兼容性承诺时才有价值，
+   而这里只有一条版本线。
+3. **专用 dockerd 只给 unit 文件，默认不 enable。** 它单独起一个 daemon，但 `sandboxd` 仍走默认 socket，所以启用
+   它本身不改变任何行为——这是一个需要接线（`DOCKER_HOST`）才有意义的开关。把它写成"v1 开关"会让人以为改一行
+   就加固了隔离，而实际只是多了一套镜像缓存。

@@ -155,6 +155,9 @@ desktop/          Vue 3 管理台
 
 - `nexus/docs/terminology.md` — 术语与动作词约定（改代码前建议先读）（[中文版](nexus/docs/terminology.zh.md)）
 - `nexus/docs/sandbox-design.md` — 沙箱隔离设计与三条执行通道（[中文版](nexus/docs/sandbox-design.zh.md)）
+- `nexus/docs/deployment.md` — 部署方案：单机原生布局、产物清单、多实例需要的旋钮（[中文版](nexus/docs/deployment.zh.md)）
+- `nexus/docs/deployment-runbook.md` — 部署操作手册：三档形态、配置、首启、升级、备份、验收与排障
+  （[中文版](nexus/docs/deployment-runbook.zh.md)）
 - `nexus/docs/workspace-layout-and-supervisor-power.md` — 租户工作区布局（[中文版](nexus/docs/workspace-layout-and-supervisor-power.zh.md)）
 - `nexus/docs/design-highlights.md` — 设计要点：调用链防环、多租户配额、端点模型（[中文版](nexus/docs/design-highlights.zh.md)）
 - `nexus/docs/i18n-plan.md` — 中英双语的分层方案、成本与坑位（[中文版](nexus/docs/i18n-plan.zh.md)）

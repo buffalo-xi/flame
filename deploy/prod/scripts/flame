@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# The only way to talk to this stack.
+#
+# Installed as /usr/local/bin/flame by install.sh. It exists so the command line is identical in every tier:
+# the wrapper loads /etc/flame/flame.env, expands COMPOSE_FILE (tier 3 adds compose.multi-host.yaml) and runs
+# compose from /opt/flame/current. Without it, every operation would have to remember both the file list and
+# the directory, and "which compose files" would drift between the runbook and reality.
+#
+#   flame up -d
+#   flame --profile jobs run --rm migrate
+#   flame ps
+set -euo pipefail
+
+# set -a: every variable in the env file becomes part of the environment, which is what compose interpolation
+# and the services' own ${VAR} expansion both read.
+set -a
+. /etc/flame/flame.env
+set +a
+
+cd /opt/flame/current
+
+# COMPOSE_FILE is a colon-separated list, matching docker compose's own convention.
+IFS=: read -r -a files <<< "${COMPOSE_FILE:-compose.yaml}"
+args=()
+for f in "${files[@]}"; do
+    args+=(-f "$f")
+done
+
+exec docker compose "${args[@]}" "$@"

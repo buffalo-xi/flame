@@ -1,0 +1,30 @@
+# Optional dedicated Docker daemon for the sandbox (decision 17 in nexus/docs/deployment.md).
+#
+# Not enabled by default, and enabling it alone changes nothing: sandboxd talks to the default socket
+# (/var/run/docker.sock) today, so a second daemon only becomes the sandbox's runtime once sandboxd's
+# `docker.binary` / environment point at this socket (DOCKER_HOST). Use it when the shared daemon is the
+# isolation boundary you no longer trust, not as a general improvement: it doubles the image cache and the
+# disk footprint of every node.
+[Unit]
+Description=Flame dedicated Docker daemon (optional)
+Documentation=file:///opt/flame/current/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/dockerd \
+    --data-root=/var/lib/flame/docker \
+    --exec-root=/run/flame-docker \
+    --pidfile=/run/flame-docker.pid \
+    --host=unix:///run/flame-docker.sock
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=3
+LimitNOFILE=infinity
+TasksMax=infinity
+Delegate=yes
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

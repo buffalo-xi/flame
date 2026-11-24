@@ -168,6 +168,10 @@ desktop/          Vue 3 admin console
   ([中文](nexus/docs/terminology.zh.md))
 - `nexus/docs/sandbox-design.md` — sandbox isolation design and the three execution channels
   ([中文](nexus/docs/sandbox-design.zh.md))
+- `nexus/docs/deployment.md` — the deployment plan: single-host native layout, artifact inventory, the knobs a
+  multi-instance deployment needs ([中文](nexus/docs/deployment.zh.md))
+- `nexus/docs/deployment-runbook.md` — the operational companion: tiers, configs, first boot, upgrade, backup,
+  acceptance checks, troubleshooting ([中文](nexus/docs/deployment-runbook.zh.md))
 - `nexus/docs/workspace-layout-and-supervisor-power.md` — tenant workspace layout
   ([中文](nexus/docs/workspace-layout-and-supervisor-power.zh.md))
 - `nexus/docs/design-highlights.md` — design highlights: call-chain recursion, multi-tenant quotas, endpoint model

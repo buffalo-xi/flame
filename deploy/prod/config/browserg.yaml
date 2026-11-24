@@ -1,0 +1,40 @@
+# browserg for the production stack (deploy/prod). Rendered once by install.sh into /etc/flame/browserg.yaml.
+#
+# Same shape as sandboxg: discovery plus sticky routing, but the unit of capacity is one Chromium and a
+# session can never be moved between instances, so "re-route" does not exist - it fails as session lost.
+
+listen: ":27090"
+
+log_dir: "/var/log/flame/browserg"
+
+# Must equal nexus's browser.token.
+token: "${BROWSER_TOKEN}"
+
+# Must equal browserd's token.
+browser_token: "${BROWSER_TOKEN}"
+
+metrics_interval_sec: 2
+
+# Must exceed browserd's idle_timeout_sec (300) + 2 x janitor_sec (30); 2100 also covers the older defaults.
+sticky_ttl_sec: 2100
+
+health_check_interval_sec: 5
+health_check_fail_threshold: 3
+
+# The only place a pool-wide per-tenant cap can be enforced: one configured per browserd would multiply by
+# the number of instances.
+max_per_tenant: 1
+
+redis:
+  addr: "${FLAME_REDIS_ADDR}"
+  password: "${REDIS_PASSWORD}"
+  db: 0
+
+discovery:
+  type: consul
+  address: "${FLAME_CONSUL_ADDR_NET}"
+  service_name: browserd
+  interval_sec: 5
+
+# Empty for the same reason as sandboxg: a loopback seed would make the gateway dial itself.
+backends: []

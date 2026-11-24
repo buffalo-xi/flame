@@ -1,0 +1,5 @@
+# Build products: cross-compiled binaries, the desktop bundle, the SQL copy and the image tarballs.
+out/
+
+# A local trial's rendered configuration, secrets and pid file (scripts/dev-up.sh).
+.devrun/

@@ -1,0 +1,17 @@
+# Rendered by install.sh into /etc/flame/redis.conf with ${REDIS_PASSWORD} substituted.
+#
+# Why a file and not `--requirepass` on the command line: the command is visible in `docker inspect` and in
+# `ps` on the host, and this password also guards the gateways' sticky-binding state.
+#
+# Why noeviction: the same instance holds caches and quota counters. Evicting a counter under memory pressure
+# would silently reset a tenant's budget, which is worse than the write failing.
+
+bind 0.0.0.0
+protected-mode yes
+requirepass ${REDIS_PASSWORD}
+
+appendonly yes
+appendfsync everysec
+dir /data
+
+maxmemory-policy noeviction

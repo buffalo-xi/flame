@@ -1,0 +1,19 @@
+[Unit]
+Description=Flame browserd (bare-metal browser pool)
+Documentation=file:///opt/flame/current/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=flame
+Group=flame
+WorkingDirectory=/var/lib/flame/browserd
+EnvironmentFile=-/etc/flame/flame.env
+ExecStart=/opt/flame/current/bin/browserd -config /etc/flame/browserd.yaml
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

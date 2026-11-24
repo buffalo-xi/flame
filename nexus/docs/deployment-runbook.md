@@ -3,8 +3,8 @@
 [中文](deployment-runbook.zh.md) | English
 
 > Status: the operational companion to [`deployment.md`](deployment.md). That file explains *why*; this one lists the
-> exact steps, files and checks. `deploy/prod/` is still a **specification** — the compose files, units and scripts below
-> are the shape to create, not files that exist in the repository today.
+> exact steps, files and checks. `deploy/prod/` exists: the compose fragments, units and scripts below are taken from
+> those files, and the commands match their interfaces. Fragments omit comments and rarer sections — the files win.
 >
 > Terminology follows [`terminology.md`](terminology.md): assets are `list` / `delist`, endpoints `expose` / `retract`,
 > versions `release` / `deploy` / `rollback`. Reverting a deployment is "switch back to the previous release", which is
@@ -94,21 +94,38 @@ servers, and a unique `-node` name per server; a single server publishes neither
 FLAME_TAG=2026.12.01               # the one version number: image tags and releases/<ver>
 FLAME_BIND_IP=127.0.0.1            # tiers 2/3: this host's intranet IP
 COMPOSE_FILE=compose.yaml          # tier 3: compose.yaml:compose.multi-host.yaml
+FLAME_PUBLISH_IP=0.0.0.0           # where 27001 binds; behind an upstream LB: 127.0.0.1 or the intranet IP
+FLAME_TLS_IP=0.0.0.0               # where 27443 binds; inert while no certificate exists
 
-POSTGRES_PASSWORD=<random>
-REDIS_PASSWORD=<random>
-JWT_SECRET=<openssl rand -base64 48>
-FLAME_VALUE_KEY=<openssl rand -base64 48>
-LITELLM_MASTER_KEY=sk-<random>
-SANDBOX_TOKEN=<random>
-BROWSER_TOKEN=<random>
-FLAME_ADMIN_PASSWORD=<random>      # bootstrap: the `plat` password; 12345678 is the PoC default and must not survive
+# Hex throughout: POSTGRES_PASSWORD is embedded in LiteLLM's DATABASE_URL, where base64's + and / break the URI
+POSTGRES_PASSWORD=<openssl rand -hex 24>
+REDIS_PASSWORD=<openssl rand -hex 24>
+JWT_SECRET=<openssl rand -hex 24>
+FLAME_VALUE_KEY=<openssl rand -hex 24>
+LITELLM_MASTER_KEY=sk-<openssl rand -hex 24>
+LITELLM_SALT_KEY=<openssl rand -hex 24>     # never rotate: it decrypts the provider keys in LiteLLM's database
+SANDBOX_TOKEN=<openssl rand -hex 24>
+BROWSER_TOKEN=<openssl rand -hex 24>
+
+# Seed credentials, identical to the demo box (password 12345678, fixed API key); change the password after the
+# first login and rotate the key, see §12
+FLAME_ADMIN_PASSWORD=12345678
+FLAME_API_KEY=sk-poc-t0-primary
+FLAME_TENANT_SCHEMA=t0
+FLAME_TENANT_TITLE=Default tenant
 
 FLAME_DB_HOST=postgres
 FLAME_REDIS_ADDR=redis:6379
 FLAME_LITELLM_HOST=litellm
-FLAME_SANDBOXG_HOST=sandboxg
-FLAME_BROWSERG_HOST=browserg
+# Full URLs: nexus dials these. Empty means "no such executor" (nexus then skips the sandbox readiness gate
+# entirely), which is only right for a trial
+FLAME_SANDBOX_URL=ws://sandboxg:27080
+FLAME_BROWSER_URL=ws://browserg:27090
+
+# Consul, two views: the host-side executors, and the gateway containers (tier 3 with remote gateways: the
+# first host's intranet IP)
+FLAME_CONSUL_ADDR_HOST=127.0.0.1:8500
+FLAME_CONSUL_ADDR_NET=consul:8500
 ```
 
 ### 5.2 `/etc/flame/nexus.yaml` (full `${VAR}` expansion, mounted as `config.yaml`)
@@ -201,17 +218,13 @@ registry:
   service_name: browserd
 ```
 
-`install.sh` renders them once from `deploy/prod/config/<name>.yaml` into `/etc/flame/<name>.yaml`; doing it by hand is
-the same command. They live in `/etc/flame`, which upgrades do not overwrite. The templates use the same `${VAR}` form
-nexus does — `envsubst` with no list would also eat nginx-style `$` in the file, so name the variables:
+`install.sh` renders them once from `deploy/prod/config/<name>.yaml` into `/etc/flame/<name>.yaml` (`0640
+root:flame`), and **only when the file is absent**; `--force-config` overwrites. An upgrade therefore cannot clobber
+host policy or credentials.
 
-```bash
-set -a; . /etc/flame/flame.env; set +a
-for n in sandboxd browserd sandboxg browserg; do
-  envsubst '${SANDBOX_TOKEN} ${BROWSER_TOKEN} ${REDIS_PASSWORD}' \
-    < deploy/prod/config/"$n".yaml > /etc/flame/"$n".yaml
-done
-```
+The rendering is `sed` over a known variable list, not `envsubst`: `envsubst` replaces every `$NAME` it can resolve,
+so an nginx-style `$host` / `$http_upgrade` in the same template would be eaten. `install.sh` warns when a `${...}`
+survives the render.
 
 These four services read their yaml literally — `${VAR}` left in place is not expanded at runtime, so an unrendered
 template starts with the placeholder itself as the token and every call is rejected.
@@ -301,69 +314,94 @@ services:
     command: ["agent", "-server", "-bootstrap-expect=1", "-client=0.0.0.0", "-data-dir=/consul/data"]
     volumes: ["flame-consul:/consul/data"]
     ports: ["${FLAME_BIND_IP:-127.0.0.1}:8500:8500"]
+    extra_hosts: ["host.docker.internal:host-gateway"]   # it issues the health checks, so it resolves service_addr
 
   postgres:
     image: postgres:18
     environment:
+      POSTGRES_USER: flame                 # initdb creates the role; no "create then hand over" script
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
       POSTGRES_DB: flame
     shm_size: 256mb                        # the default 64 MB /dev/shm breaks parallel queries
     volumes:
-      - flame-pg:/var/lib/postgresql/data
+      # Mount the parent: the 18 image moved PGDATA to /var/lib/postgresql/18/docker, so a volume on the
+      # old /var/lib/postgresql/data path would silently stop persisting.
+      - flame-pg:/var/lib/postgresql
       - /srv/flame/pg-init:/docker-entrypoint-initdb.d:ro
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes",
-              "--maxmemory-policy", "noeviction"]
-    volumes: ["flame-redis:/data"]
+    command: ["redis-server", "/etc/flame/redis.conf"]   # the password lives in the file, not in argv
+    volumes:
+      - flame-redis:/data
+      - /etc/flame/redis.conf:/etc/flame/redis.conf:ro
 
   litellm:
     image: ghcr.io/berriai/litellm-database:main-latest
     environment:
-      DATABASE_URL: "postgresql://flame:${POSTGRES_PASSWORD}@postgres:5432/litellm"
+      DATABASE_URL: "postgresql://flame:${POSTGRES_PASSWORD}@postgres:5432/litellm?sslmode=disable"
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      LITELLM_SALT_KEY: "${LITELLM_SALT_KEY}"          # decrypts the stored provider keys; never rotate
 
   nexus:
     image: flame/nexus:${FLAME_TAG}
-    working_dir: /etc/flame               # nexus reads ./config.yaml from here
+    user: "1000:1000"
+    working_dir: /var/lib/flame/nexus      # nexus reads ./config.yaml here and creates logs/ next to it
+    env_file: ["/etc/flame/flame.env"]     # nexus expands the ${VAR} placeholders from this environment
+    environment: { XLOG_CONSOLE: "1" }     # otherwise logs only reach a file and `docker logs` is empty
     volumes:
-      - /etc/flame/nexus.yaml:/etc/flame/config.yaml:ro
+      - /etc/flame/nexus.yaml:/var/lib/flame/nexus/config.yaml:ro
+      - /var/log/flame/nexus:/var/lib/flame/nexus/logs
       - /srv/flame/data:/srv/flame/data
 
   sandboxg:
     image: flame/gateway:${FLAME_TAG}
-    volumes: ["/etc/flame/sandboxg.yaml:/etc/flame/config.yaml:ro"]
+    user: "1000:1000"
+    command: ["/opt/flame/bin/sandboxg", "-config", "/etc/flame/config.yaml"]
+    environment: { XLOG_CONSOLE: "1" }
+    volumes:
+      - /etc/flame/sandboxg.yaml:/etc/flame/config.yaml:ro
+      - /var/log/flame/sandboxg:/var/log/flame/sandboxg
+    extra_hosts: ["host.docker.internal:host-gateway"]
 
   browserg:
     image: flame/gateway:${FLAME_TAG}
-    volumes: ["/etc/flame/browserg.yaml:/etc/flame/config.yaml:ro"]
+    user: "1000:1000"
+    command: ["/opt/flame/bin/browserg", "-config", "/etc/flame/config.yaml"]
+    environment: { XLOG_CONSOLE: "1" }
+    volumes:
+      - /etc/flame/browserg.yaml:/etc/flame/config.yaml:ro
+      - /var/log/flame/browserg:/var/log/flame/browserg
+    extra_hosts: ["host.docker.internal:host-gateway"]
 
   web:
     image: flame/web:${FLAME_TAG}
-    ports: ["27001:80", "27443:443"]
+    # Container port equals host port (nginx listens on 27001 / 27443); the variable decides the binding address
+    ports:
+      - "${FLAME_PUBLISH_IP:-0.0.0.0}:27001:27001"
+      - "${FLAME_TLS_IP:-0.0.0.0}:27443:27443"   # nginx only listens there with a certificate; publishing it is harmless
     volumes:
       - /srv/flame/data:/srv/flame/data:ro   # X-Accel-Redirect: nginx sends the bytes itself
-      - /etc/flame/tls:/etc/nginx/tls:ro     # optional; present enables 27443
+      - /etc/flame/tls:/etc/nginx/tls:ro     # optional; the start hook links the TLS block in when it exists
 ```
 
 Two one-shot jobs also live in this file and are never started by `up -d` — they sit behind the `jobs` profile, so they
 are invoked as `flame --profile jobs run --rm <name>`: `migrate` — the `postgres` image running psql over
-`releases/<ver>/sql`, with `90-admin.sql` applied last — and `bootstrap` — the `flame/nexus` image with an overridden
-entrypoint. Both need nexus's `user: "1000:1000"` and the `/srv/flame/data` mount,
+`releases/<ver>/sql`, in the order `scripts/migrate-apply.sh` lists — and `bootstrap` — the `flame/nexus` image with an
+overridden entrypoint running the seed script. Both need nexus's `user: "1000:1000"` and the `/srv/flame/data` mount,
 or the files they write end up owned by a uid neither nexus nor the sandbox can read.
 
 Images, not a release directory: nothing in the application plane is bind-mounted from `/opt/flame` any more. A new
 `FLAME_TAG` changes the image each container references, which is what makes Compose recreate it — no `--force-recreate`
 needed, and `releases/` matters only to the two systemd units.
 
-`/srv/flame/pg-init/00-roles.sql` runs once, on an empty data volume. The image runs it with `ON_ERROR_STOP=1`, and
-`POSTGRES_DB: flame` has already created that database — so it is handed over, not created again:
+`/srv/flame/pg-init/10-litellm-db.sql` runs once, on an empty data volume. The role and the `flame` database come from
+`POSTGRES_USER` / `POSTGRES_DB` (with `POSTGRES_PASSWORD`), so the file only owns the second database — in an idempotent
+form, so running it by hand on a database that already has it does not fail:
 
 ```sql
-CREATE ROLE flame LOGIN PASSWORD 'the-same-as-POSTGRES_PASSWORD';
-ALTER DATABASE flame OWNER TO flame;      -- created by POSTGRES_DB, not by this script
-CREATE DATABASE litellm OWNER flame;
+SELECT 'CREATE DATABASE litellm OWNER flame'
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'litellm')\gexec
 ```
 
 `compose.multi-host.yaml`, tier 3 only:
@@ -402,25 +440,49 @@ location /        { proxy_pass http://nexus:27006; }
 
 ## 7. First boot
 
-```bash
-# 1) place the release, the images and the units; the preflight either passes or names what is missing
-sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
-docker image inspect flame/nexus:"$FLAME_TAG" >/dev/null   # and flame/gateway, flame/web
+### 7.0 See it work on your own machine first (no root)
 
-# 2) fill in /etc/flame/flame.env (§5.1), then render the four executed or containerised configs (§5.3 / §5.4)
-#    there is no -check flag: a bad config shows up as a startup error, so start the service and read the log
+```bash
+./scripts/images.sh build --tag dev --no-sandbox
+./scripts/dev-up.sh            # data plane -> SQL -> seed -> local sandboxd -> application plane
+```
+
+It uses `compose.dev.yaml`: configuration is rendered into `.devrun/`, data lives in named volumes, and it installs
+**no systemd units and writes nothing into `/etc/flame`**. It finishes by printing the console URL and two accounts
+(platform `plat`, tenant `primary`, password `12345678`). The seed gives the tenant a `DeepSeek` provider with an
+empty key: paste yours in the console and provision its `deepseek-flash` model. `dev-up.sh --smoke` additionally runs
+the end-to-end call (it needs `FLAME_LLM_BASE_URL` / `FLAME_LLM_API_KEY` / `FLAME_LLM_MODEL`), and `dev-up.sh
+down|purge|status|logs` are the companions.
+
+Boundaries of the trial: the seeded provider has no API key (so nothing answers until you add one), no `browserd`,
+and `sandboxd` runs as a process on this machine, so shell tools execute but see none of the tenant's files. A real
+installation is 7.1.
+
+### 7.1 The production host
+
+```bash
+# 1) preflight: either it passes or it names what is missing (it changes nothing)
+sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
+
+# 2) place: release, units, wrapper, the four rendered configs and redis.conf; a first run also writes
+#    /etc/flame/flame.env. For offline delivery add --images <dir with the tarball>: it docker-loads first.
+sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/release-images
 
 # 3) data plane first
 flame up -d consul postgres redis litellm
 
 # 4) platform SQL, then the t0 seed — both are one-shot compose services, both idempotent
-flame --profile jobs run --rm migrate
-flame --profile jobs run --rm bootstrap    # writes /etc/flame/initial-credentials.txt, 0600, owned by flame
+./scripts/migrate.sh --check                # the file set must equal the execution list
+./scripts/migrate.sh
+flame --profile jobs run --rm bootstrap     # writes /etc/flame/initial-credentials.txt, 0600, owned by flame
 
-# 5) native executors, then the application plane
-systemctl enable --now flame-sandboxd flame-browserd
+# 5) native executors, then the application plane (install.sh already enabled them; this only starts)
+systemctl start flame-sandboxd flame-browserd
 flame up -d
 flame ps
+
+# 6) acceptance: the §13 checks, naming whatever fails
+./scripts/health.sh
 ```
 
 Executors are systemd units on the host (`flame-sandboxd.service`):
@@ -653,9 +715,9 @@ Adding a replica is a separate, heavier step with its own checklist: §8.2.
 ```bash
 # upgrade: build, then move one version number — containers follow the image tag, natives follow the symlink
 ./scripts/build.sh
-./scripts/images.sh --tag "$FLAME_TAG"
+./scripts/images.sh build --tag "$FLAME_TAG"
 sudo ./scripts/install.sh --tag "$FLAME_TAG"        # places releases/<ver>, repoints current, reloads the units
-flame --profile jobs run --rm migrate               # SQL before the new code runs
+./scripts/migrate.sh                                # SQL before the new code runs
 flame up -d sandboxg browserg nexus web             # the image reference changed, so Compose recreates each
 systemctl restart flame-sandboxd flame-browserd     # re-exec through the repointed symlink
 
@@ -704,15 +766,18 @@ time and keep nginx pointed at the host already upgraded, not at one still on th
   (tokens can only arrive through `CONSUL_HTTP_TOKEN`; none of the four service configs exposes a token field)
 - the PostgreSQL DSN hardcodes `sslmode=disable` and the Redis client has no TLS fields: cross-host only inside a
   controlled network until those gaps are closed
-- `bootstrap`'s defaults (`12345678`, the fixed key `sk-poc-t0-primary`) are the PoC's values: pass `FLAME_ADMIN_PASSWORD`,
-  rotate the key, and delete `initial-credentials.txt` once it has been used
+- `bootstrap`'s seed credentials (`12345678`, the fixed key `sk-poc-t0-primary`) match the PoC and `install.sh` writes
+  exactly those into `flame.env`: change the password after the first login, rotate the key, then delete
+  `initial-credentials.txt`
 
 ## 13. Acceptance checks
 
 | Check | Command | Expected |
 |---|---|---|
+| everything above at once | `./scripts/health.sh` | all ok; a FAIL names the item |
+| it can actually answer | `./scripts/smoke.sh` (needs `FLAME_LLM_*` for a real provider) | the answer contains the random string the script sent - the only check that proves "usable" |
 | containers | `flame ps` | all running / healthy |
-| images for this tag | `docker image inspect flame/nexus:$FLAME_TAG flame/gateway:$FLAME_TAG flame/web:$FLAME_TAG` | all three present |
+| images for this tag | `docker image inspect flame/nexus:$FLAME_TAG flame/gateway:$FLAME_TAG flame/web:$FLAME_TAG flame/sandbox:$FLAME_TAG` | all four present |
 | platform SQL | `./scripts/migrate.sh --check` | the file set equals the execution list |
 | entry point | `curl -sI http://localhost:27001/` | 200 |
 | api health | `curl -s http://localhost:27001/health` | 200 once `db` / `redis` / `litellm` / `sandbox` are all up; a 503 body names the missing one |
@@ -741,11 +806,14 @@ time and keep nginx pointed at the host already upgraded, not at one still on th
 
 ## 15. Known gaps
 
-1. `deploy/prod/` has no real artifacts yet: the compose files, units and wrapper above are the specification.
-2. Tier 3 has no orchestration artifact — which service starts on which host is still a manual choice; only tiers 1–2 are
-   validated.
-3. Consul ACLs are not generated by any script; PostgreSQL / Redis have no TLS; cross-machine nexus is unverified.
-4. `nexus`'s own registration is off by default and passes `registry.service_addr` through verbatim, unlike the executors
+1. `bootstrap` is still compiled from `nexus/cmd/seedpoc` and installed under the production name: the behaviour matches
+   the contract in §7, and the rename is what is left.
+2. The platform SQL has no version table (every script is re-applied in a fixed order and relies on idempotence), and
+   tenant schemas have no upgrade mechanism at all; see `deployment.md` §11 items 7 and 8.
+3. Tier 3 has artifacts but no end-to-end validation — which service starts on which host is still a manual choice;
+   only tiers 1–2 are validated.
+4. Consul ACLs are not generated by any script; PostgreSQL / Redis have no TLS; cross-machine nexus is unverified.
+5. `nexus`'s own registration is off by default and passes `registry.service_addr` through verbatim, unlike the executors
    (which normalise it through `ResolveAdvertise`). The default is `http://localhost`, so enabling it on several hosts as
    it stands collides in Consul and probes `http://http://…`; set a bare per-host IP until the code normalises the value.
-5. On tier 1, `127.0.0.1:8500` is a required port (the native executors register there), not an unnecessary exposure.
+6. On tier 1, `127.0.0.1:8500` is a required port (the native executors register there), not an unnecessary exposure.

@@ -3,7 +3,8 @@
 中文 | [English](deployment-runbook.md)
 
 > 状态：这是 [`deployment.md`](deployment.md) 的**操作篇**。那里解释"为什么"，这里只列步骤、文件与检查项。
-> `deploy/prod/` 仍是**规格说明**——下面的 compose 文件、unit 与脚本是要创建的形状，不是仓库里已经存在的文件。
+> `deploy/prod/` 已经存在：下面的 compose 片段、unit 与脚本都摘自其中的真实文件，命令按它们的接口写。片段省略了
+> 注释与不常用的段，以文件为准。
 >
 > 用词遵循 [`terminology.md`](terminology.md)：资产是 `list` / `delist`，端点是 `expose` / `retract`，
 > 版本是 `release` / `deploy` / `rollback`。部署回退说的是"切回上一个 release"，不是版本域的 `rollback`。
@@ -89,21 +90,35 @@ Consul 超过一个 server 时，server 之间还要 `8300`（server RPC）与 `
 FLAME_TAG=2026.12.01               # 唯一的版本号：镜像 tag 和 releases/<ver> 都用它
 FLAME_BIND_IP=127.0.0.1            # 第 2/3 档改成这台的内网 IP
 COMPOSE_FILE=compose.yaml          # 第 3 档：compose.yaml:compose.multi-host.yaml
+FLAME_PUBLISH_IP=0.0.0.0           # 27001 绑到哪；前置 LB 时改成 127.0.0.1 或内网 IP
+FLAME_TLS_IP=0.0.0.0               # 27443 绑到哪；没有证书时这行不产生监听
 
-POSTGRES_PASSWORD=<随机>
-REDIS_PASSWORD=<随机>
-JWT_SECRET=<openssl rand -base64 48>
-FLAME_VALUE_KEY=<openssl rand -base64 48>
-LITELLM_MASTER_KEY=sk-<随机>
-SANDBOX_TOKEN=<随机>
-BROWSER_TOKEN=<随机>
-FLAME_ADMIN_PASSWORD=<随机>         # bootstrap：`plat` 的密码；12345678 是 PoC 默认值，不能留到生产
+# 一律 hex：POSTGRES_PASSWORD 会被拼进 LiteLLM 的 DATABASE_URL，base64 的 + / = 会让它失效
+POSTGRES_PASSWORD=<openssl rand -hex 24>
+REDIS_PASSWORD=<openssl rand -hex 24>
+JWT_SECRET=<openssl rand -hex 24>
+FLAME_VALUE_KEY=<openssl rand -hex 24>
+LITELLM_MASTER_KEY=sk-<openssl rand -hex 24>
+LITELLM_SALT_KEY=<openssl rand -hex 24>     # 永不轮换：它解 LiteLLM 库里的供应商 key
+SANDBOX_TOKEN=<openssl rand -hex 24>
+BROWSER_TOKEN=<openssl rand -hex 24>
+
+# 种子凭据：与 PoC 同一套（口令 12345678、固定 API key），首次登录后立刻改口令、轮换该 key，见 §12
+FLAME_ADMIN_PASSWORD=12345678
+FLAME_API_KEY=sk-poc-t0-primary
+FLAME_TENANT_SCHEMA=t0
+FLAME_TENANT_TITLE=Default tenant
 
 FLAME_DB_HOST=postgres
 FLAME_REDIS_ADDR=redis:6379
 FLAME_LITELLM_HOST=litellm
-FLAME_SANDBOXG_HOST=sandboxg
-FLAME_BROWSERG_HOST=browserg
+# 完整 URL：nexus 直接拨它们。留空 = 没有该类执行器（nexus 连沙箱就绪闸门一起跳过），只适合试跑
+FLAME_SANDBOX_URL=ws://sandboxg:27080
+FLAME_BROWSER_URL=ws://browserg:27090
+
+# consul 的两个视角：宿主上的执行器、容器里的网关（第 3 档网关分机时改成首台内网 IP）
+FLAME_CONSUL_ADDR_HOST=127.0.0.1:8500
+FLAME_CONSUL_ADDR_NET=consul:8500
 ```
 
 ### 5.2 `/etc/flame/nexus.yaml`（全量 `${VAR}` 展开，挂成 `config.yaml`）
@@ -152,7 +167,11 @@ download:
   x_accel_prefix: /__files
 ```
 
-未设置的 `${VAR}` 会展开成空串并让服务拒绝启动——这是有意的。上面每个变量都必须在 `flame.env` 里。
+未设置的 `${VAR}` 会展开成空串并让服务拒绝启动——这是有意的。上面每个变量都必须在 `flame.env` 里，而
+`flame.env` 也是通过 `env_file` 进容器的：展开发生在 nexus 自己的进程里，不是在 compose 里。
+
+它在容器里挂成 `/var/lib/flame/nexus/config.yaml`，工作目录同为 `/var/lib/flame/nexus`（nexus 读 `./config.yaml`，
+并在工作目录下建 `logs/`，那份 `logs` 从宿主挂进来）。
 
 ### 5.3 `sandboxd` / `browserd`（渲染，不支持 `${VAR}`）
 
@@ -195,17 +214,11 @@ registry:
   service_name: browserd
 ```
 
-`install.sh` 会从 `deploy/prod/config/<name>.yaml` 渲染一次到 `/etc/flame/<name>.yaml`；手工做就是同一条命令。
-它们放在 `/etc/flame`，升级不覆盖。模板用的是与 nexus 相同的 `${VAR}` 形式——不给列表的 `envsubst` 会连文件里
-nginx 风格的 `$` 一起吃掉，所以要把变量名点名：
+`install.sh` 会把 `deploy/prod/config/<name>.yaml` 渲染一次到 `/etc/flame/<name>.yaml`（`0640 root:flame`），
+**只在文件不存在时**；`--force-config` 才会覆盖。升级因此不会冲掉宿主策略与口令。
 
-```bash
-set -a; . /etc/flame/flame.env; set +a
-for n in sandboxd browserd sandboxg browserg; do
-  envsubst '${SANDBOX_TOKEN} ${BROWSER_TOKEN} ${REDIS_PASSWORD}' \
-    < deploy/prod/config/"$n".yaml > /etc/flame/"$n".yaml
-done
-```
+渲染用的是按已知变量表的 `sed`，不是 `envsubst`：`envsubst` 会把文件里任何它能解析的 `$NAME` 都替换掉，nginx
+风格的 `$host` / `$http_upgrade` 一旦出现在同一份模板里就会被吃掉。渲染后若还剩 `${...}`，`install.sh` 会告警。
 
 这四个服务是照字面读 yaml 的——留在文件里的 `${VAR}` 运行时不会展开，所以没渲染的模板会**把占位符本身当成
 token** 启动，之后每次调用都被拒。
@@ -294,67 +307,92 @@ services:
     command: ["agent", "-server", "-bootstrap-expect=1", "-client=0.0.0.0", "-data-dir=/consul/data"]
     volumes: ["flame-consul:/consul/data"]
     ports: ["${FLAME_BIND_IP:-127.0.0.1}:8500:8500"]
+    extra_hosts: ["host.docker.internal:host-gateway"]   # 健康检查是它发起的，它也要能解析 service_addr
 
   postgres:
     image: postgres:18
     environment:
+      POSTGRES_USER: flame                 # initdb 直接建出这个角色，不需要"建角色 + 移交所有权"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
       POSTGRES_DB: flame
     shm_size: 256mb                        # 默认 64 MB 的 /dev/shm 会让并行查询失败
     volumes:
-      - flame-pg:/var/lib/postgresql/data
+      # 挂父目录：18 的镜像把 PGDATA 挪到了 /var/lib/postgresql/18/docker，
+      # 挂在旧的 /var/lib/postgresql/data 上会静默地不再持久化
+      - flame-pg:/var/lib/postgresql
       - /srv/flame/pg-init:/docker-entrypoint-initdb.d:ro
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes",
-              "--maxmemory-policy", "noeviction"]
-    volumes: ["flame-redis:/data"]
+    command: ["redis-server", "/etc/flame/redis.conf"]   # 口令在文件里，不在命令行
+    volumes:
+      - flame-redis:/data
+      - /etc/flame/redis.conf:/etc/flame/redis.conf:ro
 
   litellm:
     image: ghcr.io/berriai/litellm-database:main-latest
     environment:
-      DATABASE_URL: "postgresql://flame:${POSTGRES_PASSWORD}@postgres:5432/litellm"
+      DATABASE_URL: "postgresql://flame:${POSTGRES_PASSWORD}@postgres:5432/litellm?sslmode=disable"
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      LITELLM_SALT_KEY: "${LITELLM_SALT_KEY}"          # 解库里的供应商 key，永不轮换
 
   nexus:
     image: flame/nexus:${FLAME_TAG}
-    working_dir: /etc/flame               # nexus 从这里读 ./config.yaml
+    user: "1000:1000"
+    working_dir: /var/lib/flame/nexus      # nexus 从这里读 ./config.yaml，并在同目录建 logs/
+    env_file: ["/etc/flame/flame.env"]     # 配置里的 ${VAR} 由 nexus 自己展开
+    environment: { XLOG_CONSOLE: "1" }     # 否则日志只进文件，docker logs 是空的
     volumes:
-      - /etc/flame/nexus.yaml:/etc/flame/config.yaml:ro
+      - /etc/flame/nexus.yaml:/var/lib/flame/nexus/config.yaml:ro
+      - /var/log/flame/nexus:/var/lib/flame/nexus/logs
       - /srv/flame/data:/srv/flame/data
 
   sandboxg:
     image: flame/gateway:${FLAME_TAG}
-    volumes: ["/etc/flame/sandboxg.yaml:/etc/flame/config.yaml:ro"]
+    user: "1000:1000"
+    command: ["/opt/flame/bin/sandboxg", "-config", "/etc/flame/config.yaml"]
+    environment: { XLOG_CONSOLE: "1" }
+    volumes:
+      - /etc/flame/sandboxg.yaml:/etc/flame/config.yaml:ro
+      - /var/log/flame/sandboxg:/var/log/flame/sandboxg
+    extra_hosts: ["host.docker.internal:host-gateway"]
 
   browserg:
     image: flame/gateway:${FLAME_TAG}
-    volumes: ["/etc/flame/browserg.yaml:/etc/flame/config.yaml:ro"]
+    user: "1000:1000"
+    command: ["/opt/flame/bin/browserg", "-config", "/etc/flame/config.yaml"]
+    environment: { XLOG_CONSOLE: "1" }
+    volumes:
+      - /etc/flame/browserg.yaml:/etc/flame/config.yaml:ro
+      - /var/log/flame/browserg:/var/log/flame/browserg
+    extra_hosts: ["host.docker.internal:host-gateway"]
 
   web:
     image: flame/web:${FLAME_TAG}
-    ports: ["27001:80", "27443:443"]
+    # 容器内端口与宿主一致（nginx 就在 27001 / 27443 上监听），暴露范围由变量决定
+    ports:
+      - "${FLAME_PUBLISH_IP:-0.0.0.0}:27001:27001"
+      - "${FLAME_TLS_IP:-0.0.0.0}:27443:27443"   # 没有证书时 nginx 不监听它，发布出去也无害
     volumes:
       - /srv/flame/data:/srv/flame/data:ro   # 下载走 X-Accel-Redirect，nginx 自己发字节
-      - /etc/flame/tls:/etc/nginx/tls:ro     # 可选；存在即启用 27443
+      - /etc/flame/tls:/etc/nginx/tls:ro     # 可选；入口脚本按它是否存在接入 TLS 配置块
 ```
 
 同一份文件里还有两个一次性任务，`up -d` 不会启动它们——它们挂在 `jobs` profile 后面，只能用
 `flame --profile jobs run --rm <name>` 调用：`migrate`——用 `postgres` 镜像跑 `releases/<ver>/sql` 里的 psql，
-`90-admin.sql` 最后执行；以及 `bootstrap`——`flame/nexus` 镜像加上覆盖的 entrypoint。两者都必须带 nexus 的 `user: "1000:1000"` 和 `/srv/flame/data` 挂载，否则它们写出的文件属主既不是
-nexus 也不是沙箱能读的 uid。
+顺序由 `scripts/migrate-apply.sh` 里的清单决定；以及 `bootstrap`——`flame/nexus` 镜像加上覆盖的 entrypoint 跑种子
+脚本。两者都必须带 nexus 的 `user: "1000:1000"` 和 `/srv/flame/data` 挂载，否则它们写出的文件属主既不是 nexus
+也不是沙箱能读的 uid。
 
 **是镜像，不是 release 目录**：应用面已经没有任何东西从 `/opt/flame` bind mount 进来了。改 `FLAME_TAG` 就改了每个
 容器引用的镜像，这正是 Compose 判定重建的依据——不需要 `--force-recreate`，`releases/` 只对两个 systemd 单元有意义。
 
-`/srv/flame/pg-init/00-roles.sql` 只在空数据卷上跑一次。镜像用 `ON_ERROR_STOP=1` 执行它，而 `POSTGRES_DB: flame`
-已经把那个库建好了——所以这里是**移交所有权**，不能再来一次 `CREATE DATABASE`：
+`/srv/flame/pg-init/10-litellm-db.sql` 只在空数据卷上跑一次。角色与 `flame` 库由 `POSTGRES_USER` / `POSTGRES_DB`
+建好（口令就是 `POSTGRES_PASSWORD`），所以这个文件只负责第二个库；写成幂等形式，手工重复执行也不会报错：
 
 ```sql
-CREATE ROLE flame LOGIN PASSWORD '与 POSTGRES_PASSWORD 相同';
-ALTER DATABASE flame OWNER TO flame;      -- 这个库由 POSTGRES_DB 建，不是本脚本
-CREATE DATABASE litellm OWNER flame;
+SELECT 'CREATE DATABASE litellm OWNER flame'
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'litellm')\gexec
 ```
 
 `compose.multi-host.yaml`，仅第 3 档：
@@ -393,25 +431,47 @@ location /        { proxy_pass http://nexus:27006; }
 
 ## 7. 首次启动
 
-```bash
-# 1) 放置 release、镜像与单元；前置检查要么通过，要么点名缺什么
-sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
-docker image inspect flame/nexus:"$FLAME_TAG" >/dev/null   # gateway / web 同理
+### 7.0 想先在自己机器上看到它跑起来（不需要 root）
 
-# 2) 填写 /etc/flame/flame.env（§5.1），再渲染四份执行器/网关配置（§5.3 / §5.4）
-#    没有 -check 参数：配置错了就是启动失败，起服务看日志即可
+```bash
+./scripts/images.sh build --tag dev --no-sandbox
+./scripts/dev-up.sh            # 数据面 → SQL → 种子 → 本机 sandboxd → 应用面
+```
+
+它用 `compose.dev.yaml`：配置文件渲染到 `.devrun/`、数据放命名卷，并且**不装 systemd、不写 `/etc/flame`**。
+结束时会打印控制台地址与两组账号（平台 `plat`、租户 `primary`，口令都是 `12345678`）。种子会给租户一条 `DeepSeek`
+供应商（key 留空）：进控制台把 key 填上，再把它配套的 `deepseek-flash` 模型配置到网关。`dev-up.sh --smoke` 会额外跑
+一次端到端调用（需要 `FLAME_LLM_BASE_URL` / `FLAME_LLM_API_KEY` / `FLAME_LLM_MODEL`），
+`dev-up.sh down|purge|status|logs` 是配套命令。
+
+试跑的边界：种子里的供应商没有 key（填上之前没有任何模型能应答）、没有 `browserd`；`sandboxd` 跑在本机进程里，因此
+shell 工具能执行但看不到租户文件。正式部署走下面的 7.1。
+
+### 7.1 生产主机
+
+```bash
+# 1) 前置检查：要么通过，要么点名缺什么（它不改任何东西）
+sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
+
+# 2) 落位：release、unit、包装脚本、渲染好的四份配置与 redis.conf；首次运行会生成 /etc/flame/flame.env
+#    离线交付时加 --images <tar 所在目录>，它会先 docker load
+sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/release-images
 
 # 3) 先起数据面
 flame up -d consul postgres redis litellm
 
 # 4) 平台 SQL，然后 t0 种子——两个都是一次性 compose 服务，都可重复执行
-flame --profile jobs run --rm migrate
-flame --profile jobs run --rm bootstrap    # 写出 /etc/flame/initial-credentials.txt，0600，属主 flame
+./scripts/migrate.sh --check                # 文件集合与执行清单必须相等
+./scripts/migrate.sh
+flame --profile jobs run --rm bootstrap     # 写出 /etc/flame/initial-credentials.txt，0600，属主 flame
 
-# 5) 原生执行器，然后应用面
-systemctl enable --now flame-sandboxd flame-browserd
+# 5) 原生执行器，然后应用面（install.sh 已经 enable，这里只 start）
+systemctl start flame-sandboxd flame-browserd
 flame up -d
 flame ps
+
+# 6) 验收：§13 的检查项，失败即点名
+./scripts/health.sh
 ```
 
 执行器是宿主上的 systemd unit（`flame-sandboxd.service`）：
@@ -630,9 +690,9 @@ backends: []
 ```bash
 # 升级：先构建，然后只动一个版本号——容器跟镜像 tag，原生进程跟软链
 ./scripts/build.sh
-./scripts/images.sh --tag "$FLAME_TAG"
+./scripts/images.sh build --tag "$FLAME_TAG"
 sudo ./scripts/install.sh --tag "$FLAME_TAG"        # 放置 releases/<ver>、重指 current、重载单元
-flame --profile jobs run --rm migrate               # 先跑 SQL，再让新代码上线
+./scripts/migrate.sh                                # 先跑 SQL，再让新代码上线
 flame up -d sandboxg browserg nexus web             # 镜像引用变了，Compose 会逐个重建
 systemctl restart flame-sandboxd flame-browserd     # 通过重指后的软链重新 exec
 
@@ -676,15 +736,17 @@ systemctl restart flame-sandboxd flame-browserd
 - 无 ACL 的 Consul 是可写控制面：回环，或内网 + 防火墙白名单，或 ACL + TLS（token 只能通过
   `CONSUL_HTTP_TOKEN` 注入，四个服务的配置都没有 token 字段）
 - PostgreSQL 的 DSN 写死 `sslmode=disable`，Redis 客户端没有 TLS 字段：跨机只能在受控网络里，直到补齐
-- `bootstrap` 的默认值（`12345678`、固定 API key `sk-poc-t0-primary`）是 PoC 的；生产传 `FLAME_ADMIN_PASSWORD`、
-  轮换该 key，并在用完后删掉 `initial-credentials.txt`
+- `bootstrap` 的种子凭据（`12345678`、固定 API key `sk-poc-t0-primary`）与 PoC 一致，`install.sh` 就按这个值写入
+  `flame.env`：首次登录后立刻改口令、轮换该 key，然后删掉 `initial-credentials.txt`
 
 ## 13. 验收检查
 
 | 检查项 | 命令 | 期望 |
 |---|---|---|
+| 一次跑完上面的检查 | `./scripts/health.sh` | 全部 ok；FAIL 会点名是哪一项 |
+| 真的能答一次 | `./scripts/smoke.sh`（需真实的 `FLAME_LLM_*`） | 回答里含脚本发出去的那个随机串——这是唯一能证明"能用"的检查 |
 | 容器 | `flame ps` | 全部 running / healthy |
-| 当前 tag 的镜像 | `docker image inspect flame/nexus:$FLAME_TAG flame/gateway:$FLAME_TAG flame/web:$FLAME_TAG` | 三个都在 |
+| 当前 tag 的镜像 | `docker image inspect flame/nexus:$FLAME_TAG flame/gateway:$FLAME_TAG flame/web:$FLAME_TAG flame/sandbox:$FLAME_TAG` | 四个都在 |
 | 平台 SQL | `./scripts/migrate.sh --check` | 文件集合与执行清单完全一致 |
 | 入口 | `curl -sI http://localhost:27001/` | 200 |
 | 接口健康 | `curl -s http://localhost:27001/health` | `db` / `redis` / `litellm` / `sandbox` 全部就绪时才是 200；503 的响应体会点名缺哪个 |
@@ -713,10 +775,12 @@ systemctl restart flame-sandboxd flame-browserd
 
 ## 15. 已知缺口
 
-1. `deploy/prod/` 还没有真实产物：上面的 compose、unit、包装脚本都是规格。
-2. 第 3 档没有编排产物——哪台起哪些服务仍靠人工挑选；v1 只验证第 1、2 档。
-3. Consul ACL 不由任何脚本生成；PostgreSQL / Redis 无 TLS；跨机 nexus 未验证。
-4. `nexus` 自己的注册默认关闭，且把 `registry.service_addr` 原样透传，不像执行器那样过一遍 `ResolveAdvertise`
+1. `bootstrap` 仍由 `nexus/cmd/seedpoc` 编译、以正式名字装进镜像：行为与 §7 的契约一致，待做的只是重命名。
+2. 平台 SQL 没有版本表（每次按清单全量执行，靠幂等），租户 schema 完全没有升级机制；见 `deployment.md` §11 第
+   7、8 项。
+3. 第 3 档有产物但没有端到端验证——哪台起哪些服务仍靠人工挑选；v1 只验证第 1、2 档。
+4. Consul ACL 不由任何脚本生成；PostgreSQL / Redis 无 TLS；跨机 nexus 未验证。
+5. `nexus` 自己的注册默认关闭，且把 `registry.service_addr` 原样透传，不像执行器那样过一遍 `ResolveAdvertise`
    归一化。默认值是 `http://localhost`，所以多机照现状开启会在 Consul 里互相顶掉，探活还会拼成 `http://http://…`；
    在代码归一化之前，逐台写裸 IP。
-5. 第 1 档的 `127.0.0.1:8500` 是必需端口（裸跑执行器要注册），不是多余暴露。
+6. 第 1 档的 `127.0.0.1:8500` 是必需端口（裸跑执行器要注册），不是多余暴露。

@@ -1,0 +1,257 @@
+# Flame production stack: one compose file as the launcher.
+#
+# Everything that holds a host privilege runs bare under systemd (sandboxd, browserd, see ../systemd);
+# everything immutable is a container here. Only `web` publishes a port that faces the outside; `consul`
+# publishes to FLAME_BIND_IP (loopback in tier 1, the intranet NIC in tiers 2-3). Every other service has
+# no `ports:` entry at all: compose.multi-host.yaml adds the data-plane ports, and only for tier 3.
+#
+# Never call `docker compose` directly: use the wrapper (/usr/local/bin/flame). It loads
+# /etc/flame/flame.env and expands COMPOSE_FILE, so the command line is identical in every tier.
+name: flame
+
+# xlog only mirrors to stdout when it detects a terminal; a container's stdout is a pipe, so without this
+# every log would exist only as a file inside the container and `docker logs` would stay empty.
+x-log-env: &log-env
+  XLOG_CONSOLE: "1"
+
+services:
+  consul:
+    image: hashicorp/consul:1.20
+    restart: unless-stopped
+    command:
+      - agent
+      - -server
+      - -bootstrap-expect=1
+      - -client=0.0.0.0
+      - -data-dir=/consul/data
+      - -ui=false
+    volumes:
+      - flame-consul:/consul/data
+    ports:
+      # Tier 1: loopback, because the bare-metal executors on this host are the only clients.
+      # Tier 2/3: FLAME_BIND_IP, so remote executors can register. Never the public interface.
+      - "${FLAME_BIND_IP:-127.0.0.1}:8500:8500"
+    extra_hosts:
+      # The catalogue health check runs from *this* container against the host-side executors, so it needs
+      # the same alias the two gateways need.
+      - "host.docker.internal:host-gateway"
+    networks: [flame-net]
+
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      # The role is created by initdb with exactly these credentials, which is why no "hand over ownership"
+      # script is needed: nexus, migrate and LiteLLM all log in as `flame`.
+      POSTGRES_USER: flame
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_DB: flame
+    # The default 64 MB /dev/shm makes parallel queries fail; 256 MB is the documented floor.
+    shm_size: 256mb
+    volumes:
+      # Mount the parent, not /var/lib/postgresql/data: the 18 image moved PGDATA to
+      # /var/lib/postgresql/18/docker, and a volume on the old path would silently stop persisting.
+      - flame-pg:/var/lib/postgresql
+      # Runs only when the data directory is empty: it creates the litellm database, nothing else.
+      - /srv/flame/pg-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flame -d flame"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [flame-net]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # The password lives in the rendered /etc/flame/redis.conf instead of the command line: `docker inspect`
+    # shows the command, and the requirepass is also the gateways' sticky-binding state.
+    command: ["redis-server", "/etc/flame/redis.conf"]
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+    volumes:
+      - flame-redis:/data
+      - /etc/flame/redis.conf:/etc/flame/redis.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [flame-net]
+
+  litellm:
+    # `litellm-database`, not `litellm`: the plain image has no Prisma, and `store_model_in_db` (set in
+    # config/litellm.yaml) is what makes "add a provider, then add a model" persist. Without it the console
+    # reports success and nothing is stored - the failure only shows up as "the model does not exist" later.
+    #
+    # `lts` tracks the newest LTS patch. Pin an exact version if a byte-for-byte reproducible image matters more
+    # than security updates. The platform line is not optional: with it on one service only, an arm64 host
+    # emulates this one and the two sides disagree about architecture in a way that reads as a crash.
+    image: docker.litellm.ai/berriai/litellm-database:lts
+    platform: linux/amd64
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      DATABASE_URL: "postgresql://flame:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/litellm?sslmode=disable"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY is required}"
+      # Encrypts provider keys in its own database. Rotating it makes every stored key unreadable, so it is
+      # generated once and kept (see env/SECRETS.md).
+      LITELLM_SALT_KEY: "${LITELLM_SALT_KEY:?LITELLM_SALT_KEY is required}"
+    volumes:
+      - ./config/litellm.yaml:/app/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # Prisma migrations run on first start, which is why the start period is this long.
+      test: ["CMD-SHELL", "python -c 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(\"http://127.0.0.1:4000/health/liveliness\").status==200 else 1)'"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 10
+    networks: [flame-net]
+
+  nexus:
+    image: flame/nexus:${FLAME_TAG:?FLAME_TAG is required}
+    restart: unless-stopped
+    # uid 1000 is not cosmetic: the sandbox runs as 1000:1000 and writes tenant files, and this services'
+    # downloads and plugin directories must be readable and deletable by both sides.
+    user: "1000:1000"
+    # nexus has no -config flag: it loads ./config.yaml from its working directory. The working directory is
+    # a writable path because xlog creates ./logs next to it (a directory bind-mounted from the host, so the
+    # files survive a container recreate).
+    working_dir: /var/lib/flame/nexus
+    # The configuration file carries ${VAR} placeholders and nexus expands them from its own environment,
+    # so the whole env file has to be present inside the container - not just the two values compose
+    # interpolates at launch time.
+    # Parameterised so the local trial (compose.dev.yaml) can point at .devrun/flame.env: compose appends env_file
+    # lists instead of replacing them, so a hardcoded path here would make the trial require /etc/flame.
+    env_file:
+      - ${FLAME_ENV_FILE:-/etc/flame/flame.env}
+    environment: *log-env
+    volumes:
+      - /etc/flame/nexus.yaml:/var/lib/flame/nexus/config.yaml:ro
+      - /var/log/flame/nexus:/var/lib/flame/nexus/logs
+      # Same absolute path as on the host and inside sandboxd/browserd: a different path does not fail, it
+      # silently splits the storage into two trees.
+      - /srv/flame/data:/srv/flame/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:27006/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 90s
+      retries: 8
+    networks: [flame-net]
+
+  sandboxg:
+    image: flame/gateway:${FLAME_TAG:?FLAME_TAG is required}
+    restart: unless-stopped
+    user: "1000:1000"
+    command: ["/opt/flame/bin/sandboxg", "-config", "/etc/flame/config.yaml"]
+    environment: *log-env
+    volumes:
+      - /etc/flame/sandboxg.yaml:/etc/flame/config.yaml:ro
+      - /var/log/flame/sandboxg:/var/log/flame/sandboxg
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [flame-net]
+
+  browserg:
+    image: flame/gateway:${FLAME_TAG:?FLAME_TAG is required}
+    restart: unless-stopped
+    user: "1000:1000"
+    command: ["/opt/flame/bin/browserg", "-config", "/etc/flame/config.yaml"]
+    environment: *log-env
+    volumes:
+      - /etc/flame/browserg.yaml:/etc/flame/config.yaml:ro
+      - /var/log/flame/browserg:/var/log/flame/browserg
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [flame-net]
+
+  web:
+    image: flame/web:${FLAME_TAG:?FLAME_TAG is required}
+    restart: unless-stopped
+    # nginx resolves `nexus` once, at startup: if the API container is not up yet, the config fails to load with
+    # "host not found in upstream" and the web tier restart-loops until it is.
+    depends_on:
+      nexus:
+        condition: service_started
+    ports:
+      # 27001 is the full-capability entry point. FLAME_PUBLISH_IP narrows it to the intranet address or to
+      # loopback (behind an upstream load balancer); it is never left empty.
+      - "${FLAME_PUBLISH_IP:-0.0.0.0}:27001:27001"
+      # 27443 is the optional TLS overlay: nginx only listens there when /etc/flame/tls holds a certificate,
+      # and publishing a port nothing listens on is harmless.
+      - "${FLAME_TLS_IP:-0.0.0.0}:27443:27443"
+    volumes:
+      # Downloads are served by nginx itself (X-Accel-Redirect + sendfile), from the same absolute path.
+      - /srv/flame/data:/srv/flame/data:ro
+      # Optional: the entrypoint links the TLS server block when fullchain.pem and privkey.pem are present.
+      - /etc/flame/tls:/etc/nginx/tls:ro
+    networks: [flame-net]
+
+  # ---- one-shot jobs (profile "jobs": `up -d` never starts them) -----------------
+  migrate:
+    image: postgres:18
+    profiles: ["jobs"]
+    # psql only: the platform SQL is mounted from the release directory, never baked into an image.
+    entrypoint: ["/bin/sh", "/opt/flame/migrate-apply.sh"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: flame
+      PGPASSWORD: "${POSTGRES_PASSWORD}"
+      PGDATABASE: flame
+    volumes:
+      - ./sql:/sql:ro
+      - ./scripts/migrate-apply.sh:/opt/flame/migrate-apply.sh:ro
+    networks: [flame-net]
+
+  bootstrap:
+    image: flame/nexus:${FLAME_TAG:?FLAME_TAG is required}
+    profiles: ["jobs"]
+    # Same uid and the same storage mount as nexus: the definition-domain files it materialises belong to
+    # the tenant, and a root-owned copy would be unreadable for both nexus and the sandbox.
+    user: "1000:1000"
+    entrypoint: ["/bin/sh", "/opt/flame/bootstrap.sh"]
+    # It reads /etc/flame/nexus.yaml, which expands ${VAR} from this environment: without the env file the
+    # seed job would connect to an empty host and fail with a confusing "dial tcp" message.
+    env_file:
+      - ${FLAME_ENV_FILE:-/etc/flame/flame.env}
+    environment:
+      FLAME_ADMIN_PASSWORD: "${FLAME_ADMIN_PASSWORD:?FLAME_ADMIN_PASSWORD is required}"
+      FLAME_API_KEY: "${FLAME_API_KEY:?FLAME_API_KEY is required}"
+      FLAME_TENANT_SCHEMA: "${FLAME_TENANT_SCHEMA:-t0}"
+      FLAME_TENANT_TITLE: "${FLAME_TENANT_TITLE:-Default tenant}"
+      XLOG_CONSOLE: "1"
+    volumes:
+      # Read-write: the job writes /etc/flame/initial-credentials.txt next to the configuration it reads.
+      - /etc/flame:/etc/flame
+      - /srv/flame/data:/srv/flame/data
+      - ./scripts/bootstrap.sh:/opt/flame/bootstrap.sh:ro
+    networks: [flame-net]
+
+volumes:
+  flame-pg:
+  flame-redis:
+  # The catalogue only: executors re-register periodically, so losing this volume is equivalent to a
+  # reinstall, not to data loss.
+  flame-consul:
+
+networks:
+  flame-net:
+    name: flame-net

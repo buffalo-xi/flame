@@ -1,0 +1,29 @@
+[Unit]
+Description=Flame sandboxd (bare-metal sandbox executor)
+Documentation=file:///opt/flame/current/README.md
+# Requires, not Wants: sandboxd's whole job is `docker run`, so starting it without the daemon produces a
+# service that answers /healthz and fails every call.
+Requires=docker.service
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=flame
+Group=flame
+WorkingDirectory=/var/lib/flame/sandboxd
+# The first file carries the addresses and secrets the configuration file references; the second exists only
+# when Consul ACLs are enabled, where the token can only arrive through the environment (neither the registry
+# nor the discovery config has a token field).
+EnvironmentFile=-/etc/flame/flame.env
+EnvironmentFile=-/etc/flame/sandboxd.env
+ExecStart=/opt/flame/current/bin/sandboxd -config /etc/flame/sandboxd.yaml
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+# A script that forks its own children hits pids.max quickly under the default TasksMax; the sandbox caps it
+# per unit, but the service itself also needs room for its own goroutines and reapers.
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target

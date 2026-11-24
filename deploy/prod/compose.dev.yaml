@@ -1,0 +1,91 @@
+# Local trial override - "someone with Docker should see the product work in ten minutes".
+#
+#   ./scripts/dev-up.sh          # up, migrate, seed, print the URL and the credentials
+#   ./scripts/dev-up.sh down     # stop, keep the data volumes
+#   ./scripts/dev-up.sh purge    # stop and delete the data volumes
+#
+# Loaded on top of compose.yaml by dev-up.sh; install.sh never sees it. Every entry here repeats a **mount target**
+# from the production file on purpose: compose merges volume lists by target path, so a target that this file does
+# not mention keeps its production host path (and would fail, because /etc/flame does not exist here).
+#
+# One deliberate difference: absolute host paths become repository-relative files (rendered by dev-up.sh into
+# .devrun/) or named volumes. Not taste: on Docker Desktop a bind mount from /mnt/d is not owned by uid 1000, and
+# nexus writes into its storage root, so a bind-mounted data directory fails on the first write with EACCES.
+#
+# No model provider is defined here: the tenant seed adds a DeepSeek provider with an empty key, so nothing answers
+# until a real key is pasted and the model is provisioned. Never deploy this file (there is no TLS).
+
+services:
+  postgres:
+    volumes:
+      - flame-dev-pg:/var/lib/postgresql
+      - ./config/postgres:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    volumes:
+      - flame-dev-redis:/data
+      - ./.devrun/redis.conf:/etc/flame/redis.conf:ro
+
+  nexus:
+    # /health reports "unavailable" for as long as no sandbox executor has registered, and a trial runs without
+    # one (sandboxd needs a real host docker daemon and the host paths it hands to its containers). Text answers,
+    # the console and the API all work; exec/shell/browser tools do not. Disabling the probe keeps `up --wait`
+    # from treating that documented boundary as a failed start.
+    healthcheck:
+      disable: true
+    volumes:
+      - ./.devrun/nexus.yaml:/var/lib/flame/nexus/config.yaml:ro
+      - ./.devrun/nexus.yaml:/etc/flame/nexus.yaml:ro
+      # Named volumes, not .devrun/logs/*: a bind mount from /mnt/d is not writable by uid 1000, and the log
+      # file is opened at startup - the service would restart forever on a permission error.
+      - flame-dev-log-nexus:/var/lib/flame/nexus/logs
+      - flame-dev-log-nexus:/var/log/flame/nexus
+      - flame-dev-data:/srv/flame/data
+
+  sandboxg:
+    volumes:
+      - ./.devrun/sandboxg.yaml:/etc/flame/config.yaml:ro
+      - flame-dev-log-sandboxg:/var/log/flame/sandboxg
+
+  browserg:
+    volumes:
+      - ./.devrun/browserg.yaml:/etc/flame/config.yaml:ro
+      - flame-dev-log-browserg:/var/log/flame/browserg
+
+  web:
+    volumes:
+      - flame-dev-data:/srv/flame/data:ro
+      - ./.devrun/tls:/etc/nginx/tls:ro
+
+  # The SQL comes straight from the repository here: a trial has no build products to copy from.
+  migrate:
+    volumes:
+      - ../../nexus/platform/sql:/sql:ro
+
+  bootstrap:
+    volumes:
+      - ./.devrun:/etc/flame
+      - ./.devrun/nexus.yaml:/etc/flame/nexus.yaml:ro
+      - flame-dev-data:/srv/flame/data
+
+  # Named volumes that a *scratch* image mounts (the gateways' log directories) are created root-owned, because
+  # there is no image path to inherit ownership from. This one-shot repairs them; it runs before anything that
+  # writes, and it is idempotent.
+  dev-fix-perms:
+    image: flame/base:${FLAME_TAG:?FLAME_TAG is required}
+    user: "0:0"
+    profiles: ["jobs"]
+    entrypoint: ["/bin/sh", "-c", "chown -R 1000:1000 /mnt/data /mnt/nexus /mnt/sandboxg /mnt/browserg"]
+    volumes:
+      - flame-dev-data:/mnt/data
+      - flame-dev-log-nexus:/mnt/nexus
+      - flame-dev-log-sandboxg:/mnt/sandboxg
+      - flame-dev-log-browserg:/mnt/browserg
+
+volumes:
+  flame-dev-pg:
+  flame-dev-redis:
+  flame-dev-data:
+  flame-dev-log-nexus:
+  flame-dev-log-sandboxg:
+  flame-dev-log-browserg:

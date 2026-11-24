@@ -1,0 +1,42 @@
+# sandboxg for the production stack (deploy/prod). Rendered once by install.sh into /etc/flame/sandboxg.yaml.
+#
+# A container whose whole job is routing: exec/code are load-balanced across backends, interactive sessions
+# are pinned to the instance that holds the process. Reached by nexus at ws://sandboxg:27080.
+
+listen: ":27080"
+
+log_dir: "/var/log/flame/sandboxg"
+
+# Authentication towards nexus. Must equal nexus's sandbox.token.
+token: "${SANDBOX_TOKEN}"
+
+# The token the gateway presents to every discovered instance: a registry only yields addresses, so the
+# credential has to be attached here for all of them. Must equal sandboxd's token.
+sandbox_token: "${SANDBOX_TOKEN}"
+
+metrics_interval_sec: 2
+
+# Must exceed sandboxd's interactive_idle_sec (300) + 2 x interactive_janitor_sec (60) = 420; 2100 also
+# covers a fleet that left the old 1800 in place. A binding that outlives its process costs one stale record.
+sticky_ttl_sec: 2100
+
+health_check_interval_sec: 5
+health_check_fail_threshold: 3
+
+# Sticky bindings live here, so it is required as soon as more than one gateway instance exists.
+redis:
+  addr: "${FLAME_REDIS_ADDR}"
+  password: "${REDIS_PASSWORD}"
+  db: 0
+
+discovery:
+  type: consul
+  # As seen from inside a container: the compose service name on tiers 1-2, the first machine's intranet
+  # address when the gateway itself runs on another host (tier 3).
+  address: "${FLAME_CONSUL_ADDR_NET}"
+  service_name: sandboxd
+  interval_sec: 5
+
+# Empty on purpose. A 127.0.0.1 seed here means the gateway's own loopback, so the pool would dial itself
+# and hang; discovery is authoritative anyway, and this list is only the pre-first-pull fallback.
+backends: []

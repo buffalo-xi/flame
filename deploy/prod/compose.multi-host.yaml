@@ -1,0 +1,33 @@
+# Tier 3 only (containers on separate machines). Loaded by setting, in /etc/flame/flame.env:
+#
+#   COMPOSE_FILE=compose.yaml:compose.multi-host.yaml
+#
+# This file carries `ports:` entries and nothing else. Compose merges `ports` instead of replacing them, so
+# every port must have exactly one owner: base owns 27001 / 27443 (web) and 8500 (consul), this file owns
+# the data plane and the cross-machine application ports. Comment out every block that is not actually
+# split across machines - publishing a port is a firewall decision, not a default.
+#
+# FLAME_BIND_IP is required here (`:?`): a missing value would expand to ":5432:5432", i.e. 0.0.0.0, which
+# is strictly worse than refusing to start.
+services:
+  # Needed only when nexus does not run on the machine that holds the database.
+  postgres:
+    ports:
+      - "${FLAME_BIND_IP:?FLAME_BIND_IP must be the intranet IP}:5432:5432"
+  redis:
+    ports:
+      - "${FLAME_BIND_IP:?FLAME_BIND_IP must be the intranet IP}:6379:6379"
+  litellm:
+    ports:
+      - "${FLAME_BIND_IP:?FLAME_BIND_IP must be the intranet IP}:4000:4000"
+  # Needed only when nginx is not on the nexus machine.
+  # nexus:
+  #   ports:
+  #     - "${FLAME_BIND_IP:?set FLAME_BIND_IP}:27006:27006"
+  # Needed only when nexus is not on the gateway machines.
+  # sandboxg:
+  #   ports:
+  #     - "${FLAME_BIND_IP:?set FLAME_BIND_IP}:27080:27080"
+  # browserg:
+  #   ports:
+  #     - "${FLAME_BIND_IP:?set FLAME_BIND_IP}:27090:27090"

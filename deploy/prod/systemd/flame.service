@@ -1,0 +1,22 @@
+[Unit]
+Description=Flame stack (all containers)
+Documentation=file:///opt/flame/current/README.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+# The bare-metal executors are separate units on purpose: they own the host docker daemon and must not be
+# restarted by a container release.
+Before=flame-sandboxd.service flame-browserd.service
+
+[Service]
+# "up -d" finishes as soon as the containers are created; the containers themselves are kept alive by Docker,
+# so this unit only has to remember that it started them.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/flame up -d
+ExecStop=/usr/local/bin/flame stop
+TimeoutStartSec=300
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

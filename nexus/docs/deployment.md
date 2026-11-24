@@ -2,11 +2,14 @@
 
 [中文](deployment.zh.md) | English
 
-> Status: **design settled, not verified**. Everything marked `TODO(verify)` is an estimate, not a measurement.
+> Status: **artifacts landed, not verified**. `deploy/prod/` exists (compose, units, four image definitions, scripts,
+> config templates); this file still carries the design and the reasoning. Everything marked `TODO(verify)` is an
+> estimate, not a measurement.
 > Scope: one ordinary Linux host can run the whole stack — one compose file as the launcher, systemd for boot and
 > restart. When the stack grows to several machines, this plan only ships the components and the knobs.
 >
-> The `deploy/prod/` inventory in §5.1 is a **specification**, not a description of files that exist today.
+> §5.1 describes the artifact as it is. When the artifact and this document disagree, the artifact wins and this
+> document gets fixed: a specification that has parted ways with the files only leaves the reader guessing.
 >
 > Step-by-step commands, configs and acceptance checks: [`deployment-runbook.md`](deployment-runbook.md).
 
@@ -59,7 +62,7 @@ One sentence: **whatever holds a host privilege or a host device runs native; ev
 | 12 | PostgreSQL 18 comes from the official image | version matches upstream and is identical across distros; the data directory is still local block storage |
 | 13 | TLS terminates at nginx; nexus speaks plaintext only | nexus has no TLS code; nginx is required anyway; one certificate instead of one per instance |
 | 14 | 27001 is the full-capability entry; 27443 is an optional layer | with no certificate `listen ... ssl` makes nginx refuse to start, so TLS can only be additive |
-| 15 | Three native binaries ship; `seedpoc` does not | the rest go into images; `seedpoc` only seeds a demo environment |
+| 15 | Four bare-metal binaries ship (sandboxd / codehost / browserd / browserhost); the rest go into images; `seedpoc` no longer exists as a standalone product | bare-metal needs exactly those four; `seedpoc`'s implementation ships as `bootstrap` inside the nexus image (§7.2), so the demo name is gone from a release |
 | 16 | Configuration and tenant data never enter an image | day-to-day operations (new skills, edited `AGENT.md`, asset listing) rebuild nothing |
 | 17 | A dedicated dockerd is optional and off in v1 | `flame-docker.service` ships disabled; enable it when stronger isolation is wanted |
 | 18 | Images and native binaries share one version number | two rails must not become two version lines |
@@ -170,9 +173,11 @@ a new dependency means editing the Dockerfile and rebuilding.
 
 | Image | Content | Note |
 |---|---|---|
-| `flame/nexus` | nexus, backfillversions, **bootstrap**, the Python interpreter and dependencies plugins need | the host needs no Python; bootstrap must come from the same module as provisioning, see §7.2 |
-| `flame/gateway` | sandboxg and browserg (one image, selected by `ARG` / entry argument) | distroless-like, no shell |
-| `flame/web` | nginx configuration + frontend assets | certificates and shared storage are mounted, never baked in |
+| `flame/base` | Python 3 and the plugin dependencies, plus `curl` for the health check | changes once or twice a year, which is what keeps the application layer thin |
+| `flame/nexus` | nexus, backfillversions, **bootstrap** (`FROM flame/base`) | the host needs no Python; bootstrap must come from the same module as provisioning, see §7.2 |
+| `flame/gateway` | sandboxg and browserg (one image, selected by compose's `command`) | `scratch`, no shell and no entrypoint: compose names the binary |
+| `flame/web` | nginx configuration + frontend assets | certificates and shared storage are mounted, never baked in; the TLS block is linked in at start when a certificate exists |
+| `flame/sandbox` | built from `sandboxd/Dockerfile` (Debian 13 + lua/python/node + the Python packages + codehost) | one build definition only; `build.sh` puts codehost into that build context first |
 | `postgres:18.<minor>` | upstream | named volume + initdb.d scripts |
 | `redis:7-alpine` | upstream | requirepass + AOF |
 | `hashicorp/consul` | upstream | single-node server; `retry_join` when it spans hosts |
@@ -182,62 +187,88 @@ a new dependency means editing the Dockerfile and rebuilding.
 
 ## 5. Layout
 
-### 5.1 In the repository (`deploy/prod/`, to be created)
+### 5.1 In the repository (`deploy/prod/`)
 
 ```
 deploy/prod/
-├─ README.md / README.zh.md            preflight, quickstart, decision record
-├─ compose.yaml                        single-host composition (nexus / gateways / web / PG / Redis / LiteLLM / consul)
+├─ README.md / README.zh.md            preflight, quickstart, the three traps, gaps of this drop
+├─ compose.yaml                        single-host composition (nexus / gateways / web / PG / Redis / LiteLLM / consul + 2 jobs)
 ├─ compose.multi-host.yaml             multi-host overlay: ports only, loaded by COMPOSE_FILE
-├─ build.sh                            three native binaries + frontend → out/
+├─ compose.dev.yaml                    local-trial overlay: .devrun paths + named volumes; never deployed
 ├─ images/
-│  ├─ nexus.Dockerfile                 nexus + backfillversions + the Python plugins need
-│  ├─ gateway.Dockerfile               sandboxg / browserg, same shape
-│  ├─ web.Dockerfile                   nginx + dist + site configuration
-│  └─ sandbox.Dockerfile               reuses the sandboxd/Dockerfile build context
+│  ├─ base.Dockerfile                  flame/base: the Python runtime and plugin deps, rarely changes
+│  ├─ nexus.Dockerfile                 nexus + bootstrap + backfillversions + static (one layer on top of base)
+│  ├─ gateway.Dockerfile               sandboxg / browserg, same shape, scratch, no shell
+│  └─ web.Dockerfile                   nginx + dist + site configuration
 ├─ config/
-│  ├─ nexus.yaml                       everything as ${VAR}
-│  ├─ sandboxd.yaml                    mode + registry + both isolation sections
-│  ├─ sandboxg.yaml                    discovery + sandbox_token + backends seed
+│  ├─ nexus.yaml                       everything as ${VAR}, expanded by nexus from its own environment
+│  ├─ litellm.yaml                     store_model_in_db + master key; without it a model is silently not stored
+│  ├─ sandboxd.yaml                    mode + registry + docker/nsjail (the nsjail block stays commented)
+│  ├─ sandboxg.yaml                    discovery + sandbox_token + backends (empty, no loopback seed)
 │  ├─ browserd.yaml                    shared workspace_root + local profile_root
 │  ├─ browserg.yaml                    discovery + max_per_tenant + redis
 │  ├─ nginx/
 │  │  ├─ flame-common.conf             the maps, defined once at http level
 │  │  ├─ flame-locations.inc           every business location, shared by both entries
 │  │  ├─ flame-http.conf               listen 27001, full capability
-│  │  └─ flame-tls.conf                listen 27443 ssl, optional
-│  ├─ postgres/
-│  │  ├─ 10-litellm-db.sql             initdb.d: roles and databases only, never platform SQL
-│  │  └─ 90-admin.sql                  the first platform administrator `plat`; applied last by migrate, outside the file-set check
-│  └─ redis/redis.conf                 requirepass + appendonly yes
+│  │  ├─ flame-tls.conf                listen 27443 ssl, optional
+│  │  └─ flame-enable-tls.sh           links the TLS block in at container start, when a certificate exists
+│  ├─ postgres/10-litellm-db.sql       initdb.d: creates the litellm database only; platform SQL is not here
+│  └─ redis/redis.conf.tmpl            requirepass + appendonly yes, password substituted at render time
 ├─ env/
-│  ├─ flame.env.example                version tag, keys, paths, and the deployment-shape switch (FLAME_BIND_IP / COMPOSE_FILE)
+│  ├─ flame.env.example                version tag, keys, the two views of consul, the deployment-shape switch
 │  ├─ sandboxd.env.example             CONSUL_HTTP_TOKEN (no token field in yaml; the address lives in registry.address)
-│  └─ SECRETS.md                       blast radius and rotation risk per variable
+│  └─ SECRETS.md / SECRETS.zh.md       blast radius and rotation risk per variable
 ├─ systemd/
-│  ├─ flame.service                    `docker compose up -d` — the only container entry
-│  ├─ flame-migrate.service            oneshot, `compose run --rm migrate`
-│  ├─ flame-sandboxd.service           native, After=docker.service
+│  ├─ flame.service                    `flame up -d` — the only container entry
+│  ├─ flame-migrate.service            oneshot, runs scripts/migrate.sh; no [Install], never fires at boot
+│  ├─ flame-sandboxd.service           native, Requires=docker.service
 │  ├─ flame-browserd.service           native
-│  └─ flame-docker.service             optional, not enabled by default
+│  └─ flame-docker.service             optional, not enabled by default (a second daemon, inert until wired)
 ├─ scripts/
-│  ├─ build.sh      images.sh     install.sh
-│  ├─ init-db.sh    migrate.sh    health.sh
-├─ sql -> ../../nexus/platform/sql     symlink; a single source of truth
-└─ docs/                               added once validation has real numbers
+│  ├─ lib.sh                           log/die, secret generation, the config renderer (shared by install and dev-up)
+│  ├─ flame                            the wrapper: loads the env file, expands COMPOSE_FILE, installed to /usr/local/bin
+│  ├─ build.sh     images.sh           cross-compile + four images; images.sh also does save / load for offline delivery
+│  ├─ install.sh                       preflight (--check), place the release, render configs, install units, load images
+│  ├─ migrate.sh   migrate-apply.sh    host orchestration / in-container SQL in dependency order (--check compares the file set)
+│  ├─ bootstrap.sh health.sh           the one-shot seed job (and the v1 backfill) / the section 13 acceptance checks
+│  ├─ smoke.sh                         end to end: log in, add a model, publish, expose, call it, assert the answer
+│  └─ dev-up.sh                        the local trial: up, seed, local sandboxd, application plane; down/purge
+└─ out/                                build products: bin, static, web, sql (gitignored)
 ```
+
+Three differences from the early draft, all made when the artifact took its final shape:
+
+- **No `images/sandbox.Dockerfile`**: the sandbox image is built from `sandboxd/Dockerfile`, one definition only. That
+  file `COPY`s `bin/codehost-linux`, so `build.sh` places the binary into that build context first.
+- **No `sql -> ../../nexus/platform/sql` symlink**: symlinks survive neither a Windows checkout nor a tarball reliably.
+  `build.sh` copies `nexus/platform/sql` into `out/sql`, and the execution list in `migrate-apply.sh` is word-for-word
+  the one in `scripts/verify-sql.ps1`; `--check` requires the file sets to be **equal**, so the single source of truth
+  is still the repository directory.
+- **No `90-admin.sql`**: the platform administrator `plat` is created by the `bootstrap` job (`seedpoc`'s
+  `ensurePlatformUser` writes the same bcrypt hash), not by a statement appended to the migration. That is what makes
+  `FLAME_ADMIN_PASSWORD` real: a hash in SQL is a constant, and creating the row first would leave the seed job
+  permanently at "already exists, password unchanged".
 
 ### 5.2 On the host (`install.sh` creates these, idempotently)
 
 ```
-/opt/flame/releases/<ver>/{bin,static,web,compose*.yaml}  +  current -> releases/<ver>
+/opt/flame/releases/<ver>/{bin,static,web,sql,scripts,config,systemd,compose*.yaml}
+/opt/flame/current -> releases/<ver>
 /opt/flame/rootfs/<ver>/                                  nsjail rootfs, exported from the image
-/etc/flame/{flame.env, sandboxd.yaml, sandboxd.env, browserd.yaml}
+/etc/flame/{flame.env, nexus.yaml, sandboxd.yaml, sandboxd.env, browserd.yaml,
+            sandboxg.yaml, browserg.yaml, redis.conf}
 /etc/flame/tls/{fullchain,privkey}.pem                    optional; present enables 27443
+/etc/flame/initial-credentials.txt                        written by bootstrap, 0600; delete after rotating
 /srv/flame/data/{tenants,platform-assets,plugins}
-/var/lib/flame/{sandboxd/tmp, browserd/profiles}
+/srv/flame/pg-init/10-litellm-db.sql                      runs only on an empty data directory
+/var/lib/flame/{nexus/logs, sandboxd/tmp, browserd/profiles}
 /var/log/flame/<service>/
 ```
+
+`/etc/flame/redis.conf` and the four executor/gateway YAMLs are **rendered once**: `install.sh` writes them only when
+they are absent, and only `--force-config` overwrites them. An upgrade therefore cannot clobber host policy or
+credentials; to change policy, edit `/etc/flame/<name>.yaml` and restart the unit, not the template inside a release.
 
 `/opt/flame/rootfs/<ver>` is one directory per image generation, and it is **exported, not built**: the tree comes out of
 `flame/sandbox:<ver>`, so the two modes can never drift. Two things do not survive that export — `docker export` carries no
@@ -253,7 +284,10 @@ periodically and come back on their own.
 ### 5.3 Three asymmetries
 
 - **nexus has no `-config` flag**: it reads `./config.yaml` from its working directory, so the container sets
-  `working_dir: /etc/flame` and mounts the file. The other four services take `-config <path>`.
+  `working_dir: /var/lib/flame/nexus` and mounts the file as `./config.yaml`. The working directory is **not**
+  `/etc/flame`: `xlog` creates `logs/` next to it, and `/etc/flame` is the configuration's home. A writable directory
+  with `logs` bind-mounted from the host is what keeps the log files across a container recreate. The other four
+  services take `-config <path>`.
 - **Shared storage must be mounted at the same path inside containers** (`/srv/flame/data:/srv/flame/data`). Mounting it
   elsewhere does not fail, it just gives nexus and sandboxd two different views of the same "directory".
 - **Executors roll through the `releases/` symlink; containers roll through image tags.** Both share one version number.
@@ -266,15 +300,15 @@ periodically and come back on their own.
 
 | Service | Key points |
 |---|---|
-| `compose.yaml` | every container joins `flame-net`; only `web` has external `ports`, and `consul` additionally publishes `${FLAME_BIND_IP}:8500:8500` (loopback on one host, intranet when scaled); PG / Redis / LiteLLM `ports` live only in `compose.multi-host.yaml`, not loaded on a single host; `nexus` and `web` mount `/srv/flame/data:/srv/flame/data`; `web` also mounts the certificates; `postgres` mounts its volume and `initdb.d`; `consul` mounts `flame-consul`; both gateways **and `consul`** need `extra_hosts: host.docker.internal:host-gateway` — the health check is issued by consul, so it must resolve `service_addr` too |
-| nexus | `sandbox.url` → `ws://sandboxg:27080`, `browser.url` → `ws://browserg:27090` (service names); `storage.root_dir=/srv/flame/data`; `download.x_accel_prefix=/__files`; `db.host=postgres`, `redis.addrs=[redis:6379]`, `litellm.url=http://litellm:4000` (across machines these become the first host's intranet address, see §9.4) |
+| `compose.yaml` | every container joins `flame-net`; only `web` has external `ports` (`${FLAME_PUBLISH_IP}:27001:27001` and `${FLAME_TLS_IP}:27443:27443` — container port equals host port, the variable decides the binding address), and `consul` additionally publishes `${FLAME_BIND_IP}:8500:8500` (loopback on one host, intranet when scaled); PG / Redis / LiteLLM `ports` live only in `compose.multi-host.yaml`, not loaded on a single host; `nexus` and `web` mount `/srv/flame/data:/srv/flame/data`; `web` also mounts the certificates; `postgres` mounts its volume and `initdb.d`; `redis` mounts the rendered `/etc/flame/redis.conf`; `nexus` and `bootstrap` use `env_file: /etc/flame/flame.env` (their config files expand `${VAR}` from it); every Go service sets `XLOG_CONSOLE=1`, otherwise the log only reaches a file and `docker logs` stays empty; both gateways **and `consul`** need `extra_hosts: host.docker.internal:host-gateway` — the health check is issued by consul, so it must resolve `service_addr` too |
+| nexus | `sandbox.url` → `ws://sandboxg:27080`, `browser.url` → `ws://browserg:27090` (service names); `storage.root_dir=/srv/flame/data`; `download.x_accel_prefix=/__files`; `db.host=postgres` (user `flame`), `redis.addrs=[redis:6379]`, `litellm.url=http://litellm:4000` (across machines these become the first host's intranet address, see §9.4); the config is mounted as `/var/lib/flame/nexus/config.yaml`, in the same directory as the working directory (see §5.3) |
 | sandboxd | `mode` is the switch; `allowed_mount_roots` must be **literally equal** to nexus's `storage.root_dir`; `tmp_dir` is machine-local and exclusive; `listen` on `0.0.0.0:27081`; `registry.service_addr` left empty is derived from `listen` (a concrete address is used as-is, a wildcard goes through `advertise_iface` or the hostname) and a failed derivation — or a loopback result while the registry is remote — **refuses to start**; `service_port` is gone (the port always follows `listen`); `service_id` defaults to `<name>-<address>-<port>`, no hand-tuning |
 | consul | a single-node server (`-bootstrap-expect=1`) with its data in `flame-consul`; 8500 binds `FLAME_BIND_IP` (loopback on one host, intranet when scaled), containers use `consul:8500`; an executor's ID is derived from its address and therefore unique, no configuration needed. With ACLs on, executors pass `CONSUL_HTTP_TOKEN`. To remove the single point of failure, start the same image as a server on another host and `retry_join` it to the first |
 | sandboxg | `discovery.type=consul` plus `discovery.address=consul:8500` and a **required** `sandbox_token`; the `backends` seed is a fallback only and **must not say `127.0.0.1`** (loopback inside the container is the gateway itself) — delete it or use `host.docker.internal:27081`; `sticky_ttl_sec ≥ interactive_idle_sec + 2×janitor_sec` |
 | browserd | `workspace_root` is the same directory as nexus's storage root; `profile_root` is machine-local; `max_per_tenant: 0` |
 | browserg | `max_per_tenant` is the only enforcement point; Redis is required |
 | nginx | 27001 is the full-capability entry: static site, `/nexus/` stripped, `/service/` kept, `/__files/` as `internal` with an `alias`, WebSocket upgrade; 27443 is the optional TLS layer, see §6.4 |
-| PostgreSQL | `/docker-entrypoint-initdb.d` runs **only when the data directory is empty**, so it creates roles and the `litellm` database only; platform SQL stays with `migrate.sh`; use a named volume, not a bind mount (uid 999); `shm_size` ≥ 256 MB or parallel queries fail on the 64 MB `/dev/shm` |
+| PostgreSQL | `POSTGRES_USER=flame` makes initdb create that role with that password, so no "create the role, hand over ownership" script is needed; `/docker-entrypoint-initdb.d` runs **only when the data directory is empty**, so it creates the `litellm` database only; platform SQL stays with `migrate.sh`; use a named volume, not a bind mount (uid 999), and mount it at `/var/lib/postgresql` rather than `/var/lib/postgresql/data` — the 18 image moved `PGDATA` to `/var/lib/postgresql/18/docker`, so the old path would silently stop persisting; `shm_size` ≥ 256 MB or parallel queries fail on the 64 MB `/dev/shm` |
 | Redis | `requirepass` + `appendonly yes`; `noeviction` (caches and quota counters share it) |
 
 ### 6.2 Seven hard constraints
@@ -366,16 +400,25 @@ SELinux enforcing the port also needs `semanage port -a -t http_port_t -p tcp 27
 ## 7. Install
 
 ```bash
-./scripts/build.sh                                  # three native binaries + frontend
-./scripts/images.sh --tag $FLAME_TAG                # four images plus the sandbox image and rootfs
-sudo ./scripts/install.sh --tag $FLAME_TAG --check  # preflight + placement + units
-docker compose up -d postgres redis litellm         # data plane first
-./scripts/migrate.sh                                # compose run --rm migrate
-docker compose run --rm bootstrap                   # platform admin + t0 seed, see §7.2
-systemctl enable --now flame-sandboxd flame-browserd
-docker compose up -d                                # nexus / gateways / web
-./scripts/health.sh
+# build machine (has go and node)
+./scripts/build.sh                                  # native binaries + frontend + the SQL copy -> out/
+./scripts/images.sh build --tag $FLAME_TAG          # base / nexus / gateway / web + the sandbox image
+./scripts/images.sh save  --tag $FLAME_TAG --dir /srv/flame/release-images   # offline delivery
+
+# target host (root)
+sudo ./scripts/install.sh --tag $FLAME_TAG --check                        # checks only, changes nothing
+sudo ./scripts/install.sh --tag $FLAME_TAG --images /srv/flame/release-images
+flame up -d consul postgres redis litellm           # data plane first
+./scripts/migrate.sh                                # platform SQL; --check only compares the file set
+flame --profile jobs run --rm bootstrap             # platform admin + t0 seed, see §7.2
+systemctl start flame-sandboxd flame-browserd       # the two bare-metal executors
+flame up -d                                         # nexus / gateways / web
+./scripts/health.sh                                 # the §13 checks, naming whatever fails
 ```
+
+`install.sh` places, renders, installs units and enables them; it **starts nothing**. The start order is part of the
+installation (data plane → SQL → seed → executors → application plane), and folding it into one script would let a
+half-created database race the new code.
 
 ### 7.1 Preflight
 
@@ -402,12 +445,14 @@ The seed lives in **two schemas**, with the same content as the PoC; only the ca
 
 | Schema | Seed content | Source |
 |---|---|---|
-| `platform` | platform tables, provider presets (`llm_provider_presets` / `llm_presets_seed`), limit defaults (`zz_limit_defaults`), capability gates (`capability_gates` / `plugin_gates` / `tenant_plugins`), and the first platform administrator `plat` | `nexus/platform/sql/*.sql` in dependency order, then `config/postgres/90-admin.sql` last |
-| `t0` | tenant tables, definition files materialised to disk (`main`'s `AGENT.md`, the four protected skills), the registry row, the tenant administrator, every capability, the API key | `docker compose run --rm bootstrap`, equivalent to the PoC's `seedpoc` |
+| `platform` | platform tables, provider presets (`llm_provider_presets` / `llm_presets_seed`), limit defaults (`zz_limit_defaults`), capability gates (`capability_gates` / `plugin_gates` / `tenant_plugins`) | `nexus/platform/sql/*.sql` in the dependency order of `migrate-apply.sh` (the same list as `verify-sql.ps1`; `--check` requires the file sets to be equal) |
+| `t0` | tenant tables, definition files materialised to disk (`main`'s `AGENT.md`, the four protected skills), the seeded LLM provider and model (`DeepSeek` with an empty key, `deepseek-flash`), the registry row, the tenant administrator, every capability, the API key | `docker compose run --rm bootstrap`, equivalent to the PoC's `seedpoc` |
 
-**`platform` is pure SQL; `t0` has to be a command** — that is not a trade-off, it is how the PoC splits it too:
-`90-admin.sql` only creates an account, while t0's `AGENT.md` and skill files are materialised by `seedpoc` through
-`provision.Provision`, because SQL cannot write files.
+**`platform`'s tables are pure SQL; the accounts and `t0` have to be a command** — that is not a trade-off: t0's
+`AGENT.md` and skill files are materialised by `provision.Provision` because SQL cannot write files, and a platform
+account's hash has to come from `account.HashPassword`, so SQL could only ever store a constant. The PoC creates `plat`
+from `90-admin.sql`, at the price of a password that cannot be chosen at install time; production hands that to
+`bootstrap`, which is what makes `FLAME_ADMIN_PASSWORD` real.
 
 What `bootstrap` does (equivalent to `seedpoc`, every step idempotent):
 
@@ -419,6 +464,7 @@ What `bootstrap` does (equivalent to `seedpoc`, every step idempotent):
 | 4 | verify `main` still holds the supervisor privilege and the four protected skills are present | failure aborts — this is the root cause of "the console is empty" |
 | 5 | grant t0 **every** capability (`capability.All()`, the same list the PoC uses) | idempotent |
 | 6 | create the API key for t0's primary user, default `sk-poc-t0-primary` | reused when present |
+| 7 | top up t0's seeded LLM configuration: provider `DeepSeek` (empty key, disabled) and model `deepseek-flash`. A tenant created above already has both from the template; this covers a t0 that predates the seed, whose `provision` run never re-executes | `ON CONFLICT DO NOTHING` — a provider or model the operator already configured is never overwritten |
 
 **Only two things differ from the PoC, and neither changes the seed content**:
 
@@ -441,10 +487,11 @@ password → change it → add a model; only then is `main` usable.
 **Not overwriting an existing tenant** is deliberate: overwriting would erase whatever an administrator changed in t0.
 Refreshing t0's definition files after a template change is `tenantmigrate` (§11 item 8), not bootstrap.
 
-**Two one-shot services in compose**: `migrate` (the `postgres` image running psql, with `90-admin.sql` applied last) and
-`bootstrap` (the `flame/nexus` image with an overridden `entrypoint`). Both need the same `user: "1000:1000"` and storage
-mount as nexus — otherwise the files bootstrap writes are owned by the wrong uid and neither nexus nor the sandbox can
-read them.
+**Two one-shot services in compose**, both behind the `jobs` profile so `up -d` never starts them: `migrate` (the
+`postgres` image running psql over the release's `sql/`, in the order of `migrate-apply.sh`) and `bootstrap` (the
+`flame/nexus` image with an overridden `entrypoint` running the seed script). Both need the same `user: "1000:1000"` and
+storage mount as nexus — otherwise the files bootstrap writes are owned by the wrong uid and neither nexus nor the
+sandbox can read them.
 
 ---
 
@@ -474,12 +521,12 @@ registry** at all: the image is already local and `compose up -d` uses it.
 
 ```bash
 ./scripts/build.sh
-./scripts/images.sh --tag 2026.12.01
-./scripts/migrate.sh                 # migrate first
+./scripts/images.sh build --tag 2026.12.01
+./scripts/migrate.sh                         # migrate first
 # edit /etc/flame/flame.env: FLAME_TAG=2026.12.01
-docker compose up -d sandboxg browserg
-docker compose up -d nexus
-docker compose up -d web
+sudo ./scripts/install.sh --tag 2026.12.01   # places releases/<ver>, repoints current, reloads the units
+flame up -d sandboxg browserg nexus web
+systemctl restart flame-sandboxd flame-browserd   # the unit path never changes; only a restart picks the new binary
 ```
 
 A rollback is changing `FLAME_TAG` back plus `compose up -d`. The old image stays on the host; nothing depends on the
@@ -703,7 +750,7 @@ Four easy mistakes:
 
 | Stage | Content | Pass criterion |
 |---|---|---|
-| V0 | build | three static ELF binaries; four images inspectable |
+| V0 | build | four static ELF bare-metal binaries; five images (base / nexus / gateway / web / sandbox) inspectable |
 | V1 | data plane + nexus | `docker compose ps` all up; `/health` returns 200; `consul catalog services` lists `sandboxd` and `browserd` |
 | V2 | sandboxd `mode=docker` | `go test ./isolate -run Docker` green; the gateway reaches `host.docker.internal` |
 | V3 | browserd | `open → snapshot → kill`; the screenshot lands under `workspace_root` |
@@ -786,8 +833,14 @@ var runtimeEnv = []string{
 
 ---
 
-## Open questions
+## Settled when the artifact took its shape
 
-1. Is `/srv/flame/data` the path to use?
-2. Does the image tag use a date (`2026.11.24`) or semantic versioning (`1.2.0`)?
-3. Does the dedicated dockerd (`--isolated-docker`) ship as a v1 switch, or only as a unit file?
+1. **`/srv/flame/data` is the path.** It is already hardcoded in four places (`sandboxd.allowed_mount_roots`,
+   `browserd.workspace_root`, `nexus.storage.root_dir`, nginx's `alias`), so changing it means changing all of them,
+   and the name itself buys nothing. To move it, replace it everywhere at install time, not in one file.
+2. **Image tags are dates (`2026.12.01`).** `FLAME_TAG` is the one version number of this product line and rollback is
+   changing it back; a date sorts and compares without anyone deciding whether a change counts as minor. Semantic
+   versioning only pays off when one tag has to carry several compatibility promises, and there is one line here.
+3. **The dedicated dockerd ships as a unit file, not enabled.** It starts a second daemon, but `sandboxd` still uses the
+   default socket, so enabling it alone changes nothing — it is a switch that must also be wired (`DOCKER_HOST`) to mean
+   anything. Calling it a "v1 switch" would suggest that one line hardens the isolation, when it only adds an image cache.

@@ -1,0 +1,53 @@
+# browserd for the production stack (deploy/prod). Rendered once by install.sh into /etc/flame/browserd.yaml.
+#
+# Runs bare under systemd (flame-browserd.service): it owns the host Chromium and a profile directory on
+# local disk. One Chromium per session, never reused across sessions - that would hand one tenant's cookies
+# to the next one.
+
+# The directory shared with nexus: the *same* directory, which is not the same thing as the same string.
+# Screenshots and downloads land here and are then read back by nginx/nexus, so a different path does not
+# fail, it just puts the files somewhere the tenant never sees.
+workspace_root: "/srv/flame/data"
+
+listen: "0.0.0.0:27091"
+
+# Must equal nexus's browser.token (the gateway presents it to this service).
+token: "${BROWSER_TOKEN}"
+
+log_dir: "/var/log/flame/browserd"
+
+# "process": Chromium is a plain child of this service; the OS user is the isolation boundary.
+mode: process
+
+# Hard ceiling of this node: one live Chromium per worker (~300 MB each at full house).
+workers: 2
+
+# Stays 0 behind browserg: the gateway is the only place a pool-wide per-tenant cap can be enforced, because
+# a cap counted inside one instance multiplies by the number of instances.
+max_per_tenant: 0
+
+queue_timeout_sec: 20
+idle_timeout_sec: 300
+janitor_sec: 30
+
+browser:
+  # Absolute, through the release symlink: an upgrade replaces the target and the unit restart picks it up.
+  binary: "/opt/flame/current/bin/browserhost"
+  # Empty = autodetect chromium / chrome / msedge on the host PATH.
+  exec_path: ""
+  # Deliberately outside workspace_root: this is the service's private state (per-session cookies) and is
+  # deleted when the session ends.
+  profile_root: "/var/lib/flame/browserd/profiles"
+  headless: true
+  allow_headed: true
+
+registry:
+  enabled: true
+  type: consul
+  # Registry address as seen from this host; the gateways use FLAME_CONSUL_ADDR_NET instead (they reach
+  # consul through flame-net's service name).
+  address: "${FLAME_CONSUL_ADDR_HOST}"
+  service_name: browserd
+  health_check_path: /healthz
+  # service_addr is derived from listen, and the service id from that address, so every host is unique
+  # without configuration.

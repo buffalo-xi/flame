@@ -1,0 +1,24 @@
+# LiteLLM proxy configuration. Mounted at /app/config.yaml; the image is `litellm-database`.
+#
+# model_list is empty on purpose: no provider key is ever baked into an image. Models are added from the console
+# (add a provider, then add a model), and nexus provisions each one here through the proxy's API - which is exactly
+# why `store_model_in_db` has to be true: with it false, the file is the only source of models and "add a provider ->
+# add a model" silently fails to persist while the console still reports success. That flag is also the reason for
+# the `-database` image (Prisma) rather than the plain `litellm` one.
+#
+# Two variables are read by the proxy but invisible here: DATABASE_URL (repeated below so "which database is this
+# proxy writing to" is answerable without reading compose) and LITELLM_SALT_KEY, which encrypts provider keys in that
+# database. The salt key must never change: rotating it leaves every provider key undecryptable, with the model still
+# listed and every call failing on auth.
+
+model_list: []
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+
+litellm_settings:
+  # A provider rejects an unknown parameter rather than ignoring it; dropping it turns a model-specific option into
+  # a harmless no-op instead of a 400 the user cannot diagnose.
+  drop_params: true

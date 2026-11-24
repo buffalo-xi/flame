@@ -1,0 +1,16 @@
+# No [Install] section on purpose: this unit must never be enabled or started by a boot. It is run by hand
+# (`systemctl start flame-migrate`) or by a release procedure, on one machine only.
+[Unit]
+Description=Flame platform SQL migration (one-shot)
+Documentation=file:///opt/flame/current/README.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+# Not started by anything by default: a migration runs when a release says so, on one machine only. With
+# several nexus copies, concurrent DDL is exactly what an explicit job avoids.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/flame/current/scripts/migrate.sh
+TimeoutStartSec=600
