@@ -138,9 +138,15 @@ func spawnCodehost(sb sandbox.Sandbox, binary, tmpRoot string, limits sandbox.Li
 		return nil, fmt.Errorf("worker: chmod tmp dir %s: %w", tmpDir, err)
 	}
 
+	// The code channel is offline by construction: the request frame carries no egress intent (see the note in
+	// config.go), and this is the one place that can make that true for docker / nsjail. Leaving it nil would fall
+	// back to the configured network, which is bridge as soon as exec needs egress — the capability report would
+	// then say "code: off" while the container is online.
+	offline := false
 	spec := &sandbox.Spec{
-		Argv: []string{binary},
-		Dir:  tmpGuestDir, // the cwd must be a writable directory
+		Argv:   []string{binary},
+		Dir:    tmpGuestDir, // the cwd must be a writable directory
+		Egress: &offline,
 		// The interpreter's stderr (print / traceback) is not echoed to the terminal: it is kept at the tail by
 		// stderrCollector and returned in the logs field of the done/error frame (handle_code additionally logs
 		// errors), so discarding the forwarded copy is enough to keep sandboxd's terminal free of script output.
