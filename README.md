@@ -10,6 +10,10 @@ Ships with a Vue 3 admin console (`desktop/`), shared by the tenant side and the
 > **Want to run the whole thing?** `deploy/poc/` is a two-container demo (the product stack + the LiteLLM gateway) that
 > starts with `docker compose` and listens on a single port — see [`deploy/poc/README.md`](deploy/poc/README.md). A prebuilt
 > image is published on every push, so running it needs no toolchain. It is a proof of concept, not a production deployment.
+>
+> **Want to deploy it for real?** Every `v*` tag publishes the five production images to GHCR and one host tarball to
+> that release. Installing needs no toolchain either: download, extract, `./scripts/install.sh --registry …` — see
+> [`deploy/prod/README.md`](deploy/prod/README.md).
 
 ## Features
 

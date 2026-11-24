@@ -11,6 +11,30 @@ Deliberately **no Kubernetes, no Ansible, no operator**: one normal Linux host r
 compose file is the launcher, systemd gives it boot ordering and restart, and the two things that hold a host
 privilege (`sandboxd`, `browserd`) run bare.
 
+## Install from a GitHub release (nothing to compile)
+
+A `v*` tag publishes five images to GHCR and one tarball to that release. The tarball is the **host half** of a
+deployment — the two executor binaries that cannot be containers, the systemd units, the config templates and these
+scripts — and the images carry the rest:
+
+```bash
+# on the target host, as root; <tag> is the release tag (it is FLAME_TAG, the image tag and the release name at once)
+mkdir -p /srv/flame/dist && cd /srv/flame/dist
+curl -fLO https://github.com/<owner>/flame/releases/download/<tag>/flame-prod-<tag>.tar.gz
+tar -xzf flame-prod-<tag>.tar.gz
+sudo ./scripts/install.sh --tag <tag> --check --registry ghcr.io/<owner>/flame    # changes nothing
+sudo ./scripts/install.sh --tag <tag> --registry ghcr.io/<owner>/flame
+```
+
+Then the start order is the one under "Order of operations" below (data plane → SQL → seed → executors → application
+plane). Upgrading is a new tag plus `flame up -d`; rolling back is editing `FLAME_TAG` back in
+`/etc/flame/flame.env` — that line is the version.
+
+Two things a host needs from the outside: the four upstream images (consul, postgres, redis, litellm) come from their
+own publishers — a host without internet takes the offline tarball instead — and GHCR packages are **private by
+default even on a public repository**, so the publisher has to set the package visibility to public (or hand out a
+`read:packages` token) once, after the first run.
+
 ## Try it on one machine (about a minute)
 
 No root, no systemd, nothing installed outside this directory:

@@ -9,6 +9,27 @@
 刻意**不用 K8s、不用 Ansible、不用 operator**：一台普通 Linux 主机跑整套产品，一份 compose 作为启动器，systemd
 负责开机顺序与失败重启，两个持有宿主特权的组件（`sandboxd`、`browserd`）裸跑。
 
+## 从 GitHub Release 安装（不需要编译）
+
+打一个 `v*` tag 会把五个镜像发布到 GHCR，并在该 Release 上挂一个 tar 包。那个包是部署的**宿主侧一半**——两个
+不可能做成容器的执行器二进制、systemd unit、配置模板和这些脚本；镜像承担另一半：
+
+```bash
+# 目标机，root；<tag> 就是发布 tag（它同时是 FLAME_TAG、镜像 tag 和 Release 名）
+mkdir -p /srv/flame/dist && cd /srv/flame/dist
+curl -fLO https://github.com/<owner>/flame/releases/download/<tag>/flame-prod-<tag>.tar.gz
+tar -xzf flame-prod-<tag>.tar.gz
+sudo ./scripts/install.sh --tag <tag> --check --registry ghcr.io/<owner>/flame    # 什么都不改
+sudo ./scripts/install.sh --tag <tag> --registry ghcr.io/<owner>/flame
+```
+
+之后启动顺序就是下面的"操作顺序"（数据面 → SQL → 种子 → 执行器 → 应用面）。升级是换一个新 tag 再 `flame up -d`；
+回退是把 `/etc/flame/flame.env` 里的 `FLAME_TAG` 改回去——那一行就是版本。
+
+有两件事必须从外部来：四个上游镜像（consul、postgres、redis、litellm）由各自发布方拉取——没有外网的主机改用离线
+tar 包——以及 **GHCR 的包默认是私有的，哪怕仓库是公开的**，所以发布方要在首次运行后把包的可见性改成 public（或
+分发一个 `read:packages` token）。
+
 ## 先在本机试一下（约一分钟）
 
 不需要 root、不装 systemd、不在这个目录之外写任何东西：

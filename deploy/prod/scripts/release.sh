@@ -109,7 +109,8 @@ ls -lh "$rel"
 # install.sh loads the tarball itself when it is given --images, so there is no separate `images.sh load` step here: one
 # command to place the release, one directory for the images to come from - and that directory is the one the runnable
 # tree was extracted into, because the two archives travel side by side.
-cat <<EOF
+if [ "$with_images" -eq 1 ]; then
+    cat <<EOF
 
 on the target machine (copy both files into the same directory first):
   mkdir -p /srv/flame/dist && cd /srv/flame/dist
@@ -120,16 +121,18 @@ with a registry instead of the image tarball:
   ./scripts/images.sh push --tag $tag          # then on the target host:
   sudo ./scripts/install.sh --tag $tag --registry $FLAME_IMAGE_NS
 EOF
+else
+    # The CI path: the tarball is only the host half, and the images come from wherever they were pushed.
+    cat <<EOF
+
+on the target machine (this bundle has no images: they come from a registry, or are already in the docker daemon):
+  tar -xzf flame-prod-$tag.tar.gz
+  sudo ./scripts/install.sh --tag $tag --registry $FLAME_IMAGE_NS
+EOF
+fi
 if [ "$with_images" -eq 1 ] && [ "$with_upstream" -eq 0 ]; then
     cat <<EOF
 
 The tarball has no upstream images (--no-upstream): the target host pulls consul, postgres, redis and litellm itself.
-EOF
-fi
-if [ "$with_images" -eq 0 ]; then
-    cat <<EOF
-
-No images in this bundle (--no-images): the target host needs flame/{nexus,gateway,web,sandbox}:$tag in its docker
-daemon (or a registry and --registry), and the four upstream images as well.
 EOF
 fi

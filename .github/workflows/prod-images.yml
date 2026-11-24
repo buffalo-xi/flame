@@ -8,6 +8,11 @@ name: prod-images
 # Trigger is a release tag, not a push: `FLAME_TAG` is the whole upgrade/rollback mechanism, so an image that moves
 # under a tag somebody already deployed is the one thing this workflow must never do. A manual run takes the tag as an
 # input and produces exactly the same five images.
+#
+# One manual step no workflow can do (the PoC image has the same note): a GHCR package is private even when the
+# repository is public. After the first run, open the package (repository page -> Packages) and set its visibility -
+# otherwise `docker pull` for someone outside the organisation fails with "unauthorized". The release tarball itself
+# needs no such step; it is a normal release asset.
 on:
   push:
     tags: ['v*']
@@ -46,8 +51,10 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
-      - name: Build the products
-        run: ./scripts/build.sh
+      # Two products in one pass: the images below COPY out/, and the tarball is what a user downloads instead of
+      # installing a toolchain. --no-images, because the images are pushed by buildx in the steps after this one.
+      - name: Build the products and the host bundle
+        run: ./scripts/release.sh --tag "$TAG" --no-images
         working-directory: deploy/prod
 
       - uses: docker/setup-buildx-action@v3
@@ -125,3 +132,40 @@ jobs:
             echo
             echo "On the target host: \`sudo ./scripts/install.sh --tag $TAG --registry $NS\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Also on the run page, so a manual run (no tag, no release) still produces something downloadable.
+      - name: Upload the host bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: flame-prod-${{ env.TAG }}
+          path: |
+            deploy/prod/release/flame-prod-*.tar.gz
+            deploy/prod/release/SHA256SUMS
+          if-no-files-found: error
+
+      # Only for a real tag. This tarball is the host side of a deployment - the two executor binaries that cannot be
+      # containers, the units, the config templates and the scripts - and it is deliberately the whole answer a user
+      # needs besides the images: download, extract, one install command.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            deploy/prod/release/flame-prod-*.tar.gz
+            deploy/prod/release/SHA256SUMS
+          fail_on_unmatched_files: true
+          body: |
+            Images (linux/amd64, `${{ env.TAG }}`): `${{ env.NS }}/{base,nexus,gateway,web,sandbox}`
+
+            On a fresh host, as root:
+
+            ```bash
+            mkdir -p /srv/flame/dist && cd /srv/flame/dist
+            curl -fLO ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/flame-prod-${{ env.TAG }}.tar.gz
+            tar -xzf flame-prod-${{ env.TAG }}.tar.gz
+            sudo ./scripts/install.sh --tag ${{ env.TAG }} --check --registry ${{ env.NS }}
+            sudo ./scripts/install.sh --tag ${{ env.TAG }} --registry ${{ env.NS }}
+            ```
+
+            Then the start order is in `nexus/docs/deployment-runbook.md` section 7.1 (data plane, migrate, bootstrap,
+            executors, application plane, `health.sh`).
