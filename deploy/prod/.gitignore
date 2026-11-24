@@ -3,3 +3,6 @@ out/
 
 # A local trial's rendered configuration, secrets and pid file (scripts/dev-up.sh).
 .devrun/
+
+# A release bundle produced by scripts/release.sh: the runnable tarball, the image tarball and SHA256SUMS.
+release/

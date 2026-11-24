@@ -60,6 +60,7 @@ deploy/prod/
 │  ├─ lib.sh                        共用：log/die、密钥生成、配置渲染器
 │  ├─ flame                          安装到 /usr/local/bin 的包装脚本
 │  ├─ build.sh  images.sh           产物与镜像（images.sh 另有 save/load 做离线交付）
+│  ├─ release.sh                    一条命令：产物 + 镜像 + 两个 tar + SHA256SUMS
 │  ├─ install.sh                    前置检查、落位、渲染、装 unit、导入镜像
 │  ├─ migrate.sh  migrate-apply.sh  平台 SQL（固定顺序，--check 校验文件集合）
 │  ├─ bootstrap.sh  smoke.sh        一次性种子（含 v1 回填）/ 端到端调用并断言拿到回答
@@ -67,20 +68,27 @@ deploy/prod/
 ├─ env/flame.env.example            每个变量的用途与改坏的后果
 ├─ env/SECRETS.zh.md                影响面与轮换风险表（英文见 SECRETS.md）
 ├─ .devrun/                         试跑的渲染配置与密钥（gitignore）
-└─ out/                             构建产物（gitignore）
+├─ out/                             构建产物（gitignore）
+└─ release/                         release.sh 写出的发布包：两个 tar + SHA256SUMS（gitignore）
 ```
 
 ## 操作顺序
 
 ```bash
-# 构建机（有 go 与 node）
+# 构建机（有 go、node 与 docker）：一条命令打齐一次发布所需
+./scripts/release.sh --tag 2026.12.01
+#   deploy/prod/release/flame-prod-2026.12.01.tar.gz    可运行目录树（产物、脚本、配置、unit）
+#   deploy/prod/release/flame-images-2026.12.01.tar     五个镜像，给没有 registry 的机器
+#   deploy/prod/release/SHA256SUMS                      目标机上核验两者
+
+# 同样的三步，一次一步（release.sh --no-images 只做第一步）
 ./scripts/build.sh
 ./scripts/images.sh build --tag 2026.12.01
-./scripts/images.sh save  --tag 2026.12.01 --dir /srv/flame/release-images   # 离线交付
+./scripts/images.sh save  --tag 2026.12.01 --dir /srv/flame/dist   # 离线交付
 
-# 目标机，root
+# 目标机，root：把两个包拷进同一个目录，在其下解开目录树
 ./scripts/install.sh --tag 2026.12.01 --check      # 只做前置检查，什么都不改
-./scripts/install.sh --tag 2026.12.01 --images /srv/flame/release-images
+./scripts/install.sh --tag 2026.12.01 --images /srv/flame/dist
 
 flame up -d consul postgres redis litellm          # 先起数据面
 ./scripts/migrate.sh                               # 平台 SQL，按依赖序

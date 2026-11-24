@@ -64,6 +64,7 @@ deploy/prod/
 │  ├─ lib.sh                        shared: log/die, secret generation, the config renderer
 │  ├─ flame                          the wrapper installed to /usr/local/bin
 │  ├─ build.sh  images.sh           products and images (images.sh also does save/load for offline delivery)
+│  ├─ release.sh                    one command: products + images + both tarballs + SHA256SUMS
 │  ├─ install.sh                    preflight, placement, rendering, units, image import
 │  ├─ migrate.sh  migrate-apply.sh  platform SQL (ordered list, `--check` compares the file set)
 │  ├─ bootstrap.sh  smoke.sh        one-shot seed (+ v1 backfill) / end-to-end call with a real answer
@@ -71,20 +72,27 @@ deploy/prod/
 ├─ env/flame.env.example            every variable, what it is for, and what breaks when it changes
 ├─ env/SECRETS.md                   impact and rotation table (+ zh mirror)
 ├─ .devrun/                         a trial's rendered config and secrets (gitignored)
-└─ out/                             build products (gitignored)
+├─ out/                             build products (gitignored)
+└─ release/                         the release bundle release.sh writes: two tarballs + SHA256SUMS (gitignored)
 ```
 
 ## Order of operations
 
 ```bash
-# on a build machine with go and node
+# on a build machine with go, node and docker: one command, everything a release needs
+./scripts/release.sh --tag 2026.12.01
+#   deploy/prod/release/flame-prod-2026.12.01.tar.gz    the runnable tree (products, scripts, config, units)
+#   deploy/prod/release/flame-images-2026.12.01.tar     the five images, for a host without a registry
+#   deploy/prod/release/SHA256SUMS                      verify both, on the target machine
+
+# the same three steps, one at a time (release.sh --no-images stops after the first)
 ./scripts/build.sh
 ./scripts/images.sh build --tag 2026.12.01
-./scripts/images.sh save  --tag 2026.12.01 --dir /srv/flame/release-images   # offline delivery
+./scripts/images.sh save  --tag 2026.12.01 --dir /srv/flame/dist   # offline delivery
 
-# on the host, as root
+# on the host, as root: copy both archives into one directory, extract the tree there
 ./scripts/install.sh --tag 2026.12.01 --check      # prerequisites only, changes nothing
-./scripts/install.sh --tag 2026.12.01 --images /srv/flame/release-images
+./scripts/install.sh --tag 2026.12.01 --images /srv/flame/dist
 
 flame up -d consul postgres redis litellm          # data plane first
 ./scripts/migrate.sh                               # platform SQL, in dependency order

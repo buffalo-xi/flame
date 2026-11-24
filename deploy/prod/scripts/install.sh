@@ -3,7 +3,7 @@
 #
 #   sudo ./scripts/install.sh --tag 2026.12.01 --check   # prerequisites only, changes nothing
 #   sudo ./scripts/install.sh --tag 2026.12.01           # place the release and the units
-#   sudo ./scripts/install.sh --tag 2026.12.01 --images /srv/flame/release-images
+#   sudo ./scripts/install.sh --tag 2026.12.01 --images /srv/flame/dist
 #
 # Idempotent: running it twice with the same tag only refreshes files. It never touches /etc/flame/flame.env,
 # the rendered service configurations or /srv/flame/data once they exist - those carry host policy, secrets and

@@ -229,6 +229,7 @@ deploy/prod/
 │  ├─ lib.sh                           log/die, secret generation, the config renderer (shared by install and dev-up)
 │  ├─ flame                            the wrapper: loads the env file, expands COMPOSE_FILE, installed to /usr/local/bin
 │  ├─ build.sh     images.sh           cross-compile + four images; images.sh also does save / load for offline delivery
+│  ├─ release.sh                       one entry point: products, images, both tarballs and SHA256SUMS in one directory
 │  ├─ install.sh                       preflight (--check), place the release, render configs, install units, load images
 │  ├─ migrate.sh   migrate-apply.sh    host orchestration / in-container SQL in dependency order (--check compares the file set)
 │  ├─ bootstrap.sh health.sh           the one-shot seed job (and the v1 backfill) / the section 13 acceptance checks
@@ -400,14 +401,20 @@ SELinux enforcing the port also needs `semanage port -a -t http_port_t -p tcp 27
 ## 7. Install
 
 ```bash
-# build machine (has go and node)
+# build machine (has go, node and docker): one command builds everything a release needs
+./scripts/release.sh --tag $FLAME_TAG
+#   deploy/prod/release/flame-prod-$FLAME_TAG.tar.gz    the runnable tree
+#   deploy/prod/release/flame-images-$FLAME_TAG.tar     the five images, for a host without a registry
+#   deploy/prod/release/SHA256SUMS                      verify both on the target host
+
+# the same steps one at a time (release.sh --no-images stops after the first)
 ./scripts/build.sh                                  # native binaries + frontend + the SQL copy -> out/
 ./scripts/images.sh build --tag $FLAME_TAG          # base / nexus / gateway / web + the sandbox image
-./scripts/images.sh save  --tag $FLAME_TAG --dir /srv/flame/release-images   # offline delivery
+./scripts/images.sh save  --tag $FLAME_TAG --dir /srv/flame/dist   # offline delivery
 
-# target host (root)
+# target host (root): both archives in one directory, the tree extracted there
 sudo ./scripts/install.sh --tag $FLAME_TAG --check                        # checks only, changes nothing
-sudo ./scripts/install.sh --tag $FLAME_TAG --images /srv/flame/release-images
+sudo ./scripts/install.sh --tag $FLAME_TAG --images /srv/flame/dist
 flame up -d consul postgres redis litellm           # data plane first
 ./scripts/migrate.sh                                # platform SQL; --check only compares the file set
 flame --profile jobs run --rm bootstrap             # platform admin + t0 seed, see §7.2
@@ -415,6 +422,12 @@ systemctl start flame-sandboxd flame-browserd       # the two bare-metal executo
 flame up -d                                         # nexus / gateways / web
 ./scripts/health.sh                                 # the §13 checks, naming whatever fails
 ```
+
+`release.sh` exists because those three build steps have an order and the bundle is the artefact that actually travels:
+a release that forgets the image tarball, or packs a tree without the binaries `build.sh` just produced, fails only on
+the target host — after the copy. It normalises the script modes before packing (a Windows build host writes `0666`)
+and prints the extract-then-install commands for the target host when it finishes; `--no-images` builds the products
+only, for a build machine with no docker daemon.
 
 `install.sh` places, renders, installs units and enables them; it **starts nothing**. The start order is part of the
 installation (data plane → SQL → seed → executors → application plane), and folding it into one script would let a

@@ -461,12 +461,17 @@ installation is 7.1.
 ### 7.1 The production host
 
 ```bash
+# 0) on the build machine (go, node and docker): products, images, both tarballs and SHA256SUMS in one directory.
+#    Copy the two archives over, then extract the tree where they sit (here /srv/flame/dist) - install.sh reads both
+#    from that one directory, so nothing has to be sorted out on the host.
+./scripts/release.sh --tag "$FLAME_TAG"
+
 # 1) preflight: either it passes or it names what is missing (it changes nothing)
 sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
 
 # 2) place: release, units, wrapper, the four rendered configs and redis.conf; a first run also writes
-#    /etc/flame/flame.env. For offline delivery add --images <dir with the tarball>: it docker-loads first.
-sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/release-images
+#    /etc/flame/flame.env. --images points at the directory holding the image tarball: it docker-loads first.
+sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/dist
 
 # 3) data plane first
 flame up -d consul postgres redis litellm

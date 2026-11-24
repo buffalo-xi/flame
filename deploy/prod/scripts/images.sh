@@ -2,8 +2,8 @@
 # Build, save and load the four Flame images plus the sandbox runtime image.
 #
 #   ./scripts/images.sh build --tag 2026.12.01
-#   ./scripts/images.sh save  --tag 2026.12.01 --dir /srv/flame/release-images
-#   ./scripts/images.sh load  --dir /srv/flame/release-images
+#   ./scripts/images.sh save  --tag 2026.12.01 --dir /srv/flame/dist
+#   ./scripts/images.sh load  --dir /srv/flame/dist
 #
 # Everything is tagged with the release tag, including flame/base: base changes rarely, so rebuilding it is a
 # cache hit, and one tag keeps "which base does this app image sit on" answerable without a second version
@@ -91,7 +91,8 @@ case "$cmd" in
     save)
         [ -n "$tag" ] || die "--tag is required"
         [ -n "$dir" ] || die "--dir is required (where the tarball goes)"
-        install -d "$dir"
+        # mkdir rather than install: the release host may be Windows (Git Bash), where `install` does not exist.
+        mkdir -p "$dir"
         # One tarball, not five: an offline bundle is copied to the target machine by hand.
         file="$dir/flame-images-$tag.tar"
         log "saving to $file"

@@ -450,12 +450,17 @@ shell 工具能执行但看不到租户文件。正式部署走下面的 7.1。
 ### 7.1 生产主机
 
 ```bash
+# 0) 在构建机（有 go、node、docker）：产物、镜像、两个 tar 与 SHA256SUMS 一次落进同一目录。
+#    把两个包拷过来，就在它们所在处解开目录树（这里是 /srv/flame/dist）——install.sh 从同一个目录读两者，
+#    主机上不需要再整理路径。
+./scripts/release.sh --tag "$FLAME_TAG"
+
 # 1) 前置检查：要么通过，要么点名缺什么（它不改任何东西）
 sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
 
 # 2) 落位：release、unit、包装脚本、渲染好的四份配置与 redis.conf；首次运行会生成 /etc/flame/flame.env
-#    离线交付时加 --images <tar 所在目录>，它会先 docker load
-sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/release-images
+#    --images 指向镜像 tar 所在目录，它会先 docker load
+sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/dist
 
 # 3) 先起数据面
 flame up -d consul postgres redis litellm
