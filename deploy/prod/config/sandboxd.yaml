@@ -40,7 +40,7 @@ network: on-request
 
 docker:
   binary: docker
-  image: "flame/sandbox:${FLAME_TAG}"
+  image: "${FLAME_IMAGE_NS}/sandbox:${FLAME_TAG}"
   # on-request needs a real network to switch to when a request asks for egress; "none" would make that
   # branch impossible and startup refuses the combination.
   network: bridge

@@ -18,7 +18,14 @@ rand_hex() { openssl rand -hex 24; }
 
 # Variables a template may reference. Keep in step with config/sandboxd.yaml, browserd.yaml, sandboxg.yaml,
 # browserg.yaml and redis/redis.conf.tmpl - dev-up.sh checks the set and fails loudly on an unlisted placeholder.
-RENDER_VARS="SANDBOX_TOKEN BROWSER_TOKEN REDIS_PASSWORD FLAME_TAG FLAME_CONSUL_ADDR_HOST FLAME_CONSUL_ADDR_NET FLAME_REDIS_ADDR"
+RENDER_VARS="SANDBOX_TOKEN BROWSER_TOKEN REDIS_PASSWORD FLAME_TAG FLAME_IMAGE_NS FLAME_CONSUL_ADDR_HOST FLAME_CONSUL_ADDR_NET FLAME_REDIS_ADDR"
+
+# The one place an image name is built: `flame` is what a locally built release uses, a registry delivery sets it to
+# e.g. ghcr.io/acme/flame (install.sh --registry does that). compose, sandboxd.yaml and images.sh all repeat the
+# default rather than reading this file - compose is a data file and images.sh never sources it - so a change here has
+# to be mirrored in those three places.
+: "${FLAME_IMAGE_NS:=flame}"
+export FLAME_IMAGE_NS
 
 # render <template> <output> [mode] - substitute ${VAR} for the variables above.
 #
@@ -59,4 +66,42 @@ check_render_vars() {
         esac
     done
     [ -z "$unknown" ] || die "templates use placeholders render() does not set:$unknown (add them to RENDER_VARS)"
+}
+
+# ---------------------------------------------------------------------------
+# Image names
+# ---------------------------------------------------------------------------
+# One definition each, because three callers ask the same question: images.sh builds and pushes them, install.sh checks
+# they are present, release.sh writes the same set into the bundle. The upstream images are read from compose.yaml
+# instead of being repeated - the tag written there is exactly the tag that has to be pulled, and a second copy would
+# drift the first time compose is bumped.
+
+# flame_images <namespace> <tag> - the five images this repository builds; base first, because the others are FROM it.
+flame_images() {
+    printf '%s\n' \
+        "$1/base:$2" \
+        "$1/nexus:$2" \
+        "$1/gateway:$2" \
+        "$1/web:$2" \
+        "$1/sandbox:$2"
+}
+
+# flame_runtime_images <namespace> <tag> - what a running host needs. base is build-time only: the final images carry
+# its layers, so pulling or saving it separately would add a few hundred megabytes and satisfy nothing.
+flame_runtime_images() {
+    flame_images "$1" "$2" | grep -v '/base:'
+}
+
+# upstream_images <deploy/prod> - the literal image references compose pulls (consul, postgres, redis, litellm).
+# Lines starting with a `$` are skipped on purpose: those are the Flame images, whose namespace is the caller's.
+upstream_images() {
+    grep -hE '^[[:space:]]+image:' "$1/compose.yaml" "$1/compose.multi-host.yaml" 2>/dev/null \
+        | sed -e 's/^[[:space:]]*image:[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' \
+        | grep -v '^[$]' \
+        | sort -u
+}
+
+# required_images <deploy/prod> <namespace> <tag> - everything `flame up -d` can ask for, on either delivery path.
+required_images() {
+    { flame_runtime_images "$2" "$3"; upstream_images "$1"; } | sort -u
 }

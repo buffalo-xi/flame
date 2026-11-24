@@ -2,13 +2,15 @@
 # Place a release on this machine: products, compose files, units, configuration, the `flame` wrapper.
 #
 #   sudo ./scripts/install.sh --tag 2026.12.01 --check   # prerequisites only, changes nothing
-#   sudo ./scripts/install.sh --tag 2026.12.01           # place the release and the units
+#   sudo ./scripts/install.sh --tag 2026.12.01           # place the release and the units, images already local
 #   sudo ./scripts/install.sh --tag 2026.12.01 --images /srv/flame/dist
+#   sudo ./scripts/install.sh --tag 2026.12.01 --registry ghcr.io/acme/flame
 #
 # Idempotent: running it twice with the same tag only refreshes files. It never touches /etc/flame/flame.env,
 # the rendered service configurations or /srv/flame/data once they exist - those carry host policy, secrets and
 # tenant data, and an upgrade must not overwrite them. Pass --force-config to re-render the four generated
-# configurations from the release's templates (it overwrites the files, nowhere else).
+# configurations from the release's templates (it overwrites the files, nowhere else). --registry is the one thing
+# that does edit flame.env (the FLAME_IMAGE_NS line): compose has to ask for the same names it pulled.
 #
 # It does not start anything: starting is explicit, and the order matters (data plane, migrate, bootstrap,
 # executors, application plane). See the runbook, section 7.
@@ -19,6 +21,7 @@ prod=$(cd -- "$here/.." && pwd)
 from=$prod/out
 tag="${FLAME_TAG:-}"
 images_dir=""
+registry=""
 check_only=0
 force_config=0
 
@@ -30,15 +33,24 @@ while [ $# -gt 0 ]; do
         --tag)          tag=${2:?--tag needs a value}; shift 2 ;;
         --from)         from=${2:?--from needs a value}; shift 2 ;;
         --images)       images_dir=${2:?--images needs a value}; shift 2 ;;
+        --registry)     registry=${2:?--registry needs a value}; shift 2 ;;
         --check)        check_only=1; shift ;;
         --force-config) force_config=1; shift ;;
-        -h|--help)      sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)      sed -n '2,16p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *)              die "unknown argument: $1" ;;
     esac
 done
 
 [ -n "$tag" ] || die "--tag is required (or set FLAME_TAG)"
 [ "$(id -u)" -eq 0 ] || die "run as root (it creates users, directories and systemd units)"
+[ -z "$registry" ] || [ -z "$images_dir" ] \
+    || die "--registry and --images are two delivery paths: pass one (a tarball already carries the images)"
+
+# The namespace every image reference resolves through, and the one written into flame.env by --registry.
+if [ -n "$registry" ]; then
+    FLAME_IMAGE_NS=${registry%/}
+    export FLAME_IMAGE_NS
+fi
 
 
 # ---------------------------------------------------------------------------
@@ -70,12 +82,27 @@ fi
 
 if [ -n "$images_dir" ]; then
     ls "$images_dir"/*.tar >/dev/null 2>&1 && ok "image bundle in $images_dir" || bad "no *.tar in $images_dir"
-else
-    for img in nexus gateway web sandbox; do
-        if docker image inspect "flame/$img:$tag" >/dev/null 2>&1; then
-            ok "image flame/$img:$tag"
+    note "the images inside the bundle are checked after loading, not here"
+elif [ -n "$registry" ]; then
+    # Resolve, do not pull: --check changes nothing, and this is exactly the question a registry delivery cannot answer
+    # later without a twenty-minute pull first. A manifest miss here is "wrong tag", "wrong namespace" or "not logged
+    # in", and all three are cheap to fix now.
+    for img in $(flame_runtime_images "$FLAME_IMAGE_NS" "$tag"); do
+        if docker manifest inspect "$img" >/dev/null 2>&1; then
+            ok "registry image $img"
         else
-            bad "image flame/$img:$tag missing (build it, or pass --images <dir>)"
+            bad "cannot resolve $img (docker login, wrong --registry, or the tag was never pushed)"
+        fi
+    done
+    note "consul / postgres / redis / litellm still come from their own publishers unless the host has them"
+else
+    # Everything compose can ask for, upstream included: a missing postgres or litellm image is not a pull error at
+    # this point, it is "the container exited immediately" ten minutes later.
+    for img in $(required_images "$prod" "$FLAME_IMAGE_NS" "$tag"); do
+        if docker image inspect "$img" >/dev/null 2>&1; then
+            ok "image $img"
+        else
+            bad "image $img missing (build it, pass --images <dir>, or --registry <ns>)"
         fi
     done
 fi
@@ -172,12 +199,27 @@ chmod 0755 "$release/scripts/flame"
 ln -sfn "$release" /opt/flame/current
 
 # ---------------------------------------------------------------------------
-# Images (offline path)
+# Images: pulled from a registry, or loaded from a tarball
 # ---------------------------------------------------------------------------
-if [ -n "$images_dir" ]; then
+if [ -n "$registry" ]; then
+    log "pulling images from $FLAME_IMAGE_NS"
+    # Only the runtime images: the base is build-time, and the final images already carry its layers.
+    for img in $(flame_runtime_images "$FLAME_IMAGE_NS" "$tag"); do
+        docker pull "$img"
+    done
+elif [ -n "$images_dir" ]; then
     log "loading images from $images_dir"
     "$release/scripts/images.sh" load --dir "$images_dir"
 fi
+
+# Whichever path ran, the host has to end up holding the whole set: compose asks for these by name and has no fallback,
+# so a gap is reported here instead of as a container that exits during startup.
+missing=""
+for img in $(required_images "$prod" "$FLAME_IMAGE_NS" "$tag"); do
+    docker image inspect "$img" >/dev/null 2>&1 || missing="$missing $img"
+done
+[ -z "$missing" ] \
+    || die "images missing after delivery:$missing (pull them, or put them in the bundle)"
 
 # ---------------------------------------------------------------------------
 # Convention: /etc/flame/flame.env
@@ -190,6 +232,10 @@ if [ ! -f /etc/flame/flame.env ]; then
 # Changing FLAME_TAG is the whole upgrade/rollback procedure.
 
 FLAME_TAG=$tag
+
+# Where the four Flame images live: `flame` for a release built on this host, a registry prefix (install.sh
+# --registry) for one pulled from it. compose.yaml and sandboxd.yaml both read this value, so the three agree.
+FLAME_IMAGE_NS=${FLAME_IMAGE_NS:-flame}
 
 # Tier 1 (everything on this host): the executors register over loopback.
 # Tier 2 (extra executor machines): set this machine's intranet IP and FLAME_CONSUL_ADDR_HOST to it.
@@ -243,6 +289,20 @@ else
     if ! grep -qx "FLAME_TAG=$tag" /etc/flame/flame.env; then
         warn "it pins FLAME_TAG=$(sed -n 's/^FLAME_TAG=//p' /etc/flame/flame.env | head -n1); the release just placed is $tag"
         warn "the stack keeps running the old tag until that line is changed (that is the rollback mechanism)"
+    fi
+    # The one line --registry is allowed to write: `flame up -d` interpolates the namespace from this file, so a pull
+    # that is not recorded here is undone by the next start (compose would ask for flame/nexus again).
+    if [ -n "$registry" ]; then
+        current=$(sed -n 's/^FLAME_IMAGE_NS=//p' /etc/flame/flame.env | head -n1)
+        if [ "$current" != "$FLAME_IMAGE_NS" ]; then
+            log "recording FLAME_IMAGE_NS=$FLAME_IMAGE_NS in /etc/flame/flame.env"
+            if grep -q '^FLAME_IMAGE_NS=' /etc/flame/flame.env; then
+                sed -i "s|^FLAME_IMAGE_NS=.*|FLAME_IMAGE_NS=$FLAME_IMAGE_NS|" /etc/flame/flame.env
+            else
+                printf '\n# Written by install.sh --registry; compose and sandboxd.yaml read it.\nFLAME_IMAGE_NS=%s\n' \
+                    "$FLAME_IMAGE_NS" >> /etc/flame/flame.env
+            fi
+        fi
     fi
 fi
 

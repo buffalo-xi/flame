@@ -6,9 +6,13 @@
 # fills. Nothing is compiled here: the host has Go and node, the image gets the products.
 #
 # Build: docker build -f images/nexus.Dockerfile --build-arg FLAME_TAG=<tag> -t flame/nexus:<tag> .
+#
+# FLAME_BASE exists for the registry path: a CI build pushes flame/base first and then points this at the pushed
+# name (ghcr.io/<org>/flame/base), so the image is built from the same base other machines will pull.
 
 ARG FLAME_TAG=latest
-FROM flame/base:${FLAME_TAG}
+ARG FLAME_BASE=flame/base
+FROM ${FLAME_BASE}:${FLAME_TAG}
 
 # nexus serves the console and the API; backfillversions is the version-directory repair tool; bootstrap is
 # the one-shot seeder the `bootstrap` compose job runs.

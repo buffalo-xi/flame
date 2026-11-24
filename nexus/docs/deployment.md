@@ -228,7 +228,7 @@ deploy/prod/
 ├─ scripts/
 │  ├─ lib.sh                           log/die, secret generation, the config renderer (shared by install and dev-up)
 │  ├─ flame                            the wrapper: loads the env file, expands COMPOSE_FILE, installed to /usr/local/bin
-│  ├─ build.sh     images.sh           cross-compile + four images; images.sh also does save / load for offline delivery
+│  ├─ build.sh     images.sh           cross-compile + four images; images.sh also pushes, and saves / loads for offline delivery
 │  ├─ release.sh                       one entry point: products, images, both tarballs and SHA256SUMS in one directory
 │  ├─ install.sh                       preflight (--check), place the release, render configs, install units, load images
 │  ├─ migrate.sh   migrate-apply.sh    host orchestration / in-container SQL in dependency order (--check compares the file set)
@@ -401,10 +401,10 @@ SELinux enforcing the port also needs `semanage port -a -t http_port_t -p tcp 27
 ## 7. Install
 
 ```bash
-# build machine (has go, node and docker): one command builds everything a release needs
+# build machine (has go, node and docker): one command builds everything an offline release needs
 ./scripts/release.sh --tag $FLAME_TAG
 #   deploy/prod/release/flame-prod-$FLAME_TAG.tar.gz    the runnable tree
-#   deploy/prod/release/flame-images-$FLAME_TAG.tar     the five images, for a host without a registry
+#   deploy/prod/release/flame-images-$FLAME_TAG.tar     the four runtime images + consul / postgres / redis / litellm
 #   deploy/prod/release/SHA256SUMS                      verify both on the target host
 
 # the same steps one at a time (release.sh --no-images stops after the first)
@@ -412,9 +412,17 @@ SELinux enforcing the port also needs `semanage port -a -t http_port_t -p tcp 27
 ./scripts/images.sh build --tag $FLAME_TAG          # base / nexus / gateway / web + the sandbox image
 ./scripts/images.sh save  --tag $FLAME_TAG --dir /srv/flame/dist   # offline delivery
 
-# target host (root): both archives in one directory, the tree extracted there
+# ... or publish the images to a registry and carry no tarball at all
+./scripts/images.sh push  --tag $FLAME_TAG --registry ghcr.io/acme/flame
+
+# target host (root), tarball path: both archives in one directory, the tree extracted there
 sudo ./scripts/install.sh --tag $FLAME_TAG --check                        # checks only, changes nothing
 sudo ./scripts/install.sh --tag $FLAME_TAG --images /srv/flame/dist
+
+# target host (root), registry path: pulls the four runtime images and records the namespace in flame.env
+sudo ./scripts/install.sh --tag $FLAME_TAG --check --registry ghcr.io/acme/flame
+sudo ./scripts/install.sh --tag $FLAME_TAG --registry ghcr.io/acme/flame
+
 flame up -d consul postgres redis litellm           # data plane first
 ./scripts/migrate.sh                                # platform SQL; --check only compares the file set
 flame --profile jobs run --rm bootstrap             # platform admin + t0 seed, see §7.2
@@ -428,6 +436,12 @@ a release that forgets the image tarball, or packs a tree without the binaries `
 the target host — after the copy. It normalises the script modes before packing (a Windows build host writes `0666`)
 and prints the extract-then-install commands for the target host when it finishes; `--no-images` builds the products
 only, for a build machine with no docker daemon.
+
+The two delivery paths end in the same place: `--images <dir>` loads a tarball, `--registry <ns>` pulls the four
+runtime images and writes `FLAME_IMAGE_NS` into `/etc/flame/flame.env` (compose and the rendered `sandboxd.yaml` both
+read it from there). The four upstream images come from the bundle or from their own publishers, and `install.sh`
+refuses to finish with any of them missing — a gap there surfaces as a container that exits during startup, minutes
+later, with a log nobody connects to the install.
 
 `install.sh` places, renders, installs units and enables them; it **starts nothing**. The start order is part of the
 installation (data plane → SQL → seed → executors → application plane), and folding it into one script would let a

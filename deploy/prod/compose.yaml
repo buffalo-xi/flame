@@ -7,6 +7,10 @@
 #
 # Never call `docker compose` directly: use the wrapper (/usr/local/bin/flame). It loads
 # /etc/flame/flame.env and expands COMPOSE_FILE, so the command line is identical in every tier.
+#
+# FLAME_IMAGE_NS is where the four Flame images live: `flame` (the default) for a release built on this host,
+# `ghcr.io/<org>/flame` for one pulled from a registry (install.sh --registry writes it into flame.env). The
+# default is repeated here rather than defaulting silently, because a compose file has to be readable on its own.
 name: flame
 
 # xlog only mirrors to stdout when it detects a terminal; a container's stdout is a pipe, so without this
@@ -112,7 +116,7 @@ services:
     networks: [flame-net]
 
   nexus:
-    image: flame/nexus:${FLAME_TAG:?FLAME_TAG is required}
+    image: ${FLAME_IMAGE_NS:-flame}/nexus:${FLAME_TAG:?FLAME_TAG is required}
     restart: unless-stopped
     # uid 1000 is not cosmetic: the sandbox runs as 1000:1000 and writes tenant files, and this services'
     # downloads and plugin directories must be readable and deletable by both sides.
@@ -151,7 +155,7 @@ services:
     networks: [flame-net]
 
   sandboxg:
-    image: flame/gateway:${FLAME_TAG:?FLAME_TAG is required}
+    image: ${FLAME_IMAGE_NS:-flame}/gateway:${FLAME_TAG:?FLAME_TAG is required}
     restart: unless-stopped
     user: "1000:1000"
     command: ["/opt/flame/bin/sandboxg", "-config", "/etc/flame/config.yaml"]
@@ -167,7 +171,7 @@ services:
     networks: [flame-net]
 
   browserg:
-    image: flame/gateway:${FLAME_TAG:?FLAME_TAG is required}
+    image: ${FLAME_IMAGE_NS:-flame}/gateway:${FLAME_TAG:?FLAME_TAG is required}
     restart: unless-stopped
     user: "1000:1000"
     command: ["/opt/flame/bin/browserg", "-config", "/etc/flame/config.yaml"]
@@ -183,7 +187,7 @@ services:
     networks: [flame-net]
 
   web:
-    image: flame/web:${FLAME_TAG:?FLAME_TAG is required}
+    image: ${FLAME_IMAGE_NS:-flame}/web:${FLAME_TAG:?FLAME_TAG is required}
     restart: unless-stopped
     # nginx resolves `nexus` once, at startup: if the API container is not up yet, the config fails to load with
     # "host not found in upstream" and the web tier restart-loops until it is.
@@ -222,7 +226,7 @@ services:
     networks: [flame-net]
 
   bootstrap:
-    image: flame/nexus:${FLAME_TAG:?FLAME_TAG is required}
+    image: ${FLAME_IMAGE_NS:-flame}/nexus:${FLAME_TAG:?FLAME_TAG is required}
     profiles: ["jobs"]
     # Same uid and the same storage mount as nexus: the definition-domain files it materialises belong to
     # the tenant, and a root-owned copy would be unreadable for both nexus and the sandbox.

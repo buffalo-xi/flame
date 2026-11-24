@@ -472,6 +472,9 @@ sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
 # 2) place: release, units, wrapper, the four rendered configs and redis.conf; a first run also writes
 #    /etc/flame/flame.env. --images points at the directory holding the image tarball: it docker-loads first.
 sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/dist
+#    ... or, with the images published to a registry (`./scripts/images.sh push --tag "$FLAME_TAG" --registry <ns>`):
+#    it pulls the four runtime images and records <ns> as FLAME_IMAGE_NS in flame.env.
+# sudo ./scripts/install.sh --tag "$FLAME_TAG" --registry ghcr.io/acme/flame
 
 # 3) data plane first
 flame up -d consul postgres redis litellm

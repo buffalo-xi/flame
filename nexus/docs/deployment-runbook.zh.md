@@ -461,6 +461,9 @@ sudo ./scripts/install.sh --tag "$FLAME_TAG" --check
 # 2) 落位：release、unit、包装脚本、渲染好的四份配置与 redis.conf；首次运行会生成 /etc/flame/flame.env
 #    --images 指向镜像 tar 所在目录，它会先 docker load
 sudo ./scripts/install.sh --tag "$FLAME_TAG" --images /srv/flame/dist
+#    ……或者镜像已发布到 registry（`./scripts/images.sh push --tag "$FLAME_TAG" --registry <ns>`）：
+#    它会拉四个运行镜像，并把 <ns> 记为 flame.env 里的 FLAME_IMAGE_NS
+# sudo ./scripts/install.sh --tag "$FLAME_TAG" --registry ghcr.io/acme/flame
 
 # 3) 先起数据面
 flame up -d consul postgres redis litellm

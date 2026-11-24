@@ -221,7 +221,7 @@ deploy/prod/
 ├─ scripts/
 │  ├─ lib.sh                           log/die、密钥生成、配置渲染器（install 与 dev-up 共用）
 │  ├─ flame                            包装脚本：读 env、展开 COMPOSE_FILE，装到 /usr/local/bin
-│  ├─ build.sh     images.sh           交叉编译 + 四个镜像；images.sh 另有 save / load 做离线交付
+│  ├─ build.sh     images.sh           交叉编译 + 四个镜像；images.sh 另有 push，以及 save / load 做离线交付
 │  ├─ release.sh                       唯一入口：产物、镜像、两个 tar 与 SHA256SUMS 一次落到同一目录
 │  ├─ install.sh                       前置检查（--check）、落 release、渲染配置、装 unit、导入镜像
 │  ├─ migrate.sh   migrate-apply.sh    宿主编排作业 / 容器内按依赖序执行 SQL（--check 校验文件集合）
@@ -375,10 +375,10 @@ map $http_x_forwarded_proto $fwd_proto { default $scheme; https https; }
 ## 7. 安装
 
 ```bash
-# 构建机（有 go、node 与 docker）：一条命令打齐一次发布所需
+# 构建机（有 go、node 与 docker）：一条命令打齐一次离线发布所需
 ./scripts/release.sh --tag $FLAME_TAG
 #   deploy/prod/release/flame-prod-$FLAME_TAG.tar.gz    可运行目录树
-#   deploy/prod/release/flame-images-$FLAME_TAG.tar     五个镜像，给没有 registry 的机器
+#   deploy/prod/release/flame-images-$FLAME_TAG.tar     四个运行镜像 + consul / postgres / redis / litellm
 #   deploy/prod/release/SHA256SUMS                      在目标机上核验两者
 
 # 同样的步骤，一次一步（release.sh --no-images 只做第一步）
@@ -386,9 +386,17 @@ map $http_x_forwarded_proto $fwd_proto { default $scheme; https https; }
 ./scripts/images.sh build --tag $FLAME_TAG          # base / nexus / gateway / web + sandbox 镜像
 ./scripts/images.sh save  --tag $FLAME_TAG --dir /srv/flame/dist   # 离线交付
 
-# 目标机（root）：两个包拷进同一目录，目录树就地解开
+# ……或者把镜像推到 registry，完全不搬 tar
+./scripts/images.sh push  --tag $FLAME_TAG --registry ghcr.io/acme/flame
+
+# 目标机（root），走 tar：两个包拷进同一目录，目录树就地解开
 sudo ./scripts/install.sh --tag $FLAME_TAG --check                       # 只检查，不改任何东西
 sudo ./scripts/install.sh --tag $FLAME_TAG --images /srv/flame/dist
+
+# 目标机（root），走 registry：拉四个运行镜像，并把命名空间写进 flame.env
+sudo ./scripts/install.sh --tag $FLAME_TAG --check --registry ghcr.io/acme/flame
+sudo ./scripts/install.sh --tag $FLAME_TAG --registry ghcr.io/acme/flame
+
 flame up -d consul postgres redis litellm           # 数据面先起
 ./scripts/migrate.sh                                # 平台 SQL；--check 只校验文件集合
 flame --profile jobs run --rm bootstrap             # 平台管理员 + t0 种子，见 §7.2
@@ -400,6 +408,11 @@ flame up -d                                         # nexus / 网关 / web
 `release.sh` 存在的理由就是构建那三步有先后、而真正被搬走的是那个包：漏打镜像 tar、或把不含 `build.sh` 刚产出的
 二进制拷进包里，都只会等到目标机上才失败——而且是在拷贝之后。它在打包前统一脚本权限位（Windows 构建机会写成
 `0666`），结束时打印目标机"解包再 install"的命令；`--no-images` 只出产物，给连不到 docker daemon 的构建机用。
+
+两条交付路径终点相同：`--images <dir>` 解包加载，`--registry <ns>` 拉四个运行镜像并把 `FLAME_IMAGE_NS` 写进
+`/etc/flame/flame.env`（compose 与渲染后的 `sandboxd.yaml` 都从这里读）。四个上游镜像要么在离线包里、要么由各自
+发布方拉取；`install.sh` 只要发现缺一个就不肯收尾——否则它会在几分钟后表现成"容器启动即退出"，而日志里看不出
+和安装的关系。
 
 `install.sh` 只落位、渲染配置、装 unit 并 `enable`，**不启动任何东西**：启动顺序本身就是安装的一部分（数据面 →
 SQL → 种子 → 执行器 → 应用面），把它塞进一个脚本等于让半成品数据库和新代码赛跑。

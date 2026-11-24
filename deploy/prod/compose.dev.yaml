@@ -72,7 +72,7 @@ services:
   # there is no image path to inherit ownership from. This one-shot repairs them; it runs before anything that
   # writes, and it is idempotent.
   dev-fix-perms:
-    image: flame/base:${FLAME_TAG:?FLAME_TAG is required}
+    image: ${FLAME_IMAGE_NS:-flame}/base:${FLAME_TAG:?FLAME_TAG is required}
     user: "0:0"
     profiles: ["jobs"]
     entrypoint: ["/bin/sh", "-c", "chown -R 1000:1000 /mnt/data /mnt/nexus /mnt/sandboxg /mnt/browserg"]

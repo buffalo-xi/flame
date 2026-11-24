@@ -1,33 +1,41 @@
 #!/usr/bin/env bash
 # Build everything a production release needs, in one command.
 #
-#   ./scripts/release.sh --tag 2026.12.01
-#   ./scripts/release.sh --tag 2026.12.01 --no-images    # products only (no docker needed)
+#   ./scripts/release.sh --tag 2026.12.01                 # products + images + tarballs
+#   ./scripts/release.sh --tag 2026.12.01 --no-images     # products only (no docker needed)
+#   ./scripts/release.sh --tag 2026.12.01 --no-upstream   # leave consul/postgres/redis/litellm out of the tarball
 #
 # Products land in deploy/prod/release (gitignored):
 #   flame-prod-<tag>.tar.gz   runnable tree: compose + config + images + scripts + systemd + env + out/
-#   flame-images-<tag>.tar   the five images, for a machine without a registry
-#   SHA256SUMS               sha256 of both archives
+#   flame-images-<tag>.tar    the four runtime images plus the four upstream ones, for a host without a registry
+#   SHA256SUMS                sha256 of both archives
 #
 # Why one entry point: build.sh, images.sh build and images.sh save are three commands with an order, and the offline
 # bundle is the thing that actually travels. A release that forgets the image tarball, or packs a tree without the
 # binaries build.sh produced, fails only on the target host - after the copy.
+#
+# A host that can reach a registry does not need this tarball: `./scripts/images.sh push --tag <tag>` publishes the
+# images and the target host installs with `install.sh --registry <namespace>`.
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 prod=$(cd -- "$here/.." && pwd)
 rel=$prod/release
 
-log() { printf '\033[36m==> %s\033[0m\n' "$*"; }
-die() { printf 'release.sh: %s\n' "$*" >&2; exit 1; }
+# shellcheck source=scripts/lib.sh
+. "$here/lib.sh"
 
 tag=""
 with_images=1
+with_upstream=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --tag) tag=${2:?--tag needs a value}; shift 2 ;;
         --no-images) with_images=0; shift ;;
-        -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        # The upstream images (consul, postgres, redis, litellm) are what a fully offline host needs. Leaving them out
+        # keeps the tarball small when the target can pull them itself.
+        --no-upstream) with_upstream=0; shift ;;
+        -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
 done
@@ -48,8 +56,22 @@ log "compiling the products"
 if [ "$with_images" -eq 1 ]; then
     log "building the images"
     "$here/images.sh" build --tag "$tag"
+
+    # Pulling here rather than leaving it to images.sh save: that one refuses to write a tarball with a hole in it, and
+    # a release that stops after twenty minutes of building to say "docker pull postgres:18" is a worse trade.
+    if [ "$with_upstream" -eq 1 ]; then
+        log "pulling the upstream images"
+        for img in $(upstream_images "$prod"); do
+            docker pull "$img"
+        done
+    fi
+
     log "saving the image tarball"
-    "$here/images.sh" save --tag "$tag" --dir "$rel"
+    if [ "$with_upstream" -eq 1 ]; then
+        "$here/images.sh" save --tag "$tag" --dir "$rel"
+    else
+        "$here/images.sh" save --tag "$tag" --dir "$rel" --no-upstream
+    fi
 fi
 
 # The modes travel inside the tarball, and the first thing the target machine runs is ./scripts/install.sh: a build
@@ -93,11 +115,21 @@ on the target machine (copy both files into the same directory first):
   mkdir -p /srv/flame/dist && cd /srv/flame/dist
   tar -xzf flame-prod-$tag.tar.gz
   sudo ./scripts/install.sh --tag $tag --images /srv/flame/dist
+
+with a registry instead of the image tarball:
+  ./scripts/images.sh push --tag $tag          # then on the target host:
+  sudo ./scripts/install.sh --tag $tag --registry $FLAME_IMAGE_NS
 EOF
+if [ "$with_images" -eq 1 ] && [ "$with_upstream" -eq 0 ]; then
+    cat <<EOF
+
+The tarball has no upstream images (--no-upstream): the target host pulls consul, postgres, redis and litellm itself.
+EOF
+fi
 if [ "$with_images" -eq 0 ]; then
     cat <<EOF
 
-No image tarball in this bundle (--no-images): the target machine needs flame/{nexus,gateway,web,sandbox}:$tag
-already in its docker daemon, otherwise drop --images from the install command.
+No images in this bundle (--no-images): the target host needs flame/{nexus,gateway,web,sandbox}:$tag in its docker
+daemon (or a registry and --registry), and the four upstream images as well.
 EOF
 fi

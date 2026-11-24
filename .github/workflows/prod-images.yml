@@ -1,0 +1,127 @@
+name: prod-images
+
+# The production images, published so a target host needs no toolchain:
+#
+#   docker login ghcr.io
+#   sudo ./scripts/install.sh --tag <tag> --registry ghcr.io/<owner>/flame
+#
+# Trigger is a release tag, not a push: `FLAME_TAG` is the whole upgrade/rollback mechanism, so an image that moves
+# under a tag somebody already deployed is the one thing this workflow must never do. A manual run takes the tag as an
+# input and produces exactly the same five images.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (becomes FLAME_TAG; must not be reused)'
+        required: true
+
+concurrency:
+  group: prod-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # the reason this job exists: pushing to ghcr.io
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      # One namespace for all five images, so compose needs one variable (FLAME_IMAGE_NS) rather than five.
+      NS: ghcr.io/${{ github.repository_owner }}/flame
+    steps:
+      - uses: actions/checkout@v4
+
+      # The images contain the products, they do not compile them: nexus/base/gateway/web Dockerfiles COPY out/, and
+      # sandboxd/Dockerfile COPYs sandboxd/bin/codehost-linux. Both are what this step writes.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: nexus/go.mod
+          cache-dependency-path: nexus/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Build the products
+        run: ./scripts/build.sh
+        working-directory: deploy/prod
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # base goes first and is pushed before the others are built: they are FROM it, and building them against a local
+      # base that was never pushed would produce images this registry cannot explain.
+      - name: Build and push the base
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/prod/images
+          file: deploy/prod/images/base.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.NS }}/base:${{ env.TAG }}
+
+      - name: Build and push nexus
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/prod
+          file: deploy/prod/images/nexus.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.NS }}/nexus:${{ env.TAG }}
+          build-args: |
+            FLAME_TAG=${{ env.TAG }}
+            FLAME_BASE=${{ env.NS }}/base
+
+      - name: Build and push gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/prod
+          file: deploy/prod/images/gateway.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.NS }}/gateway:${{ env.TAG }}
+
+      - name: Build and push web
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/prod
+          file: deploy/prod/images/web.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.NS }}/web:${{ env.TAG }}
+
+      # The sandbox image is built from sandboxd/Dockerfile as it stands, with sandboxd/ as the context: that
+      # Dockerfile COPYs bin/codehost-linux from it, and a build from the repository root would silently produce an
+      # image without codehost.
+      - name: Build and push sandbox
+        uses: docker/build-push-action@v6
+        with:
+          context: sandboxd
+          file: sandboxd/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.NS }}/sandbox:${{ env.TAG }}
+          # First build ~10 min (apt + Python packages), later ones are cache hits on the unchanged layers.
+          cache-from: type=gha,scope=sandbox
+          cache-to: type=gha,mode=max,scope=sandbox
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo '```'
+            for img in base nexus gateway web sandbox; do echo "$NS/$img:$TAG"; done
+            echo '```'
+            echo
+            echo "On the target host: \`sudo ./scripts/install.sh --tag $TAG --registry $NS\`"
+          } >> "$GITHUB_STEP_SUMMARY"
