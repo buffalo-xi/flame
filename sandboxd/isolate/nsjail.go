@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -155,11 +156,43 @@ func resolveRootfsCmd(rootfs, cmd string) string {
 		return cmd
 	}
 	for _, dir := range strings.Split(nsjailPath, ":") {
-		guest := filepath.Join(dir, cmd)     // in-jail path
-		host := filepath.Join(rootfs, guest) // host-side path (rootfs prefix)
-		if fi, err := os.Stat(host); err == nil && !fi.IsDir() {
+		guest := filepath.Join(dir, cmd) // in-jail path
+		if rootfsHasFile(rootfs, guest, 0) {
 			return guest
 		}
 	}
 	return cmd
+}
+
+// rootfsHasFile reports whether guest is a regular file inside rootfs, resolving symlinks with jail semantics.
+//
+// The difference from os.Stat(filepath.Join(rootfs, guest)) matters: a rootfs prepared from a container image carries
+// absolute symlinks such as /usr/local/bin/lua -> /usr/bin/lua5.4. On the host that target usually does not exist, so a
+// plain Stat sees a dangling link and reports "missing", and the command name is passed to nsjail unresolved — inside
+// the jail execve() then fails with ENOENT and the language is reported as unavailable. An absolute target therefore
+// has to be re-anchored at rootfs, which is where it points once the jail is up.
+//
+// The returned path is still guest, not the target: inside the jail the kernel resolves the link the same way.
+func rootfsHasFile(rootfs, guest string, depth int) bool {
+	const maxSymlinkDepth = 8
+	if depth > maxSymlinkDepth {
+		// A link cycle: treat it as missing rather than looping.
+		return false
+	}
+	host := filepath.Join(rootfs, guest) // host-side path (rootfs prefix)
+	fi, err := os.Lstat(host)
+	if err != nil {
+		return false
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return !fi.IsDir()
+	}
+	target, err := os.Readlink(host)
+	if err != nil {
+		return false
+	}
+	if !path.IsAbs(target) {
+		target = path.Join(path.Dir(guest), target)
+	}
+	return rootfsHasFile(rootfs, target, depth+1)
 }
