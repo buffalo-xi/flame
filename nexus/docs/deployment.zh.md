@@ -418,7 +418,7 @@ SQL → 种子 → 执行器 → 应用面），把它塞进一个脚本等于�
 | schema | 种子内容 | 来源 |
 |---|---|---|
 | `platform` | 平台表结构、供应商预设（`llm_provider_presets` / `llm_presets_seed`）、限额默认值（`zz_limit_defaults`）、能力闸门（`capability_gates` / `plugin_gates` / `tenant_plugins`） | `nexus/platform/sql/*.sql` 按 `migrate-apply.sh` 的依赖序执行（与 `verify-sql.ps1` 同一份清单，`--check` 要求文件集合相等） |
-| `t0` | 租户表结构、物化到磁盘的定义域文件（`main` 的 `AGENT.md`、四个受保护技能）、预置的 LLM 供应商与模型（`DeepSeek` 空密钥、`deepseek-flash`）、注册行、租户管理员、全部能力、API key | `docker compose run --rm bootstrap`，等价于 PoC 的 `seedpoc` |
+| `t0` | 租户表结构、物化到磁盘的定义域文件（`main` 的 `AGENT.md`、四个受保护技能）、预置的 LLM 供应商与模型（`DeepSeek` 空密钥、停用，`deepseek-flash`）、注册行、租户管理员、全部能力、API key | `docker compose run --rm bootstrap`，等价于 PoC 的 `seedpoc` |
 
 **`platform` 的表结构是纯 SQL，账号与 `t0` 必须是命令**——这不是取舍：t0 的 `AGENT.md` 与技能文件由
 `provision.Provision` 物化，SQL 写不出文件；而平台账号的哈希必须由 `account.HashPassword` 生成，SQL 里只能写死

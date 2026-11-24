@@ -446,7 +446,7 @@ The seed lives in **two schemas**, with the same content as the PoC; only the ca
 | Schema | Seed content | Source |
 |---|---|---|
 | `platform` | platform tables, provider presets (`llm_provider_presets` / `llm_presets_seed`), limit defaults (`zz_limit_defaults`), capability gates (`capability_gates` / `plugin_gates` / `tenant_plugins`) | `nexus/platform/sql/*.sql` in the dependency order of `migrate-apply.sh` (the same list as `verify-sql.ps1`; `--check` requires the file sets to be equal) |
-| `t0` | tenant tables, definition files materialised to disk (`main`'s `AGENT.md`, the four protected skills), the seeded LLM provider and model (`DeepSeek` with an empty key, `deepseek-flash`), the registry row, the tenant administrator, every capability, the API key | `docker compose run --rm bootstrap`, equivalent to the PoC's `seedpoc` |
+| `t0` | tenant tables, definition files materialised to disk (`main`'s `AGENT.md`, the four protected skills), the seeded LLM provider and model (`DeepSeek` with an empty key and disabled, `deepseek-flash`), the registry row, the tenant administrator, every capability, the API key | `docker compose run --rm bootstrap`, equivalent to the PoC's `seedpoc` |
 
 **`platform`'s tables are pure SQL; the accounts and `t0` have to be a command** — that is not a trade-off: t0's
 `AGENT.md` and skill files are materialised by `provision.Provision` because SQL cannot write files, and a platform
