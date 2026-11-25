@@ -83,7 +83,8 @@ deploy/prod/
 │  ├─ flame                          安装到 /usr/local/bin 的包装脚本
 │  ├─ build.sh  images.sh           产物与镜像（images.sh 另有 push，以及 save/load 做离线交付）
 │  ├─ release.sh                    一条命令：产物 + 镜像 + 两个 tar + SHA256SUMS
-│  ├─ install.sh                    前置检查、落位、渲染 + nexus.yaml、装 unit、导入镜像
+│  ├─ install.sh                    前置检查（按 mode 判断，含 nsjail）、落位、渲染 + nexus.yaml、装 unit、导入镜像
+│  ├─ rootfs.sh                     nsjail：把镜像导出成 /opt/flame/rootfs/<tag>（含设备节点与自证）
 │  ├─ migrate.sh  migrate-apply.sh  平台 SQL（固定顺序，--check 校验文件集合）
 │  ├─ bootstrap.sh  smoke.sh        一次性种子（含 v1 回填）/ 端到端调用并断言拿到回答
 │  └─ dev-up.sh                     本机试跑：拉起、种子、执行器；--smoke 另外跑端到端自检
@@ -161,5 +162,6 @@ flame up -d                                        # 再起应用面
 - 没有 drain 端点：停 `sandboxd` 会关掉它的复用容器，停 `browserd` 会丢该节点的浏览器会话。维护窗口只能是
   "低峰 + 等空闲超时"。
 - 第 3 档（容器分机）有产物但未端到端验证，边界见运行手册的"已知缺口"。
-- nsjail 模式是可选的（模板默认 `mode: docker`），但它要的两样东西都不在 release 里：setuid 的 `nsjail` 二进制，
-  以及每台执行器按镜像世代导出的 rootfs。逐条步骤见 [`INSTALL.zh.md`](INSTALL.zh.md) §4。
+- nsjail 模式是可选的（模板默认 `mode: docker`，但 `nsjail:` 块已经填好，切换只改一行）。它要的两样东西里只有
+  一样是自动的：`scripts/rootfs.sh` 负责每台执行器、每个镜像世代的 rootfs；setuid 的 `nsjail` 二进制仍要源码编译。
+  逐条步骤见 [`INSTALL.zh.md`](INSTALL.zh.md) §4。

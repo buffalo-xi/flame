@@ -226,34 +226,26 @@ token** 启动，之后每次调用都被拒。
 #### nsjail 的 rootfs 是造出来的，一份对应一代镜像
 
 只有 `mode: nsjail` 需要它——docker 模式直接用镜像。镜像本身就是契约（解释器、库、`codehost`），所以从镜像
-export，不要手搓 rootfs：
+export，不要手搓 rootfs。`scripts/rootfs.sh` 就是这个 export，第一台与每台执行器节点用的都是同一条命令：
 
 ```bash
-# 建成按版本分目录的：回退要用旧的，所以不要原地覆盖
-R=/opt/flame/rootfs/<ver>
-docker create --name flame-rootfs flame/sandbox:<ver> true
-install -d "$R"
-docker export flame-rootfs | tar -x -C "$R"
-docker rm flame-rootfs
-
-# `docker export` 不带设备节点，而 codehost 给每个子进程都要开 /dev/null。少了这些，jail 能起来，
-# 但第一次 exec 就失败：codehost: start python3: open /dev/null: no such file or directory
-install -d "$R/dev"
-mknod -m 666 "$R/dev/null"    c 1 3
-mknod -m 666 "$R/dev/zero"    c 1 5
-mknod -m 666 "$R/dev/random"  c 1 8
-mknod -m 666 "$R/dev/urandom" c 1 9
-mknod -m 666 "$R/dev/tty"     c 5 0
-
-# 指给 sandboxd 之前先自证：解释器路径坏了只会表现为运行期"不可用"
-nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V
-nsjail -Mo --chroot "$R" -- /usr/local/bin/lua -v
+./scripts/rootfs.sh --tag <ver>          # docker export -> /opt/flame/rootfs/<ver>，建设备节点，再自证
+./scripts/rootfs.sh --tag <ver> --check  # 校验已有的一份；不改任何东西
 ```
 
+它做的事，顺序是有理由的：把 `flame/sandbox:<ver>` 用 `docker create` / `docker export` 落到按 tag 分目录的位置
+（回退要用旧的，所以不原地覆盖）；补上 `docker export` 不带的五个设备节点——`codehost` 给每个子进程都要开
+`/dev/null`，少了它们 jail 能起来但第一次 exec 就失败，报
+`codehost: start python3: open /dev/null: no such file or directory`；最后用
+`nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V` 自证，因为解释器路径坏了只会在运行期表现为"不可用"。
+无法 `mknod` 时（开发机没有 root、Docker Desktop 的 overlay）它会明确报错，并留下文档里的退路：
+`--no-dev-nodes` 加 `extra_args: ["-R", "/dev"]`，把宿主 `/dev` 只读绑进监狱。
+
 ```yaml
+# /etc/flame/sandboxd.yaml —— 模板里这块已经填好，切换只改 mode 这一行
 mode: nsjail
 nsjail:
-  binary: nsjail                  # 源码编译时装到 /usr/local/bin/nsjail
+  binary: /usr/local/bin/nsjail   # 源码编译
   rootfs: /opt/flame/rootfs/<ver>
   uid: 99999
   gid: 99999
@@ -716,9 +708,10 @@ systemctl restart flame-sandboxd flame-browserd
 
 `bootstrap` 不属于日常升级：它的作用是在空库上建 t0，虽然幂等，但每次发布都跑只会重新打印一堆没人要的凭据。
 
-`mode: nsjail` 多一步：rootfs 是绑在镜像代际上的（§5.3），所以要为新镜像造一份新的、把配置里的 `rootfs:` 指过去，
-再 `systemctl restart flame-sandboxd`。省掉这一步，jail 还在跑上一代的解释器——而如果同时混着 docker 模式，那边已经是
-新镜像了。旧 rootfs 留到新一代确认接流量再删，删早了回退就得重新造。
+`mode: nsjail` 多一步，而且没人替你把关：rootfs 是绑在镜像代际上的（§5.3），所以先
+`./scripts/rootfs.sh --tag <新 tag>`，再把配置里的 `rootfs:` 指过去，最后 `systemctl restart flame-sandboxd`。
+省掉这一步，jail 还在跑上一代的解释器——而如果同时混着 docker 模式，那边已经是新镜像了。旧 rootfs 留到新一代确认
+接流量再删，删早了回退就得重新导出。
 
 约束：SQL 只做增量（新表、新列）。破坏性变更会让旧代码跑在新 schema 上，回退就不再安全。每次迁移前先 dump。
 

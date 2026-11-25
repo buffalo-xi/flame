@@ -30,8 +30,16 @@ registry:
   # it unique per host without any configuration. Writing 127.0.0.1 here with a remote registry refuses to
   # start - on purpose, because the probe would only measure itself.
 
-# docker is the default isolation mode. nsjail is the other option and needs a rootfs exported from the image
-# (see nexus/docs/deployment-runbook.md section 5.3); switching mode is one line plus that directory.
+# Two isolation modes, and the switch is this one line.
+#
+#   docker   each sandbox is a container on the host daemon: needs the daemon, and a daemon that allows nested
+#            Docker when a sandbox itself runs containers.
+#   nsjail   each sandbox is a jailed process: no daemon, no image at runtime, no nested Docker - but it needs a
+#            setuid nsjail binary, cgroup v2, and a rootfs exported per image generation (./scripts/rootfs.sh).
+#
+# The `nsjail:` block at the bottom is already filled in so switching is one line, and docker mode reads none of it.
+# The choice is per machine, not per deployment: a pool may mix the two, provided both kinds run the same image
+# generation - otherwise the same request answers with different interpreters depending on where it lands.
 mode: docker
 
 # The ceiling of the egress policy, not the fact of one call: the effective value is this ceiling AND the
@@ -40,6 +48,8 @@ network: on-request
 
 docker:
   binary: docker
+  # FLAME_IMAGE_NS follows the release: the default `flame` for a locally built image, the registry prefix for a
+  # pulled one. sandboxd runs on the host but starts containers, so it has to name the image the host actually has.
   image: "${FLAME_IMAGE_NS}/sandbox:${FLAME_TAG}"
   # on-request needs a real network to switch to when a request asks for egress; "none" would make that
   # branch impossible and startup refuses the combination.
@@ -52,16 +62,24 @@ codehost:
   binary: codehost
   binaries:
     docker: /usr/local/bin/codehost
+    nsjail: /usr/local/bin/codehost       # the rootfs carries the same binary, exported from the same image
 
 langs:
   # The names below are guaranteed by the image (sandboxd/Dockerfile symlinks lua and python); they resolve
-  # inside the container, not on the host.
+  # inside the container for docker mode, inside the rootfs for nsjail. Absolute paths keep the nsjail answer
+  # independent of the PATH inside the chroot.
   lua:
     command: lua
+    commands:
+      nsjail: /usr/local/bin/lua
   python:
     command: python
+    commands:
+      nsjail: /usr/bin/python3
   js:
     command: node
+    commands:
+      nsjail: /usr/local/bin/node
 
 # The host root of the per-worker writable directories: each worker gets an exclusive subdirectory mounted
 # as /tmp and used as the script's cwd. Machine-local and dedicated to this service.
@@ -122,13 +140,27 @@ code:
         max: 8
       max_concurrent: 16
 
-# nsjail, for reference: only used when mode is switched to nsjail, and only with a rootfs exported from the
-# matching image generation (docker export drops the device nodes; codehost needs /dev/null).
-# nsjail:
-#   binary: nsjail
-#   rootfs: /opt/flame/rootfs/<ver>
-#   uid: 99999
-#   gid: 99999
-#   disable_network: true
-#   read_only_rootfs: true
-#   cgroup_version: auto
+# nsjail: read only when mode is nsjail. Both paths are host state, not part of the release:
+#   rootfs   ./scripts/rootfs.sh --tag <tag>    - a `docker export` of flame/sandbox:<tag> plus the /dev nodes the
+#                                                export omits, verified before it is written
+#   binary   built from source and installed setuid root (nexus/docs/deployment-runbook.md §5.3)
+#
+# The path carries ${FLAME_TAG} on purpose: one rootfs per image generation, because a stale one is invisible - nsjail
+# keeps running last generation's interpreters while docker mode runs the new ones and nothing reports it.
+nsjail:
+  binary: /usr/local/bin/nsjail
+  rootfs: /opt/flame/rootfs/${FLAME_TAG}
+  # A dedicated uid/gid, never 0. The jail starts as this user; the worker's per-session /tmp is chmod 0777 so that
+  # the same uid can write it from inside the jail.
+  uid: 99999
+  gid: 99999
+  # Cutting the network is clone_newnet plus --iface_no_lo. Granting it again needs --disable_clone_newnet in
+  # extra_args; under `network: on-request` with neither flag an egress request silently gets no network.
+  disable_network: true
+  # nsjail chroots read-only by default; true writes nothing, false adds --rw (nothing repairs a broken rootfs anyway).
+  read_only_rootfs: true
+  cgroup_version: auto
+  # Only when mknod is impossible (a dev box without root, Docker Desktop's overlay): bind the host /dev read-only into
+  # the jail, which supplies null / zero / random / urandom / tty. A production host runs rootfs.sh, which creates those
+  # nodes itself and leaves this line empty.
+  # extra_args: ["-R", "/dev"]

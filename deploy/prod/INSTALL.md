@@ -149,16 +149,17 @@ On the new host:
 
 ```bash
 # docker, the same /srv/flame/data mount, the flame user (uid 1000), and /opt/flame/current/bin (binaries only —
-# the containers, the compose files and the SQL stay on the first host)
+# the containers, the compose files and the SQL stay on the first host; an nsjail node also wants scripts/rootfs.sh
+# plus scripts/lib.sh — §4.4)
 install -d -o flame -g flame /var/lib/flame/sandboxd/tmp
 # copy /etc/flame/sandboxd.yaml from the first host and set registry.address to <first host>:8500;
 # leave registry.service_addr empty — it is derived from listen, and the ID follows the address
 systemctl enable --now flame-sandboxd
 ```
 
-`sandboxd` runs `flame/sandbox:<tag>` containers on this node but never pulls them itself: give the node access to
-GHCR (the reference comes from `sandboxd.yaml`, as `FLAME_IMAGE_NS` plus `FLAME_TAG`), or load the bundle with
-`./scripts/images.sh load --dir /srv/flame/dist`.
+In docker mode `sandboxd` runs `flame/sandbox:<tag>` containers on this node but never pulls them itself: give the node
+access to GHCR (the reference comes from `sandboxd.yaml`, as `FLAME_IMAGE_NS` plus `FLAME_TAG`), or load the bundle with
+`./scripts/images.sh load --dir /srv/flame/dist`. An nsjail node needs no image at runtime — it needs the rootfs (§4.4).
 
 Firewall: new node → first host `8500` (registration); first host and every gateway node → new node `27081`
 (health check and traffic).
@@ -209,7 +210,7 @@ two can be mixed in one pool; pick per host, not per deployment.
 |---|---|
 | `nsjail` | built from source (Ubuntu 26.04 packages none) and installed **setuid root** — it must be able to change namespaces while `sandboxd` keeps running as `flame` |
 | cgroup v2 | `stat -fc %T /sys/fs/cgroup` prints `cgroup2fs`; memory limits go through `--cgroup_mem_max` |
-| rootfs | `/opt/flame/rootfs/<tag>`, exported from `flame/sandbox:<tag>` — one per image generation, ~600 MB |
+| rootfs | `/opt/flame/rootfs/<tag>`, exported from `flame/sandbox:<tag>` by `./scripts/rootfs.sh` (§4.2) — one per image generation, ~600 MB |
 | `codehost` | inside that rootfs at `/usr/local/bin/codehost`, taken from the same image, never copied by hand |
 | `/dev` | `null`, `zero`, `random`, `urandom`, `tty` inside the rootfs — `docker export` carries none (`codehost` opens `/dev/null` for every child) |
 
@@ -220,43 +221,31 @@ sudo install -m 4755 -o root -g root nsjail /usr/local/bin/nsjail   # 4755 = set
 stat -fc %T /sys/fs/cgroup                                          # cgroup2fs, or this mode is not for this host
 ```
 
-`install.sh --check` only **warns** about a missing `nsjail` (docker mode is the default), so that line is worth reading
-rather than skimming.
+`install.sh --check` reads this host's `/etc/flame/sandboxd.yaml`: while that says `mode: docker`, a missing `nsjail` is
+only a warning; once it says `nsjail`, the same command **fails** on a missing binary, a missing or stale rootfs, absent
+device nodes, or cgroup v1. That makes it the acceptance check for this mode as well as for the install.
 
 ### 4.2 On the single host
 
-The tag and the image namespace live in `/etc/flame/flame.env`, and the rootfs path has to name the tag — one rootfs per
-image generation, or the interpreters nsjail runs drift away from the ones the image actually has:
+The export is one command. It takes the tag and namespace from `/etc/flame/flame.env`, does the `docker create` /
+`docker export`, creates the five device nodes `docker export` omits, and runs the chroot proof before sandboxd ever
+sees the tree:
 
 ```bash
-FLAME_TAG=$(sed -n 's/^FLAME_TAG=//p' /etc/flame/flame.env)
-NS=$(sed -n 's/^FLAME_IMAGE_NS=//p' /etc/flame/flame.env)
-R=/opt/flame/rootfs/$FLAME_TAG
-
-# export, do not hand-build: the image is the contract (interpreters, packages, codehost)
-sudo docker create --name flame-rootfs "$NS/sandbox:$FLAME_TAG" true
-sudo install -d "$R"
-sudo docker export flame-rootfs | sudo tar -x -C "$R"
-sudo docker rm flame-rootfs
-
-# the device nodes docker export does not carry
-sudo install -d "$R/dev"
-sudo mknod -m 666 "$R/dev/null"    c 1 3
-sudo mknod -m 666 "$R/dev/zero"    c 1 5
-sudo mknod -m 666 "$R/dev/random"  c 1 8
-sudo mknod -m 666 "$R/dev/urandom" c 1 9
-sudo mknod -m 666 "$R/dev/tty"     c 5 0
-
-# prove it before sandboxd trusts it: a broken interpreter only shows up per request, as "unavailable"
-sudo nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V
-sudo nsjail -Mo --chroot "$R" -- /usr/local/bin/lua -v
+sudo ./scripts/rootfs.sh --tag v2026.11.25          # -> /opt/flame/rootfs/v2026.11.25
+sudo ./scripts/rootfs.sh --tag v2026.11.25 --check  # verify an existing tree, changes nothing
 ```
 
-Then the host policy file — the installer rendered it once and will not touch it again:
+The directory is versioned by tag on purpose: one rootfs per image generation, or nsjail keeps running last
+generation's interpreters while the image moves on and nothing reports it. For the same reason the script refuses to
+write into a non-empty directory — a rollback needs the old tree.
+
+Then the host policy file. The installer rendered it once and will not touch it again, and the `nsjail:` block is
+already filled in, so on this machine the edit is one line:
 
 ```yaml
 # /etc/flame/sandboxd.yaml
-mode: nsjail
+mode: nsjail                        # was docker
 
 nsjail:
   binary: /usr/local/bin/nsjail     # absolute: the unit's PATH is systemd's, not yours
@@ -276,7 +265,7 @@ sudo systemctl restart flame-sandboxd && ./scripts/health.sh
 Three things that are easy to get wrong here:
 
 - **`--force-config` puts `mode: docker` back.** It re-renders `/etc/flame/sandboxd.yaml` from the release's template,
-  so after using it, re-apply the block above.
+  so after using it, put the `mode:` line back — the block itself ships in the template.
 - **`docker.image` is ignored in this mode.** The rootfs plays its part, so the node needs no sandbox image at runtime —
   but it needs one **once** to export, and that is why the path carries the tag.
 - **`network: on-request` cannot grant egress by itself.** Under nsjail, cutting the network is `clone_newnet` plus
@@ -303,14 +292,12 @@ the device nodes. The release tarball carries neither `nsjail` nor a rootfs (§1
 So §3.1 gains one step on the new node, before `systemctl enable --now flame-sandboxd`:
 
 ```bash
-FLAME_TAG=$(sed -n 's/^FLAME_TAG=//p' /etc/flame/flame.env)   # copied from the first host, or written by install.sh
-NS=$(sed -n 's/^FLAME_IMAGE_NS=//p' /etc/flame/flame.env)
-R=/opt/flame/rootfs/$FLAME_TAG
-sudo docker create --name flame-rootfs "$NS/sandbox:$FLAME_TAG" true   # the image must exist on this node once
-sudo install -d "$R" && sudo docker export flame-rootfs | sudo tar -x -C "$R" && sudo docker rm flame-rootfs
-sudo install -d "$R/dev" && sudo mknod -m 666 "$R/dev/null" c 1 3   # …and zero / random / urandom / tty
-sudo nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V
+sudo ./scripts/rootfs.sh            # tag and namespace come from this node's /etc/flame/flame.env
 ```
+
+Copy `scripts/rootfs.sh` and `scripts/lib.sh` over with the binary — the script needs nothing but bash and docker, and
+the node has neither the release directory nor the compose files. It pulls `flame/sandbox:<tag>` if this node does not
+have it yet.
 
 Everything else is unchanged: the copied `/etc/flame/sandboxd.yaml` already names the tag, registration is the same
 `8500`, and the firewall is the same `27081`. Tier 3 changes nothing about this mode — `sandboxd` is bare on both tiers
@@ -327,16 +314,11 @@ directory is the same generation either way — but every exec would then read i
 difference. The order is export first, repoint second:
 
 ```bash
-# 1. the new generation, in its own directory (the old one stays until the new one has taken traffic)
-FLAME_TAG=v2026.11.26; NS=$(sed -n 's/^FLAME_IMAGE_NS=//p' /etc/flame/flame.env); R=/opt/flame/rootfs/$FLAME_TAG
-docker pull "$NS/sandbox:$FLAME_TAG"          # or ./scripts/images.sh load --dir <bundle>
-docker create --name flame-rootfs "$NS/sandbox:$FLAME_TAG" true
-sudo install -d "$R" && docker export flame-rootfs | sudo tar -x -C "$R" && docker rm flame-rootfs
-sudo install -d "$R/dev" && sudo mknod …      # the same five nodes as 4.2
-sudo nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V
+# 1. the new generation, in its own directory (the old tree stays until the new one has taken traffic)
+sudo ./scripts/rootfs.sh --tag v2026.11.26    # pulls the image here if it is not here yet
 
 # 2. repoint, then the normal upgrade from §5
-sudo sed -i "s#^  rootfs: .*#  rootfs: $R#" /etc/flame/sandboxd.yaml
+sudo sed -i 's#^  rootfs: .*#  rootfs: /opt/flame/rootfs/v2026.11.26#' /etc/flame/sandboxd.yaml
 sudo ./scripts/install.sh --tag v2026.11.26 --registry ghcr.io/<owner>/flame
 sudo sed -i 's/^FLAME_TAG=.*/FLAME_TAG=v2026.11.26/' /etc/flame/flame.env
 flame up -d && sudo systemctl restart flame-sandboxd

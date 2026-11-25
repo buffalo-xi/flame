@@ -203,7 +203,7 @@ deploy/prod/
 ├─ config/
 │  ├─ nexus.yaml                       everything as ${VAR}, expanded by nexus from its own environment
 │  ├─ litellm.yaml                     store_model_in_db + master key; without it a model is silently not stored
-│  ├─ sandboxd.yaml                    mode + registry + docker/nsjail (the nsjail block stays commented)
+│  ├─ sandboxd.yaml                    mode + registry + docker/nsjail (both blocks filled in; `mode` decides)
 │  ├─ sandboxg.yaml                    discovery + sandbox_token + backends (empty, no loopback seed)
 │  ├─ browserd.yaml                    shared workspace_root + local profile_root
 │  ├─ browserg.yaml                    discovery + max_per_tenant + redis
@@ -588,7 +588,8 @@ The artifacts provide four things only: changeable ports, fillable addresses, a 
 
 ```bash
 1) install docker, mount /srv/flame/data at the same path (Consul runs in a container on the first host; do not install an agent here)
-2) place /srv/flame/bin/{sandboxd,codehost,nsjail}, import the sandbox image, extract the rootfs
+2) place /srv/flame/bin/{sandboxd,codehost,nsjail}, import the sandbox image, and for nsjail run
+   ./scripts/rootfs.sh --tag <tag> (per generation, on every executor node)
 3) write /etc/flame/sandboxd{,.env}, changing registry.address only (the first host's intranet IP:8500); service_addr
    left empty is derived automatically (on a multi-NIC host use advertise_iface, or write this host's intranet IP);
    service_id is unique by default; add CONSUL_HTTP_TOKEN when ACLs are on

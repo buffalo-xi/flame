@@ -232,34 +232,28 @@ template starts with the placeholder itself as the token and every call is rejec
 #### The nsjail rootfs is built, one per image generation
 
 Only `mode: nsjail` needs one — docker mode mounts the image directly. The image *is* the contract (interpreters,
-libraries, `codehost`), so export it instead of hand-building a rootfs:
+libraries, `codehost`), so export it instead of hand-building a rootfs. `scripts/rootfs.sh` is that export, and the
+same command works on the first host and on every executor node:
 
 ```bash
-# Build into a versioned directory: a revert needs the old one, so nothing is overwritten in place.
-R=/opt/flame/rootfs/<ver>
-docker create --name flame-rootfs flame/sandbox:<ver> true
-install -d "$R"
-docker export flame-rootfs | tar -x -C "$R"
-docker rm flame-rootfs
-
-# `docker export` carries no device nodes, and codehost opens /dev/null for every child. Without these the jail starts
-# and then fails the first exec with: codehost: start python3: open /dev/null: no such file or directory
-install -d "$R/dev"
-mknod -m 666 "$R/dev/null"    c 1 3
-mknod -m 666 "$R/dev/zero"    c 1 5
-mknod -m 666 "$R/dev/random"  c 1 8
-mknod -m 666 "$R/dev/urandom" c 1 9
-mknod -m 666 "$R/dev/tty"     c 5 0
-
-# Prove it before pointing sandboxd at it: a broken interpreter path only shows up per request, as "unavailable".
-nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V
-nsjail -Mo --chroot "$R" -- /usr/local/bin/lua -v
+./scripts/rootfs.sh --tag <ver>          # docker export -> /opt/flame/rootfs/<ver>, /dev nodes, then self-proof
+./scripts/rootfs.sh --tag <ver> --check  # verify an existing tree; changes nothing
 ```
 
+What it does, in the order that matters: `docker create` / `docker export` of `flame/sandbox:<ver>` into a directory
+versioned by tag (a revert needs the old one, so nothing is overwritten in place); the five `mknod` device nodes
+`docker export` omits — `codehost` opens `/dev/null` for every child, and without them the jail starts and the first
+exec fails with `codehost: start python3: open /dev/null: no such file or directory`; then
+`nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V` before anything trusts the tree, because a broken interpreter path
+only shows up per request, as "unavailable". Where `mknod` is not permitted (a dev box without root, Docker
+Desktop's overlay) it fails loudly and leaves the documented fallback: `--no-dev-nodes` plus
+`extra_args: ["-R", "/dev"]`, which binds the host `/dev` read-only into the jail.
+
 ```yaml
+# /etc/flame/sandboxd.yaml — the shipped template already carries this block; switching is the `mode` line
 mode: nsjail
 nsjail:
-  binary: nsjail                  # /usr/local/bin/nsjail when built from source
+  binary: /usr/local/bin/nsjail   # built from source
   rootfs: /opt/flame/rootfs/<ver>
   uid: 99999
   gid: 99999
@@ -743,10 +737,10 @@ is exactly the per-service config hash Compose compares, and nothing in the appl
 `bootstrap` is not part of an ordinary upgrade: it exists to create t0 on an empty database and is idempotent, but running
 it after every release only re-prints credentials nobody asked for.
 
-`mode: nsjail` adds one step: a rootfs belongs to an image generation (§5.3), so build the new one, point `rootfs:` at
-it, then restart `flame-sandboxd`. Skipping it leaves the jail on the previous interpreters while docker mode — if that is
-mixed in — runs the new image. Keep the old rootfs until the new one has taken traffic; deleting it makes the revert
-impossible without rebuilding.
+`mode: nsjail` adds one step, and it is the one nothing enforces: a rootfs belongs to an image generation (§5.3), so
+`./scripts/rootfs.sh --tag <new>` first, point `rootfs:` at it, then restart `flame-sandboxd`. Skipping it leaves the
+jail on the previous interpreters while docker mode — if that is mixed in — runs the new image. Keep the old rootfs until
+the new one has taken traffic; deleting it makes the revert impossible without re-exporting.
 
 Constraint: SQL is additive only (new tables, new columns). A destructive change makes the old code run on a new schema,
 and a revert stops being safe. Take a database dump before every migration.

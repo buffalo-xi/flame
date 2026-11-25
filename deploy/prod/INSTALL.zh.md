@@ -145,16 +145,16 @@ curl -s "http://<第一台>:8500/v1/status/leader"      # 先证明能连通，�
 
 ```bash
 # 装 docker、同样的 /srv/flame/data 挂载、flame 用户（uid 1000），以及 /opt/flame/current/bin
-# （只要二进制——容器、compose 文件、SQL 都留在第一台）
+# （只要二进制——容器、compose 文件、SQL 都留在第一台；nsjail 节点还要 scripts/rootfs.sh 与 scripts/lib.sh，见 §4.4）
 install -d -o flame -g flame /var/lib/flame/sandboxd/tmp
 # 从第一台拷 /etc/flame/sandboxd.yaml，把 registry.address 改成 <第一台>:8500；
 # registry.service_addr 留空——它由 listen 推导，注册 ID 跟着地址走
 systemctl enable --now flame-sandboxd
 ```
 
-`sandboxd` 会在这台机器上起 `flame/sandbox:<tag>` 容器，但它自己不会去拉镜像：要么让这台机器能访问 GHCR
-（镜像名来自 `sandboxd.yaml`，即 `FLAME_IMAGE_NS` 加 `FLAME_TAG`），要么用
-`./scripts/images.sh load --dir /srv/flame/dist` 从离线包导入。
+docker 模式下 `sandboxd` 会在这台机器上起 `flame/sandbox:<tag>` 容器，但它自己不会去拉镜像：要么让这台机器能
+访问 GHCR（镜像名来自 `sandboxd.yaml`，即 `FLAME_IMAGE_NS` 加 `FLAME_TAG`），要么用
+`./scripts/images.sh load --dir /srv/flame/dist` 从离线包导入。nsjail 模式的节点不要镜像，它要的是 rootfs（§4.4）。
 
 防火墙：新节点 → 第一台 `8500`（注册）；第一台以及各网关节点 → 新节点 `27081`（健康检查与流量）。
 
@@ -213,42 +213,28 @@ sudo install -m 4755 -o root -g root nsjail /usr/local/bin/nsjail   # 4755 = set
 stat -fc %T /sys/fs/cgroup                                          # cgroup2fs，否则这台机器不适合这个模式
 ```
 
-`install.sh --check` 对缺 `nsjail` 只 **warn**（默认是 docker 模式），所以那一行要看清，别扫过去。
+`install.sh --check` 会读这台机器的 `/etc/flame/sandboxd.yaml`：还写着 `mode: docker` 时，缺 `nsjail` 只是 **warn**；
+一旦写成 `nsjail`，同一条命令会在缺二进制、rootfs 缺失或世代不对、设备节点缺失、cgroup v1 上 **FAIL**。所以它也是
+这个模式的验收检查。
 
 ### 4.2 单机怎么做
 
-tag 与镜像命名空间都在 `/etc/flame/flame.env` 里，rootfs 路径必须带 tag——一个镜像世代一份，否则 nsjail 跑的
-解释器会和镜像里真正有的那些慢慢脱节：
+导出只有一条命令。tag 与镜像命名空间它自己从 `/etc/flame/flame.env` 读，做 `docker create` / `docker export`，
+补上 `docker export` 不带的五个设备节点，并在 sandboxd 看到这棵树之前先做一次 chroot 自证：
 
 ```bash
-FLAME_TAG=$(sed -n 's/^FLAME_TAG=//p' /etc/flame/flame.env)
-NS=$(sed -n 's/^FLAME_IMAGE_NS=//p' /etc/flame/flame.env)
-R=/opt/flame/rootfs/$FLAME_TAG
-
-# 导出，而不是手搭：镜像就是契约（解释器、包、codehost）
-sudo docker create --name flame-rootfs "$NS/sandbox:$FLAME_TAG" true
-sudo install -d "$R"
-sudo docker export flame-rootfs | sudo tar -x -C "$R"
-sudo docker rm flame-rootfs
-
-# docker export 不会带过来的设备节点
-sudo install -d "$R/dev"
-sudo mknod -m 666 "$R/dev/null"    c 1 3
-sudo mknod -m 666 "$R/dev/zero"    c 1 5
-sudo mknod -m 666 "$R/dev/random"  c 1 8
-sudo mknod -m 666 "$R/dev/urandom" c 1 9
-sudo mknod -m 666 "$R/dev/tty"     c 5 0
-
-# 先自证，再让 sandboxd 用它：解释器路径错了只会在每次请求里表现为 "unavailable"
-sudo nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V
-sudo nsjail -Mo --chroot "$R" -- /usr/local/bin/lua -v
+sudo ./scripts/rootfs.sh --tag v2026.11.25          # -> /opt/flame/rootfs/v2026.11.25
+sudo ./scripts/rootfs.sh --tag v2026.11.25 --check  # 校验已有的一份，不改任何东西
 ```
 
-然后改主机策略文件——安装器只渲染过一次，之后不再碰它：
+目录按 tag 分是故意的：一个镜像世代一份，否则 nsjail 会继续跑上一代的解释器，而镜像已经往前走，且没有任何东西
+会报告这个差异。同样出于这个原因，脚本不会往非空目录里写——回退要用旧的树。
+
+然后改主机策略文件。安装器只渲染过一次，之后不再碰它；`nsjail:` 块模板里已经填好，所以这台机器上只改一行：
 
 ```yaml
 # /etc/flame/sandboxd.yaml
-mode: nsjail
+mode: nsjail                        # 原来是 docker
 
 nsjail:
   binary: /usr/local/bin/nsjail     # 写绝对路径：unit 里的 PATH 是 systemd 的，不是你的
@@ -268,7 +254,7 @@ sudo systemctl restart flame-sandboxd && ./scripts/health.sh
 这里最容易错的三件事：
 
 - **`--force-config` 会把 `mode: docker` 写回来。** 它会用 release 里的模板重渲染 `/etc/flame/sandboxd.yaml`，所以
-  用过之后要把上面那段重新加回去。
+  用过之后把 `mode:` 那行改回 `nsjail`（块本身模板里就有）。
 - **这个模式下 `docker.image` 不再起作用。** 它的位置由 rootfs 顶替，所以节点运行时不需要沙箱镜像——但**导出那一刻**
   需要，这也正是路径里带 tag 的原因。
 - **`network: on-request` 自己发不出网。** nsjail 断网靠 `clone_newnet` 加 `--iface_no_lo`；要放行 egress 必须在
@@ -293,14 +279,11 @@ docker 与 nsjail 节点——但那样 **镜像世代必须一致**，否则同
 因此 §3.1 在新节点上多一步，位置在 `systemctl enable --now flame-sandboxd` 之前：
 
 ```bash
-FLAME_TAG=$(sed -n 's/^FLAME_TAG=//p' /etc/flame/flame.env)   # 从第一台拷过来，或由 install.sh 写入
-NS=$(sed -n 's/^FLAME_IMAGE_NS=//p' /etc/flame/flame.env)
-R=/opt/flame/rootfs/$FLAME_TAG
-sudo docker create --name flame-rootfs "$NS/sandbox:$FLAME_TAG" true   # 这个镜像在本节点上要先存在一次
-sudo install -d "$R" && sudo docker export flame-rootfs | sudo tar -x -C "$R" && sudo docker rm flame-rootfs
-sudo install -d "$R/dev" && sudo mknod -m 666 "$R/dev/null" c 1 3   # ……以及 zero / random / urandom / tty
-sudo nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V
+sudo ./scripts/rootfs.sh            # tag 与命名空间取自本节点的 /etc/flame/flame.env
 ```
+
+把 `scripts/rootfs.sh` 与 `scripts/lib.sh` 跟二进制一起拷过去——脚本只要 bash 和 docker，而这个节点上既没有 release
+目录也没有 compose 文件。本节点还没有 `flame/sandbox:<tag>` 的话它会自己拉。
 
 其余都不变：拷过去的 `/etc/flame/sandboxd.yaml` 已经写着那个 tag，注册还是 `8500`，防火墙还是 `27081`。tier 3 对
 这个模式没有任何改变——两个 tier 里 `sandboxd` 都裸跑，因为它就是持有特权的那一环；tier 3 拆开的是 nexus、
@@ -316,15 +299,10 @@ sudo nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V
 
 ```bash
 # 1. 新世代，放进自己的目录（旧的留着，直到新的接过流量）
-FLAME_TAG=v2026.11.26; NS=$(sed -n 's/^FLAME_IMAGE_NS=//p' /etc/flame/flame.env); R=/opt/flame/rootfs/$FLAME_TAG
-docker pull "$NS/sandbox:$FLAME_TAG"          # 或 ./scripts/images.sh load --dir <bundle>
-docker create --name flame-rootfs "$NS/sandbox:$FLAME_TAG" true
-sudo install -d "$R" && docker export flame-rootfs | sudo tar -x -C "$R" && docker rm flame-rootfs
-sudo install -d "$R/dev" && sudo mknod …      # 与 4.2 同样的五个节点
-sudo nsjail -Mo --chroot "$R" -- /usr/bin/python3 -V
+sudo ./scripts/rootfs.sh --tag v2026.11.26    # 本机还没有镜像的话它会先拉
 
 # 2. 改指向，然后走 §5 的正常升级流程
-sudo sed -i "s#^  rootfs: .*#  rootfs: $R#" /etc/flame/sandboxd.yaml
+sudo sed -i 's#^  rootfs: .*#  rootfs: /opt/flame/rootfs/v2026.11.26#' /etc/flame/sandboxd.yaml
 sudo ./scripts/install.sh --tag v2026.11.26 --registry ghcr.io/<owner>/flame
 sudo sed -i 's/^FLAME_TAG=.*/FLAME_TAG=v2026.11.26/' /etc/flame/flame.env
 flame up -d && sudo systemctl restart flame-sandboxd

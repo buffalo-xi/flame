@@ -196,7 +196,7 @@ deploy/prod/
 ├─ config/
 │  ├─ nexus.yaml                       全部写成 ${VAR}，由 nexus 从自己的环境展开
 │  ├─ litellm.yaml                     store_model_in_db + master key；没有它配模型会静默不生效
-│  ├─ sandboxd.yaml                    mode + registry + docker/nsjail（nsjail 段注释保留）
+│  ├─ sandboxd.yaml                    mode + registry + docker/nsjail（两段都已填好，由 mode 决定读哪段）
 │  ├─ sandboxg.yaml                    discovery + sandbox_token + backends（空，不写回环种子）
 │  ├─ browserd.yaml                    共享 workspace_root + 本地 profile_root
 │  ├─ browserg.yaml                    discovery + max_per_tenant + redis
@@ -543,7 +543,8 @@ Chromium，`session lost` 是设计答案。没有 drain 端点，流程只能�
 
 ```bash
 1) 装 docker、把 /srv/flame/data 挂到同一路径（Consul 在第一台的容器里，本机不装 agent）
-2) 放 /srv/flame/bin/{sandboxd,codehost,nsjail}、导入 sandbox 镜像、解 rootfs
+2) 放 /srv/flame/bin/{sandboxd,codehost,nsjail}、导入 sandbox 镜像；nsjail 节点再跑
+   ./scripts/rootfs.sh --tag <tag>（每台执行器、每一代都要一份）
 3) 写 /etc/flame/sandboxd{,.env}，只改 registry.address（首台内网 IP:8500）；service_addr 留空即自动推导
    （多网卡机器用 advertise_iface，或显式写本机内网 IP），service_id 默认已按地址唯一；开 ACL 时再加
    CONSUL_HTTP_TOKEN

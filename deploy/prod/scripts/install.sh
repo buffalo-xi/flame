@@ -145,10 +145,84 @@ else
     note "no Chromium on PATH: the browser tools will report 'unavailable' (needed by browserd)"
 fi
 
-if command -v nsjail >/dev/null; then
-    ok "nsjail present (only needed for mode: nsjail)"
+# nsjail is optional, so an absent binary is only a warning - unless this host's own sandboxd.yaml already says
+# `mode: nsjail`, and then each missing piece is the reason nothing runs. The mode lives in a file install.sh never
+# rewrites, so --check reads it rather than guessing. Parsing is section-scoped by hand: the config has three `binary:`
+# keys (docker, codehost, nsjail) and a bare `sed` would take whichever came last.
+yaml_value() { # yaml_value <file> <section> <key>   ("" as the section means the top level)
+    awk -v s="$2" -v k="$3" '
+        function take(line) { sub("^[ \t]*" k ":[ \t]*", "", line); sub(/[ \t]+#.*/, "", line); gsub(/"/, "", line); return line }
+        /^[A-Za-z_]/ {
+            if (s == "" && $0 ~ ("^" k ":")) { print take($0); exit }
+            name=$0; sub(/:.*/, "", name); sec=name; next
+        }
+        sec == s {
+            line=$0; sub(/^[ \t]+/, "", line)
+            if (line ~ ("^" k ":")) { print take(line); exit }
+        }' "$1"
+}
+
+sandboxd_conf=/etc/flame/sandboxd.yaml
+sandbox_mode=""
+[ -f "$sandboxd_conf" ] && sandbox_mode=$(yaml_value "$sandboxd_conf" "" mode)
+
+if [ "$sandbox_mode" != "nsjail" ]; then
+    if command -v nsjail >/dev/null; then
+        ok "nsjail present (only needed for mode: nsjail)"
+    else
+        note "nsjail absent - fine for the default mode: docker"
+    fi
 else
-    note "nsjail absent - fine for the default mode: docker"
+    nsjail_bin=$(yaml_value "$sandboxd_conf" nsjail binary)
+    nsjail_bin=${nsjail_bin:-nsjail}
+    nsjail_rootfs=$(yaml_value "$sandboxd_conf" nsjail rootfs)
+    nsjail_extra=$(yaml_value "$sandboxd_conf" nsjail extra_args)
+
+    # A bare name in the config has to be resolved before stat, or the setuid bit of an absolute path is what gets
+    # reported as "no setuid" - which is a false alarm on the one host that configured it correctly.
+    nsjail_path=$(command -v "$nsjail_bin" 2>/dev/null || true)
+    [ -n "$nsjail_path" ] || nsjail_path=$nsjail_bin
+    if [ -x "$nsjail_path" ]; then
+        ok "nsjail binary ($nsjail_path)"
+        case "$(stat -c %A "$nsjail_path" 2>/dev/null)" in
+            *s*) ok "nsjail is setuid (it can create namespaces for user flame)" ;;
+            *) note "$nsjail_bin has no setuid bit: fine only where unprivileged user namespaces are allowed" ;;
+        esac
+    else
+        bad "mode: nsjail but $nsjail_bin is not executable (build it, install it setuid root)"
+    fi
+
+    if [ -z "$nsjail_rootfs" ]; then
+        bad "mode: nsjail but nsjail.rootfs is empty"
+    elif [ ! -d "$nsjail_rootfs" ]; then
+        bad "mode: nsjail but rootfs $nsjail_rootfs is missing (./scripts/rootfs.sh --tag $tag)"
+    else
+        ok "nsjail rootfs $nsjail_rootfs"
+        [ -x "$nsjail_rootfs/usr/local/bin/codehost" ] && ok "codehost inside the rootfs" \
+            || bad "$nsjail_rootfs has no executable /usr/local/bin/codehost"
+        case "$nsjail_rootfs" in
+            *"$tag"*) ;;
+            *) note "the rootfs is not the $tag generation - export it again after an upgrade (§4.5 of INSTALL.md)" ;;
+        esac
+        # -R /dev borrows the host's devices, which is the documented fallback for a rootfs without mknod.
+        case "$nsjail_extra" in
+            */dev*) ok "device nodes come from the host /dev (extra_args)" ;;
+            *)
+                missing_dev=""
+                for n in null zero random urandom tty; do
+                    [ -c "$nsjail_rootfs/dev/$n" ] || missing_dev="$missing_dev /dev/$n"
+                done
+                [ -z "$missing_dev" ] && ok "device nodes inside the rootfs" \
+                    || bad "rootfs lacks$missing_dev (codehost opens /dev/null; or add extra_args: [\"-R\", \"/dev\"])"
+                ;;
+        esac
+    fi
+
+    if [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" = "cgroup2fs" ]; then
+        ok "cgroup v2"
+    else
+        bad "mode: nsjail needs cgroup v2 on the host (stat -fc %T /sys/fs/cgroup)"
+    fi
 fi
 
 if [ "$failed" -gt 0 ]; then

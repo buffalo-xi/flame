@@ -90,7 +90,8 @@ deploy/prod/
 │  ├─ flame                          the wrapper installed to /usr/local/bin
 │  ├─ build.sh  images.sh           products and images (images.sh also does push, and save/load for offline delivery)
 │  ├─ release.sh                    one command: products + images + both tarballs + SHA256SUMS
-│  ├─ install.sh                    preflight, placement, rendering + nexus.yaml, units, image import
+│  ├─ install.sh                    preflight (mode-aware: nsjail included), placement, rendering + nexus.yaml, units
+│  ├─ rootfs.sh                     nsjail: export an image into /opt/flame/rootfs/<tag> (+ /dev nodes, self-proof)
 │  ├─ migrate.sh  migrate-apply.sh  platform SQL (ordered list, `--check` compares the file set)
 │  ├─ bootstrap.sh  smoke.sh        one-shot seed (+ v1 backfill) / end-to-end call with a real answer
 │  └─ dev-up.sh                     the local trial: up, seed, executor; --smoke adds the end-to-end check
@@ -173,6 +174,6 @@ flame up -d                                        # application plane
   sessions. Maintenance is "low peak, then wait for the idle timeout".
 - Tier 3 (containers on separate machines) has artifacts but has not been verified end to end; the runbook's
   known-gaps section lists the boundaries.
-- nsjail is an optional mode (the template ships `mode: docker`), and the two things it needs are not in the release:
-  a setuid `nsjail` binary, and a rootfs exported per executor per image generation. Command by command in
-  [`INSTALL.md`](INSTALL.md) §4.
+- nsjail is an optional mode (the template ships `mode: docker`, and the `nsjail:` block is filled in so the switch is
+  one line). Of the two things it needs, only one is automated: `scripts/rootfs.sh` exports the rootfs per executor per
+  image generation, while the setuid `nsjail` binary still comes from a source build. [`INSTALL.md`](INSTALL.md) §4.
