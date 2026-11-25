@@ -228,9 +228,17 @@ two can be mixed in one pool; pick per host, not per deployment.
 ```bash
 sudo apt install -y bison flex libprotobuf-dev protobuf-compiler libnl-3-dev libnl-route-3-dev libcap-dev pkg-config
 git clone https://github.com/google/nsjail && cd nsjail && make
-sudo install -m 4755 -o root -g root nsjail /usr/local/bin/nsjail   # 4755 = setuid root: without it nsjail cannot create namespaces for a non-root caller
-stat -fc %T /sys/fs/cgroup                                          # cgroup2fs, or this mode is not for this host
+sudo install -o root -g root -m 0755 nsjail /usr/local/bin/nsjail
+sudo chmod 4755 /usr/local/bin/nsjail     # setuid root: without it a non-root caller cannot create namespaces
+stat -c %a /usr/local/bin/nsjail          # 4755, not 755 - check it, do not assume it
+stat -fc %T /sys/fs/cgroup                # cgroup2fs, or this mode is not for this host
 ```
+
+`install -m 4755 -o root -g root …` looks right and produces `0755`: the copy ends with a `chown`, and the kernel
+drops setuid whenever ownership changes. Two commands (or one `chmod` after the copy) are the only reliable form,
+which is why the `stat -c %a` line is part of the recipe. On a kernel that allows unprivileged user namespaces
+nsjail still runs without the bit, and that is exactly why a silently missing setuid survives local testing and
+then fails on a hardened host.
 
 `install.sh --check` reads this host's `/etc/flame/sandboxd.yaml`: while that says `mode: docker`, a missing `nsjail` is
 only a warning; once it says `nsjail`, the same command **fails** on a missing binary, a missing or stale rootfs, absent
@@ -252,7 +260,7 @@ generation's interpreters while the image moves on and nothing reports it. For t
 write into a non-empty directory — a rollback needs the old tree.
 
 Then the host policy file. The installer rendered it once and will not touch it again, and the `nsjail:` block is
-already filled in, so on this machine the edit is one line:
+already filled in, so on a host installed by **this** release the edit is one line:
 
 ```yaml
 # /etc/flame/sandboxd.yaml
@@ -272,6 +280,13 @@ nsjail:
 ```bash
 sudo systemctl restart flame-sandboxd && ./scripts/health.sh
 ```
+
+Upgrading a host whose `/etc/flame/sandboxd.yaml` was rendered before this release needs one extra step: that file
+has no `nsjail:` block (the older template commented it out), so switching `mode:` alone fails at startup with
+`isolate: nsjail requires rootfs`. Run `install.sh --tag <tag> --registry … --force-config` once to render the new
+template — and run it **after** `FLAME_TAG` in `/etc/flame/flame.env` has been moved to the new tag, because `rootfs:`
+is `${FLAME_TAG}` expanded at render time; the other order writes the previous generation's directory into the file.
+`--force-config` re-renders all five configurations, so re-apply any other local edit they carried.
 
 Three things that are easy to get wrong here:
 
@@ -346,7 +361,7 @@ new generation has taken traffic. Deleting it makes the rollback a rebuild.
 | `isolate: nsjail requires rootfs` | `nsjail.rootfs` is empty — the directory is never checked for existence, so a wrong path fails later instead |
 | `codehost: start python3: open /dev/null: no such file or directory` | the device nodes are missing — 4.2, or `-R /dev` — 4.3 |
 | the language is reported unavailable, nsjail exits `255` | the interpreter path inside the rootfs is wrong, or `/usr/local/bin/lua` exists without its `/usr/bin/lua5.4` target |
-| the node registers, then every exec fails with `EPERM` / `ENOSYS` | cgroup v1, or a kernel without user namespaces: check `stat -fc %T /sys/fs/cgroup` and `nsjail --version` first |
+| the node registers, then every exec fails with `EPERM` / `ENOSYS` | cgroup v1, a kernel without user namespaces, or a nsjail that lost its setuid bit: check `stat -fc %T /sys/fs/cgroup` and `stat -c %a /usr/local/bin/nsjail`, then run `nsjail -Mo -q -R / -- /bin/true` by hand (nsjail has no `--version`) |
 | egress requests get no network while `network: on-request` | `--disable_clone_newnet` is missing from `extra_args` (4.2) |
 
 ## 5. Upgrade and rollback

@@ -216,9 +216,16 @@ docker 模式把每个沙箱跑成宿主 daemon 上的一个容器。nsjail 换�
 ```bash
 sudo apt install -y bison flex libprotobuf-dev protobuf-compiler libnl-3-dev libnl-route-3-dev libcap-dev pkg-config
 git clone https://github.com/google/nsjail && cd nsjail && make
-sudo install -m 4755 -o root -g root nsjail /usr/local/bin/nsjail   # 4755 = setuid root：没有这一位，非 root 调用方创建不了命名空间
-stat -fc %T /sys/fs/cgroup                                          # cgroup2fs，否则这台机器不适合这个模式
+sudo install -o root -g root -m 0755 nsjail /usr/local/bin/nsjail
+sudo chmod 4755 /usr/local/bin/nsjail     # setuid root：没有这一位，非 root 调用方创建不了命名空间
+stat -c %a /usr/local/bin/nsjail          # 应当是 4755 而不是 755——要查，不要假定
+stat -fc %T /sys/fs/cgroup                # cgroup2fs，否则这台机器不适合这个模式
 ```
+
+`install -m 4755 -o root -g root …` 看起来对，实际得到 `0755`：拷贝的最后一步是 `chown`，而内核只要属主变化就会
+清掉 setuid。可靠写法只有两条命令（或拷贝后补一次 `chmod`），这也是上面那行 `stat -c %a` 属于步骤的一部分的原因。
+在允许非特权 user namespace 的内核上，没有这一位 nsjail 照样能跑——所以「setuid 悄悄丢了」会在本机测试里活下来，
+到加固过的生产机上才失败。
 
 `install.sh --check` 会读这台机器的 `/etc/flame/sandboxd.yaml`：还写着 `mode: docker` 时，缺 `nsjail` 只是 **warn**；
 一旦写成 `nsjail`，同一条命令会在缺二进制、rootfs 缺失或世代不对、设备节点缺失、cgroup v1 上 **FAIL**。所以它也是
@@ -237,7 +244,8 @@ sudo ./scripts/rootfs.sh --tag v2026.11.25 --check  # 校验已有的一份，�
 目录按 tag 分是故意的：一个镜像世代一份，否则 nsjail 会继续跑上一代的解释器，而镜像已经往前走，且没有任何东西
 会报告这个差异。同样出于这个原因，脚本不会往非空目录里写——回退要用旧的树。
 
-然后改主机策略文件。安装器只渲染过一次，之后不再碰它；`nsjail:` 块模板里已经填好，所以这台机器上只改一行：
+然后改主机策略文件。安装器只渲染过一次，之后不再碰它；`nsjail:` 块模板里已经填好，所以由**本版本**安装/渲染的主机上
+只改一行：
 
 ```yaml
 # /etc/flame/sandboxd.yaml
@@ -257,6 +265,12 @@ nsjail:
 ```bash
 sudo systemctl restart flame-sandboxd && ./scripts/health.sh
 ```
+
+如果这台机器的 `/etc/flame/sandboxd.yaml` 是在本版本之前渲染的，就多一步：那份文件里没有 `nsjail:` 块（旧模板把它
+注释掉了），只改 `mode:` 会在启动时报 `isolate: nsjail requires rootfs`。用
+`install.sh --tag <tag> --registry … --force-config` 跑一次，让新模板重新渲染——而且要在 `/etc/flame/flame.env` 里的
+`FLAME_TAG` 改成新 tag **之后**再跑，因为 `rootfs:` 是渲染时展开的 `${FLAME_TAG}`；顺序反过来，写进文件的就是上一代的
+目录。`--force-config` 会重渲染全部五份配置，所以这些文件上其它的本地改动要自己补回去。
 
 这里最容易错的三件事：
 
@@ -325,7 +339,7 @@ flame up -d && sudo systemctl restart flame-sandboxd
 | `isolate: nsjail requires rootfs` | `nsjail.rootfs` 为空——rootfs 目录本身从不做存在性检查，写错路径要到更晚才失败 |
 | `codehost: start python3: open /dev/null: no such file or directory` | 缺设备节点——见 4.2，或用 `-R /dev`——见 4.3 |
 | 语言被报成 unavailable，nsjail 退出码 `255` | rootfs 里的解释器路径不对，或 `/usr/local/bin/lua` 在而它的 `/usr/bin/lua5.4` 目标没了 |
-| 节点注册成功，但每次执行都 `EPERM` / `ENOSYS` | cgroup v1，或内核没有 user namespace：先看 `stat -fc %T /sys/fs/cgroup` 与 `nsjail --version` |
+| 节点注册成功，但每次执行都 `EPERM` / `ENOSYS` | cgroup v1、内核没有 user namespace，或 nsjail 丢了 setuid 位：看 `stat -fc %T /sys/fs/cgroup` 与 `stat -c %a /usr/local/bin/nsjail`，再手工跑 `nsjail -Mo -q -R / -- /bin/true`（nsjail 没有 `--version`） |
 | `network: on-request` 下 egress 请求拿不到网 | `extra_args` 里缺 `--disable_clone_newnet`（4.2） |
 
 ## 5. 升级与回滚
