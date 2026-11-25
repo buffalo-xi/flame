@@ -215,6 +215,28 @@ no image needed at runtime, and no nested-Docker question — but it charges a d
 v2, and a rootfs you export from the same sandbox image. The mode lives in one host's `/etc/flame/sandboxd.yaml`, so the
 two can be mixed in one pool; pick per host, not per deployment.
 
+**Check setuid on the host before anything else.** The unit runs `sandboxd` as `flame`, so `nsjail` only gets to build
+its mount tree because it is setuid root. Some hosts disable setuid on the root filesystem — WSL2 is the one this was
+tested on — and then nsjail falls back to an unprivileged user namespace, where it cannot create a bind-mount target
+under `/run/user/<uid>/nsjail/root`. The failure is easy to misread, because it only hits calls that mount something
+(nexus's `/workspace`) while `/v1/code` keeps working:
+
+```
+createMountTarget():161 mkdir('/run/user/<uid>/nsjail/root//workspace'): Permission denied
+```
+
+Verify the host first; this is also the check to run when the message above appears:
+
+```bash
+sudo cp /bin/sh /usr/local/bin/nsjail-setuid-probe
+sudo chmod 4755 /usr/local/bin/nsjail-setuid-probe
+runuser -u flame -- /usr/local/bin/nsjail-setuid-probe -c 'id -u'   # 0 = setuid works; the caller's uid = it does not
+sudo rm -f /usr/local/bin/nsjail-setuid-probe
+```
+
+If it prints the caller's uid, this mode is not for this host: keep `mode: docker` and run nsjail on a machine that
+allows setuid.
+
 ### 4.1 What an nsjail node needs
 
 | | |

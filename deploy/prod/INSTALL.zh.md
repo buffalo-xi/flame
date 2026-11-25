@@ -203,6 +203,26 @@ docker 模式把每个沙箱跑成宿主 daemon 上的一个容器。nsjail 换�
 也不存在嵌套 Docker 的问题——但它换了一种代价：一个 **setuid** 的二进制、cgroup v2，以及一份要从同一个沙箱镜像里
 导出的 rootfs。模式写在某一台机器的 `/etc/flame/sandboxd.yaml` 里，所以同一个池子里可以混用；按机器选，不按部署选。
 
+**动手之前先确认 setuid 生效。** unit 以 `flame` 身份运行 `sandboxd`，nsjail 能建挂载树全靠它是 setuid root。有些宿主
+在根文件系统上关闭了 setuid——本文实测过的就是 WSL2——此时 nsjail 退化成非特权 user namespace，无法在
+`/run/user/<uid>/nsjail/root` 下创建 bind mount 目标。这个失败很容易误判：只有带挂载的调用（nexus 的 `/workspace`）
+会中招，而 `/v1/code` 照常工作：
+
+```
+createMountTarget():161 mkdir('/run/user/<uid>/nsjail/root//workspace'): Permission denied
+```
+
+先验宿主；出现上面这条报错时也是跑它：
+
+```bash
+sudo cp /bin/sh /usr/local/bin/nsjail-setuid-probe
+sudo chmod 4755 /usr/local/bin/nsjail-setuid-probe
+runuser -u flame -- /usr/local/bin/nsjail-setuid-probe -c 'id -u'   # 0 = setuid 生效；打印调用者 uid = 不生效
+sudo rm -f /usr/local/bin/nsjail-setuid-probe
+```
+
+如果打印的是调用者自己的 uid，这个模式就不适合这台机器：保持 `mode: docker`，把 nsjail 放到允许 setuid 的机器上跑。
+
 ### 4.1 nsjail 节点需要什么
 
 | | |
