@@ -153,10 +153,17 @@ tools/            公共库
 desktop/          Vue 3 管理台
 ```
 
+## MCP 协议版本
+
+端点只讲 **MCP `2026-07-28`**：无状态的那一版——没有 `initialize` 握手、没有协议层会话，每个请求在
+`params._meta` 里带 `protocolVersion` / `clientInfo` / `clientCapabilities`。默认走旧协议的客户端会在传输层被直接
+拒绝；具体的失败形态和出站（客户端）一侧见 [`nexus/docs/mcp-support.md`](nexus/docs/mcp-support.md)。
+
 ## 文档
 
 - `nexus/docs/terminology.md` — 术语与动作词约定（改代码前建议先读）（[中文版](nexus/docs/terminology.zh.md)）
 - `nexus/docs/sandbox-design.md` — 沙箱隔离设计与三条执行通道（[中文版](nexus/docs/sandbox-design.zh.md)）
+- `nexus/docs/mcp-support.md` — MCP 支持：只支持 `2026-07-28`、为什么是无状态的、握手失败长什么样（[中文版](nexus/docs/mcp-support.zh.md)）
 - `nexus/docs/deployment.md` — 部署方案：单机原生布局、产物清单、多实例需要的旋钮（[中文版](nexus/docs/deployment.zh.md)）
 - `nexus/docs/deployment-runbook.md` — 部署操作手册：三档形态、配置、首启、升级、备份、验收与排障
   （[中文版](nexus/docs/deployment-runbook.zh.md)）

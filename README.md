@@ -168,12 +168,21 @@ tools/            shared libraries
 desktop/          Vue 3 admin console
 ```
 
+## MCP protocol version
+
+Endpoints speak **MCP `2026-07-28` only** — the stateless revision: no `initialize` handshake, no protocol-level
+session, and every request carries `protocolVersion` / `clientInfo` / `clientCapabilities` in `params._meta`. A client
+that defaults to the older protocol is refused at the transport layer; see
+[`nexus/docs/mcp-support.md`](nexus/docs/mcp-support.md) for the exact failure modes and for the outbound side.
+
 ## Docs
 
 - `nexus/docs/terminology.md` — terminology and verb conventions (read this before changing code)
   ([中文](nexus/docs/terminology.zh.md))
 - `nexus/docs/sandbox-design.md` — sandbox isolation design and the three execution channels
   ([中文](nexus/docs/sandbox-design.zh.md))
+- `nexus/docs/mcp-support.md` — MCP support: the single protocol version (`2026-07-28`), why it is stateless, and how
+  a failed handshake surfaces ([中文](nexus/docs/mcp-support.zh.md))
 - `nexus/docs/deployment.md` — the deployment plan: single-host native layout, artifact inventory, the knobs a
   multi-instance deployment needs ([中文](nexus/docs/deployment.zh.md))
 - `nexus/docs/deployment-runbook.md` — the operational companion: tiers, configs, first boot, upgrade, backup,
