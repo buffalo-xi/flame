@@ -161,3 +161,5 @@ flame up -d                                        # 再起应用面
 - 没有 drain 端点：停 `sandboxd` 会关掉它的复用容器，停 `browserd` 会丢该节点的浏览器会话。维护窗口只能是
   "低峰 + 等空闲超时"。
 - 第 3 档（容器分机）有产物但未端到端验证，边界见运行手册的"已知缺口"。
+- nsjail 模式是可选的（模板默认 `mode: docker`），但它要的两样东西都不在 release 里：setuid 的 `nsjail` 二进制，
+  以及每台执行器按镜像世代导出的 rootfs。逐条步骤见 [`INSTALL.zh.md`](INSTALL.zh.md) §4。

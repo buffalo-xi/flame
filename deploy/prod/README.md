@@ -173,3 +173,6 @@ flame up -d                                        # application plane
   sessions. Maintenance is "low peak, then wait for the idle timeout".
 - Tier 3 (containers on separate machines) has artifacts but has not been verified end to end; the runbook's
   known-gaps section lists the boundaries.
+- nsjail is an optional mode (the template ships `mode: docker`), and the two things it needs are not in the release:
+  a setuid `nsjail` binary, and a rootfs exported per executor per image generation. Command by command in
+  [`INSTALL.md`](INSTALL.md) §4.
