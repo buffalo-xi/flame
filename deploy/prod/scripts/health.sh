@@ -77,6 +77,16 @@ for svc in sandboxd:27081 browserd:27091; do
     fi
 done
 
+echo "browser"
+# browserd starts without a browser on purpose (the honest state is "not installed", not "refuses to boot"), so
+# /healthz being 200 says nothing about the browser tools. This is the only place the difference is visible from
+# the host; `--selftest` only runs `<browser> --version`, it never launches anything.
+if out=$(/opt/flame/current/bin/browserhost --selftest 2>&1); then
+    ok "browserhost selftest: $out"
+else
+    note "browserd has no browser to drive - the browser tools stay unavailable (${out})"
+fi
+
 echo "storage"
 if [ -d /srv/flame/data/tenants ]; then
     ok "/srv/flame/data/tenants exists"

@@ -20,6 +20,7 @@ strips the prefix.
 | Access | root, systemd |
 | Runtime | Docker Engine 20.10+ with the Compose **v2** plugin — the compose file uses a top-level `name:`, `profiles` and `host-gateway` |
 | Network | `github.com`, `ghcr.io`, `docker.io` and `docker.litellm.ai` reachable; the offline bundle (§1b) needs none of them |
+| Browser | Chromium or Google Chrome on the host `PATH` — `browserd` drives a host browser and the installer installs neither (§7) |
 | Ports | 27001 free (27443 is published but only listens with a certificate); the executors listen on `0.0.0.0:27081` / `0.0.0.0:27091`, so keep them off the public network |
 | Storage | `/srv/flame/data` on the local filesystem, owned by uid 1000 (a shared mount from tier 2 on) |
 | Kernel | docker mode: the sandbox runs containers, so the daemon must allow nested Docker; nsjail mode: cgroup v2 instead (§4) |
@@ -417,6 +418,7 @@ release, so export the new generation and repoint `rootfs:` before the restart (
 | `health.sh` reports the sandbox unavailable | `flame-sandboxd` not started, or the gateway cannot reach `27081` |
 | `exec format error` | the host is arm64 and the image is amd64; re-run `install.sh --check` on the target architecture |
 | an nsjail node registers but cannot run anything | §4.6 — the usual three are a binary not on `PATH`, a rootfs without `/dev` nodes, a stale generation |
+| the browser tools answer `browser disabled: no instance reported a usable browser` | no browser on the host `PATH`; `/opt/flame/current/bin/browserhost --selftest` names it, and `health.sh` prints the same line. Install Chromium or Google Chrome, then `systemctl restart flame-browserd` |
 
 ## 7. What this file does not cover
 
@@ -428,3 +430,6 @@ release, so export the new generation and repoint `rootfs:` before the restart (
   `fullchain.pem` and `privkey.pem` are present.
 - **Backups.** `/srv/flame/data` plus the PostgreSQL volume, and `/etc/flame/flame.env` (without it the encrypted
   values are unreadable).
+- **The browser.** `browserd` drives a Chromium or Google Chrome that must already be on the host `PATH`, and the
+  installer installs neither. Without one the service still starts, registers and answers `/healthz` — only the
+  browser tools are unavailable, which is why `health.sh` has a `browser` line of its own.

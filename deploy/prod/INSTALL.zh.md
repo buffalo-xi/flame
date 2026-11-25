@@ -19,6 +19,7 @@ tar 包名和 `FLAME_TAG`，而 `install.sh` 与 `release.sh` 都不会替你加
 | 权限 | root，systemd |
 | 运行时 | Docker Engine 20.10+ 与 Compose **v2** 插件——compose 文件用了顶层 `name:`、`profiles` 和 `host-gateway` |
 | 网络 | 能访问 `github.com`、`ghcr.io`、`docker.io`、`docker.litellm.ai`；离线包（§1b）一个都不需要 |
+| 浏览器 | 宿主 `PATH` 上有 Chromium 或 Google Chrome——`browserd` 驱动的是宿主浏览器，安装器不会替你装（见 §7） |
 | 端口 | `27001` 空闲（`27443` 会发布端口，但只有证书就位才监听）；执行器监听的是 `0.0.0.0:27081` / `0.0.0.0:27091`，不要暴露到公网 |
 | 存储 | `/srv/flame/data` 在本机文件系统上，属主 uid 1000（从 tier 2 起改为共享挂载） |
 | 内核 | docker 模式：沙箱里要跑容器，daemon 必须允许嵌套 Docker；nsjail 模式：改用 cgroup v2（§4） |
@@ -392,6 +393,7 @@ flame up -d && systemctl restart flame-sandboxd flame-browserd
 | `health.sh` 报沙箱不可用 | `flame-sandboxd` 没启动，或网关到不了 `27081` |
 | `exec format error` | 主机是 arm64 而镜像是 amd64；在目标架构上重跑 `install.sh --check` |
 | nsjail 节点注册成功但什么都跑不了 | §4.6——通常是三件：二进制不在 `PATH`、rootfs 缺 `/dev` 节点、rootfs 是上一世代 |
+| 浏览器工具返回 `browser disabled: no instance reported a usable browser` | 宿主 `PATH` 上没有浏览器；`/opt/flame/current/bin/browserhost --selftest` 会指出，`health.sh` 打印同一行。装 Chromium 或 Google Chrome，然后 `systemctl restart flame-browserd` |
 
 ## 7. 本文不覆盖
 
@@ -401,3 +403,5 @@ flame up -d && systemctl restart flame-sandboxd flame-browserd
 - **TLS 证书。** 放进 `/etc/flame/tls/`；只有当 `fullchain.pem` 与 `privkey.pem` 同时存在，nginx 才会挂上 TLS
   的 server 块。
 - **备份。** `/srv/flame/data` 加 PostgreSQL 卷，再加 `/etc/flame/flame.env`（没有它，加密过的值读不回来）。
+- **浏览器。** `browserd` 驱动的是宿主 `PATH` 上已有的 Chromium 或 Google Chrome，安装器两个都不装。没有浏览器
+  时服务照常启动、注册、`/healthz` 返回 200——只有浏览器工具不可用，所以 `health.sh` 单独有一行 `browser`。
