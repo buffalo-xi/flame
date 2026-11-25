@@ -4,7 +4,8 @@
 
 这个目录是 [`nexus/docs/deployment.zh.md`](../../nexus/docs/deployment.zh.md)（设计与"为什么"）和
 [`nexus/docs/deployment-runbook.zh.md`](../../nexus/docs/deployment-runbook.zh.md)（逐条命令与验收）的可部署形态。
-理由与验收标准看那两份；这里只说清"有什么、按什么顺序用"。
+理由与验收标准看那两份；这里说清"有什么、按什么顺序用"，那个顺序逐条命令的版本在
+[`INSTALL.zh.md`](INSTALL.zh.md)——先装一台，再把同一套安装长到多台。
 
 刻意**不用 K8s、不用 Ansible、不用 operator**：一台普通 Linux 主机跑整套产品，一份 compose 作为启动器，systemd
 负责开机顺序与失败重启，两个持有宿主特权的组件（`sandboxd`、`browserd`）裸跑。

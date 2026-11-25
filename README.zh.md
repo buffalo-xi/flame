@@ -8,7 +8,7 @@ Go 写的多租户 AI Agent 平台。把「智能体 / 技能 / 工具 / 工作�
 
 > **想直接跑起来？** `deploy/poc/` 是一个双容器演示（产品栈 + LiteLLM 网关），用 `docker compose` 一条命令起、只占一个端口——见 [`deploy/poc/README.zh.md`](deploy/poc/README.zh.md)。每次推送都会发布预构建镜像，跑起来不需要工具链。它是概念验证，不是生产部署。
 >
-> **想正式部署？** 每个 `v*` tag 会把五个生产镜像发布到 GHCR，并在该 Release 上挂一个宿主侧 tar 包。安装同样不需要工具链：下载、解包、`./scripts/install.sh --registry …`——见 [`deploy/prod/README.zh.md`](deploy/prod/README.zh.md)。
+> **想正式部署？** 每个 `v*` tag 会把五个生产镜像发布到 GHCR，并在该 Release 上挂一个宿主侧 tar 包，安装同样不需要工具链。[`deploy/prod/INSTALL.zh.md`](deploy/prod/INSTALL.zh.md) 是逐条命令的路径：先装一台（tier 1），再把同一套安装长到裸机执行器节点（tier 2）与跨机拆分（tier 3），全程不重装。各目录里有什么见 [`deploy/prod/README.zh.md`](deploy/prod/README.zh.md)。
 
 ## 功能
 

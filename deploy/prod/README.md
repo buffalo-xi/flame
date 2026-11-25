@@ -4,8 +4,9 @@ English | [中文](README.zh.md)
 
 This directory is the deployable form of [`nexus/docs/deployment.md`](../../nexus/docs/deployment.md) (the
 design, and the "why") and [`nexus/docs/deployment-runbook.md`](../../nexus/docs/deployment-runbook.md) (the
-step-by-step commands and checks). Read those two for reasoning and acceptance; this file only says what is in
-here and in which order to use it.
+step-by-step commands and checks). Read those two for reasoning and acceptance; this file says what is in here and in
+which order to use it, and [`INSTALL.md`](INSTALL.md) is that order as commands you can paste — one host first, then
+the same install grown onto several.
 
 Deliberately **no Kubernetes, no Ansible, no operator**: one normal Linux host runs the whole product, one
 compose file is the launcher, systemd gives it boot ordering and restart, and the two things that hold a host

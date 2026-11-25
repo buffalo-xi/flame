@@ -12,8 +12,10 @@ Ships with a Vue 3 admin console (`desktop/`), shared by the tenant side and the
 > image is published on every push, so running it needs no toolchain. It is a proof of concept, not a production deployment.
 >
 > **Want to deploy it for real?** Every `v*` tag publishes the five production images to GHCR and one host tarball to
-> that release. Installing needs no toolchain either: download, extract, `./scripts/install.sh --registry …` — see
-> [`deploy/prod/README.md`](deploy/prod/README.md).
+> that release, and installing needs no toolchain either:
+> [`deploy/prod/INSTALL.md`](deploy/prod/INSTALL.md) is the command-by-command path — one host first (tier 1), then the
+> same install grows onto bare-metal executor nodes (tier 2) and across machines (tier 3), never reinstalled. What each
+> directory holds is in [`deploy/prod/README.md`](deploy/prod/README.md).
 
 ## Features
 
