@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Build, push, save and load the Flame images.
 #
-#   ./scripts/images.sh build --tag 2026.12.01                        # the five images, in the local daemon
-#   ./scripts/images.sh push  --tag 2026.12.01 --registry ghcr.io/acme/flame   # ... and to that namespace
-#   ./scripts/images.sh save  --tag 2026.12.01 --dir /srv/flame/dist  # offline bundle, upstream images included
+#   ./scripts/images.sh build --tag v2026.12.01                        # the five images, in the local daemon
+#   ./scripts/images.sh push  --tag v2026.12.01 --registry ghcr.io/acme/flame   # ... and to that namespace
+#   ./scripts/images.sh save  --tag v2026.12.01 --dir /srv/flame/dist  # offline bundle, upstream images included
 #   ./scripts/images.sh load  --dir /srv/flame/dist
 #
 # Everything is tagged with the release tag, including the base image: base changes rarely, so rebuilding it is a

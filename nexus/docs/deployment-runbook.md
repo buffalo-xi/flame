@@ -91,7 +91,7 @@ servers, and a unique `-node` name per server; a single server publishes neither
 ### 5.1 `/etc/flame/flame.env` (0600)
 
 ```bash
-FLAME_TAG=2026.12.01               # the one version number: image tags and releases/<ver>
+FLAME_TAG=v2026.12.01               # the one version number: image tags and releases/<ver>
 FLAME_BIND_IP=127.0.0.1            # tiers 2/3: this host's intranet IP
 COMPOSE_FILE=compose.yaml          # tier 3: compose.yaml:compose.multi-host.yaml
 FLAME_PUBLISH_IP=0.0.0.0           # where 27001 binds; behind an upstream LB: 127.0.0.1 or the intranet IP

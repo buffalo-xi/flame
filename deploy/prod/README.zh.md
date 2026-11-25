@@ -99,27 +99,27 @@ deploy/prod/
 
 ```bash
 # 构建机（有 go、node 与 docker）：一条命令打齐一次离线发布所需
-./scripts/release.sh --tag 2026.12.01
-#   deploy/prod/release/flame-prod-2026.12.01.tar.gz    可运行目录树（产物、脚本、配置、unit）
-#   deploy/prod/release/flame-images-2026.12.01.tar     四个运行镜像 + consul / postgres / redis / litellm
+./scripts/release.sh --tag v2026.12.01
+#   deploy/prod/release/flame-prod-v2026.12.01.tar.gz    可运行目录树（产物、脚本、配置、unit）
+#   deploy/prod/release/flame-images-v2026.12.01.tar     四个运行镜像 + consul / postgres / redis / litellm
 #   deploy/prod/release/SHA256SUMS                      目标机上核验两者
 
 # 同样的步骤，一次一步
 ./scripts/build.sh
-./scripts/images.sh build --tag 2026.12.01
-./scripts/images.sh save  --tag 2026.12.01 --dir /srv/flame/dist   # 离线交付
+./scripts/images.sh build --tag v2026.12.01
+./scripts/images.sh save  --tag v2026.12.01 --dir /srv/flame/dist   # 离线交付
 
 # ……或者把镜像推到 registry，不搬 tar
-./scripts/images.sh push  --tag 2026.12.01 --registry ghcr.io/acme/flame
+./scripts/images.sh push  --tag v2026.12.01 --registry ghcr.io/acme/flame
 
 # 目标机，root，走 tar：把两个包拷进同一个目录，在其下解开目录树
-./scripts/install.sh --tag 2026.12.01 --check      # 只做前置检查，什么都不改
-./scripts/install.sh --tag 2026.12.01 --images /srv/flame/dist
+./scripts/install.sh --tag v2026.12.01 --check      # 只做前置检查，什么都不改
+./scripts/install.sh --tag v2026.12.01 --images /srv/flame/dist
 
 # ……或者走 registry：它会拉四个运行镜像（consul / postgres / redis / litellm 在主机上没有时仍从各自发布方拉），
 # 并把命名空间写进 flame.env
-./scripts/install.sh --tag 2026.12.01 --check --registry ghcr.io/acme/flame
-./scripts/install.sh --tag 2026.12.01 --registry ghcr.io/acme/flame
+./scripts/install.sh --tag v2026.12.01 --check --registry ghcr.io/acme/flame
+./scripts/install.sh --tag v2026.12.01 --registry ghcr.io/acme/flame
 
 flame up -d consul postgres redis litellm          # 先起数据面
 ./scripts/migrate.sh                               # 平台 SQL，按依赖序

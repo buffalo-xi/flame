@@ -8,6 +8,8 @@
 **先装一台（tier 1），再让同一套安装长到多台，不需要重装。**
 
 下文 `<owner>` 是发布镜像的 GitHub 账号；本仓库是 `buffalo-xi`。
+下文 `<tag>` 是 release tag，必须**按发布值原样使用，`v` 前缀要带上**：同一个字符串同时是镜像 tag、release 目录名、
+tar 包名和 `FLAME_TAG`，而 `install.sh` 与 `release.sh` 都不会替你加或去掉前缀。
 
 ## 0. 机器要求
 
@@ -15,8 +17,8 @@
 |---|---|
 | 架构 | `linux/amd64`（发布的镜像只有 amd64） |
 | 权限 | root，systemd |
-| 运行时 | Docker，带 `compose` 插件 |
-| 网络 | 能访问 `github.com` 与 `ghcr.io`；否则走离线包（§1b） |
+| 运行时 | Docker Engine 20.10+ 与 Compose **v2** 插件——compose 文件用了顶层 `name:`、`profiles` 和 `host-gateway` |
+| 网络 | 能访问 `github.com`、`ghcr.io`、`docker.io`、`docker.litellm.ai`；离线包（§1b）一个都不需要 |
 | 端口 | `27001` 空闲（`27443` 会发布端口，但只有证书就位才监听）；执行器监听的是 `0.0.0.0:27081` / `0.0.0.0:27091`，不要暴露到公网 |
 | 存储 | `/srv/flame/data` 在本机文件系统上，属主 uid 1000（从 tier 2 起改为共享挂载） |
 | 内核 | docker 模式：沙箱里要跑容器，daemon 必须允许嵌套 Docker；nsjail 模式：改用 cgroup v2（§4） |
@@ -27,10 +29,12 @@
 
 ### 1a. 从 Release 取（需要 `ghcr.io`）
 
+tag 从仓库的 Releases 页面取当前值，替换下面命令里的 `v2026.11.25`；本仓库可直接复制的是：
+
 ```bash
 mkdir -p /srv/flame/dist && cd /srv/flame/dist
-curl -fLO https://github.com/<owner>/flame/releases/download/v2026.11.25/flame-prod-v2026.11.25.tar.gz
-curl -fLO https://github.com/<owner>/flame/releases/download/v2026.11.25/SHA256SUMS
+curl -fLO https://github.com/buffalo-xi/flame/releases/download/v2026.11.25/flame-prod-v2026.11.25.tar.gz
+curl -fLO https://github.com/buffalo-xi/flame/releases/download/v2026.11.25/SHA256SUMS
 sha256sum -c SHA256SUMS
 tar -xzf flame-prod-v2026.11.25.tar.gz
 ```
@@ -45,11 +49,12 @@ tar -xzf flame-prod-v2026.11.25.tar.gz
 
 ```bash
 cd deploy/prod
-./scripts/release.sh --tag 2026.11.25        # 产物 + 镜像 + 两个 tar 包 + SHA256SUMS
+./scripts/release.sh --tag v2026.11.25       # 产物 + 镜像 + 两个 tar 包 + SHA256SUMS
 ```
 
 把 `release/` 拷到目标机、在目标机解开，然后在第 2.2 步用 `--images` 代替 `--registry`。离线包连四个上游镜像
-（consul、postgres、redis、litellm）一起带上。
+（consul、postgres、redis、litellm）一起带上。构建用的 tag 必须与传给 `install.sh` 的**完全同一串**：`release.sh`
+把它烙进镜像 tag、目录名和包名，所以按不带 `v` 的 tag 构建出的包，按带 `v` 的 tag 装不上。
 
 ## 2. 单机（tier 1）
 
@@ -77,14 +82,8 @@ sudo ./scripts/install.sh --tag v2026.11.25 --registry ghcr.io/<owner>/flame
 `/etc/flame/flame.env`（0600，含新生成的密钥），渲染四份服务配置和 `redis.conf`，安装 `/usr/local/bin/flame`
 与 units，**不启动任何东西**。
 
-接着确认第五份配置在位——安装器会从带这份文件的每个 release 里写它，已经在位时这一步是空操作：
-
-```bash
-sudo test -f /etc/flame/nexus.yaml || \
-  sudo install -m 0640 -o root -g flame config/nexus.yaml /etc/flame/nexus.yaml
-```
-
-`nexus.yaml` 是唯一**原样拷贝**的配置（其余都渲染），因为 nexus 自己从环境变量展开里面的 `${VAR}` 占位符。
+`nexus.yaml` 是第五份配置，也是唯一**原样拷贝**的配置（其余都渲染），因为 nexus 自己从环境变量展开里面的 `${VAR}`
+占位符。`install.sh` 会安装它，已存在则保留；只有 `--force-config` 会覆盖它。
 
 ### 2.3 按顺序启动
 
@@ -103,6 +102,9 @@ flame ps
 
 `install.sh` 已经把 units 设成开机启用，留给你的只有 `systemctl start`，而且要等 schema 与 seed 就位之后再敲。
 
+三条判据说明装成了：`flame ps` 列出六个容器、`/etc/flame/initial-credentials.txt` 存在、
+`systemctl is-active flame-sandboxd flame-browserd` 打印两次 `active`。
+
 ### 2.4 首次登录
 
 打开 `http://<host>:27001`。
@@ -112,8 +114,9 @@ flame ps
 | 平台管理员 | `plat` / `12345678` |
 | 租户管理员（`t0`） | `primary` / `12345678` |
 
-这是 seed 的 PoC 账号。**立刻改密码并轮换 `FLAME_API_KEY`**——两者都在 `/etc/flame/flame.env` 里。各供应商的
-API key 在控制台里添加，所有模型调用都经过 LiteLLM。
+这是 seed 的 PoC 账号。**立刻改密码并轮换 `FLAME_API_KEY`**——两者都在 `/etc/flame/flame.env` 里，该文件是 `0600`、
+属主 root，所以读写都要 `sudo`（例如 `sudo grep FLAME_API_KEY /etc/flame/flame.env`）；直接 `cat` 会报
+`permission denied`。各供应商的 API key 在控制台里添加，所有模型调用都经过 LiteLLM。
 
 ## 3. 长到多台
 
@@ -163,6 +166,10 @@ docker 模式下 `sandboxd` 会在这台机器上起 `flame/sandbox:<tag>` 容�
 ```bash
 curl -s "http://<第一台>:8500/v1/health/service/sandboxd?passing=1"
 ```
+
+这个返回是**一个已注册 `sandboxd` 实例一个数组元素**——每个元素里是 `Node`、`Service`，以及属于该实例的 `Checks`
+数组。tier 1 应该是长度 1、带两个检查（`serfHealth` 加服务检查）；`"Service"` 在这一个元素里会出现两次（一次是条目
+键，一次是服务名段），所以按它计数并不能说明注册了几个实例。
 
 回滚：在新节点上 `systemctl disable --now flame-sandboxd`。
 

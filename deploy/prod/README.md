@@ -106,27 +106,27 @@ deploy/prod/
 
 ```bash
 # on a build machine with go, node and docker: one command, everything an offline release needs
-./scripts/release.sh --tag 2026.12.01
-#   deploy/prod/release/flame-prod-2026.12.01.tar.gz    the runnable tree (products, scripts, config, units)
-#   deploy/prod/release/flame-images-2026.12.01.tar     the four runtime images + consul / postgres / redis / litellm
+./scripts/release.sh --tag v2026.12.01
+#   deploy/prod/release/flame-prod-v2026.12.01.tar.gz    the runnable tree (products, scripts, config, units)
+#   deploy/prod/release/flame-images-v2026.12.01.tar     the four runtime images + consul / postgres / redis / litellm
 #   deploy/prod/release/SHA256SUMS                      verify both, on the target machine
 
 # the same steps, one at a time
 ./scripts/build.sh
-./scripts/images.sh build --tag 2026.12.01
-./scripts/images.sh save  --tag 2026.12.01 --dir /srv/flame/dist   # offline delivery
+./scripts/images.sh build --tag v2026.12.01
+./scripts/images.sh save  --tag v2026.12.01 --dir /srv/flame/dist   # offline delivery
 
 # ... or publish the images to a registry instead of carrying a tarball
-./scripts/images.sh push  --tag 2026.12.01 --registry ghcr.io/acme/flame
+./scripts/images.sh push  --tag v2026.12.01 --registry ghcr.io/acme/flame
 
 # on the host, as root, with the tarball: copy both files into one directory, extract the tree there
-./scripts/install.sh --tag 2026.12.01 --check      # prerequisites only, changes nothing
-./scripts/install.sh --tag 2026.12.01 --images /srv/flame/dist
+./scripts/install.sh --tag v2026.12.01 --check      # prerequisites only, changes nothing
+./scripts/install.sh --tag v2026.12.01 --images /srv/flame/dist
 
 # ... or with the registry: it pulls the four runtime images (consul / postgres / redis / litellm are pulled from
 # their own publishers unless the host already has them), and records the namespace in flame.env
-./scripts/install.sh --tag 2026.12.01 --check --registry ghcr.io/acme/flame
-./scripts/install.sh --tag 2026.12.01 --registry ghcr.io/acme/flame
+./scripts/install.sh --tag v2026.12.01 --check --registry ghcr.io/acme/flame
+./scripts/install.sh --tag v2026.12.01 --registry ghcr.io/acme/flame
 
 flame up -d consul postgres redis litellm          # data plane first
 ./scripts/migrate.sh                               # platform SQL, in dependency order

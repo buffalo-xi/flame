@@ -87,7 +87,7 @@ Consul 超过一个 server 时，server 之间还要 `8300`（server RPC）与 `
 ### 5.1 `/etc/flame/flame.env`（0600）
 
 ```bash
-FLAME_TAG=2026.12.01               # 唯一的版本号：镜像 tag 和 releases/<ver> 都用它
+FLAME_TAG=v2026.12.01               # 唯一的版本号：镜像 tag 和 releases/<ver> 都用它
 FLAME_BIND_IP=127.0.0.1            # 第 2/3 档改成这台的内网 IP
 COMPOSE_FILE=compose.yaml          # 第 3 档：compose.yaml:compose.multi-host.yaml
 FLAME_PUBLISH_IP=0.0.0.0           # 27001 绑到哪；前置 LB 时改成 127.0.0.1 或内网 IP

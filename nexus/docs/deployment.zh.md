@@ -513,10 +513,10 @@ SQL → 种子 → 执行器 → 应用面），把它塞进一个脚本等于�
 
 ```bash
 ./scripts/build.sh
-./scripts/images.sh build --tag 2026.12.01
+./scripts/images.sh build --tag v2026.12.01
 ./scripts/migrate.sh                 # 先迁移
-# 改 /etc/flame/flame.env: FLAME_TAG=2026.12.01
-sudo ./scripts/install.sh --tag 2026.12.01   # 落 releases/<ver>、重指 current、重载 unit
+# 改 /etc/flame/flame.env: FLAME_TAG=v2026.12.01
+sudo ./scripts/install.sh --tag v2026.12.01   # 落 releases/<ver>、重指 current、重载 unit
 flame up -d sandboxg browserg nexus web
 systemctl restart flame-sandboxd flame-browserd   # 单元路径没变，只有 restart 才会跑新二进制
 ```
@@ -808,7 +808,7 @@ var runtimeEnv = []string{
 1. **共享存储路径就用 `/srv/flame/data`。** 它已经被四份配置硬编码（`sandboxd.allowed_mount_roots`、
    `browserd.workspace_root`、`nexus.storage.root_dir`、nginx 的 `alias`），改它要同时动五处，而名字本身不带来
    任何收益。要换位置就在安装时整体替换，不要只改一处。
-2. **镜像 tag 用日期（`2026.12.01`）。** `FLAME_TAG` 是这条产品线唯一的版本号，回退是把它改回去；日期天然可比较、
+2. **镜像 tag 用日期（`v2026.12.01`）。** `FLAME_TAG` 是这条产品线唯一的版本号，回退是把它改回去；日期天然可比较、
    可排序，也不需要有人判断"这次改动算不算 minor"。语义化版本只在同一个 tag 要表达多种兼容性承诺时才有价值，
    而这里只有一条版本线。
 3. **专用 dockerd 只给 unit 文件，默认不 enable。** 它单独起一个 daemon，但 `sandboxd` 仍走默认 socket，所以启用

@@ -8,6 +8,9 @@ The step-by-step, for a host with no toolchain. The reasoning lives in
 command by command: **one host first (tier 1), then the same install grows to several hosts without being redone.**
 
 `<owner>` below is the GitHub account that publishes the images; in this repository it is `buffalo-xi`.
+`<tag>` is a release tag, and it must be used **exactly as published, `v` included**: the same string is the image
+tag, the release directory name, the tarball name and `FLAME_TAG`, and neither `install.sh` nor `release.sh` adds or
+strips the prefix.
 
 ## 0. What the host needs
 
@@ -15,8 +18,8 @@ command by command: **one host first (tier 1), then the same install grows to se
 |---|---|
 | Architecture | `linux/amd64` (the published images are amd64 only) |
 | Access | root, systemd |
-| Runtime | Docker with the `compose` plugin |
-| Network | `github.com` and `ghcr.io` reachable; or use the offline bundle (§1b) |
+| Runtime | Docker Engine 20.10+ with the Compose **v2** plugin — the compose file uses a top-level `name:`, `profiles` and `host-gateway` |
+| Network | `github.com`, `ghcr.io`, `docker.io` and `docker.litellm.ai` reachable; the offline bundle (§1b) needs none of them |
 | Ports | 27001 free (27443 is published but only listens with a certificate); the executors listen on `0.0.0.0:27081` / `0.0.0.0:27091`, so keep them off the public network |
 | Storage | `/srv/flame/data` on the local filesystem, owned by uid 1000 (a shared mount from tier 2 on) |
 | Kernel | docker mode: the sandbox runs containers, so the daemon must allow nested Docker; nsjail mode: cgroup v2 instead (§4) |
@@ -27,10 +30,13 @@ Two paths; pick one. Both end in the same `/srv/flame/dist`, because everything 
 
 ### 1a. From a release (needs `ghcr.io`)
 
+Take the current tag from the repository's Releases page and substitute it for `v2026.11.25` below; for this
+repository the concrete URLs are these:
+
 ```bash
 mkdir -p /srv/flame/dist && cd /srv/flame/dist
-curl -fLO https://github.com/<owner>/flame/releases/download/v2026.11.25/flame-prod-v2026.11.25.tar.gz
-curl -fLO https://github.com/<owner>/flame/releases/download/v2026.11.25/SHA256SUMS
+curl -fLO https://github.com/buffalo-xi/flame/releases/download/v2026.11.25/flame-prod-v2026.11.25.tar.gz
+curl -fLO https://github.com/buffalo-xi/flame/releases/download/v2026.11.25/SHA256SUMS
 sha256sum -c SHA256SUMS
 tar -xzf flame-prod-v2026.11.25.tar.gz
 ```
@@ -45,11 +51,13 @@ On a build machine with Go, Node and Docker:
 
 ```bash
 cd deploy/prod
-./scripts/release.sh --tag 2026.11.25        # products + images + both tarballs + SHA256SUMS
+./scripts/release.sh --tag v2026.11.25       # products + images + both tarballs + SHA256SUMS
 ```
 
 Copy `release/` to the host, extract the tree there, and pass `--images` instead of `--registry` in step 2.2. The
-bundle then carries the four upstream images too (consul, postgres, redis, litellm).
+bundle then carries the four upstream images too (consul, postgres, redis, litellm). Build with the **same tag string**
+you will pass to `install.sh`: `release.sh` bakes it into the image tags, the directory name and the tarball name, so a
+bundle built without the `v` cannot be installed with it.
 
 ## 2. Single host (tier 1)
 
@@ -77,16 +85,9 @@ This pulls the four runtime images, places `/opt/flame/releases/<tag>` and point
 `/etc/flame/flame.env` with fresh secrets (0600), renders the four service configurations plus `redis.conf`, installs
 `/usr/local/bin/flame` and the units, and **starts nothing**.
 
-Then verify the fifth configuration is in place — the installer writes it from every release that includes this
-file, and the check is a no-op when it is already there:
-
-```bash
-sudo test -f /etc/flame/nexus.yaml || \
-  sudo install -m 0640 -o root -g flame config/nexus.yaml /etc/flame/nexus.yaml
-```
-
-`nexus.yaml` is the one configuration that is **copied verbatim** rather than rendered, because nexus expands its
-`${VAR}` placeholders from its own environment.
+`nexus.yaml` is the fifth configuration and the one that is **copied verbatim** rather than rendered, because nexus
+expands its `${VAR}` placeholders from its own environment. `install.sh` installs it and keeps an existing file;
+`--force-config` is the only thing that overwrites it.
 
 ### 2.3 Start, in order
 
@@ -106,6 +107,9 @@ flame ps
 `install.sh` already enabled the units; `systemctl start` is the only thing it left to you, and only after the
 schema and the seed exist.
 
+Three things say the install took: `flame ps` lists six containers, `/etc/flame/initial-credentials.txt` exists, and
+`systemctl is-active flame-sandboxd flame-browserd` prints `active` twice.
+
 ### 2.4 First login
 
 Open `http://<host>:27001`.
@@ -116,7 +120,9 @@ Open `http://<host>:27001`.
 | tenant administrator (`t0`) | `primary` / `12345678` |
 
 Those are the seeded PoC credentials. **Change the password and rotate `FLAME_API_KEY` immediately** — both live in
-`/etc/flame/flame.env`. Each provider's API key is added in the console, and every model call goes through LiteLLM.
+`/etc/flame/flame.env`, which is `0600` and owned by root, so read and edit it with `sudo` (for example
+`sudo grep FLAME_API_KEY /etc/flame/flame.env`); a plain `cat` fails with `permission denied`. Each provider's API key
+is added in the console, and every model call goes through LiteLLM.
 
 ## 3. Growing to several hosts
 
@@ -169,6 +175,11 @@ Verify the catalog *grew* rather than replaced the existing entry:
 ```bash
 curl -s "http://<first host>:8500/v1/health/service/sandboxd?passing=1"
 ```
+
+Read the reply as **one array element per registered `sandboxd` instance** — each element holds `Node`, `Service` and a
+`Checks` array for that instance. On tier 1 expect length 1 with two checks (`serfHealth` plus the service check);
+`"Service"` occurs twice inside that single element (once as the entry key, once as the service's name field), so
+counting that string tells you nothing about how many instances registered.
 
 Rollback: `systemctl disable --now flame-sandboxd` on the new node.
 

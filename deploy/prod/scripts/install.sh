@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Place a release on this machine: products, compose files, units, configuration, the `flame` wrapper.
 #
-#   sudo ./scripts/install.sh --tag 2026.12.01 --check   # prerequisites only, changes nothing
-#   sudo ./scripts/install.sh --tag 2026.12.01           # place the release and the units, images already local
-#   sudo ./scripts/install.sh --tag 2026.12.01 --images /srv/flame/dist
-#   sudo ./scripts/install.sh --tag 2026.12.01 --registry ghcr.io/acme/flame
+#   sudo ./scripts/install.sh --tag v2026.12.01 --check   # prerequisites only, changes nothing
+#   sudo ./scripts/install.sh --tag v2026.12.01           # place the release and the units, images already local
+#   sudo ./scripts/install.sh --tag v2026.12.01 --images /srv/flame/dist
+#   sudo ./scripts/install.sh --tag v2026.12.01 --registry ghcr.io/acme/flame
 #
 # Idempotent: running it twice with the same tag only refreshes files. It never touches /etc/flame/flame.env,
 # the service configurations or /srv/flame/data once they exist - those carry host policy, secrets and tenant

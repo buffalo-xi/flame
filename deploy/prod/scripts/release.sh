@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Build everything a production release needs, in one command.
 #
-#   ./scripts/release.sh --tag 2026.12.01                 # products + images + tarballs
-#   ./scripts/release.sh --tag 2026.12.01 --no-images     # products only (no docker needed)
-#   ./scripts/release.sh --tag 2026.12.01 --no-upstream   # leave consul/postgres/redis/litellm out of the tarball
+#   ./scripts/release.sh --tag v2026.12.01                 # products + images + tarballs
+#   ./scripts/release.sh --tag v2026.12.01 --no-images     # products only (no docker needed)
+#   ./scripts/release.sh --tag v2026.12.01 --no-upstream   # leave consul/postgres/redis/litellm out of the tarball
 #
 # Products land in deploy/prod/release (gitignored):
 #   flame-prod-<tag>.tar.gz   runnable tree: compose + config + images + scripts + systemd + env + out/

@@ -554,10 +554,10 @@ registry** at all: the image is already local and `compose up -d` uses it.
 
 ```bash
 ./scripts/build.sh
-./scripts/images.sh build --tag 2026.12.01
+./scripts/images.sh build --tag v2026.12.01
 ./scripts/migrate.sh                         # migrate first
-# edit /etc/flame/flame.env: FLAME_TAG=2026.12.01
-sudo ./scripts/install.sh --tag 2026.12.01   # places releases/<ver>, repoints current, reloads the units
+# edit /etc/flame/flame.env: FLAME_TAG=v2026.12.01
+sudo ./scripts/install.sh --tag v2026.12.01   # places releases/<ver>, repoints current, reloads the units
 flame up -d sandboxg browserg nexus web
 systemctl restart flame-sandboxd flame-browserd   # the unit path never changes; only a restart picks the new binary
 ```
@@ -872,7 +872,7 @@ var runtimeEnv = []string{
 1. **`/srv/flame/data` is the path.** It is already hardcoded in four places (`sandboxd.allowed_mount_roots`,
    `browserd.workspace_root`, `nexus.storage.root_dir`, nginx's `alias`), so changing it means changing all of them,
    and the name itself buys nothing. To move it, replace it everywhere at install time, not in one file.
-2. **Image tags are dates (`2026.12.01`).** `FLAME_TAG` is the one version number of this product line and rollback is
+2. **Image tags are dates (`v2026.12.01`).** `FLAME_TAG` is the one version number of this product line and rollback is
    changing it back; a date sorts and compares without anyone deciding whether a change counts as minor. Semantic
    versioning only pays off when one tag has to carry several compatibility promises, and there is one line here.
 3. **The dedicated dockerd ships as a unit file, not enabled.** It starts a second daemon, but `sandboxd` still uses the
