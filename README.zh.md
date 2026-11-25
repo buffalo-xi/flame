@@ -159,6 +159,27 @@ desktop/          Vue 3 管理台
 `params._meta` 里带 `protocolVersion` / `clientInfo` / `clientCapabilities`。默认走旧协议的客户端会在传输层被直接
 拒绝；具体的失败形态和出站（客户端）一侧见 [`nexus/docs/mcp-support.md`](nexus/docs/mcp-support.md)。
 
+## RPC 协议
+
+除了 MCP，端点还可以暴露成**普通 JSON-RPC 2.0 接口**（`protocol = rpc`）。它仍是同一行 `svc_endpoints`、同一个目标、
+同一套 `exposed` 语义，区别只在信封——已经会说 MCP 的调用方认得这些负载：
+
+- **版本在信封里，不在 `_meta` 里**——请求带 `"version": <major>`；不传等于支持的最低版本（当前 `1`），只有不兼容的
+  改动才升它。
+- **结果就是 MCP 的工具结果**——`tools/list` 返回本租户已暴露的 `rpc` 端点，调用结果里的 `content` 是
+  `[{type: "text", text: …}]`，业务失败是结果上的 `isError: true`，而不是协议错误。
+- **错误按「该谁动手」分**——请求格式与参数错误用标准 JSON-RPC 码；配额超限（`-32000`）、调用成环（`-32001`）、
+  配置错误（`-32002`）用实现自定义区间。
+- **调用链在请求里传递**——`params._meta.call_chain`，在参数送到模型之前就剥掉，所以 `f → a → f` 这种环在第 2 跳
+  被拒绝，而不是一直跑到深度上限。
+
+有两个比信封更重要的性质。授权就是租户内的能力总线——agent 能拿到的 `local__<endpoint>` 工具只开 rpc 端点；而暴露是
+按**目标**切的开关，收回时该目标下所有协议一起下线，多一种协议只是多一行，不是多一个开关。
+
+RPC 不是 MCP 的替代品：它没有第三方生态，而且只有 tools 面（没有 resources / prompts / sampling）。它的价值是 MCP 的
+镜像——MCP 是把互操作押在别人的客户端上，RPC 是押在自己手上，版本、错误语义和调用上下文都由自己定义。理由见
+[`nexus/docs/design-highlights.md`](nexus/docs/design-highlights.md)。
+
 ## 文档
 
 - `nexus/docs/terminology.md` — 术语与动作词约定（改代码前建议先读）（[中文版](nexus/docs/terminology.zh.md)）

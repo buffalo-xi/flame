@@ -175,6 +175,32 @@ session, and every request carries `protocolVersion` / `clientInfo` / `clientCap
 that defaults to the older protocol is refused at the transport layer; see
 [`nexus/docs/mcp-support.md`](nexus/docs/mcp-support.md) for the exact failure modes and for the outbound side.
 
+## RPC protocol
+
+Beside MCP, an endpoint can also be exposed as **a plain JSON-RPC 2.0 surface** (`protocol = rpc`). It is the same
+`svc_endpoints` row over the same target with the same `exposed` semantics — only the envelope differs, and a caller
+that already speaks MCP recognises the payloads:
+
+- **The version sits in the envelope, not in `_meta`** — a request carries `"version": <major>`; omitting it means the
+  lowest supported version (currently `1`), and only an incompatible change bumps it.
+- **Results are MCP tool results** — `tools/list` lists the tenant's exposed `rpc` endpoints, a call returns
+  `content: [{type: "text", text: …}]`, and a business failure is `isError: true` on that result rather than a protocol
+  error.
+- **Errors are split by who has to act** — standard JSON-RPC codes for a malformed request and bad arguments, the
+  implementation-defined range for quota exhaustion (`-32000`), call loops (`-32001`) and configuration errors
+  (`-32002`).
+- **The call chain travels in the request** — `params._meta.call_chain`, stripped before the arguments reach the model,
+  so a cycle like `f → a → f` is refused at the second hop instead of running until the depth limit.
+
+Two properties matter more than the envelope. Grants are the in-tenant capability bus — the `local__<endpoint>` tools an
+agent can be granted are rpc endpoints exclusively — and exposure is a **target**-level switch, so retracting takes
+every protocol of that target down at once and adding a protocol adds a row rather than a second switch.
+
+RPC is not an MCP replacement: it has no third-party ecosystem and is a tools surface only (no resources / prompts /
+sampling). Its value is the mirror image of MCP's — MCP is the interoperability bet on other people's clients, RPC is
+the first-party one whose version, error semantics and call context we can define ourselves. See
+[`nexus/docs/design-highlights.md`](nexus/docs/design-highlights.md) for the reasoning.
+
 ## Docs
 
 - `nexus/docs/terminology.md` — terminology and verb conventions (read this before changing code)

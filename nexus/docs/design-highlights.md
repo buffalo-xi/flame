@@ -215,6 +215,38 @@ Retracting therefore does not invalidate target-based credential grants.
 The terminology red lines are in `nexus/docs/terminology.md` (Chinese): the endpoint domain uses `expose` / `retract`, never
 `hide`, never `publish`.
 
+### RPC is a JSON-RPC 2.0 twin of the MCP surface
+
+`protocol = rpc` is shaped like the MCP surface on purpose, so a second protocol does not become a second product:
+
+- **The version lives in the envelope** — an integer `version` on the request (`0` / absent means
+  `MinSupportedVersion`). It is the *major* version; only an incompatible change bumps it, and a field an older client
+  ignores is a compatible addition, which is why `params._meta.progressToken` and the progress notifications arrived
+  while it stayed `1`. A client below the minimum is refused explicitly, never silently degraded.
+- **Results are the MCP tool result** — `content` is always an array of text segments and a business failure is
+  `isError: true` inside the result, not a JSON-RPC error. `tools/list` mirrors `ListToolsResult`, filtered by
+  credential scope and `exposed`, and carries `serverVersion` for client alignment.
+- **Errors are split by who has to act** — standard codes for a malformed request and bad arguments; quota exhaustion
+  (`-32000`), a call loop (`-32001`) and a configuration error (`-32002`) in the implementation-defined range. A client
+  that maps `-32603` to "server fault" therefore does not page an operator over a caller-side quota problem.
+
+**What only a first-party protocol can carry.** Cycle protection (§2) needs state that travels across runs: every hop
+creates a fresh `ExecContext`, so a counter restarts. Only the wire contract can guarantee that state is passed, so the
+ancestor chain is part of it — `params._meta.call_chain` across processes, `_call_chain` in-process, both stripped at the
+entry point so the model never sees them. That turns "reported after ten hops" into "refused at the second": an
+`f → a → f` loop costs one attempt instead of a full depth budget — the difference between a misconfiguration caught on
+the spot and a pool of workers all waiting on each other. An external MCP client has no obligation to send an ancestor
+chain (it believes it is merely calling a tool), so this is a lever only the first-party surface can pull.
+
+**The cost stays near zero.** Exposure is a *target*-level switch: retracting sets `exposed = false` for every protocol
+row of that target in one statement, and the records stay. Grants are the in-tenant capability bus — `local__<endpoint>`
+tools are rpc endpoints exclusively, since `exposed` is deliberately not checked for a call from inside the tenant. A
+second protocol is therefore a row, not a second switch and not a second grant.
+
+**What it deliberately is not.** A replacement for MCP — no ecosystem, tools surface only, no resources / prompts /
+sampling — and not a way around the depth limits: the chain is reported by the caller, so the depth limit remains the
+backstop and may never be configured as unlimited.
+
 ---
 
 ## 5. Known trade-offs
