@@ -53,7 +53,10 @@ fi
 echo "registry"
 for svc in sandboxd browserd; do
     body=$(curl -s "$consul/v1/health/service/$svc?passing=1" 2>/dev/null || echo '')
-    n=$(printf '%s' "$body" | grep -o '"Service"' | wc -l)
+    # The reply is one array element per registered instance, each with Node + Service + Checks. `"Service":{` is the
+    # entry key and appears once per element; the bare string `"Service"` also matches the instance's name field and
+    # every check's ServiceID/ServiceName, so counting it reported one healthy instance as two.
+    n=$(printf '%s' "$body" | grep -o '"Service":{' | wc -l)
     if [ "$n" -ge 1 ]; then
         ok "$svc: $n passing instance(s)"
     else
@@ -77,7 +80,9 @@ done
 echo "storage"
 if [ -d /srv/flame/data/tenants ]; then
     ok "/srv/flame/data/tenants exists"
-    if [ -n "$(find /srv/flame/data/tenants -maxdepth 2 -name AGENT.md -print -quit 2>/dev/null)" ]; then
+    # tenants/<schema>/agents/<name>/AGENT.md is four levels down; maxdepth 2 never matched and the check then
+    # warned "run the bootstrap job" on an installation that had already run it.
+    if [ -n "$(find /srv/flame/data/tenants -maxdepth 6 -name AGENT.md -print -quit 2>/dev/null)" ]; then
         ok "a tenant's definition-domain files were materialised"
     else
         note "no tenant has an AGENT.md yet - run the bootstrap job"

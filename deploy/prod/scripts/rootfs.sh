@@ -68,7 +68,11 @@ failed=0
 # The lua link in the image is absolute (/usr/local/bin/lua -> /usr/bin/lua5.4). Testing it with -e would follow the
 # link on the *host*, where that path means something else, so the target is resolved against the rootfs by hand.
 lua_target() {
-    local root=$1 link=$root/usr/local/bin/lua ref
+    # Separate declarations on purpose: in `local root=$1 link=$root/...` the right-hand sides are expanded
+    # before the assignment, so `$root` would still be unset and `set -u` aborts the script.
+    local root=$1
+    local link=$root/usr/local/bin/lua
+    local ref
     [ -L "$link" ] || return 1
     ref=$(readlink "$link")
     case "$ref" in
