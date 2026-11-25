@@ -156,6 +156,10 @@ install -d -o flame -g flame /var/lib/flame/sandboxd/tmp
 systemctl enable --now flame-sandboxd
 ```
 
+`sandboxd` runs `flame/sandbox:<tag>` containers on this node but never pulls them itself: give the node access to
+GHCR (the reference comes from `sandboxd.yaml`, as `FLAME_IMAGE_NS` plus `FLAME_TAG`), or load the bundle with
+`./scripts/images.sh load --dir /srv/flame/dist`.
+
 Firewall: new node → first host `8500` (registration); first host and every gateway node → new node `27081`
 (health check and traffic).
 

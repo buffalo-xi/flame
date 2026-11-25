@@ -152,6 +152,10 @@ install -d -o flame -g flame /var/lib/flame/sandboxd/tmp
 systemctl enable --now flame-sandboxd
 ```
 
+`sandboxd` 会在这台机器上起 `flame/sandbox:<tag>` 容器，但它自己不会去拉镜像：要么让这台机器能访问 GHCR
+（镜像名来自 `sandboxd.yaml`，即 `FLAME_IMAGE_NS` 加 `FLAME_TAG`），要么用
+`./scripts/images.sh load --dir /srv/flame/dist` 从离线包导入。
+
 防火墙：新节点 → 第一台 `8500`（注册）；第一台以及各网关节点 → 新节点 `27081`（健康检查与流量）。
 
 确认目录是**变多**而不是把旧条目替换掉：
