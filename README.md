@@ -179,27 +179,33 @@ that defaults to the older protocol is refused at the transport layer; see
 
 Beside MCP, an endpoint can also be exposed as **a plain JSON-RPC 2.0 surface** (`protocol = rpc`). It is the same
 `svc_endpoints` row over the same target with the same `exposed` semantics — only the envelope differs, and a caller
-that already speaks MCP recognises the payloads:
+that already speaks MCP recognises the payloads.
 
-- **The version sits in the envelope, not in `_meta`** — a request carries `"version": <major>`; omitting it means the
-  lowest supported version (currently `1`), and only an incompatible change bumps it.
-- **Results are MCP tool results** — `tools/list` lists the tenant's exposed `rpc` endpoints, a call returns
-  `content: [{type: "text", text: …}]`, and a business failure is `isError: true` on that result rather than a protocol
-  error.
-- **Errors are split by who has to act** — standard JSON-RPC codes for a malformed request and bad arguments, the
-  implementation-defined range for quota exhaustion (`-32000`), call loops (`-32001`) and configuration errors
-  (`-32002`).
-- **The call chain travels in the request** — `params._meta.call_chain`, stripped before the arguments reach the model,
-  so a cycle like `f → a → f` is refused at the second hop instead of running until the depth limit.
+**Its unique value is what a third-party protocol structurally cannot offer.** MCP is the interoperability bet on other
+people's clients; rpc is the one whose version, error semantics and call context we define ourselves. Three things
+follow, and none of them is available to an MCP-only surface:
 
-Two properties matter more than the envelope. Grants are the in-tenant capability bus — the `local__<endpoint>` tools an
-agent can be granted are rpc endpoints exclusively — and exposure is a **target**-level switch, so retracting takes
-every protocol of that target down at once and adding a protocol adds a row rather than a second switch.
+- **The only in-tenant capability bus.** The `local__<endpoint>` tools an agent can be granted are rpc endpoints
+  exclusively; MCP rows stay out of the grant system entirely, because `exposed` is deliberately not checked for a call
+  coming from inside the tenant. "Let my own agent call my own sub-flow without exposing it" has no other protocol.
+- **The only carrier for the call chain.** Cycle protection needs state that crosses runs — every hop creates a fresh
+  `ExecContext`, so a counter restarts. The chain is part of the wire contract (`params._meta.call_chain` across
+  processes, `_call_chain` in-process, both stripped before the model sees them), so `f → a → f` is refused at the
+  second hop instead of running to the depth limit: one attempt instead of a full budget, and no pool of workers left
+  waiting on each other.
+- **The only place where a business rejection cannot be reported as a server fault.** Standard codes mean "you sent
+  something wrong"; quota exhaustion (`-32000`), call loops (`-32001`) and configuration errors (`-32002`) sit in the
+  implementation-defined range, so a client that maps `-32603` to "the server broke" does not page an operator over a
+  caller-side quota problem.
 
-RPC is not an MCP replacement: it has no third-party ecosystem and is a tools surface only (no resources / prompts /
-sampling). Its value is the mirror image of MCP's — MCP is the interoperability bet on other people's clients, RPC is
-the first-party one whose version, error semantics and call context we can define ourselves. See
-[`nexus/docs/design-highlights.md`](nexus/docs/design-highlights.md) for the reasoning.
+What keeps that affordable is the twin discipline: the version rides in the envelope (`version`, major only, absent =
+the minimum), results and `tools/list` keep the MCP shapes, and exposure is a **target**-level switch — retracting takes
+every protocol of that target down in one statement, so a second protocol costs a row, not a second switch and not a
+second grant.
+
+This is still not a replacement for MCP: no third-party ecosystem, tools surface only (no resources / prompts /
+sampling). The trade is straightforward — MCP buys reach, rpc buys control, and the endpoint model lets a single target
+hold both at once. See [`nexus/docs/design-highlights.md`](nexus/docs/design-highlights.md) for the reasoning.
 
 ## Docs
 
