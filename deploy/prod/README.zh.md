@@ -31,6 +31,10 @@ sudo ./scripts/install.sh --tag <tag> --registry ghcr.io/<owner>/flame
 tar 包——以及 **GHCR 的包默认是私有的，哪怕仓库是公开的**，所以发布方要在首次运行后把包的可见性改成 public（或
 分发一个 `read:packages` token）。
 
+还有一件这个 tar 包不带的东西：`browserd` 驱动的是宿主 `PATH` 上已有的 Chromium 或 Google Chrome
+（见 [`INSTALL.md`](INSTALL.zh.md) §0）。没有浏览器时服务照常启动、注册、`/healthz` 返回 200——只有浏览器工具不可用，
+`scripts/health.sh` 会在它的 `browser` 一行里说明。
+
 ## 先在本机试一下（约一分钟）
 
 不需要 root、不装 systemd、不在这个目录之外写任何东西：

@@ -36,6 +36,10 @@ own publishers — a host without internet takes the offline tarball instead —
 default even on a public repository**, so the publisher has to set the package visibility to public (or hand out a
 `read:packages` token) once, after the first run.
 
+One dependency this tarball does not carry: `browserd` drives a Chromium or Google Chrome that must already be on the
+host `PATH` ([`INSTALL.md`](INSTALL.md) §0). Without one the service still starts, registers and answers `/healthz` —
+only the browser tools stay unavailable, and `scripts/health.sh` reports it on its `browser` line.
+
 ## Try it on one machine (about a minute)
 
 No root, no systemd, nothing installed outside this directory:

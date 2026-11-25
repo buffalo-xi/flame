@@ -4,7 +4,8 @@
 #   ./scripts/health.sh
 #
 # Every check prints ok/warn/FAIL. FAIL is what the runbook's section 13 calls a blocked release; warn is
-# "the product works, this deployment is missing something optional" (no browser, no nsjail).
+# "the product works, this deployment is missing something optional" (a host with no browser to drive). The nsjail
+# side of the same class of problem is checked by `install.sh --check`, not here.
 set -uo pipefail
 
 entry=${FLAME_ENTRY:-http://127.0.0.1:27001}
