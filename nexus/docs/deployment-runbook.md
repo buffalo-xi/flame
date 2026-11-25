@@ -791,6 +791,17 @@ time and keep nginx pointed at the host already upgraded, not at one still on th
 | replica health | `curl -s http://<replica intranet IP>:27006/health` | 200; the body names no failed dependency |
 | replica in rotation (§8.2) | log in through the entry point, then reload a few times so requests land on both | still logged in, no silent 401 |
 | static assets on each nexus | `flame logs nexus \| grep -i "static file server"` | every host logs where it mounted `/static` |
+| nsjail rootfs (§5.3 of `deployment.md`, optional) | `./scripts/rootfs.sh --tag $FLAME_TAG --check` | every line ok, including a real `nsjail --chroot … python3 -V` run |
+
+Two readings that are easy to get wrong:
+
+- **Registration is an array of instances.** One element per registered executor, each holding `Node`, `Service` and
+  that instance's `Checks`, so "one entry per executor" means the array length. A single healthy instance already
+  contains the string `"Service"` twice (the entry key and the service's name field) plus once per check in its
+  `ServiceID` / `ServiceName`, so counting that string never measures how many instances registered. `health.sh`
+  counts the entry key `"Service":{`, which is the fast read.
+- **`health.sh` proves liveness, not isolation.** With `mode: nsjail` the executor answers even when the rootfs is of
+  another generation; run the `rootfs.sh --check` row above as well.
 
 ## 14. Troubleshooting
 

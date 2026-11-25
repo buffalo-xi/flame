@@ -759,6 +759,16 @@ systemctl restart flame-sandboxd flame-browserd
 | 副本健康 | `curl -s http://<副本内网 IP>:27006/health` | 200，响应里没有失败的依赖 |
 | 副本在轮转里（§8.2） | 从入口登录，再刷新几次让请求落到两个副本上 | 仍在登录态，没有静默 401 |
 | 每台 nexus 的静态资源 | `flame logs nexus \| grep -i "static file server"` | 每台都打印出 `/static` 挂在哪里 |
+| nsjail rootfs（可选，见 `deployment.zh.md` §5.3） | `./scripts/rootfs.sh --tag $FLAME_TAG --check` | 每一项都 ok，含一次真实的 `nsjail --chroot … python3 -V` |
+
+两处最容易读错的：
+
+- **注册返回是「一个实例一个元素」的数组。** 每个元素里有 `Node`、`Service` 和属于该实例的 `Checks`，所以「每台执行器
+  一条」指的是数组长度。一个健康的实例本身就已经包含两次字符串 `"Service"`（条目键和服务名段），再加上每个检查的
+  `ServiceID` / `ServiceName` 各一次——按这个字符串计数永远量不出注册了几个实例。`health.sh` 数的是条目键
+  `"Service":{`，这是最快的读法。
+- **`health.sh` 只证明进程活着，不证明隔离生效。** `mode: nsjail` 下 rootfs 是上一世代也照样应答，所以上面那行
+  `rootfs.sh --check` 要一起跑。
 
 ## 14. 故障排查
 
