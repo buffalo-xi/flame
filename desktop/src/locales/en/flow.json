@@ -661,6 +661,7 @@
         "multi_outgoing": "More than one outgoing edge: unless this is a branch / intent, only the first one is followed",
         "container_entry": "The container has no single entry child: it reports success while running nothing",
         "branch_edge": "A branch condition has no outgoing edge, so it has nowhere to go",
+        "branch_condition": "A branch child has no condition script, so the runner skips it and that path never runs",
         "child_id": "A branch child has no id, so no edge can route to it",
         "call_target": "The call target is not a function node in this flow",
         "wait_fork": "The wait node does not point at a fork node",

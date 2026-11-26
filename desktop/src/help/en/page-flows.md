@@ -53,7 +53,7 @@ The result is listed as errors and warnings, each line naming the node and the c
 - **error**: as written, it will not run (a code step with no script, a branch with no children, a script language the
   sandbox does not offer);
 - **warning**: it runs, but probably not as intended (undeclared `outputs`, a fallback rule that can never fire, an
-  `assign` with nothing to assign).
+  `assign` with nothing to assign, a branch child with no condition).
 
 The check also re-runs while you edit (about a second after you stop), so saving is not the first time you hear about a
 problem: a node with findings gets a small round badge in its title row — red for an error, amber for warnings only. Hover

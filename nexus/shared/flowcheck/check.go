@@ -58,6 +58,7 @@ const (
 	CodeContainerEntry  = "container_entry"  // a container has no (or several) entry children
 	CodeContainerOut    = "container_out"    // a container has more than one outgoing edge
 	CodeBranchEdge      = "branch_edge"      // a branch child has no outgoing edge to route to
+	CodeBranchCondition = "branch_condition" // a branch child has no condition script, so it is skipped
 	CodeChildID         = "child_id"         // a branch child has no id, so no edge can route to it
 	CodeCallTarget      = "call_target"      // call.target does not name a function node
 	CodeWaitFork        = "wait_fork"        // wait.fork_node_id does not name a fork node
@@ -193,8 +194,26 @@ func Step(typ string, cfg map[string]any, langs []string) ([]Finding, error) {
 			add(SeverityError, CodeIncomplete, "loop.type", "loop step has no loop.type, so the run fails with unknown loop type")
 		}
 	case "branch", "intent":
-		if children, ok := cfg["children"].([]any); !ok || len(children) == 0 {
+		children, ok := cfg["children"].([]any)
+		if !ok || len(children) == 0 {
 			add(SeverityError, CodeIncomplete, "children", typ+" step has empty config.children: there is no branch to take at run time")
+			break
+		}
+		if typ == "branch" {
+			// A child without a condition script is skipped by the runner (one node log line), so the branch can never
+			// match: the node runs, just never down that path. Intent children are classified by label / description
+			// instead, which is why this loop is branch-only.
+			for _, raw := range children {
+				child := objectOf(raw)
+				id, _ := child["id"].(string)
+				if id == "" {
+					continue // the diagram check reports a branch child without an id
+				}
+				if cond, _ := child["condition"].(string); strings.TrimSpace(cond) == "" {
+					add(SeverityWarning, CodeBranchCondition, "children."+id+".condition", fmt.Sprintf(
+						"branch child %q has no condition script, so the runner skips it at run time", id))
+				}
+			}
 		}
 	case "call":
 		if target, _ := cfg["target"].(string); strings.TrimSpace(target) == "" {
@@ -251,8 +270,30 @@ func Step(typ string, cfg map[string]any, langs []string) ([]Finding, error) {
 		// The opposite failure of the cases above: the step succeeds and reports success while doing nothing, so the
 		// author's intent is lost without an error anywhere. A warning, and its own code, because that reads
 		// differently from "a required key is missing".
-		if list, ok := cfg["assignments"].([]any); !ok || len(list) == 0 {
+		list, ok := cfg["assignments"].([]any)
+		if !ok || len(list) == 0 {
 			add(SeverityWarning, CodeNoOp, "assignments", "assign step has no config.assignments: it reports success without assigning anything")
+			break
+		}
+		// The items themselves are all-or-nothing: parseAssignments refuses the whole list before the first assignment,
+		// so one malformed entry means none of them land.
+		for i, raw := range list {
+			path := fmt.Sprintf("assignments[%d]", i)
+			item := objectOf(raw)
+			if item == nil {
+				add(SeverityError, CodeIncomplete, path, "assign step has an assignment that is not an object; the run fails before assigning anything")
+				continue
+			}
+			kind, _ := item["kind"].(string)
+			target, _ := item["target"].(string)
+			if strings.TrimSpace(kind) == "" || strings.TrimSpace(target) == "" {
+				add(SeverityError, CodeIncomplete, path, "assign step has an assignment without kind or target; the run fails before assigning anything")
+				continue
+			}
+			if kind != "output" && kind != "target" {
+				add(SeverityError, CodeIncomplete, path, fmt.Sprintf(
+					"assign step has kind=%q, which is neither output nor target; the run fails before assigning anything", kind))
+			}
 		}
 	}
 

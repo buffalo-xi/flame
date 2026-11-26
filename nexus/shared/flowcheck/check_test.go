@@ -185,6 +185,44 @@ func TestStepLoopTypeAndCount(t *testing.T) {
 	}
 }
 
+// An assign list is all-or-nothing: one malformed entry is refused before any assignment lands.
+func TestStepAssignItems(t *testing.T) {
+	one := func(item any) map[string]any {
+		return map[string]any{"assignments": []any{item}}
+	}
+	if fs, _ := Step("assign", one(map[string]any{"kind": "variable", "target": "x", "value": "1"}), nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("an unknown kind must be an error, got %v", codes(fs))
+	}
+	if fs, _ := Step("assign", one(map[string]any{"kind": "output"}), nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("a missing target must be an error, got %v", codes(fs))
+	}
+	if fs, _ := Step("assign", one("x"), nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("a non-object assignment must be an error, got %v", codes(fs))
+	}
+}
+
+// The runner skips a branch child without a condition, so that path never runs: a warning, not an error. Intent children
+// are classified by label / description instead and must stay silent.
+func TestStepBranchChildNeedsCondition(t *testing.T) {
+	fs, _ := Step("branch", map[string]any{"children": []any{
+		map[string]any{"id": "c1", "condition": "return true"},
+		map[string]any{"id": "c2"},
+	}}, nil)
+	if !has(fs, SeverityWarning, CodeBranchCondition) {
+		t.Fatalf("a branch child without a condition must be a warning, got %v", codes(fs))
+	}
+	for _, f := range fs {
+		if f.Code == CodeBranchCondition && f.Path != "children.c2.condition" {
+			t.Errorf("path = %q, want children.c2.condition", f.Path)
+		}
+	}
+	if fs, _ := Step("intent", map[string]any{"children": []any{
+		map[string]any{"id": "i1", "label": "refund", "description": "a refund request"},
+	}}, nil); has(fs, SeverityWarning, CodeBranchCondition) {
+		t.Fatalf("intent children carry no condition and must not be reported: %v", codes(fs))
+	}
+}
+
 func checkDiagram(t *testing.T, body string) []Finding {
 	t.Helper()
 	fs, err := Diagram(json.RawMessage(body), nil)

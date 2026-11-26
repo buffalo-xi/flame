@@ -44,7 +44,8 @@ An ordinary node: continues along **its first outgoing edge** when done.
 - `assignments` missing / empty → the node does nothing (no error), easily mistaken for a successful assignment. Creation
   and `validate_flow` / the canvas both flag it as a warning (`no_op`), but the node still runs and reports success, so the
   empty list only shows up as "the value never arrived" further down.
-- `unknown assign kind` — `kind` written as something like `variable`.
+- `unknown assign kind` — `kind` written as something like `variable`. The list is all-or-nothing: one malformed entry
+  fails before any assignment lands, and the pre-save check reports it before the run.
 - Writing into a `target` that is not declared in `targets` → `config` error.
 - Assigning `"abc"` to a number — the conversion fails and reports `var` (listing `var` in `on_error.codes` lets you skip or retry).
 
