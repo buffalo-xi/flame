@@ -57,9 +57,8 @@ There is no fixed output; everything comes from `config.outputs`. Returning an *
 (`the script returned an undeclared variable: X`), it is not silently dropped; a declared variable that is not returned stays empty.
 
 When this step writes into an ancestor container (e.g. a `function`'s outputs) through `config.targets`, the keys belong in
-`targets`, not in `outputs`. `validate_flow` still emits `code step has no config.outputs` — the check reads only
-`config.outputs`, so with a non-empty `targets` this is noise, not a defect. Never declare the same name in both sets
-(`declared in both outputs and targets`).
+`targets`, not in `outputs` — that is a complete declaration, and `validate_flow` does not ask for `config.outputs` as well.
+Never declare the same name in both sets (`declared in both outputs and targets`).
 
 ## Outgoing edges
 

@@ -44,10 +44,9 @@ A step inside the body writes into the function's `outputs` through **`targets`*
 
 - the same name must not also appear in that step's `outputs` (`the variable is declared in both outputs and targets`) —
   `outputs` / `targets` / `locals` are pairwise disjoint;
-- `source_ref` here is the function node's **id**: labels are not resolved in `targets`, and ids are not derivable from the
-  step index once the graph has containers — read them back with `read_flow` (see `../nodes-edit.md`);
-- a `code` step written this way still draws `code step has no config.outputs` from `validate_flow`; that check reads only
-  `config.outputs`, so here it is noise, not a defect.
+- `source_ref` may be written as the function node's label, but ids are safer: the step index tells you nothing once the
+  graph has containers, so read the real ids back with `read_flow` (see `../nodes-edit.md`);
+- a `code` step written this way needs no `config.outputs` — declaring the keys in `targets` is what makes it complete.
 
 ## Structural requirements
 

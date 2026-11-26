@@ -458,12 +458,11 @@ Key points:
 
 1. **Function nodes stay off the main chain** — no in-edge, no out-edge; only `call` enters them. Wired in, the body runs
    with empty params and dies on the first param read.
-2. **`read_flow` first, then ids** — labels are resolved only for `config.inputs.source_ref` / `call.target` /
-   `config.wait.fork_node_id`, and only in `create_flow`. `targets.*.source_ref` and `call.args.*.source_ref` need real
-   node ids; `create_node` / `update_node` resolve nothing.
-3. **Filter the validator** — `validate_flow` compares a `source_key` against the source node's `outputs`, which for a
-   function node excludes its `params`: reading a param inside the body is reported as "produces no such output" while the
-   run itself succeeds. Confirm such a finding with one run before restructuring anything.
+2. **`read_flow` first, then ids** — every node reference (`inputs` / `targets` / `args` `source_ref`, `call.target`,
+   `wait.fork_node_id`) accepts a label, but ids are what the diagram stores, and the step index stops predicting them once
+   the graph has branches or containers. Read the real ids back before wiring values between nodes.
+3. **`validate_flow` is not the run** — a finding names a config key, not a proven failure. Fix what it points at, then
+   confirm with one `run_flow`; do not restructure a working graph because of a single finding.
 
 ## Test run right after building (`run_flow`)
 

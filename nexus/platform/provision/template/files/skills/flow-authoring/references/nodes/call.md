@@ -25,9 +25,8 @@ Calls another `function` node **within the same flow** (recursion supported, lim
 
 It **does not read** `inputs` / `locals`. Exceeding the recursion depth → `internal` error.
 
-`args` is **not** a place for labels: only `config.inputs.source_ref`, `config.target` and `config.wait.fork_node_id` are
-rewritten from a label, and only by `create_flow`. `args.*.source_ref` needs the real node id, and `create_node` /
-`update_node` resolve nothing — read the diagram back before writing `args`.
+`args.*.source_ref` may be written as a node **label** or as its id (a label is rewritten when it matches no id), the same
+rule as `config.inputs`. Ids are still safer once the graph grows containers: read them back with `read_flow`.
 
 ## Output variables
 
