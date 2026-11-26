@@ -303,7 +303,9 @@ once (`-SkipCopyCheck` drops the step). The gate always scans all four modules, 
   prose waiting to be translated;
 - Chinese outside comments in a Go file that is not a `_test.go` (fixtures are data, see AGENTS.md);
 - Chinese copy in the desktop sources that never reached a bundle;
-- `ErrJSON` (removed in 2026-11, it must not come back), and a `msg` containing Chinese on an `ErrCode` line.
+- `ErrJSON` (removed in 2026-11, it must not come back), and a `msg` containing Chinese on an `ErrCode` line;
+- a finding code from `shared/flowcheck` with no `flow.check.code.*` wording in either desktop bundle, or a wording left
+  behind by a rule that no longer exists (section 8 — the canvas would otherwise fall back to its generic line).
 
 The only exceptions are two allowlists at the bottom of the script: the `zh-CN` bodies in `shared/skeleton`, the language
 picker's endonyms and one legacy `msg` fallback. Adding an entry is a review decision, not a build fix.

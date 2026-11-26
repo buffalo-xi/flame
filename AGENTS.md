@@ -156,5 +156,6 @@ Verification:
   user-visible copy that never reaches a locale bundle (a response without a code, an `ErrCode` whose code has no bundle
 entry, hardcoded Chinese display fields), and the
   code-versus-bundle diff for `en` / `zh-CN`. It is a baseline by default; `-Gate` turns the decidable checks (Chinese
-comments, Chinese in non-test Go sources, un-bundled Chinese copy in the desktop sources, `ErrJSON`, a Chinese `msg`) into
-  an exit code, with the two allowlists at the bottom of the script as the only exceptions.
+  comments, Chinese in non-test Go sources, un-bundled Chinese copy in the desktop sources, `ErrJSON`, a Chinese `msg`, a
+  `shared/flowcheck` finding code without wording in either flow bundle) into an exit code, with the two allowlists at the
+  bottom of the script as the only exceptions.
