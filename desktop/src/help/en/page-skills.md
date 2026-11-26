@@ -33,7 +33,9 @@ one-line hint).
 - **Visibility**: everyone, or a whitelist. Picking in the whitelist saves immediately.
 - **Tool dependencies**: declares which tools this skill needs. **This is a declaration, not a grant** —
   tick, then press Save below.
-- **Properties**: owner (only at creation), user-callable, command dispatch and target tool.
+- **Properties**: owner (only at creation), user-callable, command dispatch and target tool. Target-tool
+  candidates come from Tool dependencies; a whole-group dependency (for example "Built-in · exec") expands into
+  the group's individual tools, and a tool name can also be typed directly.
 
 The save semantics differ per tab: visibility and properties apply immediately, tool dependencies need the
 explicit Save.

@@ -152,6 +152,7 @@
           <el-select v-model="form.command_tool" size="small" style="width:100%"
                      filterable allow-create default-first-option clearable
                      :disabled="!skillId || readonly"
+                     :no-data-text="$t('skill.targetToolNoData')"
                      :placeholder="$t('skill.targetToolPlaceholder')" @change="saveProps">
             <el-option v-for="opt in commandToolOptions" :key="opt.ref"
                        :label="opt.label === opt.ref ? opt.ref : `${opt.label} · ${opt.ref}`"
@@ -578,13 +579,30 @@ const loadDeps = async (force = false) => {
 
 // 「目标工具」的候选：该技能声明的工具依赖（一个直达命令通常就是其中某一个的薄壳），
 // 外加当前已保存的值 —— 它可能不在依赖里（以前手填过），不补进来就会显示成一个来历不明的 ref。
+//
+// 依赖也可能是「整组」（builtin:exec / mcp:fs / preset:xxx）：组本身不是一个可直达的工具，所以展开成组内的
+// 每个单工具再作为候选。面板本来就允许整组声明（分类组的 ref 与组内同名工具的 ref 会重合，比如 builtin:exec
+// 既是 exec 分类也是 exec 工具），只挑 item_type==='tool' 会让这类依赖一个候选都产不出来，下拉于是显示「无数据」。
+//
 // 仍然允许手填：命令可以直达没写进依赖的工具，能不能跑由运行时该 agent 的授权决定，这里不替后端下结论。
 const commandToolOptions = computed(() => {
-  const opts = depItems.value
-    .filter((it) => it.item_type === 'tool')
-    .map((it) => ({ ref: it.ref, label: it.label || it.ref }))
+  const opts = []
+  const seen = new Set()
+  const add = (ref, label) => {
+    if (!ref || seen.has(ref)) return
+    seen.add(ref)
+    opts.push({ ref, label: label || ref })
+  }
+  for (const it of depItems.value) {
+    if (it.item_type === 'tool') {
+      add(it.ref, it.label)
+      continue
+    }
+    const group = toolCatalog.value.find((g) => g.ref === it.ref)
+    for (const t of (group?.items || [])) add(t.ref, t.label || t.name)
+  }
   const cur = props.form.command_tool
-  if (cur && !opts.some((o) => o.ref === cur)) {
+  if (cur && !seen.has(cur)) {
     const d = describeRef(cur, 'tool')
     opts.unshift({ ref: cur, label: d.label || cur })
   }
