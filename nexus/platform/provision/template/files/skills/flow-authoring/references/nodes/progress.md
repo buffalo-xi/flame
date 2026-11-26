@@ -27,6 +27,9 @@ Emits one "progress" update outwards (reasoning / intermediate state); it does n
 
 **There is no `outputs` panel**: `output` is written automatically by the executor.
 
+Creation does **not** check `config.code` here (there is no `progress` case in the creation checks): a node without it is
+created happily and only fails when the run reaches it. Write the block even when `create_flow` returns no warning.
+
 ## Output variables
 
 `output`(string): this progress text.

@@ -41,7 +41,9 @@ An ordinary node: continues along **its first outgoing edge** when done.
 
 ## Common errors
 
-- `assignments` missing / empty → the node does nothing (no error), easily mistaken for a successful assignment.
+- `assignments` missing / empty → the node does nothing (no error), easily mistaken for a successful assignment. Creation
+  does not flag it either (there is no `assign` case in the creation checks), so an empty list only shows up as "the value
+  never arrived" further down.
 - `unknown assign kind` — `kind` written as something like `variable`.
 - Writing into a `target` that is not declared in `targets` → `config` error.
 - Assigning `"abc"` to a number — the conversion fails and reports `var` (listing `var` in `on_error.codes` lets you skip or retry).

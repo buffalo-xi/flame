@@ -53,5 +53,8 @@ An ordinary node: continues along **its first outgoing edge** when done.
 - `RPC connection does not exist` / `connection is not enabled`.
 - The endpoint call says "does not exist" — the endpoint name is wrong (the name = the flow name / agent name), or that flow
   has no rpc endpoint at all.
+- Creation does **not** check the mode-specific fields (`endpoint` in `endpoint` mode, `connection_id` + `tool_name` in
+  `connection` mode): the node is created anyway and fails only at run time. `target_type` itself defaults to `connection`
+  when absent, so an endpoint call without `target_type` silently becomes a connection call.
 
 Source: `service/flow/executors/rpc.go`

@@ -47,5 +47,7 @@ An ordinary node: continues along **its first outgoing edge** when done.
 - `mcp connection_id must not be empty` / `tool_name must not be empty`.
 - `MCP connection does not exist` / `connection is not enabled`.
 - `failed to decode arguments JSON` — the string form of `arguments` is not valid JSON (note it must still be valid after templates render).
+- Creation does **not** check either `connection_id` or `tool_name`: an empty value is accepted silently, the node is created,
+  and it only fails when the run reaches it. Both are required — write them even when `create_flow` returns no warning.
 
 Source: `service/flow/executors/mcp.go`

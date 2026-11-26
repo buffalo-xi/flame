@@ -48,6 +48,9 @@ empty.
 The reasoning, the three-language examples and the same convention for every other script surface (conditions, handlers,
 on_error, binding transforms) are in [`../script-languages.md`](../script-languages.md).
 
+A missing `code.script` or `config.outputs` is **only a creation warning** — the node is still created, then fails at run time
+(scripts are refused as undeclared without `outputs`). Fill both in even when the tool reports success.
+
 ## Output variables
 
 There is no fixed output; everything comes from `config.outputs`. Returning an **undeclared** key fails outright

@@ -64,6 +64,20 @@ object of declared variable names for `code` and handlers, a boolean for `branch
 Full table, examples and the two silent failures (`print` is not a return; `__return__` inside a function needs
 `global`): [`../script-languages.md`](../script-languages.md).
 
+## What creation checks, per type
+
+The tools check the **shape** of a step's `config` hard and its **completeness** only softly. Which is which decides whether a
+missing key stops you now or at run time:
+
+| Level | What happens |
+|---|---|
+| shape | **refused**: a behaviour block (`code` / `http` / `llm` / `loop` / `mcp` / `rpc` / `branch`) that is not an object, `children` that is not an array, a `loop.type` outside `count` / `each` / `while` / `do_while` |
+| completeness | **warning only — the node is still created**: `code` without `code.script` or `config.outputs`; `http` without `http.url`; `llm` without `config.llm`; `loop` without `config.loop`; `branch` / `intent` with empty `children`; `call` without `target`; `wait` without `fork_node_id`; a `lang` the sandbox does not list |
+| not at all | **silent until the run**: `mcp.connection_id` / `mcp.tool_name` empty; `rpc.endpoint` or the connection fields empty; `assign.assignments` empty (a no-op that reports success); `result` / `progress` without `code`; a container (`loop` / `process` / `function`) without its `entry` child; `loop each` whose `source_key` is not declared in `config.inputs` |
+
+A successful `create_flow` is therefore **not** a complete node. Fill in the "not at all" column yourself, and treat every
+returned warning as a TODO rather than as advice.
+
 ## Three facts about edges
 
 1. Except for `branch` / `intent`, a node **can have only one outgoing edge**: more than one reports a `config` error at

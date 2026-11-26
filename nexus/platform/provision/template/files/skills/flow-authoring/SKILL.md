@@ -200,14 +200,23 @@ When you do not know which variables this tenant has, call `list_global_vars` fi
 2. **Never write secret strings directly into config.** On listing, values are cleared by key name (api_key / token / secret /
    password / credential / authorization), the installer has to fill them in again, and carrying them across tenants is a leak.
 
-## Iron rule: node config must be complete (the tools **validate nothing**)
+## Iron rule: node config must be complete (only shapes are refused, completeness is merely warned)
 
-`create_flow` drops `config` into `data.config` as-is, **validating not a single field**. Measured: passing `config: {}` for
-`http` / `llm` / `code` / `mcp` / `rpc` nodes **returned success all five times** (`{"steps":1}`); when `read_flow` reads them
-back, those nodes have **no `config` key at all** in `data`, only `{"label": ...}`.
+The tools decide three different things about a step's `config`. Knowing which is which tells you what a successful call
+actually proved:
 
-In other words: the tools will happily create a node that cannot run, and the error only surfaces at runtime. So "get it right
-before creating" is the only reliable path. Go through this list first:
+- **shape is refused** — the call fails: a behaviour block (`code` / `http` / `llm` / `loop` / `mcp` / `rpc` / `branch`) that
+  is not an object, `children` that is not an array, a `loop.type` outside `count` / `each` / `while` / `do_while`;
+- **completeness is only warned** — the node **is created**: `code` without `code.script` or `config.outputs`, `http` without
+  `http.url`, `llm` without `config.llm`, `loop` without `config.loop`, `branch` / `intent` with empty `children`, `call`
+  without `target`, `wait` without `fork_node_id`, a `lang` the sandbox does not list;
+- **everything else is not checked at all**: `mcp.connection_id` / `tool_name`, `rpc.endpoint` and the connection fields,
+  `assign.assignments`, `result` / `progress` `config.code`, a container's `entry` child, `loop each`'s `source_key`.
+  Measured: `config: {}` for `http` / `llm` / `code` / `mcp` / `rpc` returns success every time and reads back with no `config`
+  key at all, only `{"label": ...}`.
+
+So `create_flow` returning success proves the shape and nothing else, and a returned warning is a TODO rather than advice. The
+per-level table is in `references/nodes/README.md` ("What creation checks, per type"). Go through this list first:
 
 1. **The sub-object must exist, named after `type`**: `type: "http"` → `config.http`, and so on. Without it the node is empty.
 2. **The required fields inside the sub-object must be present**: see the table below; none may be omitted.
@@ -224,11 +233,14 @@ The "fixed outputs" column comes from node configs the **front end actually gene
 
 | type | Sub-object required | Sub-object optional | `config.outputs` should declare |
 |---|---|---|---|
-| `http` | `url` | `method`(GET) / `headers` / `params` / `body_type` / `body` / `timeout` / `response_mode` / `on_error` | `body` `mode` `status` `headers` `sse_events` `stream_finished` |
-| `llm` | `messages` (non-empty array) | `params` / `gateway_model` / `response_mode` | `content` `reasoning_content` `tool_calls` |
-| `code` | `script` | `lang`(lua) / `timeout` | **custom**: every key the script returns must be declared |
-| `mcp` | `connection_id`, `tool_name` | `arguments` / `progress` | `result` `progress` `error` |
-| `rpc` | by `target_type`: `endpoint` → `endpoint` (**the endpoint name**, not an id); `connection` → `connection_id` + `tool_name` | `target_type` / `arguments` / `progress` | `result` `progress` `error` |
+| `http` | `url` | `method`(GET) / `headers` / `params` / `body_type` / `body` / `timeout` / `response_mode` / `handler` | `body` `mode` `status` `headers` `sse_events` `stream_finished` |
+| `llm` | `messages` (non-empty array) | `params` / `gateway_model` / `response_mode` / `handler` | `content` `reasoning_content` `tool_calls` |
+| `code` | `script`, plus `outputs` for every key the script returns | `lang`(lua) / `timeout` | **custom**: every key the script returns must be declared |
+| `mcp` | `connection_id`, `tool_name` | `arguments` / `progress` / `handler` | `result` `progress` `error` |
+| `rpc` | by `target_type`: `endpoint` → `endpoint` (**the endpoint name**, not an id); `connection` → `connection_id` + `tool_name` | `target_type` / `arguments` / `progress` / `handler` | `result` `progress` `error` |
+
+`on_error` is a **top-level sibling** of the behaviour block (`config.on_error`), never a key inside `http` / `llm` / `mcp` /
+`rpc` / `code`; an `on_error` placed inside the sub-object is silently ignored.
 
 Four easy traps:
 
@@ -523,7 +535,7 @@ declared `arguments`; undeclared keys can still be passed, but they never appear
 
 | Symptom | Most likely cause |
 |---|---|
-| In `read_flow` a node has only `{"label"}` and no `config` | `config: {}` was passed — `create_flow` validates nothing and an empty object is dropped as-is, leaving a dead node |
+| In `read_flow` a node has only `{"label"}` and no `config` | `config: {}` was passed — an empty object has no shape to refuse and nothing to warn about, so the call succeeds and the empty object is dropped as-is, leaving a dead node |
 | Creation succeeds but `warnings` says some step is a no-op | `branch`/`intent` without `branches` (or a missing sub-branch) → add `branches`; `loop`/`process`/`function` with no children → add them with `children` or `create_node(parent_node=…)`; `wait` with no concurrency group members → when the user asked for a group, add `config.concurrency` with `update_node(concurrency=group)` |
 | Run reports `body entry node not found` | the container is missing its `entry` child. `loop` / `process` / `function` all report this `config` error (it used to silently succeed and skip, so a sub-flow never ran and nobody noticed): `create_node` / `create_flow` add it automatically, a hand-written diagram does not |
 | Error "label … must be unique" | a node with that name already exists (labels are how `source_ref` / `call.target` are written, so a duplicate points at the wrong node): pick another, or leave `label` empty so the tool appends a `-2` suffix |
