@@ -12,7 +12,9 @@ All four nodes have **no config** (leave `config` empty); they finish immediatel
 ## Constraints
 
 - `break` / `continue` **only work inside a `loop`**: writing them directly in a `function` body reports a `config` error
-  (`break/continue can only be used inside a loop`).
+  (`break/continue can only be used inside a loop`). `validate_flow` / the canvas badge reports the same placement problem
+  before the run (`control_scope`): a `break` / `continue` that no loop can reach, including one inside a `function` body
+  whose call site sits in a loop. A `process` forwards the signal, so its body stays in scope.
 - None of the four triggers `on_error`: they are not errors.
 - The node itself is recorded as `success` but **does not follow its outgoing edge**.
 

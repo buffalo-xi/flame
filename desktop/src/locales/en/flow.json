@@ -668,6 +668,7 @@
         "dangling_ref": "A reference points at a node that does not exist, so the value is empty at run time",
         "loop_source": "The array this loop iterates is not declared in the inputs",
         "unreachable": "No incoming edge, so this node never runs",
+        "control_scope": "No loop can consume this break / continue, so the run fails with a config error (a function boundary also ends the loop scope)",
         "on_error_action": "This node type does not declare that fallback action; the runner ignores it",
         "on_error_code": "That error code does not exist, so the rule can never fire",
         "on_error_code_unused": "This node never produces that error code, so the rule can never fire",

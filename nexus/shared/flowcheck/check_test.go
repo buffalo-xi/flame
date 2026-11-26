@@ -272,6 +272,71 @@ func TestMultiOutgoing(t *testing.T) {
 	}
 }
 
+// A break / continue is consumed by the innermost loop. Outside one the run fails, and a function body counts as outside
+// even when the call site sits in a loop, because the function is a separate invocation. A process forwards the signal,
+// so its body stays in scope.
+func TestControlSignalScope(t *testing.T) {
+	top := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"break"}
+	],"edges":[{"id":"e1","source":"1","target":"2"}]}`)
+	if !has(top, SeverityError, CodeControlScope) {
+		t.Fatalf("a top-level break must be an error, got %v", codes(top))
+	}
+
+	inLoop := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"loop","data":{"config":{"loop":{"type":"count","total_times":2}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"continue","parent_node":"2"}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"3","target":"4"}]}`)
+	if has(inLoop, SeverityError, CodeControlScope) {
+		t.Fatalf("a continue inside a loop body must pass, got %v", codes(inLoop))
+	}
+
+	inProcess := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"loop","data":{"config":{"loop":{"type":"count","total_times":2}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"process","parent_node":"2"},
+		{"id":"5","type":"entry","parent_node":"4"},
+		{"id":"6","type":"break","parent_node":"4"}
+	],"edges":[
+		{"id":"e1","source":"1","target":"2"},
+		{"id":"e2","source":"3","target":"4"},
+		{"id":"e3","source":"5","target":"6"}
+	]}`)
+	if has(inProcess, SeverityError, CodeControlScope) {
+		t.Fatalf("a process forwards the signal to its loop and must pass, got %v", codes(inProcess))
+	}
+
+	inFunction := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function"},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"break","parent_node":"2"}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"3","target":"4"}]}`)
+	if !has(inFunction, SeverityError, CodeControlScope) {
+		t.Fatalf("a break in a function body must be an error, got %v", codes(inFunction))
+	}
+
+	nested := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function"},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"loop","parent_node":"2","data":{"config":{"loop":{"type":"count","total_times":2}}}},
+		{"id":"5","type":"entry","parent_node":"4"},
+		{"id":"6","type":"break","parent_node":"4"}
+	],"edges":[
+		{"id":"e1","source":"1","target":"2"},
+		{"id":"e2","source":"3","target":"4"},
+		{"id":"e3","source":"5","target":"6"}
+	]}`)
+	if has(nested, SeverityError, CodeControlScope) {
+		t.Fatalf("a loop inside a function owns its own break and must pass, got %v", codes(nested))
+	}
+}
+
 // An edge that crosses a container boundary is rejected by the canvas as well.
 func TestCrossParentEdge(t *testing.T) {
 	fs := checkDiagram(t, `{"nodes":[

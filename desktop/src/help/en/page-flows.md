@@ -51,7 +51,7 @@ nodes, and `on_error` actions / error codes the node does not support or can nev
 The result is listed as errors and warnings, each line naming the node and the config key:
 
 - **error**: as written, it will not run (a code step with no script, a branch with no children, a script language the
-  sandbox does not offer);
+  sandbox does not offer, a break outside any loop);
 - **warning**: it runs, but probably not as intended (undeclared `outputs`, a fallback rule that can never fire, an
   `assign` with nothing to assign, a branch child with no condition).
 

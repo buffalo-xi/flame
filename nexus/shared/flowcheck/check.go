@@ -64,6 +64,7 @@ const (
 	CodeWaitFork        = "wait_fork"        // wait.fork_node_id does not name a fork node
 	CodeDanglingRef     = "dangling_ref"     // source_ref points at a node that does not exist
 	CodeLoopSource      = "loop_source"      // each-mode source_key is not declared in inputs
+	CodeControlScope    = "control_scope"    // a break / continue that no loop can consume
 	CodeUnreachable     = "unreachable"      // no incoming edge and not the start node
 	CodeOnErrorAction   = "on_error_action"  // the node does not declare that action, so the runner ignores the block
 	CodeOnErrorCode     = "on_error_code"    // an error code that does not exist at all
@@ -653,6 +654,22 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 		}
 	}
 
+	// Control signals: break / continue are consumed by a loop, so one that no loop reaches fails the run (the runner
+	// turns a leak into "a break node outside any loop is a config error", and a function body refuses it outright).
+	inLoop := loopScope(doc)
+	for i := range doc.Nodes {
+		n := &doc.Nodes[i]
+		if n.Type != "break" && n.Type != "continue" {
+			continue
+		}
+		if inLoop[n.ID] {
+			continue
+		}
+		add(SeverityError, CodeControlScope, n.ID, n.Type, "",
+			fmt.Sprintf("%s node %s is outside every loop, so the run fails with a config error (a function boundary also ends the loop scope)", n.Type, n.ID),
+			"move it into a loop body, or delete it")
+	}
+
 	// Reference checks: a dangling source_ref silently yields an empty value at run time.
 	for i := range doc.Nodes {
 		n := &doc.Nodes[i]
@@ -753,6 +770,63 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 
 	sortFindings(out)
 	return out, nil
+}
+
+// loopScope marks every node a loop can consume a break / continue from: the loop body, the body of a process nested in
+// that body, and whatever the chains inside them lead to.
+//
+// A function body is a separate invocation - function.go turns a leaking break / continue into a config error even when
+// the call site sits inside a loop - so it is not entered. The loop's own outgoing edge runs after the loop, so it is not
+// body either.
+func loopScope(doc *diagram) map[string]bool {
+	children := make(map[string][]string, len(doc.Nodes))
+	byID := make(map[string]*node, len(doc.Nodes))
+	for i := range doc.Nodes {
+		n := &doc.Nodes[i]
+		if n.ID == "" {
+			continue
+		}
+		byID[n.ID] = n
+		if n.ParentNode != "" {
+			children[n.ParentNode] = append(children[n.ParentNode], n.ID)
+		}
+	}
+	next := make(map[string][]string, len(doc.Edges))
+	for _, e := range doc.Edges {
+		next[e.Source] = append(next[e.Source], e.Target)
+	}
+
+	in := make(map[string]bool, len(doc.Nodes))
+	var queue []string
+	push := func(id string) {
+		if id == "" || in[id] {
+			return
+		}
+		in[id] = true
+		queue = append(queue, id)
+	}
+	for i := range doc.Nodes {
+		if doc.Nodes[i].Type == "loop" {
+			push(doc.Nodes[i].ID)
+		}
+	}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		n := byID[id]
+		if n != nil && (n.Type == "loop" || n.Type == "process") {
+			for _, c := range children[id] {
+				push(c)
+			}
+		}
+		if n != nil && n.Type == "loop" {
+			continue // the loop's outgoing edge runs after the loop, not inside it
+		}
+		for _, t := range next[id] {
+			push(t)
+		}
+	}
+	return in
 }
 
 // namedObjects returns "<section>.<name>" -> object for the given config sections, so a path in a Finding matches what the

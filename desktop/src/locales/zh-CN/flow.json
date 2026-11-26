@@ -668,6 +668,7 @@
         "dangling_ref": "引用了不存在的节点：运行时拿到的是空值",
         "loop_source": "遍历的数据源没有在入参里声明",
         "unreachable": "节点没有入边，不会被执行",
+        "control_scope": "没有任何循环能接住这个 break / continue，运行时会报配置错误（函数边界同样超出了循环范围）",
         "on_error_action": "该节点不支持这个兜底动作，运行时会直接忽略",
         "on_error_code": "错误码不存在：运行时不会有这个码，这条规则永远不会命中",
         "on_error_code_unused": "该节点不会产生这个错误码，这条规则永远不会命中",
