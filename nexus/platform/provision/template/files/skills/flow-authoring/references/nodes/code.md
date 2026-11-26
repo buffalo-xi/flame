@@ -24,7 +24,7 @@ Runs a script in the sandbox and assigns the returned values to declared output 
 | Key | Required | Default | Meaning |
 |---|---|---|---|
 | `code.script` | ✅ | — | the script source; it receives an `input` object and **returns a map** |
-| `code.lang` | — | `lua` | **only** the languages listed under "workflow script languages" in the system prompt; do not write one from memory — common languages such as `js` are usually not pooled and only report `unsupported_lang` at runtime. When that list is unavailable, use `lua`; `template` is only for Result / Progress nodes, not for a Code node |
+| `code.lang` | — | `lua` | prefer `lua`; take another language only when it is listed under "workflow script languages" in the system prompt **and** the task needs something Lua cannot do (a third-party library, `xlsx` / `zip` / `pdf` output). A language written from memory only reports `unsupported_lang` at runtime. When that list is unavailable, use `lua`; `template` is only for Result / Progress nodes, not for a Code node — see [`../script-languages.md`](../script-languages.md) |
 | `code.timeout` | — | not enabled → the run limit applies | `{enabled, seconds}` |
 | `config.inputs` | — | — | resolved into the script's `input` |
 | `config.outputs` | ✅ | — | every key the script returns must be declared here; an undeclared key fails the node with `the script returned an undeclared variable: X` |

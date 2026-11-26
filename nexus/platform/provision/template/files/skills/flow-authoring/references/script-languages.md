@@ -71,6 +71,25 @@ written from memory may only report `unsupported_lang` at runtime (mapped to a `
 unavailable, use `lua`. `template` is pure Go rendering — it never touches the sandbox and is only valid on `result` /
 `progress` nodes and binding transforms, not on a `code` node or any handler.
 
+### Picking one: lua first, another language only for a reason
+
+Write `lua` whenever it can do the job — it is the default (`lang` omitted = `lua`) and the simplest surface (a top-level
+`return`, no `__return__` bookkeeping). The sandbox's Lua is a **bare interpreter with no third-party modules** — the image
+ships no rocks, even JSON is encoded by the host wrapper — so reach for `python` / `js` only when the task needs something
+Lua cannot do at that level:
+
+| Situation | Choice |
+|---|---|
+| Arithmetic, string / table shaping, filtering, conditions, handlers, `on_error` scripts | `lua` |
+| A real document or binary format — `xlsx`, `zip`, `pdf`, an image | `python` / `js`: `xlsx` alone is a zip of XML parts, and Lua has neither zlib nor a package that could add it |
+| A library the task depends on (`requests`, `openpyxl`, …) | the language whose runtime actually carries it — read the sandbox probe result in the system prompt; never assume it is installed |
+| The user names a language | that language, as long as it is in the pooled list |
+| Another script node in the same flow already uses `python` / `js` | follow it — do not mix languages inside one flow without a reason |
+
+Plain text output (CSV, `json`, a report string) does **not** justify switching: it is string building, and Lua does it
+fine. Packages cannot be installed from a flow — that means rebuilding the sandbox image — so "Lua + a module" is not an
+option.
+
 ## Errors
 
 - runtime error → the traceback / stack lands in the node log, error code `script`;
