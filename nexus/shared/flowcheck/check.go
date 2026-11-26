@@ -148,11 +148,13 @@ func Step(typ string, cfg map[string]any, langs []string) ([]Finding, error) {
 		if script, ok := code["script"].(string); !ok || strings.TrimSpace(script) == "" {
 			add(SeverityError, CodeIncomplete, "code.script", "code step has no code.script and fails with script not found at run time")
 		}
-		if _, ok := cfg["outputs"].(map[string]any); !ok {
+		// A step that writes into an ancestor container through targets (a function's outputs, a loop's locals) has no
+		// config.outputs and is complete; only a step that declares none of the three sets throws every returned key away.
+		if !declaresAnyVariable(cfg) {
 			// Not an error: the step runs, it just loses every variable the script returns. Its own code, not
 			// "incomplete": a client that words findings by code would otherwise print the same sentence for a missing
 			// script (an error) and a missing outputs block (a warning) on the same node.
-			add(SeverityWarning, CodeOutputs, "outputs", "code step has no config.outputs: variables returned by the script are rejected as undeclared")
+			add(SeverityWarning, CodeOutputs, "outputs", "code step has no config.outputs / targets / locals: variables returned by the script are rejected as undeclared")
 		}
 	case "http":
 		httpCfg, _ := cfg["http"].(map[string]any)
@@ -712,7 +714,7 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 				if src == nil {
 					continue // dangling_ref reports the missing node
 				}
-				outs, known := declaredOutputs(src, resolve)
+				outs, known := declaredOutputs(src, resolve, n, byID)
 				if !known {
 					continue // a visual node has no outputs to compare against
 				}
@@ -821,7 +823,11 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 //
 // A call node is the exception twice over: it mirrors the target function's outputs (SetOutputVarsFrom replaces the whole
 // map) and its own copy is only a front-end convenience, so the function's declaration is the truth.
-func declaredOutputs(n *node, resolve func(string) *node) (map[string]bool, bool) {
+//
+// A function node has a second readable set: a step inside its body reads a parameter through the function node itself
+// (source_type=node, source_ref=<function id>), so params count as readable - but only for a reader inside that body.
+// Handing params to an outside reader would hide a real mistake: the params exist only while the call runs.
+func declaredOutputs(n *node, resolve func(string) *node, reader *node, byID map[string]*node) (map[string]bool, bool) {
 	caps, known := CapabilitiesOf(n.Type)
 	if !known {
 		return nil, false
@@ -841,10 +847,47 @@ func declaredOutputs(n *node, resolve func(string) *node) (map[string]bool, bool
 		}
 		return out, true
 	}
+	if n.Type == "function" && reader != nil && insideContainer(reader, n.ID, byID) {
+		for name := range objectOf(n.Data.Config["params"]) {
+			out[name] = true
+		}
+	}
 	for name := range objectOf(n.Data.Config["outputs"]) {
 		out[name] = true
 	}
 	return out, true
+}
+
+// insideContainer reports whether reader sits somewhere below containerID (a direct child or deeper).
+func insideContainer(reader *node, containerID string, byID map[string]*node) bool {
+	for id := reader.ParentNode; id != ""; {
+		if id == containerID {
+			return true
+		}
+		parent, ok := byID[id]
+		if !ok {
+			return false
+		}
+		id = parent.ParentNode
+	}
+	return false
+}
+
+// declaresAnyVariable reports whether a code step declares at least one writable variable. The script may return a key
+// only if it is declared in outputs, targets or locals, so a step carrying any of the three is complete.
+//
+// An explicit (even empty) config.outputs counts as declared: the author wrote the block, and the finding is about the
+// missing block, not about its content.
+func declaresAnyVariable(cfg map[string]any) bool {
+	if _, ok := cfg["outputs"].(map[string]any); ok {
+		return true
+	}
+	for _, key := range []string{"targets", "locals"} {
+		if len(objectOf(cfg[key])) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // topLevelName takes the top-level name of a variable path: "a.b" / "a[0]" -> "a" (the same rule the executors use).

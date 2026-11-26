@@ -650,3 +650,50 @@ func TestUnreachableSkipsCalledNodes(t *testing.T) {
 		t.Errorf("an unwired code node must still be reported, got %v", codes(fs))
 	}
 }
+
+// A code step that writes into an ancestor container through targets declares its variables there, so it is complete: only
+// a step declaring none of outputs / targets / locals throws away what its script returns.
+func TestCodeStepWithTargetsIsComplete(t *testing.T) {
+	fs, err := Step("code", map[string]any{
+		"code":    map[string]any{"script": "return { sum = 1 }"},
+		"targets": map[string]any{"sum": map[string]any{"type": "number", "source_type": "node", "source_ref": "2"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Step = %v", err)
+	}
+	if has(fs, SeverityWarning, CodeOutputs) {
+		t.Fatalf("a step writing through targets must not be warned, got %v", codes(fs))
+	}
+}
+
+// A function body reads its parameters through the function node itself, so a param is a valid source_key inside the body.
+// From outside the params do not exist while the caller runs, so that finding has to stay.
+func TestFunctionParamsReadableInsideBody(t *testing.T) {
+	inside := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function","data":{"config":{"params":{"a":{"type":"number"}},"outputs":{"sum":{"type":"number"}}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","parent_node":"2","data":{"config":{
+			"code":{"script":"return { sum = input.a }"},
+			"inputs":{"a":{"type":"number","source_type":"node","source_ref":"2","source_key":"a"}},
+			"targets":{"sum":{"type":"number","source_type":"node","source_ref":"2"}}
+		}}}
+	],"edges":[{"id":"e1","source":"3","target":"4"}]}`)
+	if has(inside, SeverityError, CodeSourceKey) {
+		t.Fatalf("a param read inside the function body must pass, got %v", codes(inside))
+	}
+
+	outside := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function","data":{"config":{"params":{"a":{"type":"number"}}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","data":{"config":{
+			"code":{"script":"return {}"},
+			"outputs":{"x":{"type":"number"}},
+			"inputs":{"a":{"type":"number","source_type":"node","source_ref":"2","source_key":"a"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"4"}]}`)
+	if !has(outside, SeverityError, CodeSourceKey) {
+		t.Fatalf("reading a param from outside the body must be reported, got %v", codes(outside))
+	}
+}

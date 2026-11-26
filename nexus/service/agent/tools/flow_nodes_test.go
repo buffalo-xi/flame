@@ -51,6 +51,37 @@ func storedNodes(t *testing.T, fk *fakeFlows) map[string]map[string]any {
 	return out
 }
 
+// A node label is accepted wherever a node id is expected, and the stored config carries the id: create_node used to write
+// the label through and the run then failed to find the node (only create_flow resolved labels).
+func TestCreateNodeResolvesLabelRefs(t *testing.T) {
+	c, fk := edgeTestCtx(nodeTestDiagram)
+	out, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{
+		"flow": "demo", "type": "code", "config": map[string]any{
+			"code":    map[string]any{"lang": "lua", "script": "return { sum = 1, out = 'x' }"},
+			"targets": map[string]any{"sum": map[string]any{"type": "number", "source_type": "node", "source_ref": "上游"}},
+			"inputs": map[string]any{"x": map[string]any{
+				"type": "string", "source_type": "node", "source_ref": "上游", "source_key": "out",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	node, _ := out.(map[string]any)["node"].(map[string]any)
+	id, _ := node["id"].(string)
+	data, _ := storedNodes(t, fk)[id]["data"].(map[string]any)
+	cfg, _ := data["config"].(map[string]any)
+
+	inputs, _ := cfg["inputs"].(map[string]any)["x"].(map[string]any)
+	if got, _ := inputs["source_ref"].(string); got != "5" {
+		t.Errorf("inputs.x.source_ref = %q, want the id 5 of label 上游", got)
+	}
+	targets, _ := cfg["targets"].(map[string]any)["sum"].(map[string]any)
+	if got, _ := targets["source_ref"].(string); got != "5" {
+		t.Errorf("targets.sum.source_ref = %q, want the id 5 of label 上游", got)
+	}
+}
+
 func TestCreateNodeTopLevel(t *testing.T) {
 	c, fk := edgeTestCtx(edgeTestDiagram)
 	out, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{

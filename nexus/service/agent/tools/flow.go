@@ -1211,11 +1211,15 @@ func (b *diagramBuilder) uniqueLabel(base string) string {
 	return fmt.Sprintf("%s-%d", base, len(b.nodes)+1)
 }
 
-// resolveSourceRefs replaces values in config.inputs source_ref that were written as a node label with the node id.
+// resolveSourceRefs replaces values in config.inputs / config.targets / config.args source_ref that were written as a node
+// label with the node id.
 //
 // The model is bad at computing ids by hand (branch sub-chains are spliced in, so step k is no longer k+1), while a label it just
 // wrote is something it does remember. A value is only replaced by label when it matches no node id: id first, so that a label
 // which happens to be a digit string cannot corrupt a correct id.
+//
+// The three sections all carry the same field shape, and all three are read as "the variable comes from that node", so they are
+// rewritten together: leaving targets or args out made a label pass creation and fail at run time.
 func (b *diagramBuilder) resolveSourceRefs() {
 	byLabel := make(map[string]string, len(b.nodes))
 	ids := make(map[string]bool, len(b.nodes))
@@ -1228,18 +1232,21 @@ func (b *diagramBuilder) resolveSourceRefs() {
 		byLabel[label] = n.ID
 	}
 	for _, n := range b.nodes {
-		inputs, _ := objectOf(n.Data["config"])["inputs"].(map[string]any)
-		for _, v := range inputs {
-			in, ok := v.(map[string]any)
-			if !ok {
-				continue
-			}
-			ref, _ := in["source_ref"].(string)
-			if ref == "" || ids[ref] {
-				continue
-			}
-			if id, ok := byLabel[ref]; ok {
-				in["source_ref"] = id
+		cfg := objectOf(n.Data["config"])
+		for _, section := range []string{"inputs", "targets", "args"} {
+			vars, _ := cfg[section].(map[string]any)
+			for _, v := range vars {
+				def, ok := v.(map[string]any)
+				if !ok {
+					continue
+				}
+				ref, _ := def["source_ref"].(string)
+				if ref == "" || ids[ref] {
+					continue
+				}
+				if id, ok := byLabel[ref]; ok {
+					def["source_ref"] = id
+				}
 			}
 		}
 	}

@@ -457,6 +457,8 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	}
 	// branch / intent children may be supplied by the caller; when they are, every entry must end up with an id.
 	normalizeBranchChildren(doc, typ, cfg)
+	// References written as a label become node ids before the config is stored (the same rule create_flow applies).
+	doc.resolveRefsInConfig(cfg)
 
 	label = strings.TrimSpace(label)
 	if label != "" {
@@ -538,6 +540,59 @@ func (d *flowDoc) labelOwner(label string) string {
 		}
 	}
 	return ""
+}
+
+// resolveRefsInConfig rewrites node references written as a label into node ids, for the config of one node:
+// config.inputs.*.source_ref, config.targets.*.source_ref, config.args.*.source_ref, config.target and
+// config.fork_node_id.
+//
+// create_flow resolves a whole diagram at once (diagramBuilder.resolveSourceRefs / resolveNodeLabels); create_node,
+// insert_node and update_node write a single config and resolve it here - otherwise a label passes creation and the run
+// then fails to find the node. The same rule as the builder: a value matching an existing node id is left alone, and an
+// ambiguous label is not guessed at.
+func (d *flowDoc) resolveRefsInConfig(cfg map[string]any) {
+	if len(cfg) == 0 {
+		return
+	}
+	byLabel := make(map[string]string, len(d.nodes))
+	for i := range d.nodes {
+		label := strings.TrimSpace(d.nodes[i].Data.Label)
+		if label == "" {
+			continue
+		}
+		if _, dup := byLabel[label]; dup {
+			continue
+		}
+		byLabel[label] = d.nodes[i].ID
+	}
+	rewrite := func(ref string) string {
+		if ref == "" {
+			return ref
+		}
+		if _, ok := d.node(ref); ok {
+			return ref
+		}
+		if id, ok := byLabel[ref]; ok {
+			return id
+		}
+		return ref
+	}
+	for _, section := range []string{"inputs", "targets", "args"} {
+		for _, raw := range objectOf(cfg[section]) {
+			def := objectOf(raw)
+			if def == nil {
+				continue
+			}
+			if ref, ok := def["source_ref"].(string); ok {
+				def["source_ref"] = rewrite(ref)
+			}
+		}
+	}
+	for _, key := range []string{"target", "fork_node_id"} {
+		if ref, ok := cfg[key].(string); ok {
+			cfg[key] = rewrite(ref)
+		}
+	}
 }
 
 // uniqueLabel appends -2 / -3 ... to an **auto-generated** label until it is unique in the graph.
@@ -987,6 +1042,7 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 			data["label"] = b
 		}
 		if hasReplace {
+			doc.resolveRefsInConfig(replaceCfg)
 			b, err := json.Marshal(replaceCfg)
 			if err != nil {
 				return err
@@ -1002,6 +1058,7 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 				}
 				merged[k] = v
 			}
+			doc.resolveRefsInConfig(merged)
 			b, err := json.Marshal(merged)
 			if err != nil {
 				return err
