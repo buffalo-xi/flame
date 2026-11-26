@@ -6,6 +6,7 @@ Every node type is checked along six dimensions. The point is not to write six d
 places that describe a node - executor, static rules, create tools, canvas, docs, tests - say the same thing.
 
 ✅ means "enforced by a test or a gate"; the enforcement is listed at the bottom, so a ✅ cannot rot silently.
+⚠️ means "audited, with a gap recorded" - the dimension was looked at and something is written down below.
 ⬜ means "not audited yet" - it does **not** mean "no test exists".
 — means "not applicable": the type has nothing to configure, or the tools cannot create it.
 
@@ -24,9 +25,9 @@ places that describe a node - executor, static rules, create tools, canvas, docs
 
 | Type | Batch | Docs / label | Static rules | Creation | Runtime | Canvas | E2E |
 |---|---|---|---|---|---|---|---|
-| `code` | 1 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| `http` | 1 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| `llm` | 1 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| `code` | 1 | ✅ | ✅ | ✅ | ⬜ | ✅ | ⬜ |
+| `http` | 1 | ✅ | ✅ | ✅ | ⚠️ | ✅ | ⬜ |
+| `llm` | 1 | ✅ | ✅ | ✅ | ⬜ | ✅ | ⬜ |
 | `branch` | 2 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
 | `loop` | 2 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
 | `call` | 2 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
@@ -61,12 +62,32 @@ places that describe a node - executor, static rules, create tools, canvas, docs
 - `executors/capabilities_drift_test.go` - error codes, actions, post and fixed outputs equal `flowcheck`'s copy.
 - `scripts/check-locale.ps1` - section 8: finding codes ↔ wording; section 9: node type ↔ doc page ↔ palette label.
 
+## Batch 1: `code` / `http` / `llm`
+
+Field mapping - the executor's read set, the props panel's write set and the doc's key table must be the same list:
+
+| Type | Keys | Verdict |
+|---|---|---|
+| `code` | `code.{script,lang,timeout}`, `inputs`, `outputs`, `targets`, `locals` | match |
+| `http` | `http.{url,method,params,headers,body,body_type,response_mode,timeout,handler}`, `inputs`, `outputs` | match |
+| `llm` | `llm.{messages,gateway_model,params,response_mode,handler}`, `inputs`, `outputs`, `locals` | match |
+
+Runtime evidence so far: `executors/http_request_test.go` covers what `http.md` promises about request construction -
+url/param/header templates, the `GET` default, `body_type` deciding the default `Content-Type`, an explicit header winning,
+no `Content-Type` when there is no body, and `url` being required.
+
+Still open for this batch: the full `Execute` path of all three (outputs, `on_error`, streaming) needs an `ExecContext`
+harness; the three panels were read, not clicked.
+
 ## Found while auditing
 
 - `create_node` refused a `return` created directly under a function: the guard only looked at ancestors. Fixed in
   `9aeb4e2` (`isOrInside`).
 - `sandboxd/config.yaml` kept `langs.js` active while its own comment said js was disabled, so starting sandboxd on a host
   without Node failed. Fixed in `e911cbb`.
+- A template that references an unset variable renders as the literal `<no value>` and is then sent as-is in a url,
+  header or body (`RenderTemplate` uses the default `text/template` behaviour). Recorded, not changed: whether that should
+  be an empty string, a warning, or a config error is a product decision that affects every node using templates.
 
 ## Changing a type
 

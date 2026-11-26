@@ -6,6 +6,7 @@
 创建工具、画布、文档、测试——说同一句话。
 
 ✅ 表示"有测试或门禁保证"，具体是哪一个列在文末，所以 ✅ 不会悄悄过期。
+⚠️ 表示"已审计，但有记录在案的缺口"——这一维看过了，问题写在下面。
 ⬜ 表示"尚未审计"，**不代表**没有测试。
 — 表示"不适用"：该类型没有可配置项，或工具不能直接创建它。
 
@@ -24,9 +25,9 @@
 
 | 类型 | 批次 | 文档/词条 | 静态规则 | 创建 | 运行时 | 画布 | 端到端 |
 |---|---|---|---|---|---|---|---|
-| `code` | 1 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| `http` | 1 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| `llm` | 1 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| `code` | 1 | ✅ | ✅ | ✅ | ⬜ | ✅ | ⬜ |
+| `http` | 1 | ✅ | ✅ | ✅ | ⚠️ | ✅ | ⬜ |
+| `llm` | 1 | ✅ | ✅ | ✅ | ⬜ | ✅ | ⬜ |
 | `branch` | 2 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
 | `loop` | 2 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
 | `call` | 2 | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
@@ -61,11 +62,29 @@
 - `executors/capabilities_drift_test.go` —— 错误码、actions、post、固定输出与 `flowcheck` 的副本一致。
 - `scripts/check-locale.ps1` —— 第 8 段：finding code ↔ 文案；第 9 段：节点类型 ↔ 文档页 ↔ 画布标签。
 
+## 批次 1：`code` / `http` / `llm`
+
+字段对照——执行器读取的键、props 面板写入的键、文档的键表必须是同一份清单：
+
+| 类型 | 键 | 结论 |
+|---|---|---|
+| `code` | `code.{script,lang,timeout}`、`inputs`、`outputs`、`targets`、`locals` | 一致 |
+| `http` | `http.{url,method,params,headers,body,body_type,response_mode,timeout,handler}`、`inputs`、`outputs` | 一致 |
+| `llm` | `llm.{messages,gateway_model,params,response_mode,handler}`、`inputs`、`outputs`、`locals` | 一致 |
+
+目前已有的运行时证据：`executors/http_request_test.go` 覆盖了 `http.md` 关于请求构造的承诺——url/参数/请求头模板、
+`GET` 默认值、`body_type` 决定默认 `Content-Type`、显式请求头优先、无 body 时不设 `Content-Type`、`url` 必填。
+
+本批次仍待完成：三者的完整 `Execute` 路径（输出变量、`on_error`、流式）需要 `ExecContext` 测试脚手架；三个面板只做了
+代码阅读，没有实际点击验证。
+
 ## 审计中已发现
 
 - `create_node` 曾拒绝在 function 下直接创建 `return`：守卫只查了祖先。已在 `9aeb4e2` 修复（`isOrInside`）。
 - `sandboxd/config.yaml` 里 `langs.js` 与它自己的注释矛盾（注释说已禁用，键却开着），导致没有 Node 的主机启动
   sandboxd 失败。已在 `e911cbb` 修复。
+- 模板引用未设置的变量时会渲染成字面量 `<no value>`，并原样进入 url / 请求头 / body（`RenderTemplate` 用的是
+  `text/template` 默认行为）。仅记录、未改：应该变成空字符串、告警还是配置错误，是影响所有使用模板的节点的产品决策。
 
 ## 改动一个类型
 
