@@ -187,9 +187,9 @@ langs:
 
   # node is not installed locally, so js is disabled for now: under mode=none startup validates that the host can
   # resolve it. Install Node (or switch to docker mode) and uncomment to restore it.
-  js:
-    # It is called node under all three modes, so no commands override is needed.
-    command: node
+  # js:
+  #   # It is called node under all three modes, so no commands override is needed.
+  #   command: node
 
 # Where the codehost host binary lives (shared by none / nsjail / docker).
 #
