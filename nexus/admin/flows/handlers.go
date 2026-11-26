@@ -1,6 +1,7 @@
 package flows
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 
 	"flame/nexus/service/agent/tools"
 	"flame/nexus/shared/auth"
+	"flame/nexus/shared/flowcheck"
 	"flame/nexus/shared/flowconfig"
 	"flame/nexus/shared/flowdoc"
 	"flame/nexus/shared/models"
@@ -212,6 +214,56 @@ func validateDiagramNodeCount(limits flowconfig.FlowLimits, diagram json.RawMess
 	return "flow.node_limit_exceeded",
 		gin.H{"count": count, "limit": limits.MaxNodeCount},
 		fmt.Sprintf("node count %d exceeds the tenant limit %d", count, limits.MaxNodeCount)
+}
+
+// flowFindings runs the shared static checks over a submitted diagram.
+//
+// An unparsable diagram is itself a finding rather than a failed request: the editor gets one response shape (counts +
+// findings) whatever it sends, and "the body is not even a diagram" ends up in the same list as everything else.
+func flowFindings(diagram json.RawMessage) []flowcheck.Finding {
+	// langs is nil: the sandbox's workflow language list belongs to the agent side, and the editor only offers languages
+	// from its own list - guessing here would report every lang when the snapshot is missing.
+	findings, err := flowcheck.Diagram(diagram, nil)
+	if err != nil {
+		return []flowcheck.Finding{{
+			Severity: flowcheck.SeverityError,
+			Code:     flowcheck.CodeShape,
+			Message:  err.Error(),
+			Hint:     "the editor sends diagram as a JSON string; check the nodes / edges arrays",
+		}}
+	}
+	if findings == nil {
+		return []flowcheck.Finding{}
+	}
+	return findings
+}
+
+// ValidateFlow statically checks a diagram without saving it.
+//
+// The editor calls this before PUT /flows/:id so that the canvas and the agent's validate_flow tool report the same
+// findings: shared/flowcheck is the single rule set, and a second opinion in the front end is how "the check passed but
+// the run failed" becomes normal. Nothing is stored and nothing runs; severity is the contract - an error means the
+// definition cannot run as written, a warning means it runs but probably not as intended.
+func ValidateFlow(c *gin.Context) {
+	var req struct {
+		Diagram json.RawMessage `json:"diagram"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		xhttp.ErrCode(c, "common.invalid_params", nil, "Invalid request body", "")
+		return
+	}
+	if len(bytes.TrimSpace(req.Diagram)) == 0 {
+		xhttp.ErrCode(c, "common.invalid_params", nil, "diagram must not be empty", "")
+		return
+	}
+	findings := flowFindings(req.Diagram)
+	errs, warns := flowcheck.Summarize(findings)
+	xhttp.OkJSON(c, "Success", gin.H{
+		"ok":            errs == 0,
+		"error_count":   errs,
+		"warning_count": warns,
+		"findings":      findings,
+	}, "")
 }
 
 // GetFlow returns one flow instance.

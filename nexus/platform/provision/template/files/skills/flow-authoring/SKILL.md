@@ -216,7 +216,21 @@ actually proved:
   key at all, only `{"label": ...}`.
 
 So `create_flow` returning success proves the shape and nothing else, and a returned warning is a TODO rather than advice. The
-per-level table is in `references/nodes/README.md` ("What creation checks, per type"). Go through this list first:
+per-level table is in `references/nodes/README.md` ("What creation checks, per type").
+
+**`validate_flow` closes that gap without running anything.** It applies the same rule set to a saved flow (or to a diagram
+passed inline) and returns findings with a severity, a `node_id`, the config path and a hint: nothing is executed, no request
+is sent, no model is billed. Besides config completeness it checks the structure creation ignores — container `entry`
+children, cross-container edges, dangling `source_ref` / `call.target` / `fork_node_id`, branch children with no routing edge,
+`loop each` sources missing from `inputs`, unreachable nodes — and it validates `on_error` against each node's declared
+capabilities: an action the node does not declare is dropped by the runner, and a code it cannot produce never matches, so
+both are config that looks present and does nothing.
+
+The loop is **create → `validate_flow` → fix → `run_flow`**, and the run is worth starting only when `error_count` is 0. It
+still cannot see what needs real data (an enabled connection, an existing model, a template rendered against real inputs, the
+JSON-Schema arguments) — those stay with `run_flow`.
+
+Go through this list first:
 
 1. **The sub-object must exist, named after `type`**: `type: "http"` → `config.http`, and so on. Without it the node is empty.
 2. **The required fields inside the sub-object must be present**: see the table below; none may be omitted.

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"flame/nexus/shared/callchain"
+	"flame/nexus/shared/flowcheck"
 	"flame/nexus/shared/sandboxinfo"
 
 	"github.com/google/uuid"
@@ -1266,133 +1267,31 @@ func (b *diagramBuilder) warnCalls() {
 
 // validateStepConfig validates the shape of a step's config.
 //
+// The rules live in shared/flowcheck so that the create tools, the save boundary and the validate_flow tool share one
+// implementation: a second opinion is how "the check passed but the run failed" becomes normal.
+//
 // The split: a wrong shape (a block that is not an object, children that are not an array, an illegal loop.type) cannot be
 // rescued on the canvas either, so it is refused outright; a missing required key only produces a warning - starting from a
 // minimal config and filling structural gaps in on the canvas is allowed (the same stance as flowStepHint).
-// Key names follow what each executor reads, so this must be updated when an executor changes.
 func validateStepConfig(typ string, cfg map[string]any) ([]string, error) {
-	if len(cfg) == 0 {
-		return nil, nil
+	findings, err := flowcheck.Step(typ, cfg, sandboxScriptLangs())
+	if err != nil {
+		return nil, err
 	}
-
-	// A node's behaviour block must be an object
-	for _, key := range []string{"code", "http", "llm", "loop", "mcp", "rpc", "branch"} {
-		v, exists := cfg[key]
-		if !exists {
-			continue
-		}
-		if _, ok := v.(map[string]any); !ok {
-			return nil, fmt.Errorf("step %s: config.%s must be an object", typ, key)
-		}
-	}
-	// children only appear on branch / intent
-	if v, exists := cfg["children"]; exists {
-		if _, ok := v.([]any); !ok {
-			return nil, fmt.Errorf("step %s: config.children must be an array", typ)
-		}
-	}
-	// loop.type decides which field is read later, so a wrong value guarantees a run-time error
-	if lc, ok := cfg["loop"].(map[string]any); ok {
-		if raw, exists := lc["type"]; exists {
-			s, _ := raw.(string)
-			switch s {
-			case "count", "each", "while", "do_while":
-			default:
-				return nil, fmt.Errorf("step %s: config.loop.type must be count / each / while / do_while, got %v", typ, raw)
-			}
-		}
-	}
-
-	var warnings []string
-	switch typ {
-	case "code":
-		code, _ := cfg["code"].(map[string]any)
-		if script, ok := code["script"].(string); !ok || strings.TrimSpace(script) == "" {
-			warnings = append(warnings, "code step has no code.script and fails with script not found at run time")
-		}
-		if _, ok := cfg["outputs"].(map[string]any); !ok {
-			warnings = append(warnings, "code step has no config.outputs: variables returned by the script are rejected as undeclared")
-		}
-	case "http":
-		httpCfg, _ := cfg["http"].(map[string]any)
-		if url, _ := httpCfg["url"].(string); strings.TrimSpace(url) == "" {
-			warnings = append(warnings, "http step has no http.url and cannot send the request at run time")
-		}
-	case "llm":
-		if _, ok := cfg["llm"].(map[string]any); !ok {
-			warnings = append(warnings, "llm step has no config.llm (model and messages) and fails with a config error at run time")
-		}
-	case "loop":
-		if _, ok := cfg["loop"].(map[string]any); !ok {
-			warnings = append(warnings, "loop step has no config.loop and fails with loop config not found at run time")
-		}
-	case "branch", "intent":
-		if children, ok := cfg["children"].([]any); !ok || len(children) == 0 {
-			warnings = append(warnings, typ+" step has empty config.children: there is no branch to take at run time")
-		}
-	case "call":
-		if target, _ := cfg["target"].(string); strings.TrimSpace(target) == "" {
-			warnings = append(warnings, "call step has no config.target (must be the id of a function node in the same flow)")
-		}
-	case "wait":
-		if forkID, _ := cfg["fork_node_id"].(string); strings.TrimSpace(forkID) == "" {
-			warnings = append(warnings, "wait step has no config.fork_node_id (the concurrency group to wait on)")
-		}
-	}
-
-	// Language fields are checked against the sandbox's "workflow script languages" list: a wrong one is invisible when saving
-	// and on the canvas, and only fails at run time with unsupported_lang (at node level - without on_error.retry the whole
-	// flow dies).
-	// The typical source is the model writing js from memory - the "executable languages" in the system prompt include js, but
-	// that belongs to the exec channel.
-	// When the list is unavailable (the sandbox is down / an old sandboxd does not report the field) do not guess - say nothing.
-	if langs, ok := sandboxinfo.CodeLangs(); ok {
-		for _, lf := range scriptLangFields(typ, cfg) {
-			// template is rendered in pure Go and does not use the sandbox's code pool, but it is legal for result / progress.
-			if lf.lang == "template" || containsLang(langs, lf.lang) {
-				continue
-			}
-			warnings = append(warnings, fmt.Sprintf(
-				"step %s has %s=%s, which is not among the sandbox's current workflow script languages (%s); it will fail with unsupported_lang at run time",
-				typ, lf.path, lf.lang, strings.Join(langs, ", ")))
-		}
+	warnings := make([]string, 0, len(findings))
+	for _, f := range findings {
+		warnings = append(warnings, f.Message)
 	}
 	return warnings, nil
 }
 
-// langField is one language field in a step's config; path is the human-readable access path (e.g. code.lang).
-type langField struct {
-	path string
-	lang string
-}
-
-// scriptLangFields collects every "script language" field in a step's config.
-//
-// It covers the nodes create_flow can produce: code.lang for code / result / progress, the condition script language of
-// branch / loop, the handler of http / rpc / mcp / llm, and the two fallback handlers of on_error.
-// One sweep instead of a copy per case: missing one means missing one "created fine, fails at run time" entry point.
-func scriptLangFields(typ string, cfg map[string]any) []langField {
-	var out []langField
-	add := func(path string, obj map[string]any) {
-		if s, _ := obj["lang"].(string); s != "" {
-			out = append(out, langField{path: path, lang: s})
-		}
+// sandboxScriptLangs returns the sandbox's workflow script language list, or nil when the sandbox is down / too old to
+// report it. nil means "unknown": the language check is skipped rather than guessed.
+func sandboxScriptLangs() []string {
+	if langs, ok := sandboxinfo.CodeLangs(); ok {
+		return langs
 	}
-	switch typ {
-	case "code", "result", "progress":
-		add("code.lang", objectOf(cfg["code"]))
-	case "branch":
-		add("branch.lang", objectOf(cfg["branch"]))
-	case "loop":
-		add("loop.lang", objectOf(cfg["loop"]))
-	case "http", "rpc", "mcp", "llm":
-		add(typ+".handler.lang", objectOf(objectOf(cfg[typ])["handler"]))
-	}
-	if oe := objectOf(cfg["on_error"]); oe != nil {
-		add("on_error.handler.lang", objectOf(oe["handler"]))
-		add("on_error.post.handler.lang", objectOf(objectOf(oe["post"])["handler"]))
-	}
-	return out
+	return nil
 }
 
 // objectOf takes a map[string]any; anything else counts as "absent", and shape errors are caught earlier by
@@ -1400,15 +1299,6 @@ func scriptLangFields(typ string, cfg map[string]any) []langField {
 func objectOf(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	return m
-}
-
-func containsLang(langs []string, lang string) bool {
-	for _, l := range langs {
-		if l == lang {
-			return true
-		}
-	}
-	return false
 }
 
 // parseFlowSteps parses the steps argument: each entry is {type, label?, config?, branches?}.
@@ -2074,6 +1964,85 @@ func (t *readFlowTool) Execute(ctx context.Context, c *Context, args map[string]
 	return detail, nil
 }
 
+// ===== validate_flow =====
+
+type validateFlowTool struct{}
+
+func (t *validateFlowTool) Meta() ToolMeta {
+	return ToolMeta{
+		Name:     "validate_flow",
+		Category: CategoryFlowAdmin,
+		Description: "Statically check a workflow and return findings: nothing runs, no request is sent, no model is called, no script is executed. " +
+			"Give either `flow` (a saved workflow) or `diagram` (a definition you assembled yourself). " +
+			"Each finding carries severity (error = it cannot run as written; warning = it runs but probably does not do what you meant), a node_id, the config path and a hint. " +
+			"Call it after create_flow and after every structural edit, and only call run_flow once error_count is 0 — create_flow returning success only proves the JSON shape. " +
+			"It cannot check what needs real data: whether a connection is enabled, whether a model exists, how a template renders with real inputs, or whether the entry arguments match the JSON Schema.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"flow": map[string]any{"type": "string", "description": flowRefHint},
+				"diagram": map[string]any{
+					"type": "string",
+					"description": "A diagram to check without saving it (JSON object or the JSON-string shape the canvas saves). " +
+						"The node shape is what create_flow writes: {\"nodes\":[{id,type,parent_node,data:{label,config}}]," +
+						"\"edges\":[{id,source,target,source_handle,target_handle}]}",
+				},
+			},
+		},
+	}
+}
+
+func (t *validateFlowTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
+	rawDiagram := strings.TrimSpace(argString(args, "diagram"))
+	ref := strings.TrimSpace(argString(args, "flow"))
+	switch {
+	case rawDiagram != "" && ref != "":
+		return nil, errors.New("give either flow or diagram, not both")
+	case rawDiagram == "" && ref == "":
+		return nil, errors.New("give flow (a saved workflow) or diagram (a definition to check)")
+	}
+
+	var raw json.RawMessage
+	if ref != "" {
+		if c.Flows == nil {
+			return nil, errors.New("flow manager not available")
+		}
+		detail, err := c.Flows.Get(ctx, ref, ref)
+		if err != nil {
+			return nil, err
+		}
+		if detail == nil {
+			return nil, fmt.Errorf("workflow %q does not exist: confirm the name with list_flows first", ref)
+		}
+		raw = detail.Diagram
+	} else {
+		raw = json.RawMessage(rawDiagram)
+		if !json.Valid(raw) {
+			return nil, errors.New("diagram is not valid JSON")
+		}
+	}
+
+	findings, err := flowcheck.Diagram(raw, sandboxScriptLangs())
+	if err != nil {
+		return nil, fmt.Errorf("cannot check the diagram: %w", err)
+	}
+	if findings == nil {
+		findings = []flowcheck.Finding{}
+	}
+	errs, warns := flowcheck.Summarize(findings)
+	verdict := "no error findings: the definition passes the static checks; only run_flow can prove it actually works"
+	if errs > 0 {
+		verdict = "fix the error findings first: the definition cannot run as written"
+	}
+	return map[string]any{
+		"ok":            errs == 0,
+		"error_count":   errs,
+		"warning_count": warns,
+		"verdict":       verdict,
+		"findings":      findings,
+	}, nil
+}
+
 // ===== delete_flow =====
 
 type deleteFlowTool struct{}
@@ -2418,6 +2387,7 @@ func init() {
 	Register(&createFlowTool{})
 	Register(&listFlowsTool{})
 	Register(&readFlowTool{})
+	Register(&validateFlowTool{})
 	Register(&deleteFlowTool{})
 	Register(&runFlowTool{})
 	Register(&readFlowRunTool{})

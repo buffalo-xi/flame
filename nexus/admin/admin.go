@@ -332,6 +332,8 @@ func SetupRoutes(router *gin.RouterGroup) {
 		flowsGroup.POST("/", flows.ListFlows)
 		flowsGroup.GET("/:id", flows.GetFlow)
 		flowsGroup.POST("/create", flows.CreateFlow)
+		// Static pre-save check: the editor asks before saving, using the same rule set as the agent's validate_flow.
+		flowsGroup.POST("/validate", flows.ValidateFlow)
 		flowsGroup.PUT("/:id", flows.UpdateFlow)
 		flowsGroup.DELETE("/:id", flows.DeleteFlow)
 		flowsGroup.GET("/:id/breakpoints", flows.GetBreakpoints)

@@ -827,7 +827,7 @@ func (t *updateNodeTool) Meta() ToolMeta {
 			"so remember to rewire with create_edge after moving a node into a container. position is the canvas-absolute coordinate for top-level nodes and the parent-relative coordinate for nodes inside a container. " +
 			"**Existing concurrency config is left alone by default** (existing flows stay as they are): only an explicit concurrency argument rewrites this node's " +
 			"config.concurrency (off = strip it, mono / group = switch to that shape). " +
-			"The result returns node / config / removed_edges.",
+			"The result returns node / config / removed_edges; changing config also re-checks it and returns warnings (a missing required key, an unsupported on_error rule) — a wrong shape is refused before anything is written.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -1034,6 +1034,17 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	if err != nil {
 		return nil, err
 	}
+	// The config changed: run the same checks create_node runs, on the result rather than on the patch (a merge can leave
+	// a shape that neither side had on its own). A wrong shape is refused before anything is written; a missing required
+	// key is only a warning, because finishing the config on the canvas is allowed.
+	var configWarnings []string
+	if hasReplace || hasPatch {
+		ws, err := validateStepConfig(cur.Type, nodeConfigOf(newRaw))
+		if err != nil {
+			return nil, err
+		}
+		configWarnings = ws
+	}
 	if err := doc.setNodeRaw(idx, newRaw); err != nil {
 		return nil, err
 	}
@@ -1076,8 +1087,8 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		}
 		out["removed_edges"] = views
 	}
-	if len(concurrencyWarnings) > 0 {
-		out["warnings"] = concurrencyWarnings
+	if warnings := append(concurrencyWarnings, configWarnings...); len(warnings) > 0 {
+		out["warnings"] = warnings
 	}
 	return out, nil
 }

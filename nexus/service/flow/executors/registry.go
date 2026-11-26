@@ -1,8 +1,10 @@
 package executors
 
 import (
-	"flame/nexus/service/flow/core"
+	"sort"
 	"sync"
+
+	"flame/nexus/service/flow/core"
 )
 
 type NodeCapabilities struct {
@@ -32,6 +34,19 @@ func GetExecutor(nodeType string) (Executor, bool) {
 	defer mu.RUnlock()
 	executor, exists := executorMap[nodeType]
 	return executor, exists
+}
+
+// RegisteredTypes returns every node type that has an executor, sorted. It lets callers enumerate the palette without
+// reaching into the map (the capability drift test uses it to notice a new executor that has no check entry).
+func RegisteredTypes() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	out := make([]string, 0, len(executorMap))
+	for t := range executorMap {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // GetNodeCapabilities returns the capability declarations of every registered node type plus the global

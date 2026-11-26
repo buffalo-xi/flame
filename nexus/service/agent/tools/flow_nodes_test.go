@@ -572,3 +572,58 @@ func TestCreateFlowAutoSuffixForDefaultLabels(t *testing.T) {
 		seen[n.Data.Label] = true
 	}
 }
+
+// update_node re-checks the config it just wrote: a wrong shape is refused before anything is stored (the same stance as
+// create_node), and a missing required key comes back as a warning instead of being saved silently.
+func TestUpdateNodeRechecksConfig(t *testing.T) {
+	c, fk := edgeTestCtx(nodeTestDiagram)
+	_, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{
+		"flow": "demo", "node_id": "2",
+		"config_patch": map[string]any{"code": "not an object"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must be an object") {
+		t.Fatalf("err = %v, want a non-object code block refused", err)
+	}
+	if len(fk.updatedDiagram) != 0 {
+		t.Error("a refused config must not be stored")
+	}
+
+	// A complete config produces no warning: a checker that always speaks is a checker nobody reads.
+	c2, _ := edgeTestCtx(nodeTestDiagram)
+	out, err := (&updateNodeTool{}).Execute(context.Background(), c2, map[string]any{
+		"flow": "demo", "node_id": "2",
+		"config_patch": map[string]any{
+			"code":    map[string]any{"lang": "lua", "script": "return {}"},
+			"outputs": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if w, ok := out.(map[string]any)["warnings"]; ok {
+		t.Errorf("warnings = %v, want none for a complete config", w)
+	}
+
+	// Dropping the script: the node is still saved, but the caller is told it will fail at run time.
+	c3, fk3 := edgeTestCtx(nodeTestDiagram)
+	out, err = (&updateNodeTool{}).Execute(context.Background(), c3, map[string]any{
+		"flow": "demo", "node_id": "2",
+		"config_patch": map[string]any{"code": map[string]any{}},
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	warns, _ := out.(map[string]any)["warnings"].([]string)
+	found := false
+	for _, w := range warns {
+		if strings.Contains(w, "code.script") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %v, want the missing code.script reported", warns)
+	}
+	if _, ok := storedNodes(t, fk3)["2"]; !ok {
+		t.Error("a warning must not block the write")
+	}
+}

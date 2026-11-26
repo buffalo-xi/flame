@@ -78,6 +78,17 @@ missing key stops you now or at run time:
 A successful `create_flow` is therefore **not** a complete node. Fill in the "not at all" column yourself, and treat every
 returned warning as a TODO rather than as advice.
 
+`validate_flow` fills in what creation leaves unchecked: it runs the same rule set over a saved flow (or an inline diagram) and
+reports missing entries, cross-container edges, dangling `source_ref` / `call.target` / `fork_node_id`, branch children with no
+routing edge, `loop each` sources that `inputs` does not declare, unreachable nodes, and an `on_error` block the node cannot
+honour (an action it does not declare is dropped at run time; a code it can never produce never matches) — with a `node_id` and
+the config path for each. Call it after creating and after every structural edit; run the flow only when it reports
+`error_count: 0`.
+
+`update_node` re-runs the same per-node check on the config it just wrote (a `config` replacement or a `config_patch`
+merge) and returns the warnings: a wrong shape is refused before anything is stored, a missing required key comes back as
+a warning. Editing one node does not re-check its neighbours — that is what `validate_flow` is for.
+
 ## Three facts about edges
 
 1. Except for `branch` / `intent`, a node **can have only one outgoing edge**: more than one reports a `config` error at
