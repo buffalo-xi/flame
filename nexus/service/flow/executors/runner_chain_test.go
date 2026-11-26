@@ -52,3 +52,29 @@ func TestExtractCallChainDropsGarbage(t *testing.T) {
 		t.Fatalf("chain = %v", chain)
 	}
 }
+
+// The chain goes through callchain.Normalize, so a caller that sent mixed case still matches the duplicate check, and
+// a single string is accepted as a one-element chain (the shape a hand-written request body has).
+func TestExtractCallChainNormalises(t *testing.T) {
+	upper := map[string]interface{}{"_call_chain": []string{"F1111111-1111-1111-1111-111111111111|FLOW"}}
+	chain, _ := extractCallChain(upper)
+	if len(chain) != 1 || chain[0] != testFlowKey {
+		t.Fatalf("chain = %v, want the lower-cased key", chain)
+	}
+
+	single := map[string]interface{}{"_call_chain": testFlowKey}
+	chain, _ = extractCallChain(single)
+	if len(chain) != 1 || chain[0] != testFlowKey {
+		t.Fatalf("chain = %v, want the single entry", chain)
+	}
+
+	// An unusable type yields no chain but is still stripped, so it cannot leak into the business variables.
+	wrongType := map[string]interface{}{"_call_chain": 7, "topic": "x"}
+	chain, clean := extractCallChain(wrongType)
+	if chain != nil {
+		t.Fatalf("chain = %v, want nil", chain)
+	}
+	if _, existed := clean["_call_chain"]; existed {
+		t.Fatal("_call_chain must be stripped even when it cannot be parsed")
+	}
+}

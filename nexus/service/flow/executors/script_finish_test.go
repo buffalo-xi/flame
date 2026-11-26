@@ -27,7 +27,12 @@ func TestFinishScriptErrorCodes(t *testing.T) {
 		// A connection failure is classified as connection rather than internal: internal is returned outright by
 		// shouldBypassOnError, which would lock down the class of error that most deserves a retry
 		{"connect failure", code.NewError(code.ErrCodeConnectFail, "dial refused", nil), flow.ErrCodeConnection},
+		{"worker communication", code.NewError(code.ErrCodeWorkerComm, "worker gone", nil), flow.ErrCodeConnection},
+		{"send failure", code.NewError(code.ErrCodeSendFail, "send failed", nil), flow.ErrCodeConnection},
 		{"unsupported language", code.NewError(code.ErrCodeUnsupportedLang, "no lua", nil), flow.ErrCodeConfig},
+		// The sandbox answered with an action the protocol does not know: a platform-side defect, but still
+		// classified as other so on_error can see it
+		{"unknown action", code.NewError(code.ErrCodeUnknownAction, "?", nil), flow.ErrCodeOther},
 		{"not a script error", errors.New("code client not initialized"), flow.ErrCodeInternal},
 		{"capability not granted", &capabilityError{capability: "code"}, flow.ErrCodeCapability},
 	}
