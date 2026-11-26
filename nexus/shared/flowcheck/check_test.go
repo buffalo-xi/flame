@@ -131,6 +131,60 @@ func TestStepAssignNoOp(t *testing.T) {
 	}
 }
 
+// Both executors read response_mode on the path to the call: an unknown value is a guaranteed failure, and in the http
+// case the request has already been sent by the time it is read.
+func TestStepResponseMode(t *testing.T) {
+	fs, _ := Step("http", map[string]any{
+		"http": map[string]any{"url": "https://example.com", "response_mode": "stream"},
+	}, nil)
+	if !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("an unknown http response_mode must be an error, got %v", codes(fs))
+	}
+
+	llm := func(mode string) map[string]any {
+		return map[string]any{"llm": map[string]any{
+			"messages":      []any{map[string]any{"role": "user", "content": "x"}},
+			"response_mode": mode,
+		}}
+	}
+	if fs, _ := Step("llm", llm("chunked"), nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("an unknown llm response_mode must be an error, got %v", codes(fs))
+	}
+	if fs, _ := Step("llm", llm("sse_stream"), nil); len(fs) != 0 {
+		t.Fatalf("a valid response_mode must be silent, got %v", codes(fs))
+	}
+}
+
+// An llm step without messages fails before the model is resolved, so it is knowable without a database.
+func TestStepLLMNeedsMessages(t *testing.T) {
+	fs, _ := Step("llm", map[string]any{"llm": map[string]any{}}, nil)
+	if !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("an llm step without messages must be an error, got %v", codes(fs))
+	}
+	for _, f := range fs {
+		if f.Code == CodeIncomplete && f.Path != "llm.messages" {
+			t.Errorf("path = %q, want llm.messages", f.Path)
+		}
+	}
+}
+
+// The loop dispatches on loop.type (absent means "unknown loop type") and refuses a non-numeric count before the first
+// iteration; a missing count is legal and means the system ceiling.
+func TestStepLoopTypeAndCount(t *testing.T) {
+	if fs, _ := Step("loop", map[string]any{"loop": map[string]any{}}, nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("a loop without loop.type must be an error, got %v", codes(fs))
+	}
+	if fs, _ := Step("loop", map[string]any{"loop": map[string]any{"type": "count", "total_times": "5"}}, nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("a string total_times must be an error, got %v", codes(fs))
+	}
+	if fs, _ := Step("loop", map[string]any{"loop": map[string]any{"type": "count"}}, nil); len(fs) != 0 {
+		t.Fatalf("a missing total_times means the system ceiling, got %v", codes(fs))
+	}
+	if fs, _ := Step("loop", map[string]any{"loop": map[string]any{"type": "while", "max_times": "x"}}, nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("a string max_times must be an error, got %v", codes(fs))
+	}
+}
+
 func checkDiagram(t *testing.T, body string) []Finding {
 	t.Helper()
 	fs, err := Diagram(json.RawMessage(body), nil)

@@ -156,13 +156,41 @@ func Step(typ string, cfg map[string]any, langs []string) ([]Finding, error) {
 		if url, _ := httpCfg["url"].(string); strings.TrimSpace(url) == "" {
 			add(SeverityError, CodeIncomplete, "http.url", "http step has no http.url and cannot send the request at run time")
 		}
+		// The mode is read after the request has been sent, so an unknown one costs the side effect and then fails.
+		if mode, ok := httpCfg["response_mode"].(string); ok && !validResponseMode(mode) {
+			add(SeverityError, CodeIncomplete, "http.response_mode", fmt.Sprintf(
+				"http step has response_mode=%q, which is neither complete nor sse_stream; the request is sent and only then the run fails", mode))
+		}
 	case "llm":
-		if _, ok := cfg["llm"].(map[string]any); !ok {
+		llmCfg, _ := cfg["llm"].(map[string]any)
+		if llmCfg == nil {
 			add(SeverityError, CodeIncomplete, "llm", "llm step has no config.llm (model and messages) and fails with a config error at run time")
+			break
+		}
+		if msgs, ok := llmCfg["messages"].([]any); !ok || len(msgs) == 0 {
+			add(SeverityError, CodeIncomplete, "llm.messages", "llm step has no llm.messages and fails with messages cannot be empty at run time")
+		}
+		if mode, ok := llmCfg["response_mode"].(string); ok && !validResponseMode(mode) {
+			add(SeverityError, CodeIncomplete, "llm.response_mode", fmt.Sprintf(
+				"llm step has response_mode=%q, which is neither complete nor sse_stream; the run fails with a config error", mode))
 		}
 	case "loop":
-		if _, ok := cfg["loop"].(map[string]any); !ok {
+		lc := objectOf(cfg["loop"])
+		if lc == nil {
 			add(SeverityError, CodeIncomplete, "loop", "loop step has no config.loop and fails with loop config not found at run time")
+			break
+		}
+		// The runner dispatches on loop.type and answers "unknown loop type" when it is absent, so a missing type is
+		// exactly as fatal as an unknown one (which is refused as a shape problem above).
+		switch loopType, _ := lc["type"].(string); loopType {
+		case "count":
+			addNonNumeric(lc, "total_times", "loop.total_times", add)
+		case "while", "do_while":
+			addNonNumeric(lc, "max_times", "loop.max_times", add)
+		case "each":
+			// source_key needs config.inputs, so the diagram check owns it.
+		default:
+			add(SeverityError, CodeIncomplete, "loop.type", "loop step has no loop.type, so the run fails with unknown loop type")
 		}
 	case "branch", "intent":
 		if children, ok := cfg["children"].([]any); !ok || len(children) == 0 {
@@ -360,6 +388,29 @@ func langFields(typ string, cfg map[string]any) []langField {
 		add("on_error.post.handler.lang", objectOf(objectOf(oe["post"])["handler"]))
 	}
 	return out
+}
+
+// validResponseMode accepts the two modes the http / llm executors know; an empty value means "decide at run time"
+// (llm defaults to complete, http sniffs the Content-Type) and is valid.
+func validResponseMode(mode string) bool {
+	return mode == "" || mode == "complete" || mode == "sse_stream"
+}
+
+// addNonNumeric reports a loop count that is present but not a number.
+//
+// The runner's parseCountInt treats a missing value as "use the system ceiling", so only a value of the wrong type is
+// a finding - and it is an error, because the run stops before the first iteration.
+func addNonNumeric(lc map[string]any, key, path string, add func(severity, code, path, msg string)) {
+	v, ok := lc[key]
+	if !ok || v == nil {
+		return
+	}
+	switch v.(type) {
+	case float64, int, int64:
+		return
+	}
+	add(SeverityError, CodeIncomplete, path, fmt.Sprintf(
+		"loop step has %s=%v (%T), which is not a number; the run fails with a config error", key, v, v))
 }
 
 func objectOf(v any) map[string]any {
