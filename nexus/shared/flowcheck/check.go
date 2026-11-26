@@ -63,6 +63,7 @@ const (
 	CodeCallArgs        = "call_args"        // call.args does not match the target function's params
 	CodeWaitFork        = "wait_fork"        // wait.fork_node_id does not name a fork node
 	CodeDanglingRef     = "dangling_ref"     // source_ref points at a node that does not exist
+	CodeFunctionRef     = "function_ref"     // a function node is referenced from outside its own body
 	CodeSourceKey       = "source_key"       // source_key is not an output the source node declares
 	CodeLoopSource      = "loop_source"      // each-mode source_key is not declared in inputs
 	CodeControlScope    = "control_scope"    // a break / continue that no loop can consume
@@ -683,10 +684,20 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 			if sourceType != "node" || strings.TrimSpace(ref) == "" {
 				continue
 			}
-			if resolve(ref) == nil {
+			src := resolve(ref)
+			if src == nil {
 				add(SeverityError, CodeDanglingRef, n.ID, n.Type, path,
 					fmt.Sprintf("%s refers to node %q, which does not exist", path, ref),
 					"point source_ref at an existing node id or label")
+				continue
+			}
+			// A function node is a body, not a value producer: its params / outputs are readable only from inside that
+			// body, and from outside only a call node may name it (through config.target). Any other reference reads an
+			// empty value at run time, or writes into a variable nobody reads.
+			if src.Type == "function" && !insideContainer(n, src.ID, byID) {
+				add(SeverityError, CodeFunctionRef, n.ID, n.Type, path+".source_ref",
+					fmt.Sprintf("%s refers to function node %s from outside its body", path, src.ID),
+					"outside the body only a call node may name a function: use call.target and read the call node's outputs")
 			}
 		}
 	}

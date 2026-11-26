@@ -697,3 +697,45 @@ func TestFunctionParamsReadableInsideBody(t *testing.T) {
 		t.Fatalf("reading a param from outside the body must be reported, got %v", codes(outside))
 	}
 }
+
+// Outside a function body only a call node may name a function. Every other reference reads an empty value at run time (or
+// writes into a variable nobody reads); a call node is unaffected because it reaches the function through config.target.
+func TestFunctionRefOutsideBody(t *testing.T) {
+	bad := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function","data":{"config":{"params":{"a":{"type":"number"}},"outputs":{"sum":{"type":"number"}}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","data":{"config":{
+			"code":{"script":"return { x = 1 }"},
+			"outputs":{"x":{"type":"number"}},
+			"inputs":{"a":{"type":"number","source_type":"node","source_ref":"2","source_key":"a"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"4"}]}`)
+	if !has(bad, SeverityError, CodeFunctionRef) {
+		t.Fatalf("an outside reference to a function node must be reported, got %v", codes(bad))
+	}
+	for _, f := range bad {
+		if f.Code == CodeFunctionRef && f.Path != "inputs.a.source_ref" {
+			t.Errorf("path = %q, want inputs.a.source_ref", f.Path)
+		}
+	}
+
+	ok := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function","data":{"config":{"params":{"a":{"type":"number"}},"outputs":{"sum":{"type":"number"}}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","parent_node":"2","data":{"config":{
+			"code":{"script":"return { sum = 1 }"},
+			"targets":{"sum":{"type":"number","source_type":"node","source_ref":"2"}}
+		}}},
+		{"id":"5","type":"call","data":{"config":{"target":"2","args":{"a":{"type":"number","source_type":"flow","source_key":"k"}}}}},
+		{"id":"6","type":"code","data":{"config":{
+			"code":{"script":"return { y = 1 }"},
+			"outputs":{"y":{"type":"number"}},
+			"inputs":{"s":{"type":"number","source_type":"node","source_ref":"5","source_key":"sum"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"5"},{"id":"e2","source":"5","target":"6"},{"id":"e3","source":"3","target":"4"}]}`)
+	if has(ok, SeverityError, CodeFunctionRef) {
+		t.Fatalf("a call node and an in-body reference must pass, got %v", codes(ok))
+	}
+}

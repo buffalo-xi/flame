@@ -667,6 +667,7 @@
         "call_args": "The args do not match the function's params: an unknown arg or a missing required one fails the run",
         "wait_fork": "The wait node does not point at a fork node",
         "dangling_ref": "A reference points at a node that does not exist, so the value is empty at run time",
+        "function_ref": "A function node is referenced from outside its body, so the value is empty at run time - read the call node instead",
         "source_key": "The source node produces no such output, so the value is empty at run time",
         "loop_source": "The array this loop iterates is not declared in the inputs",
         "unreachable": "No incoming edge, so this node never runs",

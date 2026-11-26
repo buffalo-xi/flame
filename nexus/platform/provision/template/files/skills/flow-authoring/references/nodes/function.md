@@ -34,6 +34,13 @@ chain into it and the executor runs the body right there with **empty parameters
 `var path a not found in function params` — and nothing after it in the chain runs. Route the main chain around the
 function and let a `call` node enter it.
 
+## Only a `call` may name it from outside
+
+Everything outside the body reads the function's result through a `call` node: the call's `outputs` mirror the function's, so
+a downstream step points at the **call**, not at the function. A `source_ref` (in `inputs` / `targets` / `args`) that names
+a function node from outside its body is a `config` error (`function_ref`) — the value would be empty at run time. Inside the
+body the function node is the way to read `params` and write `outputs`, so those references are expected.
+
 ## Writing the function's outputs
 
 A step inside the body writes into the function's `outputs` through **`targets`**, not through its own `outputs`:

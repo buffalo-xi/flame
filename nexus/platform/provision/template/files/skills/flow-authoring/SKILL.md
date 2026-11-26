@@ -478,7 +478,8 @@ Key points:
 
 ## Before the first run: three checks that save a rebuild
 
-1. **Function nodes stay off the main chain** — no in-edge, no out-edge; only `call` enters them. Wired in, the body runs
+1. **Function nodes stay off the main chain** — no in-edge, no out-edge; only `call` enters them, and only `call` may name
+   them from outside (a `source_ref` pointing at a function from outside its body is `function_ref`). Wired in, the body runs
    with empty params and dies on the first param read.
 2. **`read_flow` first, then ids** — every node reference (`inputs` / `targets` / `args` `source_ref`, `call.target`,
    `wait.fork_node_id`) accepts a label, but ids are what the diagram stores, and the step index stops predicting them once
