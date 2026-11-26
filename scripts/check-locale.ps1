@@ -23,14 +23,20 @@
        not be translated (see the i18n plan, pitfall 2) - both are worth a human look, for opposite
        reasons.
 
+    4. Finding codes and their wording. The canvas prints flow.check.code.<code> for every finding
+       shared/flowcheck returns; a code added there without a bundle entry silently degrades to the
+       generic "unknown" line, and a bundle entry no rule emits is a stale sentence. Section 8 compares
+       the two in both directions.
+
     This is a baseline, not a gate. Regex cannot follow variables or helper wrappers, so the numbers are
     a lower bound and the lists are meant to be read by a human, not asserted on by CI.
 
     -Gate narrows that to the checks that are unambiguous and finishes with an exit code: Chinese comments
     anywhere, Chinese outside comments in a Go file that is not a test, un-bundled Chinese copy in the
-    desktop sources, ErrJSON, and a Chinese msg on an ErrCode line. Test fixtures are allowed - they are
-    data, and the whole point of the split above is that they are not a todo list. The remaining
-    exceptions are two short allowlists at the bottom of this file, each with its reason.
+    desktop sources, ErrJSON, a Chinese msg on an ErrCode line, and a finding code without wording (or a
+    wording without a code). Test fixtures are allowed - they are data, and the whole point of the split
+    above is that they are not a todo list. The remaining exceptions are the short allowlists at the
+    bottom of this file, each with its reason.
 
 .PARAMETER Module
     Limit the scan to some Go modules. Default: all four.
@@ -301,7 +307,57 @@ else {
     Write-Host '7. desktop sources: not found (skipped)' -ForegroundColor DarkGray
 }
 
-# ---------------------------------------------------------------- 8. gate
+# ---------------------------------------------------------------- 8. finding codes vs bundles
+# shared/flowcheck is the one rule set behind the agent tools, POST /flows/validate and the canvas badge.
+# Every code it emits reaches the user as flow.check.code.<code>; without a bundle entry the badge falls
+# back to "unknown", which is silent degradation rather than a failure. The reverse is also a defect: a
+# wording no rule emits is a sentence describing a check that no longer exists.
+$flowcheckFile = Join-Path $repoRoot 'nexus/shared/flowcheck/check.go'
+$findingCodes = @{}
+if (Test-Path $flowcheckFile) {
+    $flowcheckRaw = Get-Content -Path $flowcheckFile -Raw -Encoding UTF8
+    # Matches the const block and the standalone declarations (CodeOnErrorCodeUnused is one), and nothing that
+    # merely starts with "Code" - the value has to be a lower-case code.
+    foreach ($m in [regex]::Matches($flowcheckRaw, '\bCode\w+\s*=\s*"([a-z_]+)"')) {
+        $findingCodes[$m.Groups[1].Value] = $true
+    }
+}
+$findingCodeFallback = @(
+    # the front end's own fallback key, not a Go constant
+    'unknown'
+)
+$findingProblems = New-Object System.Collections.Generic.List[string]
+$findingBundleCounts = @()
+foreach ($locName in @('en', 'zh-CN')) {
+    $bundlePath = Join-Path $repoRoot ("desktop/src/locales/{0}/flow.json" -f $locName)
+    if (-not (Test-Path $bundlePath)) {
+        $findingProblems.Add(("desktop/src/locales/{0}/flow.json is missing" -f $locName))
+        continue
+    }
+    $bundle = Get-Content -Path $bundlePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $keys = @($bundle.flow.check.code.PSObject.Properties.Name)
+    $findingBundleCounts += ("{0}={1}" -f $locName, $keys.Count)
+    foreach ($code in ($findingCodes.Keys | Sort-Object)) {
+        if ($keys -notcontains $code) {
+            $findingProblems.Add(("flow.check.code.{0} has no wording in {1}" -f $code, $locName))
+        }
+    }
+    foreach ($key in $keys) {
+        if ($findingCodes.ContainsKey($key)) { continue }
+        if ($findingCodeFallback -contains $key) { continue }
+        $findingProblems.Add(("flow.check.code.{0} in {1} matches no finding code" -f $key, $locName))
+    }
+}
+Write-Host ''
+Write-Host ("8. finding codes: {0} emitted, bundles {1}" -f $findingCodes.Count, ($findingBundleCounts -join ', ')) -ForegroundColor Yellow
+if ($findingProblems.Count -gt 0) {
+    foreach ($p in $findingProblems) { Write-Host ("  {0}" -f $p) -ForegroundColor DarkGray }
+}
+else {
+    Write-Host '  every code has a wording and every wording has a code' -ForegroundColor DarkGray
+}
+
+# ---------------------------------------------------------------- 9. gate
 # Two short allowlists and nothing else: every entry is Chinese the product deliberately keeps, and adding
 # one is a decision that belongs in review, not in a passing build.
 $nonTestChineseAllowed = @(
@@ -334,6 +390,9 @@ foreach ($f in $errJSON.Keys) {
 foreach ($f in $msgChinese.Keys) {
     $gateProblems.Add(("an ErrCode msg contains Chinese: {0} ({1} call(s))" -f $f, $msgChinese[$f]))
 }
+foreach ($p in $findingProblems) {
+    $gateProblems.Add($p)
+}
 
 if ($Gate) {
     Write-Host ''
@@ -342,7 +401,7 @@ if ($Gate) {
         foreach ($p in $gateProblems) { Write-Host ("  - " + $p) -ForegroundColor Red }
         exit 1
     }
-    Write-Host 'GATE PASSED: no Chinese in comments, no Chinese in non-test Go sources beyond the allowlist, no un-bundled desktop copy, no ErrJSON, no Chinese msg' -ForegroundColor Green
+    Write-Host 'GATE PASSED: no Chinese in comments, no Chinese in non-test Go sources beyond the allowlist, no un-bundled desktop copy, no ErrJSON, no Chinese msg, every finding code has a wording' -ForegroundColor Green
 }
 
 Write-Host ''
