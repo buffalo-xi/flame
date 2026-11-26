@@ -641,11 +641,18 @@
         "error": "错误",
         "warning": "提醒"
       },
+      "badge": {
+        "focus": "点一下定位到这个节点"
+      },
+      "hint": "点任意一条可定位到该节点并打开设置。",
       "continue": "继续保存",
       "saveAnyway": "仍然保存",
       "code": {
         "shape": "配置结构不对：本该是对象的配置块写成了别的类型",
-        "incomplete": "缺少必填项或内容为空：运行时这一步会失败，或者什么都不做",
+        "incomplete": "缺少必填项或内容为空",
+        "outputs": "没有声明 outputs：脚本返回的变量会被丢弃",
+        "on_error_script": "兜底处理声明了动作但没有脚本，实际什么都不会做",
+        "no_op": "没有可执行的赋值：会直接报成功，不产生任何变更",
         "unsupported_lang": "脚本语言不在沙箱的可用列表里，运行时会报 unsupported_lang",
         "duplicate_label": "两个节点用了同一个标签：按标签引用会指到错误的节点",
         "unknown_type": "节点类型没有对应的执行器，运行到它就会失败",
@@ -654,13 +661,15 @@
         "multi_outgoing": "一个节点有多条出边：除分支 / 意图外只走第一条",
         "container_entry": "容器缺少唯一的入口节点：运行时会「成功但什么都不跑」",
         "branch_edge": "分支条件没有对应的出边，命中后无处可去",
+        "child_id": "分支子节点没有 id，连线无法路由到它",
         "call_target": "调用的目标不是本流程里的函数节点",
         "wait_fork": "等待节点没有指向一个 fork 节点",
         "dangling_ref": "引用了不存在的节点：运行时拿到的是空值",
         "loop_source": "遍历的数据源没有在入参里声明",
         "unreachable": "节点没有入边，不会被执行",
         "on_error_action": "该节点不支持这个兜底动作，运行时会直接忽略",
-        "on_error_code": "该节点不会产生这个错误码（或它根本不存在），这条规则永远不会命中",
+        "on_error_code": "错误码不存在：运行时不会有这个码，这条规则永远不会命中",
+        "on_error_code_unused": "该节点不会产生这个错误码，这条规则永远不会命中",
         "on_error_post": "该节点不支持收尾处理 post，运行时会丢弃",
         "unknown": "配置有问题"
       }

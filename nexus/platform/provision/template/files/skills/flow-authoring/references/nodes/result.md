@@ -37,8 +37,8 @@ An ordinary node: continues along **its first outgoing edge** when done (usually
 
 ## Common errors
 
-- `result code not found` — the `code` sub-object is missing. Creation does not check it (there is no `result` case in the
-  creation checks), so the node is created and fails only when the run reaches it.
+- `result code not found` — the `code` sub-object is missing. The creation tools return a warning and still create the node;
+  `validate_flow` / the canvas badge report an error, because the step cannot run without it.
 - `<no value>` in the result — `inputs` does not declare it, or the template name is misspelled.
 
 Source: `service/flow/executors/result.go`

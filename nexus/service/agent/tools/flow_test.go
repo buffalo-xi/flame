@@ -1041,7 +1041,9 @@ func TestCreateFlowBranchMissingCaseWarns(t *testing.T) {
 					map[string]any{"id": "c2", "condition": "return false"},
 				}},
 				"branches": []any{
-					map[string]any{"key": "c1", "steps": []any{map[string]any{"type": "result", "config": map[string]any{}}}},
+					map[string]any{"key": "c1", "steps": []any{map[string]any{"type": "result", "config": map[string]any{
+						"code": map[string]any{"lang": "template", "script": "x"},
+					}}}},
 				},
 			},
 		},

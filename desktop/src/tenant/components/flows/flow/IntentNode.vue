@@ -6,6 +6,7 @@
       <Handle type="target" position="right" :id="'target' + id + 'right'" class="custom-handle custom-handle-right custom-handle-target" />
       <div class="icon-wrapper icon-intent"><el-icon><Aim /></el-icon></div>
       <div class="node-label">{{ data.label || t('flow.node.defaultLabel.intent') }}</div>
+      <NodeFindingsBadge :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -87,6 +88,7 @@ import { ref, watch, inject } from 'vue'
 import { Aim, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
+import NodeFindingsBadge from './NodeFindingsBadge.vue'
 
 const { t } = useI18n()
 
@@ -160,9 +162,15 @@ const deleteNode = () => {
 
 <style scoped>
 .intent-node {
-  width: 160px;
+  /* 160px is the floor, not the width: the title decides how wide the node gets, because a badge in the header used to
+     take room from the label and wrap it onto a second line. max-width keeps an absurdly long label from growing without
+     bound. */
+  width: max-content;
   min-width: 160px;
-  border-radius: 0;
+  max-width: 360px;
+  /* The card's corners are 16px (header top, last row bottom): the root has to match, or the hover shadow paints a
+     square silhouette whose four corners show beside the rounded ones. */
+  border-radius: 16px;
   cursor: pointer;
   position: relative;
   overflow: visible !important;
@@ -217,6 +225,10 @@ const deleteNode = () => {
   font-weight: 700;
   color: #333;
   flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .icon-wrapper {

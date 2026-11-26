@@ -3,6 +3,7 @@
     <div class="node-header">
       <div class="icon-wrapper icon-function"><el-icon><ScaleToOriginal /></el-icon></div>
       <div class="node-label">{{ data.label || t('flow.node.defaultLabel.function') }}</div>
+      <NodeFindingsBadge :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -32,6 +33,7 @@ import { ref, computed, onMounted, watch, inject } from 'vue'
 import { ScaleToOriginal, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
+import NodeFindingsBadge from './NodeFindingsBadge.vue'
 
 const { t } = useI18n()
 
@@ -280,7 +282,9 @@ watch(
   min-width: 300px;
   height: 100px;
   min-height: 100px;
-  border-radius: 0;
+  /* The card's corners are 16px (header top, last row bottom): the root has to match, or the hover shadow paints a
+     square silhouette whose four corners show beside the rounded ones. */
+  border-radius: 16px;
   cursor: pointer;
   position: relative;
   overflow:visible !important;
@@ -339,6 +343,11 @@ watch(
   font-weight: 700;
   color: #333;
   flex: 1;
+  /* The header can gain an extra item (findings badge): the label shortens instead of wrapping, like child-label. */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 :deep(.icon-wrapper) {

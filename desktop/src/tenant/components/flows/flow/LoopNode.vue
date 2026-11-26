@@ -6,6 +6,7 @@
       <Handle type="target" position="right" :id="'target' + id + 'right'" class="custom-handle custom-handle-right custom-handle-target" />
       <div class="icon-wrapper icon-loop"><el-icon><RefreshLeft /></el-icon></div>
       <div class="node-label" ref="labelRef">{{ data.label || t('flow.node.defaultLabel.loop') }}</div>
+      <NodeFindingsBadge :id="id" />
       <el-dropdown trigger="hover" placement="right" @command="handleDropdownCommand">
         <span class="more-icon-wrapper" @click.stop @mousedown.stop @pointerdown.stop><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -69,6 +70,7 @@ import { RefreshLeft, MoreFilled, Delete, Close, CircleCheck } from '@element-pl
 import { Handle, useVueFlow } from '@vue-flow/core'
 import { readConcurrencyGroup, buildConcurrencyConfig } from './concurrencyConfig.js'
 import { useI18n } from 'vue-i18n'
+import NodeFindingsBadge from './NodeFindingsBadge.vue'
 
 const { t } = useI18n()
 
@@ -497,7 +499,9 @@ watch(
   min-width: 150px;
   height: 100px;
   min-height: 100px;
-  border-radius: 0;
+  /* The card's corners are 16px (header top, last row bottom): the root has to match, or the hover shadow paints a
+     square silhouette whose four corners show beside the rounded ones. */
+  border-radius: 16px;
   cursor: pointer;
   position: relative;
   overflow:visible !important;
@@ -553,6 +557,11 @@ watch(
   font-weight: 700;
   color: #333;
   white-space: nowrap;
+  /* Take what the header has left instead of pushing the extra item (findings badge) past the border. */
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 :deep(.icon-wrapper) {

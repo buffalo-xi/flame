@@ -50,8 +50,15 @@ nodes, and `on_error` actions / error codes the node does not support or can nev
 
 The result is listed as errors and warnings, each line naming the node and the config key:
 
-- **error**: as written, it will not run;
-- **warning**: it runs, but probably not as intended (a missing required key, a fallback rule that can never fire).
+- **error**: as written, it will not run (a code step with no script, a branch with no children, a script language the
+  sandbox does not offer);
+- **warning**: it runs, but probably not as intended (undeclared `outputs`, a fallback rule that can never fire, an
+  `assign` with nothing to assign).
+
+The check also re-runs while you edit (about a second after you stop), so saving is not the first time you hear about a
+problem: a node with findings gets a small round badge in its title row — red for an error, amber for warnings only. Hover
+it for the text and the config key, click it to jump to that node. Each line in the pre-save dialog is the same shortcut:
+click it to drop this save and jump to that node with its settings open.
 
 The check only informs and never blocks the save — the canvas is a draft, and a half-built graph is a normal state. Only
 the hard server-side rules block a write (duplicate labels, the node quota). Once you have answered "save anyway" for one

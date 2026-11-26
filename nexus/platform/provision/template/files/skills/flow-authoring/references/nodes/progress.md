@@ -27,8 +27,8 @@ Emits one "progress" update outwards (reasoning / intermediate state); it does n
 
 **There is no `outputs` panel**: `output` is written automatically by the executor.
 
-Creation does **not** check `config.code` here (there is no `progress` case in the creation checks): a node without it is
-created happily and only fails when the run reaches it. Write the block even when `create_flow` returns no warning.
+Creation checks `config.code` like any other required key: the tools return a warning and still create the node, while
+`validate_flow` / the canvas badge report an error, because the step fails the moment the run reaches it. Write the block.
 
 ## Output variables
 

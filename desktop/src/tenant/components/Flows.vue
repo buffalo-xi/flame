@@ -68,9 +68,11 @@
           ref="flowRef"
           :key="flowRenderKey"
           v-model:instanceProps="instanceProps"
+          :findings="nodeFindings"
           @refreshList="fetchflows"
           @cancel="handleBack"
           @dirty-change="isDirty = $event"
+          @graph-change="scheduleFindings"
         />
 
         <!-- 版本面板：与「试运行」同一个右侧浮层（同样的圆角 / 投影 / 上下留白），
@@ -322,20 +324,38 @@
          It warns and lets the author save anyway: the canvas is a draft, and a half-built graph is a normal state. -->
     <el-dialog v-model="checkDialogVisible" :title="checkDialogTitle" width="600px" append-to-body
                class="wf-check-dialog" @closed="settleCheck(false)">
-      <div class="wf-check-lead">
-        {{ checkErrorCount
-          ? t('flow.check.leadError', { count: checkErrorCount })
-          : t('flow.check.leadWarning', { count: checkFindings.length }) }}
+      <!-- Custom header for its size only: the default .el-dialog__title is 18px, which next to 13px findings reads as a
+           page heading. titleId / titleClass keep the dialog's aria wiring intact, and the close button is outside the
+           slot, so it stays. -->
+      <template #header="{ titleId, titleClass }">
+        <span :id="titleId" :class="titleClass" class="wf-check-title">{{ checkDialogTitle }}</span>
+      </template>
+      <!-- The lead carries the severity: the whole dialog is either "cannot run" or "runs, probably not as meant", and a
+           grey paragraph makes those two read the same. -->
+      <div class="wf-check-lead" :class="checkErrorCount ? 'is-error' : 'is-warning'">
+        <el-icon>
+          <CircleCloseFilled v-if="checkErrorCount" />
+          <WarningFilled v-else />
+        </el-icon>
+        <span>
+          {{ checkErrorCount
+            ? t('flow.check.leadError', { count: checkErrorCount })
+            : t('flow.check.leadWarning', { count: checkFindings.length }) }}
+        </span>
       </div>
       <ul class="wf-check-list">
-        <li v-for="(f, i) in checkFindings" :key="i" class="wf-check-item" :class="f.severity">
+        <!-- A row is a shortcut to the place that needs fixing: click it and the editor jumps there with the panel open.
+             Rows without a node (duplicate labels, a broken diagram) have nowhere to jump and stay plain text. -->
+        <li v-for="(f, i) in checkFindings" :key="i" class="wf-check-item" :class="[f.severity, { 'is-link': !!f.node_id }]"
+            @click="focusFinding(f)">
           <span class="wf-check-sev">{{ t('flow.check.severity.' + f.severity) }}</span>
-          <span>
+          <span class="wf-check-body">
             <span class="wf-check-text">{{ checkCodeText(f) }}</span>
             <span v-if="checkWhere(f)" class="wf-check-where">{{ checkWhere(f) }}</span>
           </span>
         </li>
       </ul>
+      <div v-if="checkFindings.some((f) => f.node_id)" class="wf-check-hint">{{ t('flow.check.hint') }}</div>
       <template #footer>
         <el-button size="small" @click="settleCheck(false)">{{ t('common.cancel') }}</el-button>
         <el-button size="small" :type="checkErrorCount ? 'warning' : 'primary'" @click="settleCheck(true)">
@@ -351,7 +371,7 @@
 import { ref, computed, onMounted, onActivated, onUnmounted, onDeactivated, nextTick, watch, provide } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElButton, ElInput, ElIcon, ElMessage, ElMessageBox, ElDialog } from 'element-plus'
-import { Plus, Search, Refresh, Delete, Grape, Magnet, Management, Paperclip, Connection, Link, HotWater, Share, ArrowLeft, ChromeFilled, Notification, CircleCheck, CircleClose, ArrowDown, Close, Upload, Download, Key } from '@element-plus/icons-vue'
+import { Plus, Search, Refresh, Delete, Grape, Magnet, Management, Paperclip, Connection, Link, HotWater, Share, ArrowLeft, ChromeFilled, Notification, CircleCheck, CircleClose, CircleCloseFilled, WarningFilled, ArrowDown, Close, Upload, Download, Key } from '@element-plus/icons-vue'
 import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import { exportEntity } from '../utils/assetTransfer.js'
@@ -968,14 +988,22 @@ const settleCheck = (go) => {
   if (fn) fn(go)
 }
 
-// runSaveCheck asks the backend for the static findings before writing anything.
+// focusFinding turns a dialog row into a jump: this save is dropped (the author is going to fix something), the dialog
+// closes, and the canvas selects the node with its settings panel open - the same move a badge click makes.
+const focusFinding = (f) => {
+  if (!f?.node_id) return
+  const target = f.node_id
+  settleCheck(false)
+  nextTick(() => flowRef.value?.focusNode?.(target))
+}
+
+// requestFindings asks the backend for the static findings of one diagram.
 //
-// It never blocks on its own failure: the endpoint is a courtesy that turns "the run failed somewhere" into a list, and
-// an unreachable check must not become "you cannot save". It resolves true (write) / false (the author said cancel).
-const runSaveCheck = async (diagramData) => {
+// null means "no answer" (signed out, endpoint down, an error body): the caller treats that as "do not judge", never as
+// "clean" - a check that cannot run must not turn into a save that silently skips it.
+const requestFindings = async (diagramData) => {
   const token = getToken()
-  if (!token) return true
-  let data = null
+  if (!token) return null
   try {
     const response = await fetch(adminApi.flows.validate, {
       method: 'POST',
@@ -985,14 +1013,55 @@ const runSaveCheck = async (diagramData) => {
       },
       body: JSON.stringify({ diagram: JSON.stringify(diagramData) })
     })
-    if (response.ok) {
-      data = (await response.json())?.data
+    if (!response.ok) return null
+    const data = (await response.json())?.data
+    if (!data) return null
+    return {
+      findings: Array.isArray(data.findings) ? data.findings : [],
+      errorCount: Number(data.error_count || 0)
     }
   } catch {
-    return true
+    return null
   }
-  const findings = Array.isArray(data?.findings) ? data.findings : []
-  const errorCount = Number(data?.error_count || 0)
+}
+
+// The canvas paints a badge on every node that has findings, so the check also runs while editing (debounced: a drag
+// emits a change per pointer event, and each check posts the whole diagram).
+const nodeFindings = ref([])
+let findingsTimer = null
+// Two checks can be in flight if the author edits again while one is answering; only the newest may paint.
+let findingsSeq = 0
+
+const refreshFindings = async () => {
+  findingsTimer = null
+  if (!fullScreenMode.value) return
+  const diagramData = flowRef.value?.getDiagramData?.()
+  if (!diagramData) return
+  const seq = ++findingsSeq
+  const res = await requestFindings(diagramData)
+  if (res && seq === findingsSeq) nodeFindings.value = res.findings
+}
+
+const scheduleFindings = () => {
+  if (!fullScreenMode.value) return
+  if (findingsTimer) clearTimeout(findingsTimer)
+  findingsTimer = setTimeout(refreshFindings, 800)
+}
+
+onUnmounted(() => {
+  if (findingsTimer) clearTimeout(findingsTimer)
+})
+
+// runSaveCheck asks the backend for the same findings before writing anything.
+//
+// It never blocks on its own failure: an unreachable check must not become "you cannot save". It resolves true (write) /
+// false (the author said cancel).
+const runSaveCheck = async (diagramData) => {
+  const res = await requestFindings(diagramData)
+  if (!res) return true
+  const { findings, errorCount } = res
+  // Keep the badges in step with what this save is about to write, whether or not the dialog is shown.
+  nodeFindings.value = findings
   if (!findings.length && !errorCount) return true
 
   const signature = checkSignature(findings)
@@ -1033,6 +1102,11 @@ const handleBack = () => {
     store_runs: true,
     session_memory: true
   }
+  // The badges belong to the diagram that was open; the next flow starts from its own findings.
+  nodeFindings.value = []
+  findingsSeq++ // an answer still in flight must not paint onto the next flow
+  if (findingsTimer) clearTimeout(findingsTimer)
+  findingsTimer = null
   // 编辑器里可能新建 / 收回过端点，卡片上的端点与状态要整表刷新才准
   fetchflows()
 }
@@ -1531,11 +1605,38 @@ onActivated(() => {
 }
 
 /* Pre-save check dialog: one line per finding, severity first, the location underneath */
+.wf-check-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+  color: #303133;
+}
+
 .wf-check-lead {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
   margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 4px;
   font-size: 13px;
   line-height: 1.6;
-  color: #606266;
+}
+
+.wf-check-lead .el-icon {
+  flex: none;
+  margin-top: 2px;
+  font-size: 15px;
+}
+
+.wf-check-lead.is-error {
+  background: #fef0f0;
+  color: #c45656;
+}
+
+.wf-check-lead.is-warning {
+  background: #fdf6ec;
+  color: #b88230;
 }
 
 .wf-check-list {
@@ -1543,13 +1644,42 @@ onActivated(() => {
   padding: 0;
   list-style: none;
   max-height: 340px;
+  /* No horizontal bar: the text wraps instead, and a sideways scrollbar in a 600px dialog only hides the end of a line. */
+  overflow-x: hidden;
   overflow-y: auto;
+  /* The bar is invisible until the pointer is over the list: a permanent grey stripe in a small dialog reads as
+     "something is broken". The gutter is reserved either way, so revealing the thumb does not reflow the list. */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.wf-check-list:hover {
+  scrollbar-color: rgba(144, 147, 153, 0.4) transparent;
+}
+
+.wf-check-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.wf-check-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.wf-check-list::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: transparent;
+}
+
+.wf-check-list:hover::-webkit-scrollbar-thumb {
+  background: rgba(144, 147, 153, 0.4);
 }
 
 .wf-check-item {
   display: flex;
   gap: 8px;
-  padding: 8px 0;
+  margin: 0 -6px;
+  padding: 8px 6px;
+  border-radius: 4px;
   border-top: 1px solid #f0f0f0;
   font-size: 13px;
   line-height: 1.5;
@@ -1557,6 +1687,21 @@ onActivated(() => {
 
 .wf-check-item:first-child {
   border-top: none;
+}
+
+/* A row with a node is a jump, so it has to look like one: pointer cursor plus a hover wash, no underline. */
+.wf-check-item.is-link {
+  cursor: pointer;
+}
+
+.wf-check-item.is-link:hover {
+  background: #f5f7fa;
+}
+
+.wf-check-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #909399;
 }
 
 .wf-check-sev {
@@ -1575,8 +1720,16 @@ onActivated(() => {
   color: #f56c6c;
 }
 
+/* The body has to be allowed to shrink (flex items default to min-width:auto), otherwise one long token - a config key
+   like code.script, a node id - pushes the row wider instead of wrapping. */
+.wf-check-body {
+  flex: 1;
+  min-width: 0;
+}
+
 .wf-check-text {
   color: #303133;
+  overflow-wrap: anywhere;
 }
 
 .wf-check-where {
@@ -1584,6 +1737,7 @@ onActivated(() => {
   margin-top: 2px;
   font-size: 12px;
   color: #909399;
+  overflow-wrap: anywhere;
 }
 
 .header-buttons {

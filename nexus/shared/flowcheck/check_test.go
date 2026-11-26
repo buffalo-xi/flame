@@ -23,8 +23,9 @@ func has(fs []Finding, severity, code string) bool {
 	return false
 }
 
-// A wrong-shape block is refused; a missing required key is only a warning, and the message stays what create_flow has
-// always returned (the strings are part of the tool's output contract).
+// A wrong-shape block is refused; a missing script is an error (the step cannot run), while a missing outputs block is
+// only a warning (it runs, it just loses what the script returns). The messages stay what create_flow has always
+// returned (the strings are part of the tool's output contract).
 func TestStepSplit(t *testing.T) {
 	if _, err := Step("code", map[string]any{"code": "nope"}, nil); err == nil {
 		t.Fatal("a non-object behaviour block must be refused")
@@ -37,11 +38,29 @@ func TestStepSplit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Step = %v", err)
 	}
-	if len(fs) != 2 || !has(fs, SeverityWarning, CodeIncomplete) {
-		t.Fatalf("want two completeness warnings, got %v", codes(fs))
+	if len(fs) != 2 {
+		t.Fatalf("want one error and one warning, got %v", codes(fs))
+	}
+	if !has(fs, SeverityError, CodeIncomplete) || !has(fs, SeverityWarning, CodeOutputs) {
+		t.Fatalf("a missing script must be an error and a missing outputs only a warning, got %v", codes(fs))
 	}
 	if !strings.Contains(fs[0].Message, "code.script") && !strings.Contains(fs[1].Message, "code.script") {
-		t.Errorf("the script warning lost its message: %v", fs)
+		t.Errorf("the script finding lost its message: %v", fs)
+	}
+}
+
+// A node dropped on the canvas has no config at all, and that is not an exemption: a code node without a script cannot run
+// whether the config block is missing or merely empty. A node type with nothing to configure stays silent.
+func TestStepJudgesEmptyConfig(t *testing.T) {
+	fs, err := Step("code", nil, nil)
+	if err != nil {
+		t.Fatalf("Step = %v", err)
+	}
+	if !has(fs, SeverityError, CodeIncomplete) {
+		t.Fatalf("a code node with no config has no script and must be an error, got %v", codes(fs))
+	}
+	if fs, _ := Step("start", nil, nil); len(fs) != 0 {
+		t.Fatalf("start has nothing to configure, got %v", codes(fs))
 	}
 }
 
@@ -52,8 +71,63 @@ func TestStepLangUnknown(t *testing.T) {
 		t.Fatalf("unknown langs must skip the language check, got %v", codes(fs))
 	}
 	fs, _ := Step("code", cfg, []string{"lua", "python"})
-	if !has(fs, SeverityWarning, CodeUnsupportedLang) {
+	if !has(fs, SeverityError, CodeUnsupportedLang) {
 		t.Fatalf("a language outside the list must be reported, got %v", codes(fs))
+	}
+}
+
+// The text nodes are script nodes too: without config.code the executor fails before it can emit anything, so the missing
+// key is an error even though the node has nothing else to configure.
+func TestStepTextNodesNeedScript(t *testing.T) {
+	for _, typ := range []string{"result", "progress"} {
+		if fs, _ := Step(typ, nil, nil); !has(fs, SeverityError, CodeIncomplete) {
+			t.Errorf("%s without config must be an error, got %v", typ, codes(fs))
+		}
+		if fs, _ := Step(typ, map[string]any{"code": map[string]any{}}, nil); !has(fs, SeverityError, CodeIncomplete) {
+			t.Errorf("%s without a script must be an error, got %v", typ, codes(fs))
+		}
+		if fs, _ := Step(typ, map[string]any{"code": map[string]any{"script": "x"}}, nil); len(fs) != 0 {
+			t.Errorf("%s with a script must be silent, got %v", typ, codes(fs))
+		}
+	}
+}
+
+// The connection blocks are required before any network happens: an empty id is a config error at run time, not
+// "no data yet", so it belongs to the save-time check.
+func TestStepMcpAndRpcConnections(t *testing.T) {
+	if fs, _ := Step("mcp", nil, nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Errorf("mcp without config.mcp must be an error, got %v", codes(fs))
+	}
+	if fs, _ := Step("mcp", map[string]any{"mcp": map[string]any{}}, nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Errorf("mcp without a connection must be an error, got %v", codes(fs))
+	}
+	if fs, _ := Step("mcp", map[string]any{"mcp": map[string]any{"connection_id": "c", "tool_name": "t"}}, nil); len(fs) != 0 {
+		t.Errorf("a complete mcp config must be silent, got %v", codes(fs))
+	}
+
+	// rpc switches on target_type; an empty value is the legacy "connection" mode, so only "endpoint" reads rpc.endpoint.
+	if fs, _ := Step("rpc", map[string]any{"rpc": map[string]any{"target_type": "endpoint"}}, nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Errorf("an endpoint rpc without rpc.endpoint must be an error, got %v", codes(fs))
+	}
+	if fs, _ := Step("rpc", map[string]any{"rpc": map[string]any{"target_type": "endpoint", "endpoint": "e"}}, nil); len(fs) != 0 {
+		t.Errorf("a complete endpoint rpc must be silent, got %v", codes(fs))
+	}
+	if fs, _ := Step("rpc", map[string]any{"rpc": map[string]any{"endpoint": "e"}}, nil); !has(fs, SeverityError, CodeIncomplete) {
+		t.Errorf("an empty target_type means connection, so a bare endpoint is not enough, got %v", codes(fs))
+	}
+}
+
+// An assign with no assignments reports success and writes nothing: a warning with its own code, because the author has
+// to be told the step is a no-op rather than that a key is missing.
+func TestStepAssignNoOp(t *testing.T) {
+	fs, _ := Step("assign", map[string]any{"assignments": []any{}}, nil)
+	if !has(fs, SeverityWarning, CodeNoOp) {
+		t.Fatalf("an assign with no assignments must be a warning, got %v", codes(fs))
+	}
+	if fs, _ := Step("assign", map[string]any{"assignments": []any{
+		map[string]any{"kind": "output", "target": "x", "value": "1"},
+	}}, nil); len(fs) != 0 {
+		t.Fatalf("a real assignment must be silent, got %v", codes(fs))
 	}
 }
 
@@ -236,7 +310,7 @@ func TestOnErrorCodeNotProduced(t *testing.T) {
 		"outputs":  map[string]any{},
 		"on_error": map[string]any{"retry": map[string]any{"codes": []any{"auth"}}},
 	}, nil)
-	if !has(fs, SeverityWarning, CodeOnErrorCode) {
+	if !has(fs, SeverityWarning, CodeOnErrorCodeUnused) {
 		t.Fatalf("auth on a code node must be reported, got %v", codes(fs))
 	}
 }

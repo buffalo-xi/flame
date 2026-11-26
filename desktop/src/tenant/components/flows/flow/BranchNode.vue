@@ -6,6 +6,7 @@
       <Handle type="target" position="right" :id="'target' + id + 'right'" class="custom-handle custom-handle-right custom-handle-target" />
       <div class="icon-wrapper icon-start"><el-icon><Connection /></el-icon></div>
       <div class="node-label">{{ data.label || t('flow.node.defaultLabel.branch') }}</div>
+      <NodeFindingsBadge :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -89,6 +90,7 @@ import { Connection, MoreFilled, Plus, Delete } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
 import random from '@/tenant/utils/random'
 import { useI18n } from 'vue-i18n'
+import NodeFindingsBadge from './NodeFindingsBadge.vue'
 
 const { t } = useI18n()
 
@@ -197,7 +199,9 @@ const deleteNode = () => {
 :deep(.branch-node) {
   width: 300px;
   min-width: 300px;
-  border-radius: 0;
+  /* The card's corners are 16px (header top, last row bottom): the root has to match, or the hover shadow paints a
+     square silhouette whose four corners show beside the rounded ones. */
+  border-radius: 16px;
   cursor: pointer;
   position: relative;
   overflow:visible !important;
@@ -252,6 +256,11 @@ const deleteNode = () => {
   font-weight: 700;
   color: #333;
   flex: 1;
+  /* The header can gain an extra item (findings badge): the label shortens instead of wrapping, like child-label. */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 :deep(.icon-wrapper) {

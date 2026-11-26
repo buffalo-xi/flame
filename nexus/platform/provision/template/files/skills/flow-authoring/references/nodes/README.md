@@ -72,11 +72,11 @@ missing key stops you now or at run time:
 | Level | What happens |
 |---|---|
 | shape | **refused**: a behaviour block (`code` / `http` / `llm` / `loop` / `mcp` / `rpc` / `branch`) that is not an object, `children` that is not an array, a `loop.type` outside `count` / `each` / `while` / `do_while` |
-| completeness | **warning only — the node is still created**: `code` without `code.script` or `config.outputs`; `http` without `http.url`; `llm` without `config.llm`; `loop` without `config.loop`; `branch` / `intent` with empty `children`; `call` without `target`; `wait` without `fork_node_id`; a `lang` the sandbox does not list |
-| not at all | **silent until the run**: `mcp.connection_id` / `mcp.tool_name` empty; `rpc.endpoint` or the connection fields empty; `assign.assignments` empty (a no-op that reports success); `result` / `progress` without `code`; a container (`loop` / `process` / `function`) without its `entry` child; `loop each` whose `source_key` is not declared in `config.inputs` |
+| completeness | **the node is still created, but it cannot run**: `code` / `result` / `progress` without `code.script`; `http` without `http.url`; `llm` without `config.llm`; `loop` without `config.loop`; `branch` / `intent` with empty `children`; `call` without `target`; `wait` without `fork_node_id`; `mcp` without `mcp.connection_id` / `mcp.tool_name`; `rpc` without `rpc.connection_id` / `rpc.tool_name` (`rpc.endpoint` instead in `endpoint` mode); a `lang` the sandbox does not list. Reported as a returned warning by the tools (a skeleton is allowed), and as an **error** by `validate_flow` / the canvas badge, because the step fails the moment the run reaches it. Two exceptions stay warnings everywhere, because the step runs: a missing `config.outputs` (the variables the script returns are dropped) and an `assign` with no `assignments` (it reports success and changes nothing) |
+| not at creation | **the per-node check has no neighbours to look at**: a container (`loop` / `process` / `function`) without its `entry` child; `loop each` whose `source_key` is not declared in `config.inputs`; a branch child without an id; duplicate labels; cross-container edges; dangling references. `validate_flow` / the canvas badge reports these — creation does not |
 
-A successful `create_flow` is therefore **not** a complete node. Fill in the "not at all" column yourself, and treat every
-returned warning as a TODO rather than as advice.
+A successful `create_flow` is therefore **not** a complete node. Close the "not at creation" gaps with `validate_flow`, and
+treat every returned warning as a TODO rather than as advice.
 
 `validate_flow` fills in what creation leaves unchecked: it runs the same rule set over a saved flow (or an inline diagram) and
 reports missing entries, cross-container edges, dangling `source_ref` / `call.target` / `fork_node_id`, branch children with no
@@ -86,8 +86,9 @@ the config path for each. Call it after creating and after every structural edit
 `error_count: 0`.
 
 `update_node` re-runs the same per-node check on the config it just wrote (a `config` replacement or a `config_patch`
-merge) and returns the warnings: a wrong shape is refused before anything is stored, a missing required key comes back as
-a warning. Editing one node does not re-check its neighbours — that is what `validate_flow` is for.
+merge) and returns the findings as warnings: a wrong shape is refused before anything is stored, and a key the run cannot
+do without is reported (the tool still writes it, the next `validate_flow` calls it an error). Editing one node does not
+re-check its neighbours — that is what `validate_flow` is for.
 
 ## Three facts about edges
 

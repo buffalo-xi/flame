@@ -45,7 +45,10 @@ type Finding struct {
 // Known finding codes. Stable strings, so a client can key behaviour on them.
 const (
 	CodeShape           = "shape"            // a config block has the wrong JSON type (refused at creation)
-	CodeIncomplete      = "incomplete"       // a required key is missing (warning at creation)
+	CodeIncomplete      = "incomplete"       // a required key is missing: the step fails at run time
+	CodeOutputs         = "outputs"          // a code step declares no outputs, so returned variables are dropped
+	CodeOnErrorScript   = "on_error_script"  // an on_error handler declares an action but no script
+	CodeNoOp            = "no_op"            // the step is config-complete but does nothing (an empty assign)
 	CodeUnsupportedLang = "unsupported_lang" // the sandbox does not pool that language
 	CodeDuplicateLabel  = "duplicate_label"  // labels must be unique (labels are how refs are written)
 	CodeUnknownType     = "unknown_type"     // no executor and not a visual node
@@ -55,15 +58,20 @@ const (
 	CodeContainerEntry  = "container_entry"  // a container has no (or several) entry children
 	CodeContainerOut    = "container_out"    // a container has more than one outgoing edge
 	CodeBranchEdge      = "branch_edge"      // a branch child has no outgoing edge to route to
+	CodeChildID         = "child_id"         // a branch child has no id, so no edge can route to it
 	CodeCallTarget      = "call_target"      // call.target does not name a function node
 	CodeWaitFork        = "wait_fork"        // wait.fork_node_id does not name a fork node
 	CodeDanglingRef     = "dangling_ref"     // source_ref points at a node that does not exist
 	CodeLoopSource      = "loop_source"      // each-mode source_key is not declared in inputs
 	CodeUnreachable     = "unreachable"      // no incoming edge and not the start node
 	CodeOnErrorAction   = "on_error_action"  // the node does not declare that action, so the runner ignores the block
-	CodeOnErrorCode     = "on_error_code"    // a code the node cannot produce, or one that does not exist at all
+	CodeOnErrorCode     = "on_error_code"    // an error code that does not exist at all
 	CodeOnErrorPost     = "on_error_post"    // post configured on a node that does not support it
 )
+
+// CodeOnErrorCodeUnused is a real error code the node type never produces: a dead rule, so a warning - and its own code,
+// because the wording has to stay apart from "that code does not exist" (which is an error).
+const CodeOnErrorCodeUnused = "on_error_code_unused"
 
 // containerTypes hold child nodes (and bring an entry child in the frontend).
 var containerTypes = map[string]bool{"loop": true, "process": true, "function": true}
@@ -85,15 +93,19 @@ var knownTypes = map[string]bool{
 // Step checks one node's config.
 //
 // The shape rules are refused outright (err != nil): a behaviour block that is not an object cannot be rescued on the
-// canvas either. A missing required key only produces a Warning, because starting from a minimal config and finishing
-// it on the canvas is allowed - but a Warning is a TODO, not advice.
+// canvas either. Everything else is a Finding, and the severity follows the run, not the author's convenience: a key the
+// runner cannot do without (a code step with no script, a branch with no children) is an error, because the node fails
+// the moment it is reached; a key that only costs correctness (missing outputs, an on_error rule that can never fire, an
+// assign step with nothing to assign) is a warning. The create tools still hand every finding back as a warning - a skeleton with holes is a normal authoring
+// step - so severity means "will it run", not "may I save".
+//
+// An empty config is judged like any other, not exempted: a code node dropped on the canvas has no config and no script,
+// and the runner fails on it exactly as it fails on a code node whose script was cleared. Anything that legitimately has
+// nothing to configure (start, entry, comment, layout) has no case in the switch below, so it stays silent.
 //
 // langs is the sandbox's workflow script language list; nil means "unknown" (the sandbox is down or too old to report
 // it) and the language check is skipped rather than guessed.
 func Step(typ string, cfg map[string]any, langs []string) ([]Finding, error) {
-	if len(cfg) == 0 {
-		return nil, nil
-	}
 	var out []Finding
 	add := func(severity, code, path, msg string) {
 		out = append(out, Finding{Severity: severity, Code: code, NodeType: typ, Path: path, Message: msg})
@@ -131,35 +143,88 @@ func Step(typ string, cfg map[string]any, langs []string) ([]Finding, error) {
 	case "code":
 		code, _ := cfg["code"].(map[string]any)
 		if script, ok := code["script"].(string); !ok || strings.TrimSpace(script) == "" {
-			add(SeverityWarning, CodeIncomplete, "code.script", "code step has no code.script and fails with script not found at run time")
+			add(SeverityError, CodeIncomplete, "code.script", "code step has no code.script and fails with script not found at run time")
 		}
 		if _, ok := cfg["outputs"].(map[string]any); !ok {
-			add(SeverityWarning, CodeIncomplete, "outputs", "code step has no config.outputs: variables returned by the script are rejected as undeclared")
+			// Not an error: the step runs, it just loses every variable the script returns. Its own code, not
+			// "incomplete": a client that words findings by code would otherwise print the same sentence for a missing
+			// script (an error) and a missing outputs block (a warning) on the same node.
+			add(SeverityWarning, CodeOutputs, "outputs", "code step has no config.outputs: variables returned by the script are rejected as undeclared")
 		}
 	case "http":
 		httpCfg, _ := cfg["http"].(map[string]any)
 		if url, _ := httpCfg["url"].(string); strings.TrimSpace(url) == "" {
-			add(SeverityWarning, CodeIncomplete, "http.url", "http step has no http.url and cannot send the request at run time")
+			add(SeverityError, CodeIncomplete, "http.url", "http step has no http.url and cannot send the request at run time")
 		}
 	case "llm":
 		if _, ok := cfg["llm"].(map[string]any); !ok {
-			add(SeverityWarning, CodeIncomplete, "llm", "llm step has no config.llm (model and messages) and fails with a config error at run time")
+			add(SeverityError, CodeIncomplete, "llm", "llm step has no config.llm (model and messages) and fails with a config error at run time")
 		}
 	case "loop":
 		if _, ok := cfg["loop"].(map[string]any); !ok {
-			add(SeverityWarning, CodeIncomplete, "loop", "loop step has no config.loop and fails with loop config not found at run time")
+			add(SeverityError, CodeIncomplete, "loop", "loop step has no config.loop and fails with loop config not found at run time")
 		}
 	case "branch", "intent":
 		if children, ok := cfg["children"].([]any); !ok || len(children) == 0 {
-			add(SeverityWarning, CodeIncomplete, "children", typ+" step has empty config.children: there is no branch to take at run time")
+			add(SeverityError, CodeIncomplete, "children", typ+" step has empty config.children: there is no branch to take at run time")
 		}
 	case "call":
 		if target, _ := cfg["target"].(string); strings.TrimSpace(target) == "" {
-			add(SeverityWarning, CodeIncomplete, "target", "call step has no config.target (must be the id of a function node in the same flow)")
+			add(SeverityError, CodeIncomplete, "target", "call step has no config.target (must be the id of a function node in the same flow)")
 		}
 	case "wait":
 		if forkID, _ := cfg["fork_node_id"].(string); strings.TrimSpace(forkID) == "" {
-			add(SeverityWarning, CodeIncomplete, "fork_node_id", "wait step has no config.fork_node_id (the concurrency group to wait on)")
+			add(SeverityError, CodeIncomplete, "fork_node_id", "wait step has no config.fork_node_id (the concurrency group to wait on)")
+		}
+	case "result", "progress":
+		// The two text nodes reuse the script node structure and fail with "code config not found" / "script not
+		// found" before they can emit anything: nothing here needs a model, a connection or the network, so the
+		// missing key is knowable at save time.
+		codeCfg := objectOf(cfg["code"])
+		if codeCfg == nil {
+			add(SeverityError, CodeIncomplete, "code", typ+" step has no config.code and fails with code config not found at run time")
+			break
+		}
+		if script, _ := codeCfg["script"].(string); strings.TrimSpace(script) == "" {
+			add(SeverityError, CodeIncomplete, "code.script", typ+" step has no code.script and fails with script not found at run time")
+		}
+	case "mcp":
+		mcpCfg := objectOf(cfg["mcp"])
+		if mcpCfg == nil {
+			add(SeverityError, CodeIncomplete, "mcp", "mcp step has no config.mcp and fails with mcp config not found at run time")
+			break
+		}
+		if s, _ := mcpCfg["connection_id"].(string); strings.TrimSpace(s) == "" {
+			add(SeverityError, CodeIncomplete, "mcp.connection_id", "mcp step has no mcp.connection_id and fails before the call at run time")
+		}
+		if s, _ := mcpCfg["tool_name"].(string); strings.TrimSpace(s) == "" {
+			add(SeverityError, CodeIncomplete, "mcp.tool_name", "mcp step has no mcp.tool_name and fails before the call at run time")
+		}
+	case "rpc":
+		rpcCfg := objectOf(cfg["rpc"])
+		if rpcCfg == nil {
+			add(SeverityError, CodeIncomplete, "rpc", "rpc step has no config.rpc and fails with rpc config not found at run time")
+			break
+		}
+		// An empty target_type means "connection": older configs never wrote it, so only "endpoint" switches mode.
+		if target, _ := rpcCfg["target_type"].(string); target == "endpoint" {
+			if s, _ := rpcCfg["endpoint"].(string); strings.TrimSpace(s) == "" {
+				add(SeverityError, CodeIncomplete, "rpc.endpoint", "rpc step targets an endpoint but has no rpc.endpoint and fails before the call at run time")
+			}
+			break
+		}
+		if s, _ := rpcCfg["connection_id"].(string); strings.TrimSpace(s) == "" {
+			add(SeverityError, CodeIncomplete, "rpc.connection_id", "rpc step has no rpc.connection_id and fails before the call at run time")
+		}
+		if s, _ := rpcCfg["tool_name"].(string); strings.TrimSpace(s) == "" {
+			add(SeverityError, CodeIncomplete, "rpc.tool_name", "rpc step has no rpc.tool_name and fails before the call at run time")
+		}
+	case "assign":
+		// The opposite failure of the cases above: the step succeeds and reports success while doing nothing, so the
+		// author's intent is lost without an error anywhere. A warning, and its own code, because that reads
+		// differently from "a required key is missing".
+		if list, ok := cfg["assignments"].([]any); !ok || len(list) == 0 {
+			add(SeverityWarning, CodeNoOp, "assignments", "assign step has no config.assignments: it reports success without assigning anything")
 		}
 	}
 
@@ -172,7 +237,7 @@ func Step(typ string, cfg map[string]any, langs []string) ([]Finding, error) {
 			if lf.lang == "template" || contains(langs, lf.lang) {
 				continue
 			}
-			add(SeverityWarning, CodeUnsupportedLang, lf.path, fmt.Sprintf(
+			add(SeverityError, CodeUnsupportedLang, lf.path, fmt.Sprintf(
 				"step %s has %s=%s, which is not among the sandbox's current workflow script languages (%s); it will fail with unsupported_lang at run time",
 				typ, lf.path, lf.lang, strings.Join(langs, ", ")))
 		}
@@ -216,7 +281,7 @@ func checkOnError(typ string, cfg map[string]any) []Finding {
 		}
 		if action == "handler" {
 			if script, _ := block["script"].(string); strings.TrimSpace(script) == "" {
-				add(SeverityWarning, CodeIncomplete, path+".script",
+				add(SeverityWarning, CodeOnErrorScript, path+".script",
 					fmt.Sprintf("%s node has an on_error.handler without a script, so it does nothing", typ),
 					"write the handler script or drop the block")
 			}
@@ -229,7 +294,9 @@ func checkOnError(typ string, cfg map[string]any) []Finding {
 				continue
 			}
 			if !caps.ProducesCode(c) {
-				add(SeverityWarning, CodeOnErrorCode, path+".codes", fmt.Sprintf(
+				// A different code from "that code does not exist": same path, but the code is real and the node is the
+				// problem, so the client can word it apart (and it is a warning, not an error).
+				add(SeverityWarning, CodeOnErrorCodeUnused, path+".codes", fmt.Sprintf(
 					"%s nodes never produce %q, so this rule can never fire", typ, c),
 					"list only the codes this node type declares")
 			}
@@ -471,7 +538,9 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 			child, _ := raw.(map[string]any)
 			id, _ := child["id"].(string)
 			if strings.TrimSpace(id) == "" {
-				add(SeverityError, CodeBranchEdge, n.ID, n.Type, "children",
+				// Its own code: same node, same area, but a different problem and a different severity from "child has no
+				// outgoing edge" - one text per code lets the client word them apart.
+				add(SeverityError, CodeChildID, n.ID, n.Type, "children",
 					fmt.Sprintf("%s node %s has a child without an id, so no edge can route to it", n.Type, n.ID),
 					"give every child an id")
 				continue

@@ -3,6 +3,7 @@
     <div class="node-header">
       <div class="icon-wrapper icon-http"><el-icon><Lightning /></el-icon></div>
       <div class="node-label">{{ data.label || t('flow.node.defaultLabel.http') }}</div>
+      <NodeFindingsBadge :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper" @click.stop @mousedown.stop @pointerdown.stop><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -61,6 +62,7 @@ import { Lightning, MoreFilled, Delete, Close, CircleCheck } from '@element-plus
 import { Handle } from '@vue-flow/core'
 import { readConcurrencyGroup, buildConcurrencyConfig } from './concurrencyConfig.js'
 import { useI18n } from 'vue-i18n'
+import NodeFindingsBadge from './NodeFindingsBadge.vue'
 
 const { t } = useI18n()
 

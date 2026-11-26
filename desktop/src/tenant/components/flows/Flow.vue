@@ -132,10 +132,16 @@ const props = defineProps({
   instanceProps: {
     type: Object,
     default: () => ({})
+  },
+  // Static findings for the canvas currently open (shared/flowcheck behind the backend). Node components read them
+  // through inject('flowFindings'); the map is rebuilt here so a badge is one lookup, not a scan per node.
+  findings: {
+    type: Array,
+    default: () => []
   }
 })
 
-const emit = defineEmits(['update:diagram', 'dirty-change'])
+const emit = defineEmits(['update:diagram', 'dirty-change', 'graph-change'])
 
 const { t } = useI18n()
 
@@ -1310,6 +1316,27 @@ const focusNode = (nodeId) => {
   run()
 }
 
+// Static findings per node, for the badge inside each node card. Injection rather than props: Vue Flow creates the node
+// components from the nodeTypes map, so a prop would mean threading it through 26 signatures.
+const nodeFindings = computed(() => {
+  const map = {}
+  for (const f of props.findings || []) {
+    const id = f && f.node_id
+    if (!id) continue // findings without a node (duplicate labels, a broken diagram) stay in the pre-save dialog
+    const bucket = map[id] || (map[id] = { error: [], warning: [] })
+    if (f.severity === 'error') bucket.error.push(f)
+    else bucket.warning.push(f)
+  }
+  return map
+})
+provide('flowFindings', nodeFindings)
+// Clicking a badge means "show me this node": the same move as jumping in from a session.
+provide('focusNode', focusNode)
+
+// The parent re-runs the static check when the diagram is worth re-checking; it debounces before posting, because a drag
+// produces a change per pointer event.
+onMounted(() => emit('graph-change'))
+
 // 属性面板改名走这里（PropsPanel → emit('updateNode')）。
 // 节点 label 全图唯一：撞名自动加 3 位后缀并提示，与拖入节点同一套规则。
 const handleUpdateNode = (updatedNode) => {
@@ -1482,6 +1509,11 @@ const isDirty = computed(() => {
 watch(isDirty, (val) => {
   emit('dirty-change', val)
 })
+
+// The parent's static check depends on the diagram only, and selecting a node or panning the canvas is not an edit - so
+// the signal is "the diagram as it would be saved", not "something in the graph changed".
+const checkedDiagram = computed(() => JSON.stringify(getDiagramData()))
+watch(checkedDiagram, () => emit('graph-change'))
 // 记录「当前这份内容」为已保存基线（不只是画布，见 buildSavedState）
 function snapshotDiagram() {
   baselineDiagram.value = buildSavedState()

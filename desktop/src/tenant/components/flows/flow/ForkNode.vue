@@ -3,6 +3,7 @@
     <div class="node-header">
       <div class="icon-wrapper icon-fork"><el-icon><Monitor /></el-icon></div>
       <div class="node-label">{{ data.label || t('flow.node.defaultLabel.fork') }}</div>
+      <NodeFindingsBadge :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -28,6 +29,7 @@ import { ref, watch, onUnmounted, inject } from 'vue'
 import { Monitor, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
+import NodeFindingsBadge from './NodeFindingsBadge.vue'
 
 const { t } = useI18n()
 
