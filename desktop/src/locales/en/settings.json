@@ -80,7 +80,7 @@
     "agentHint": "Tenant config: empty = fall back to the system level; this group has no -1 (all six are safety valves, and \"unlimited\" removes the guard); tenant values cannot exceed the system level",
     "flowFields": {
       "max_timeout": { "label": "Max timeout (s)", "desc": "Total run-time limit for a single run; it is terminated when reached" },
-      "max_recursion_depth": { "label": "Max recursion depth", "desc": "How many levels deep workflows may call each other" },
+      "max_recursion_depth": { "label": "Max recursion depth", "desc": "How many levels deep function recursion and cross-flow calls may nest" },
       "max_node_count": { "label": "Max nodes", "desc": "Number of nodes allowed in one flow graph" },
       "max_exec_count": { "label": "Max executions", "desc": "Cumulative node executions in a single run" },
       "max_loop_times": { "label": "Max loop iterations", "desc": "Iteration cap for loop nodes" },

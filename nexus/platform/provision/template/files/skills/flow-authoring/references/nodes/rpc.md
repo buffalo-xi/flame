@@ -39,6 +39,11 @@ The external-connection form:
 | `rpc.handler` | — | — | post-processing script; **`template` is not supported** |
 | `config.outputs` | recommended to write in full | no fallback | a missing declaration reports `output var ... not defined` at write time |
 
+A flow-type endpoint call shares the recursion depth with the intra-flow `call` node: one tenant-level number
+(`flow_configs.max_recursion_depth`, 20 by default), counting **nesting**, so `A → B → C` is depth 3 and several rpc nodes
+sitting side by side in one flow all stay at the same level. Going straight back to an entity already in the chain is rejected
+earlier as `circular call detected`.
+
 ## Output variables
 
 Fixed: `result`(string) / `progress`(array[string]) / `error`(string).

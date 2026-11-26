@@ -80,7 +80,7 @@
     "agentHint": "租户配置：留空 = 回退系统级；本组没有 -1（六项都是安全阀，调成「不限制」等于拆掉防线）；租户值不能超过系统级",
     "flowFields": {
       "max_timeout": { "label": "最大超时（秒）", "desc": "单次运行的总时长上限，到点强制终止" },
-      "max_recursion_depth": { "label": "最大递归深度", "desc": "工作流之间互相调用时可嵌套的层数" },
+      "max_recursion_depth": { "label": "最大递归深度", "desc": "工作流内函数递归 / 跨流程调用可嵌套的层数" },
       "max_node_count": { "label": "最大节点数", "desc": "一张流程图里允许的节点数量" },
       "max_exec_count": { "label": "最大执行次数", "desc": "单次运行中节点被执行的累计次数" },
       "max_loop_times": { "label": "最大循环次数", "desc": "循环节点的迭代次数上限" },

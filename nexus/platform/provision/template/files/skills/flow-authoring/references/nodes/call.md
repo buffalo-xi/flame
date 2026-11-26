@@ -25,6 +25,13 @@ Calls another `function` node **within the same flow** (recursion supported, lim
 
 It **does not read** `inputs` / `locals`. Exceeding the recursion depth → `internal` error.
 
+Depth is a **tenant-level** number (`flow_configs.max_recursion_depth`, 20 by default, the platform's `max_recursion_depth`
+row is the hard ceiling), shared with the cross-flow `rpc` call, and it counts **nesting**, not calls: thirty sibling `call`
+nodes all sit at depth 1. A recursive function is the reason the number is as high as it is — a tree walk is routinely 30–50
+levels, and the tenant's `max_exec_count` / `max_timeout` are what stop a runaway one. When a run reports
+`exceeded max recursion depth`, the function is recursing deeper than the tenant allows: add a terminating condition, or ask
+an operator to raise the ceiling — rewriting the graph does not help.
+
 `args.*.source_ref` may be written as a node **label** or as its id (a label is rewritten when it matches no id), the same
 rule as `config.inputs`. Ids are still safer once the graph grows containers: read them back with `read_flow`.
 

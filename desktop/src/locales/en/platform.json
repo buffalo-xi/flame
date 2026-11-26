@@ -67,7 +67,7 @@
         "max_timeout": "Max timeout (s)",
         "max_timeoutDesc": "Upper bound for the total duration of a single run; the smaller of this and the flow instance's own timeout wins",
         "max_recursion_depth": "Max recursion depth",
-        "max_recursion_depthDesc": "Call-stack depth across agents / flows, used to stop mutual recursion",
+        "max_recursion_depthDesc": "Nesting depth for function recursion inside a flow and for cross-flow calls; the system value is the ceiling a tenant cannot exceed",
         "max_node_count": "Max node count",
         "max_node_countDesc": "Nodes allowed in one flow graph; checked on save and asset install, canvas comments do not count",
         "max_exec_count": "Max execution count",

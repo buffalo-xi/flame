@@ -30,8 +30,8 @@ func TestDepthLimitNeverReturnsUnlimited(t *testing.T) {
 	defer func() { fallback.MaxRecursionDepth = saved }()
 
 	l := FlowLimits{MaxRecursionDepth: -1}
-	if got := l.DepthLimit(); got != 10 {
-		t.Fatalf("limit = %d, want the hard-coded 10", got)
+	if got := l.DepthLimit(); got != defaultMaxRecursionDepth {
+		t.Fatalf("limit = %d, want the guard value %d", got, defaultMaxRecursionDepth)
 	}
 }
 

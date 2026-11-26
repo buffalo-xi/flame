@@ -23,6 +23,11 @@
 
 -- Flow run limits.
 --   max_timeout         30 min: longer runs belong to an async entry point, not to a bigger timeout
+--   max_recursion_depth 100: the depth a recursive function needs (tree / directory walking is routinely 30-50 levels),
+--                       not just the nesting an orchestrating call chain uses. It is not the runaway brake: a runaway
+--                       recursion is stopped by max_exec_count and max_timeout, which is why this one can stay loose.
+--                       Raising the system row is also the only way to give one tenant more: a tenant value is clamped
+--                       to min(tenant, system), so a tenant row alone can never exceed this number.
 --   max_loop_times      pinned to max_exec_count: every loop iteration records a node execution, so a larger loop
 --                       ceiling could never be reached and would only look generous
 --   max_run_records     / max_session_records: 10x / 4x the code fallback, so the ceiling is usable but still bounded
@@ -30,7 +35,7 @@ INSERT INTO platform.flow_configs
     (tenant_id, max_timeout, max_recursion_depth, max_node_count, max_exec_count, max_loop_times,
      max_run_records, max_session_records)
 VALUES
-    ('', 1800, 20, 500, 2000, 2000, 1000, 200)
+    ('', 1800, 100, 500, 2000, 2000, 1000, 200)
 ON CONFLICT (tenant_id) DO NOTHING;
 
 -- Agent run limits.

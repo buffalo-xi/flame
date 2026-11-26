@@ -28,9 +28,12 @@ type FlowLimits struct {
 // an ordinary workflow out of the box. max_loop_times is deliberately close to max_exec_count rather than orders of
 // magnitude above it - a loop body that calls a tool makes every iteration expensive, and max_exec_count is the counter
 // that actually stops the run, so a 10000-iteration default only reads generous.
+// defaultMaxRecursionDepth is shared by the fallback struct and DepthLimit's last-resort guard, so the two cannot drift.
+const defaultMaxRecursionDepth = 20
+
 var fallback = FlowLimits{
 	MaxTimeout:        300,  // 5 minutes covers a synchronous call; longer runs belong to an async entry point
-	MaxRecursionDepth: 10,   // flow -> flow nesting; each level is an execution stack
+	MaxRecursionDepth: defaultMaxRecursionDepth, // call nesting; a recursive function needs this, an orchestration chain rarely passes 3
 	MaxNodeCount:      100,  // graph size, not run cost: affects saving / editing, so it can stay loose
 	MaxExecCount:      200,  // the only counter that stops a run mid-flight (loops unroll into it)
 	MaxLoopTimes:      1000, // one order of magnitude above max_exec_count, not two
@@ -73,7 +76,7 @@ func Fallback() FlowLimits {
 // The configuration says -1 means "unlimited", but that is deliberately not honoured here: a pure flow cycle has only
 // this one gate (a chain that involves an agent has its own cap), so letting a misconfiguration switch it off would
 // leave the door wide open. A non-positive value therefore falls back to the built-in default, and an anomalous default
-// still becomes 10 — never an unbounded pass.
+// still becomes defaultMaxRecursionDepth — never an unbounded pass.
 //
 // This is the single source for both depth gates: the intra-flow call node and the cross-flow endpoint call.
 func (l FlowLimits) DepthLimit() int {
@@ -83,7 +86,7 @@ func (l FlowLimits) DepthLimit() int {
 	if fallback.MaxRecursionDepth > 0 {
 		return fallback.MaxRecursionDepth
 	}
-	return 10
+	return defaultMaxRecursionDepth
 }
 
 // RunRecordLimit returns how many run records one flow keeps (always positive).
