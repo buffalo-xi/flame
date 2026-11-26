@@ -80,9 +80,38 @@ func TestSkillLoadedBookkeeping(t *testing.T) {
 	}
 }
 
+// The activation order is the truncation priority: the most recently activated skill comes first, so the skill the model just
+// read keeps its tools when the budget forces a cut (ordering by name used to make it the first casualty).
+func TestLoadedSkillEntriesMostRecentFirst(t *testing.T) {
+	c := &Context{}
+	c.MarkSkillLoaded("id-1", "flow-authoring", []string{"builtin:flow-admin"})
+	c.MarkSkillLoaded("id-2", "agent-authoring", []string{"builtin:skill-own"})
+	c.MarkSkillLoaded("id-3", "custom-tool-authoring", []string{"builtin:custom-tool"})
+
+	entries := c.LoadedSkillEntries()
+	if len(entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(entries))
+	}
+	want := []string{"id-3", "id-2", "id-1"}
+	for i, id := range want {
+		if entries[i].ID != id {
+			t.Fatalf("entries[%d] = %q, want %q (most recently activated first): %#v", i, entries[i].ID, id, entries)
+		}
+	}
+	if entries[0].Seq <= entries[1].Seq || entries[1].Seq <= entries[2].Seq {
+		t.Errorf("sequence numbers should grow with activation: %#v", entries)
+	}
+
+	// Re-reading the same skill (same name and dependencies) is not a change: no recompute, so the order stays as it is.
+	c.MarkSkillLoaded("id-1", "flow-authoring", []string{"builtin:flow-admin"})
+	if e := c.LoadedSkillEntries(); e[2].ID != "id-1" {
+		t.Errorf("re-reading a skill should keep its place, got %#v", e)
+	}
+}
+
 // There is only one activation entry point: use_skill. read_skill is pure viewing and must not drag the tools along -
 // otherwise "I just wanted to read the document" also pulls in large schemas such as exec / browser (consuming budget, hitting the
-// 50 limit, widening the surface of wrong picks).
+// tool cap, widening the surface of wrong picks).
 func TestReadSkillDoesNotActivate(t *testing.T) {
 	const (
 		skillID   = "sk1"

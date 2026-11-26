@@ -2,9 +2,11 @@ package tools
 
 import (
 	"context"
+	"path"
 	"testing"
 
 	"flame/nexus/shared/models"
+	"flame/nexus/shared/storage"
 )
 
 // stubSkillsMgr exists only to satisfy Context.Skills != nil (resolveTargetAgent's defensive check);
@@ -21,10 +23,13 @@ type stubToolGrantsMgr struct {
 	gotName     string
 	gotRef      string
 	gotKind     string
-	called      bool
+	// gotActivated is the activation set read_agent passed in (nil = the target is not the caller).
+	gotActivated map[string]string
+	called       bool
 }
 
-func (s *stubToolGrantsMgr) ListAgentGrants(context.Context, string, string) ([]AgentGrantView, error) {
+func (s *stubToolGrantsMgr) ListAgentGrants(_ context.Context, _ string, _ string, activated map[string]string) ([]AgentGrantView, error) {
+	s.gotActivated = activated
 	return s.views, nil
 }
 
@@ -66,6 +71,58 @@ func newGrantCtxWithAgents(agentName string, ag AgentManager, tg ToolGrantsManag
 		Agents:     ag,
 		Skills:     &stubSkillsMgr{},
 		ToolGrants: tg,
+	}
+}
+
+// stubSkillsForReadAgent returns empty lists: read_agent only reads the bound / private skill names.
+type stubSkillsForReadAgent struct{ SkillsManager }
+
+func (stubSkillsForReadAgent) ListAgentSkills(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
+func (stubSkillsForReadAgent) ListAgentPrivateSkills(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
+// read_agent passes this run's activation set to the grant view only when the target is the caller itself: another agent's
+// run is not observable from here, and handing it our activations would mark its rows live.
+func TestReadAgentPassesActivationOnlyForSelf(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFilesystemStorage(t.TempDir())
+	if err := st.WriteFile(ctx, path.Join(AgentsKey("t0", "poet"), agentEntryFile), []byte("# poet\n")); err != nil {
+		t.Fatal(err)
+	}
+	tg := &stubToolGrantsMgr{}
+	newCtx := func(agentID string) *Context {
+		c := &Context{
+			Schema:       "t0",
+			AgentID:      agentID,
+			AgentName:    "main",
+			IsSupervisor: true,
+			Storage:      st,
+			Agents:       stubAgents{status: models.StatusNormal},
+			Skills:       stubSkillsForReadAgent{},
+			ToolGrants:   tg,
+		}
+		c.MarkSkillLoaded("s1", "flow-authoring", []string{"builtin:flow-admin"})
+		return c
+	}
+
+	// stubAgents reports id "aid", so this caller is the target.
+	if _, err := (&readAgentTool{}).Execute(ctx, newCtx("aid"), map[string]any{"name": "poet"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tg.gotActivated["s1"]; !ok {
+		t.Fatalf("reading yourself should pass this run's activation set: %v", tg.gotActivated)
+	}
+
+	tg.gotActivated = map[string]string{"sentinel": "sentinel"}
+	if _, err := (&readAgentTool{}).Execute(ctx, newCtx("someone-else"), map[string]any{"name": "poet"}); err != nil {
+		t.Fatal(err)
+	}
+	if tg.gotActivated != nil {
+		t.Fatalf("reading another agent must not pass our activations: %v", tg.gotActivated)
 	}
 }
 

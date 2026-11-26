@@ -51,8 +51,8 @@ func TestEffective(t *testing.T) {
 	if got.MaxCallDepth != 2 {
 		t.Errorf("MaxCallDepth = %d, want 2 (the tenant row)", got.MaxCallDepth)
 	}
-	if got.MaxTools != 30 || got.MaxOutputBytes != 64<<10 || got.MaxRunRecords != 100 || got.MaxSessionRecords != 50 {
-		t.Errorf("unset fields = %d / %d / %d / %d, want the fallbacks 30 / 65536 / 100 / 50",
+	if got.MaxTools != 60 || got.MaxOutputBytes != 64<<10 || got.MaxRunRecords != 100 || got.MaxSessionRecords != 50 {
+		t.Errorf("unset fields = %d / %d / %d / %d, want the fallbacks 60 / 65536 / 100 / 50",
 			got.MaxTools, got.MaxOutputBytes, got.MaxRunRecords, got.MaxSessionRecords)
 	}
 
@@ -146,8 +146,8 @@ func TestFallbackValues(t *testing.T) {
 	if fb.MaxCallDepth != 3 {
 		t.Errorf("MaxCallDepth fallback = %d, want 3 (agent -> agent nesting)", fb.MaxCallDepth)
 	}
-	if fb.MaxTools != 30 {
-		t.Errorf("MaxTools fallback = %d, want 30 (every tool schema costs context in every round)", fb.MaxTools)
+	if fb.MaxTools != 60 {
+		t.Errorf("MaxTools fallback = %d, want 60 (the 20 resident tools plus the 36 on-demand ones must fit)", fb.MaxTools)
 	}
 	if fb.MaxOutputBytes != 64<<10 {
 		t.Errorf("MaxOutputBytes fallback = %d, want 65536 (a quarter of the 256 KB history budget)", fb.MaxOutputBytes)

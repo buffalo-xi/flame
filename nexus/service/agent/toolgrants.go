@@ -23,8 +23,9 @@ import (
 // same consideration as skillManager.buildToolDeps.
 //
 // The criterion is **the same source as the runtime**: candidates come only from the skills "activated in this round" (agentImpl feeds
-// Context.LoadedSkills into the Resolver), and the binding relation is used here only to answer "after reading which skill will it light up" -
-// the effective verdict is not recomputed in this layer.
+// Context.LoadedSkills into the Resolver). The binding relation answers "after reading which skill will it light up", and the
+// activation set the caller passes alongside it answers "is that skill already on" - only the calling agent's own run is visible, so
+// for any other target the view is the run-start picture.
 type toolGrantManager struct {
 	schema       string
 	agentID      string // current agent uuid (written to updated_by)
@@ -316,15 +317,19 @@ func (m *toolGrantManager) RevokeAgentTool(_ context.Context, agentID, ref strin
 
 // ListAgentGrants lists the target agent's grants and their current effective state (read_agent shows the current picture with it).
 //
-// Three verdicts, all anchored at "the start of the run":
+// activated is "the skills this run already use_skill'ed" (skillID -> name). The caller supplies it only when the target is the
+// calling agent: another agent's run is unknowable from here, so for it the verdicts stay anchored at "the start of the run".
+//
+// Verdicts:
 //
 //	required -> always effective;
-//	allow    -> a bound/private skill declares it but it is **not activated yet** (pending): it lights up after the model calls use_skill;
+//	allow    -> a bound/private skill declares it and that skill is activated in this run: effective (via_skill says which);
+//	allow    -> a bound/private skill declares it but it is **not activated yet** (pending): it lights up after use_skill;
 //	allow    -> no skill declares it: never effective (spinning), with a remedy suggested.
 //
-// The binding relation only answers "after reading which skill will it light up", no longer "already effective" - the effective moment is
-// use_skill, which this function cannot foresee, so everything is marked pending rather than effective.
-func (m *toolGrantManager) ListAgentGrants(_ context.Context, agentName, agentID string) ([]tools.AgentGrantView, error) {
+// This answers "was it lit", not "did every filter keep it": capability availability and the tool cap are applied by the
+// resolver when the tool set is recomputed, and this view does not re-run it.
+func (m *toolGrantManager) ListAgentGrants(_ context.Context, agentName, agentID string, activated map[string]string) ([]tools.AgentGrantView, error) {
 	grants, err := m.repo.ListAgentGrants(m.schema, agentID)
 	if err != nil {
 		return nil, err
@@ -345,17 +350,28 @@ func (m *toolGrantManager) ListAgentGrants(_ context.Context, agentName, agentID
 		}
 		return out
 	}
-	declaring := func(expanded []string) string {
+	// declaring answers "which injected skill declares this ref, and is that skill activated in this run". An activated
+	// declarer wins: when two skills declare the same ref and only one was use_skill'ed, the row is live, and reporting the
+	// inactive one would wrongly say "pending".
+	declaring := func(expanded []string) (string, bool) {
 		want := map[string]bool{}
 		for _, r := range expanded {
 			want[r] = true
 		}
+		inactive := ""
 		for _, s := range list {
-			if name, serr := m.skillDeclaring(cat, s, want); serr == nil && name != "" {
-				return name
+			name, serr := m.skillDeclaring(cat, s, want)
+			if serr != nil || name == "" {
+				continue
+			}
+			if _, on := activated[s.ID]; on {
+				return name, true
+			}
+			if inactive == "" {
+				inactive = name
 			}
 		}
-		return ""
+		return inactive, false
 	}
 	return grantViews(grants, expand, declaring), nil
 }
@@ -365,10 +381,11 @@ func (m *toolGrantManager) ListAgentGrants(_ context.Context, agentName, agentID
 //	required -> always effective (independent of activation);
 //	deny     -> explicit refusal: nothing is injected even when a skill declares it (no effect on required; one row per ref, the admin side
 //	            forbids both at once);
-//	allow + a skill declares it -> pending: not yet effective, it lights up after use_skill activates that skill (via_skill points at it);
-//	allow + nobody declares it  -> spinning: never effective, a note and a remedy are given.
+//	allow + declared + activated    -> effective: the declaring skill was use_skill'ed in this run, so the row is lit (via_skill says which);
+//	allow + declared, not activated -> pending: it lights up after use_skill activates that skill (via_skill points at it);
+//	allow + nobody declares it      -> spinning: never effective, a note and a remedy are given.
 func grantViews(grants []models.AgentToolGrant,
-	expand func(ref string) []string, declaring func(expanded []string) string) []tools.AgentGrantView {
+	expand func(ref string) []string, declaring func(expanded []string) (string, bool)) []tools.AgentGrantView {
 	out := make([]tools.AgentGrantView, 0, len(grants))
 	for _, g := range grants {
 		v := tools.AgentGrantView{Kind: g.GrantKind, Ref: g.Ref, ItemType: g.ItemType}
@@ -380,9 +397,14 @@ func grantViews(grants []models.AgentToolGrant,
 			// "waiting to take effect".
 			v.Note = "Explicit deny: not injected even if a skill declares this dependency"
 		case declaring != nil:
-			if name := declaring(expand(g.Ref)); name != "" {
-				v.Pending = true
+			if name, activated := declaring(expand(g.Ref)); name != "" {
 				v.ViaSkill = name
+				if activated {
+					v.Effective = true
+					v.Note = "Activated in this run by use_skill " + name + ": the tools it declares are bound from the next turn"
+					break
+				}
+				v.Pending = true
 				v.Note = "Declared by a bound or private skill, but not activated yet in this run: it applies after use_skill " + name
 				break
 			}

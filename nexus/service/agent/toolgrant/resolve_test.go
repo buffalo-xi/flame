@@ -225,6 +225,34 @@ func TestResolveIgnoresUnboundSkillDeps(t *testing.T) {
 	}
 }
 
+// The truncation warning has to name what was dropped: "dropped 6" alone leaves an operator guessing which tools vanished, and
+// the cap is exactly why an agent that activated flow-authoring can lose read_flow / run_flow / validate_flow.
+func TestResolveTruncationNamesDroppedTools(t *testing.T) {
+	g := &stubGrants{agentGrants: []models.AgentToolGrant{
+		{GrantKind: models.GrantKindRequired, ItemType: models.GrantItemTool, Ref: "builtin:read_file"},
+		{GrantKind: models.GrantKindAllow, ItemType: models.GrantItemGroup, Ref: "builtin:flow-admin"},
+	}}
+	visible := []VisibleSkill{{ID: "sk1", Name: "flow-authoring", Deps: []string{"builtin:flow-admin"}}}
+	r := NewResolver(newResolveCatalog(g), "t0", visible, true)
+	r.MaxTools = 5
+
+	res, err := r.Resolve("agent-1")
+	if err != nil {
+		t.Fatalf("Resolve = %v, want nil", err)
+	}
+	// 1 required + 16 flow-admin tools, cut to 5 -> 12 dropped
+	if len(res.FinalTools) != 5 {
+		t.Fatalf("FinalTools = %d, want 5 (the cap)", len(res.FinalTools))
+	}
+	joined := strings.Join(res.Warnings, "\n")
+	if !strings.Contains(joined, "dropped 12") {
+		t.Errorf("warnings = %q, want the dropped count", joined)
+	}
+	if !strings.Contains(joined, "builtin:validate_flow") {
+		t.Errorf("warnings = %q, want the dropped refs named", joined)
+	}
+}
+
 // The dependency snapshot wins over the live table: activating a skill in a production run carries the **current version's** declaration,
 // and dependencies added or removed in the draft must not leak into production (freezing the display but not what takes effect is not a
 // freeze at all).

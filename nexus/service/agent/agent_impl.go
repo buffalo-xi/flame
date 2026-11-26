@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -442,20 +441,15 @@ func (a *agentImpl) resolveGrantedTools(instance *models.Agent) ([]toolgrant.Too
 	// for an unbound shared skill even when it is discoverable). The cap is unaffected: candidates are always narrowed by the allow
 	// list, and activation can only light up groups the administrator already granted.
 	//
-	// The order must be stable: the Resolver's truncation priority follows the "skill declaration order", while LoadedSkills is a map.
+	// The order is the Resolver's truncation priority, and LoadedSkillEntries already returns "most recently activated first":
+	// the skill the model just read keeps its tools when the budget forces a cut, instead of losing them to a skill that was
+	// activated earlier (the old order was by skill name, which made the just-used skill the first casualty).
 	// Dependency declarations come along with the activation registration (taken from the current version in a production run): the
 	// candidates trust only this snapshot and never re-read skill_tool_grants - otherwise a draft dependency edit would leak into
 	// production.
 	visible := make([]toolgrant.VisibleSkill, 0)
 	if a.toolCtx != nil {
-		entries := a.toolCtx.LoadedSkillEntries()
-		sort.Slice(entries, func(i, j int) bool {
-			if entries[i].Name != entries[j].Name {
-				return entries[i].Name < entries[j].Name
-			}
-			return entries[i].ID < entries[j].ID
-		})
-		for _, e := range entries {
+		for _, e := range a.toolCtx.LoadedSkillEntries() {
 			visible = append(visible, toolgrant.VisibleSkill{ID: e.ID, Name: e.Name, Deps: e.Deps})
 		}
 	}

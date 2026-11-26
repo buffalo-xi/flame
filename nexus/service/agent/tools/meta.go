@@ -865,7 +865,7 @@ func (t *readAgentTool) Meta() ToolMeta {
 		Name:     "read_agent",
 		Category: CategoryAgent,
 		Description: "Read an agent's AGENT.md and return the names of the skills currently bound to it (skills). " +
-			"When called by a supervisor it also returns that agent's tool grants (tool_grants: required always applies / allow is pending until use_skill activates it / deny is an explicit refusal), the \"unrestricted tools\" switch (unrestricted), " +
+			"When called by a supervisor it also returns that agent's tool grants (tool_grants: required always applies / allow is effective once its declaring skill is activated with use_skill in this run, and pending for another agent whose run cannot be seen from here / deny is an explicit refusal), the \"unrestricted tools\" switch (unrestricted), " +
 			"the \"discover unbound skills\" switch (discovery), its default reply language (default_language, empty when not configured), " +
 			"and its call grants (can_call = whom it may call, called_by = who may call it).",
 		Parameters: map[string]any{
@@ -916,7 +916,14 @@ func (t *readAgentTool) Execute(ctx context.Context, c *Context, args map[string
 			// Tool grants are given from a supervisor's viewpoint only: they say "who may use which tools", and a non-supervisor
 			// has no right to peek at another agent's configuration
 			if c.ToolGrants != nil && c.IsSupervisor {
-				if views, verr := c.ToolGrants.ListAgentGrants(ctx, name, info.ID); verr == nil {
+				// Activation belongs to this run, so it is only meaningful when the target is the caller itself: another
+				// agent's run cannot be observed from here, and passing ours would report its declare-and-not-activated rows
+				// as live.
+				var activated map[string]string
+				if info.ID == c.AgentID {
+					activated = c.LoadedSkills()
+				}
+				if views, verr := c.ToolGrants.ListAgentGrants(ctx, name, info.ID, activated); verr == nil {
 					out["tool_grants"] = views
 				}
 			}

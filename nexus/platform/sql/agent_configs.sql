@@ -67,7 +67,7 @@ COMMENT ON TABLE platform.agent_configs IS
     'Agent run limits: tenant_id = '''' is the system row (also the hard ceiling), ''t0'' a tenant row; NULL = not set; -1 is rejected';
 COMMENT ON COLUMN platform.agent_configs.max_iterations IS 'Rounds per run (loop guard, code fallback 40)';
 COMMENT ON COLUMN platform.agent_configs.max_call_depth IS 'Agent call depth (guards A -> B -> A recursion, code fallback 3)';
-COMMENT ON COLUMN platform.agent_configs.max_tools IS 'Bound tool cap (truncated with a warning past it, code fallback 30)';
+COMMENT ON COLUMN platform.agent_configs.max_tools IS 'Bound tool cap (truncated with a warning past it, code fallback 60)';
 COMMENT ON COLUMN platform.agent_configs.max_output_bytes IS 'Output byte cap for a single command (code fallback 65536)';
 COMMENT ON COLUMN platform.agent_configs.max_run_records IS
     'Agent run log rows kept per agent in agent_run_records (retention, code fallback 100); >= 1 only, no -1';

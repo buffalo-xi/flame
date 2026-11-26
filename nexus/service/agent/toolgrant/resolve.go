@@ -3,12 +3,16 @@ package toolgrant
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"flame/nexus/shared/models"
 )
 
 // DefaultMaxTools is the cap on how many tools end up bound (beyond it the list is truncated with a warning).
-const DefaultMaxTools = 50
+//
+// It mirrors shared/agentconfig's code fallback: the supervisor's 20 resident tools plus every shipped on-demand group
+// (36) must fit in one run, so a cap below 56 truncates a group the skill was activated for.
+const DefaultMaxTools = 60
 
 // VisibleSkill is a skill **activated in this run** (the model read its body with use_skill; supplied by the caller to avoid an import
 // cycle with the skills package).
@@ -184,7 +188,8 @@ func (r *Resolver) Resolve(agentID string) (*ResolveResult, error) {
 		finalTools = append(finalTools, info)
 	}
 	// The sort order is the truncation priority: required always comes first (never cut just because a skill declares many tools),
-	// the rest follow declaration order (declared first is kept first), and only then the name as a tiebreaker for determinism.
+	// the rest follow the caller's VisibleSkills order (see toolctx: most recently activated skill first, so the skill the model
+	// just read keeps its tools), and only then the name as a tiebreaker for determinism.
 	// The old implementation truncated by **alphabetical name** - declaring a few extra tools could silently cut the ones actually in
 	// use.
 	rank := func(ref string) int {
@@ -209,9 +214,15 @@ func (r *Resolver) Resolve(agentID string) (*ResolveResult, error) {
 		max = DefaultMaxTools
 	}
 	if max > 0 && len(finalTools) > max {
-		dropped := len(finalTools) - max
+		// Name what was dropped, not just how many: "dropped 6" leaves an operator to guess which six, and the list is the only
+		// place that answers "why is run_flow missing" without replaying the resolution by hand.
+		droppedRefs := make([]string, 0, len(finalTools)-max)
+		for _, t := range finalTools[max:] {
+			droppedRefs = append(droppedRefs, t.Ref)
+		}
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
-			"tool count exceeds the limit of %d; truncated by \"required first, then skill declaration order\" (dropped %d)", max, dropped))
+			"tool count exceeds the limit of %d; truncated by \"required first, then the most recently activated skill\" (dropped %d: %s)",
+			max, len(droppedRefs), joinLimited(droppedRefs, 20)))
 		finalTools = finalTools[:max]
 	}
 
@@ -256,6 +267,15 @@ func (r *Resolver) expandToolRefs(refs []string) (map[string]bool, []string, []s
 		}
 	}
 	return out, ordered, warnings
+}
+
+// joinLimited joins at most limit entries and summarises the rest, so a truncation warning stays one readable log line even
+// when a large group is cut.
+func joinLimited(items []string, limit int) string {
+	if len(items) <= limit {
+		return strings.Join(items, ", ")
+	}
+	return strings.Join(items[:limit], ", ") + fmt.Sprintf(", ... (%d more)", len(items)-limit)
 }
 
 func sortedKeys(m map[string]bool) []string {

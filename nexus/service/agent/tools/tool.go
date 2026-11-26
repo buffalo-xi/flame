@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -399,7 +400,7 @@ type AgentGrantView struct {
 	Kind      string `json:"grant_kind"` // required | allow
 	Ref       string `json:"ref"`
 	ItemType  string `json:"item_type"` // group | tool
-	Effective bool   `json:"effective"` // required always applies; allow is not activated at run start
+	Effective bool   `json:"effective"` // required always applies; allow applies once its declaring skill is activated in this run
 	// Pending means an allow grant some skill declares, but that skill has not been use_skill'ed in this run yet: it applies once activated.
 	Pending  bool   `json:"pending,omitempty"`
 	ViaSkill string `json:"via_skill,omitempty"` // the skill that backs it (while pending = which skill lights it up)
@@ -417,10 +418,14 @@ type AgentGrantView struct {
 // import would be a cycle - so ref validation (Catalog / ValidateRef) and the allow / required allocation logic live in the
 // implementation; this package only declares the interface and the read-only views.
 type ToolGrantsManager interface {
-	// ListAgentGrants lists an agent's grants and their current effectiveness (as of the run start):
+	// ListAgentGrants lists an agent's grants and their current effectiveness:
 	// required always applies; an allow applies only when a skill activated by this run's use_skill declares it,
 	// otherwise it is either pending (which skill lights it up) or inert (never applies).
-	ListAgentGrants(ctx context.Context, agentName, agentID string) ([]AgentGrantView, error)
+	//
+	// activated is "the skills this run already use_skill'ed" (skillID -> name), and it is only supplied when the target is
+	// the calling agent: another agent's run cannot be seen from here, so for it the view stays anchored at the start of
+	// the run and a declared allow is reported pending.
+	ListAgentGrants(ctx context.Context, agentName, agentID string, activated map[string]string) ([]AgentGrantView, error)
 	// GrantAgentTool assigns one grant to an agent (idempotent: the same ref is overwritten).
 	// An empty kind means "let the implementation decide": an injected skill of the target declares the dependency -> allow, else required.
 	// An explicit required / allow / deny is validated by its semantics (an allow needs a declarer, or the row never applies).
@@ -754,6 +759,7 @@ type Context struct {
 	// tools are ever executed concurrently.
 	loadedMu     sync.Mutex
 	loadedSkills map[string]loadedSkill
+	loadedSeq    int64
 	skillsDirty  bool
 }
 
@@ -762,6 +768,9 @@ type Context struct {
 type loadedSkill struct {
 	name string
 	deps []string
+	// seq is the activation order within this run (1, 2, 3 ...). Tool resolution keeps the most recently activated
+	// skill's tools first when the budget forces a truncation, so the skill just read cannot be the one that is cut.
+	seq int64
 }
 
 // LoadedSkill is a snapshot of an activated skill, used by tool resolution to assemble the candidates (see
@@ -772,6 +781,8 @@ type LoadedSkill struct {
 	// Deps is the dependency declaration obtained at activation; nil = the caller passed no snapshot (resolution falls
 	// back to the database).
 	Deps []string
+	// Seq is the activation order (1, 2, 3 ...): larger = activated more recently.
+	Seq int64
 }
 
 // MarkSkillLoaded registers a skill read in this run together with its dependency snapshot, and sets the dirty flag so the
@@ -790,9 +801,10 @@ func (c *Context) MarkSkillLoaded(id, name string, deps []string) {
 		c.loadedSkills = make(map[string]loadedSkill, 4)
 	}
 	if prev, ok := c.loadedSkills[id]; ok && prev.name == name && sameDeps(prev.deps, deps) {
-		return // reading the same skill again: no change, no need to recompute
+		return // reading the same skill again: no change, no need to recompute (and the order stays as it is)
 	}
-	c.loadedSkills[id] = loadedSkill{name: name, deps: copyDeps(deps)}
+	c.loadedSeq++
+	c.loadedSkills[id] = loadedSkill{name: name, deps: copyDeps(deps), seq: c.loadedSeq}
 	c.skillsDirty = true
 }
 
@@ -807,15 +819,30 @@ func (c *Context) LoadedSkills() map[string]string {
 	return out
 }
 
-// LoadedSkillEntries returns a snapshot of the skills activated in this run (dependency declarations included).
-// The agent loop assembles toolgrant.VisibleSkill from it; the caller decides the order, this method guarantees none.
+// LoadedSkillEntries returns a snapshot of the skills activated in this run (dependency declarations included),
+// **most recently activated first**.
+//
+// The order is the truncation priority: the agent loop turns this list into toolgrant.VisibleSkill in the given order, and
+// the resolver keeps the candidates it meets first when the tool budget forces a cut. Ordering by name instead would let the
+// tools of the skill the model just read be the first ones dropped.
 func (c *Context) LoadedSkillEntries() []LoadedSkill {
 	c.loadedMu.Lock()
 	defer c.loadedMu.Unlock()
 	out := make([]LoadedSkill, 0, len(c.loadedSkills))
 	for id, s := range c.loadedSkills {
-		out = append(out, LoadedSkill{ID: id, Name: s.name, Deps: copyDeps(s.deps)})
+		out = append(out, LoadedSkill{ID: id, Name: s.name, Deps: copyDeps(s.deps), Seq: s.seq})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Seq != out[j].Seq {
+			return out[i].Seq > out[j].Seq
+		}
+		// Defensive: equal sequences cannot happen while the counter is the only writer, but a stable order keeps the
+		// resolution deterministic if one is ever injected by hand.
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 

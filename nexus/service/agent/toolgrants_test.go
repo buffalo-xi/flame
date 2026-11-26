@@ -349,14 +349,14 @@ func TestGrantViewsMarksEffectiveness(t *testing.T) {
 		}
 		return []string{ref}
 	}
-	declaring := func(expanded []string) string {
+	declaring := func(expanded []string) (string, bool) {
 		for _, r := range expanded {
 			// write_file "has a declaring skill" too: it proves deny is not mislabelled as pending because of it
 			if r == "builtin:read_file" || r == "builtin:write_file" {
-				return "declaring-skill"
+				return "declaring-skill", false
 			}
 		}
-		return ""
+		return "", false
 	}
 	views := grantViews(grants, expand, declaring)
 
@@ -378,6 +378,68 @@ func TestGrantViewsMarksEffectiveness(t *testing.T) {
 	// 4) deny: it must not be marked pending even when a skill declares it - it is "explicitly forbidden", not "waiting to take effect"
 	if views[3].Effective || views[3].Pending || !strings.Contains(views[3].Note, "Explicit deny") {
 		t.Errorf("deny should be non-effective, non-pending, and state that it is an explicit refusal: %+v", views[3])
+	}
+}
+
+// An allow whose declaring skill was already use_skill'ed in this run is live, not pending: read_agent used to keep saying
+// "it applies after use_skill ..." even after the skill had been activated.
+func TestGrantViewsActivatedDeclarerIsEffective(t *testing.T) {
+	grants := []models.AgentToolGrant{
+		{GrantKind: models.GrantKindAllow, ItemType: models.GrantItemTool, Ref: "builtin:read_file"},
+		{GrantKind: models.GrantKindAllow, ItemType: models.GrantItemTool, Ref: "builtin:list_agents"},
+	}
+	expand := func(ref string) []string { return []string{ref} }
+	declaring := func(expanded []string) (string, bool) {
+		if expanded[0] == "builtin:read_file" {
+			return "flow-authoring", true
+		}
+		return "agent-authoring", false
+	}
+	views := grantViews(grants, expand, declaring)
+
+	if len(views) != 2 {
+		t.Fatalf("views = %d, want 2", len(views))
+	}
+	if !views[0].Effective || views[0].Pending || views[0].ViaSkill != "flow-authoring" {
+		t.Errorf("an activated declarer should make the row effective and not pending: %+v", views[0])
+	}
+	if views[1].Effective || !views[1].Pending || !strings.Contains(views[1].Note, "not activated yet") {
+		t.Errorf("a declarer that was not activated stays pending: %+v", views[1])
+	}
+}
+
+// read_agent passes this run's activation set only for the calling agent: the activated declarer wins over an inactive one, and
+// without the set (inspecting another agent) the same row is pending again.
+func TestListAgentGrantsUsesActivationForSelf(t *testing.T) {
+	gr := &stubGrantRepo{
+		grants: []models.AgentToolGrant{
+			{GrantKind: models.GrantKindAllow, ItemType: models.GrantItemTool, Ref: "builtin:read_file"},
+		},
+		skillDeps: map[string][]models.SkillToolGrant{
+			"s1": {{ItemType: models.GrantItemTool, Ref: "builtin:read_file"}},
+			"s2": {{ItemType: models.GrantItemTool, Ref: "builtin:read_file"}},
+		},
+	}
+	sk := &stubSkillRepo{injected: []models.Skill{
+		{ID: "s1", Name: "agent-authoring"},
+		{ID: "s2", Name: "flow-authoring"},
+	}}
+	m := newGrantMgr(gr, sk)
+
+	views, err := m.ListAgentGrants(context.Background(), "main", "main-id", map[string]string{"s2": "flow-authoring"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 1 || !views[0].Effective || views[0].Pending || views[0].ViaSkill != "flow-authoring" {
+		t.Fatalf("the activated declarer should win and be effective: %+v", views)
+	}
+
+	other, err := m.ListAgentGrants(context.Background(), "main", "main-id", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 1 || other[0].Effective || !other[0].Pending || other[0].ViaSkill != "agent-authoring" {
+		t.Fatalf("another agent's run has no activation set, so the row stays pending: %+v", other)
 	}
 }
 
