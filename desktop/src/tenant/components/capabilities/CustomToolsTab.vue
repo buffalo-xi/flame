@@ -43,7 +43,7 @@
         <div class="st-card-head">
           <div class="st-card-title">
             {{ p.display_name || p.name }}
-            <span class="ref-tag">{{ p.name }}</span>
+            <span class="ref-tag" :title="p.name">{{ p.name }}</span>
             <span class="ref-tag" :class="p.status === 1 ? 'ok' : 'off'">{{ statusLabel(p.status) }}</span>
             <!-- 当前发布版本：0 表示还没发布（模型看到的仍是旧版 / 无版本） -->
             <span class="ref-tag ver"
@@ -1097,7 +1097,7 @@ onUnmounted(() => {
    工具卡的信息量本来就少（名字 + 描述 + 三五个短 meta），不需要 330px 的宽卡 */
 .st-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 8px;
   /* 每张卡按自身内容取高，不被同一行最高的那张拉齐 —— 描述长短不一时空白更少 */
   align-items: start;
@@ -1111,6 +1111,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* A long tool name would otherwise raise the track's min-content width and defeat the 240px column. */
+  min-width: 0;
 }
 
 .st-card.on { border-color: #a7d8c2; box-shadow: 0 1px 6px rgba(0, 112, 74, 0.08); }
@@ -1141,6 +1143,11 @@ onUnmounted(() => {
   border-radius: 4px;
   padding: 1px 6px;
   font-weight: 400;
+  /* Narrow cards: the name tag ellipsises instead of pushing the card wider (the full name is in its title). */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ref-tag.ok { color: #00704a; background: #e6f2ec; }
 .ref-tag.off { color: #c45656; background: #fdecec; }

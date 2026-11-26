@@ -27,7 +27,7 @@
         <div class="pv-card-head">
           <div class="pv-card-title">
             {{ p.display_name || p.name }}
-            <span class="ref-tag">{{ p.name }}</span>
+            <span class="ref-tag" :title="p.name">{{ p.name }}</span>
             <span class="ref-tag" :class="p.allowed ? (p.is_active ? 'ok' : '') : 'off'">
               {{ statusText(p) }}
             </span>
@@ -574,7 +574,7 @@ onUnmounted(() => {
 /* 卡片刻意做小一号（与自定义工具卡同款）：一屏多看几个 */
 .pv-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 8px;
   /* 每张卡按自身内容取高，不被同一行最高的那张拉齐 —— 描述长短不一时空白更少 */
   align-items: start;
@@ -588,6 +588,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* A long plugin name would otherwise raise the track's min-content width and defeat the 240px column. */
+  min-width: 0;
 }
 
 .pv-card.on { border-color: #a7d8c2; box-shadow: 0 1px 6px rgba(0, 112, 74, 0.08); }
@@ -618,6 +620,11 @@ onUnmounted(() => {
   border-radius: 4px;
   padding: 1px 6px;
   font-weight: 400;
+  /* Narrow cards: the name tag ellipsises instead of pushing the card wider (the full name is in its title). */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ref-tag.ok { color: #00704a; background: #e6f2ec; }
 .ref-tag.off { color: #c45656; background: #fdecec; }
