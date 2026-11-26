@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -151,6 +152,62 @@ func TestLayoutDiagramContainer(t *testing.T) {
 	}
 	if size["height"] != "145px" {
 		t.Errorf("container height = %v, want 145px (child bottom 125 plus a 20 bottom margin)", size["height"])
+	}
+}
+
+// A function body is laid out like the main flow - entry at the left, the chain to the right - instead of the vertical stack
+// loop / process use, and the card grows to that row (wide and short) rather than to a column (narrow and tall).
+func TestLayoutDiagramFunctionBodyFollowsMainFlow(t *testing.T) {
+	b := &diagramBuilder{}
+	b.addStart()
+	fn := b.addNode("function", "求和", nil, 0)
+	entry := b.addNodeIn("entry", "入口", nil, 0, fn)
+	first := b.addNodeIn("code", "取值", nil, 0, fn)
+	second := b.addNodeIn("code", "求和", nil, 0, fn)
+	b.addEdge(entry, first, "")
+	b.addEdge(first, second, "")
+
+	b.layoutDiagram()
+
+	pos := func(id string) map[string]int {
+		for i := range b.nodes {
+			if b.nodes[i].ID == id {
+				return b.nodes[i].Position
+			}
+		}
+		t.Fatalf("node %s does not exist", id)
+		return nil
+	}
+
+	entryPos, firstPos, secondPos := pos(entry), pos(first), pos(second)
+	if entryPos["x"] != childBaseX || entryPos["y"] != childBaseY {
+		t.Errorf("function entry = %v, want (%d,%d)", entryPos, childBaseX, childBaseY)
+	}
+	if firstPos["y"] != childBaseY || secondPos["y"] != childBaseY {
+		t.Errorf("the body must stay on one row, got %v and %v", firstPos, secondPos)
+	}
+	if firstPos["x"] <= entryPos["x"] || secondPos["x"] <= firstPos["x"] {
+		t.Errorf("the body must run left to right: entry %d, first %d, second %d", entryPos["x"], firstPos["x"], secondPos["x"])
+	}
+
+	var fnCfg map[string]any
+	for i := range b.nodes {
+		if b.nodes[i].ID == fn {
+			fnCfg, _ = b.nodes[i].Data["config"].(map[string]any)
+		}
+	}
+	size, _ := fnCfg["size"].(map[string]any)
+	if size["width"] == nil || size["height"] == nil {
+		t.Fatalf("the function card has no size: %v", fnCfg)
+	}
+	var w, h int
+	fmt.Sscanf(size["width"].(string), "%dpx", &w)
+	fmt.Sscanf(size["height"].(string), "%dpx", &h)
+	if w < 400 || h > 100 {
+		t.Errorf("card size = %dx%d, want a wide, short card (the body is one row)", w, h)
+	}
+	if pos(fn)["y"] <= pos("1")["y"] {
+		t.Errorf("function node = %v, want it below the flow, not in the main row", pos(fn))
 	}
 }
 

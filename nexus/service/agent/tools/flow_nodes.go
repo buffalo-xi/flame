@@ -284,6 +284,26 @@ func (d *flowDoc) positionFor(parentID string) map[string]int {
 	return map[string]int{"x": 0, "y": maxBottom + layoutRowGap}
 }
 
+// positionBelowFlow places a top-level node under the whole graph: a function node is entered by a call, not by an edge, so
+// it must not continue the main row (positionFor would append it to the right of the last step).
+func (d *flowDoc) positionBelowFlow() map[string]int {
+	bottom := layoutMarginY
+	for _, n := range d.nodes {
+		if n.ParentNode != "" {
+			continue
+		}
+		// Containers carry their own config.size; the estimate only has to be large enough to leave a visible gap.
+		h := 40
+		if containerTypes[n.Type] {
+			h = 240
+		}
+		if b := n.Position.Y + h; b > bottom {
+			bottom = b
+		}
+	}
+	return map[string]int{"x": layoutMarginX, "y": bottom + layoutOrphanGap}
+}
+
 // nodeConfigOf decodes a node's data.config into a generic object (used for reference scanning / config changes).
 func nodeConfigOf(raw json.RawMessage) map[string]any {
 	var n struct {
@@ -479,7 +499,13 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	warnings = append(warnings, ws...)
 
 	id = doc.newNodeID()
-	raw, err := buildNodeJSON(id, typ, label, cfg, parentID, doc.positionFor(parentID))
+	// A top-level function does not continue the main row: it is entered by a call, not by an edge, so it goes below the
+	// whole graph instead (the same place the auto layout puts it).
+	pos := doc.positionFor(parentID)
+	if typ == "function" && parentID == "" {
+		pos = doc.positionBelowFlow()
+	}
+	raw, err := buildNodeJSON(id, typ, label, cfg, parentID, pos)
 	if err != nil {
 		return "", "", "", nil, err
 	}

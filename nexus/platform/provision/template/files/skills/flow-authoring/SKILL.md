@@ -80,7 +80,10 @@ Every step of `create_flow` can carry `position: {x, y}`, and **either every top
 
 - all given → laid out exactly at your coordinates; the tool only detects overlaps (conflicts go into `warnings`, your coordinates are not changed);
 - one missing → the whole flow falls back to automatic layout, and `warnings` names what was missing;
-- container children need none (coordinates are relative to the parent container; the tool stacks them vertically and writes `config.size`).
+- container children need none (coordinates are relative to the parent container; the tool lays them out and writes `config.size`).
+- `function` nodes are **not** part of the main row: the tool places them below the flow (a function is entered by a `call`,
+  not by an edge) and sizes the card to its body. A function body is laid out like the main flow — `entry` at the left, the
+  chain to the right, branches below — while `loop` / `process` children are stacked vertically, one iteration per row.
 
 Aesthetic baseline (following it matches the flow's intent better than automatic layout):
 

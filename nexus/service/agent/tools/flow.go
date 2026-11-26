@@ -657,8 +657,12 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 			}
 			b.explicit[id] = st.Position
 		}
-		b.addEdge(prev, id, prevHandle)
-		prev, prevHandle = id, ""
+		// A function is entered by a call, never by an edge: wiring it into the chain would run its body right there with
+		// empty params (the failure the reference notes call out). Keep the chain's tail where it was.
+		if typ != "function" {
+			b.addEdge(prev, id, prevHandle)
+			prev, prevHandle = id, ""
+		}
 
 		if len(st.Children) > 0 {
 			switch typ {
@@ -985,6 +989,7 @@ func (b *diagramBuilder) layoutDiagram() {
 	if start != "" {
 		l.chain(start, layoutMarginX, layoutMarginY, layoutRowMaxWidth)
 	}
+	l.placeFunctions()
 	l.placeOrphans()
 	for i := range b.edges {
 		if !l.topTo[b.edges[i].Target] {
@@ -1104,6 +1109,10 @@ func (l *diagramLayout) chain(startID string, x, y, limit int) (int, int) {
 }
 
 // containerChildren lays out a container's children (relative coordinates) and expands the container to its bounding box.
+//
+// A function body is laid out like the main flow - entry on the left, the chain to the right, branches below it - because
+// the same graph reads that way outside a container and the function card is read as a small flow. loop / process keep the
+// vertical stack: their children are iterations / embedded steps, read top to bottom.
 func (l *diagramLayout) containerChildren(containerID string) {
 	children := make([]string, 0, 4)
 	for i := range l.b.nodes {
@@ -1114,30 +1123,81 @@ func (l *diagramLayout) containerChildren(containerID string) {
 	if len(children) == 0 {
 		return
 	}
+	if l.b.nodes[l.byID[containerID]].Type == "function" {
+		l.chainChildren(containerID, children)
+	} else {
+		l.stackChildren(children)
+	}
+	l.sizeContainer(containerID, children)
+}
 
-	x := childBaseX
-	y := childBaseY
-	maxW, maxH := 300, 100
+// stackChildren places a container's children top to bottom (loop / process).
+func (l *diagramLayout) stackChildren(children []string) {
+	x, y := childBaseX, childBaseY
 	for _, cid := range children {
-		idx := l.byID[cid]
-		child := &l.b.nodes[idx]
+		child := &l.b.nodes[l.byID[cid]]
 		if containerTypes[child.Type] {
 			l.containerChildren(cid)
 		}
-		w, h := l.sizeOf(cid)
+		_, h := l.sizeOf(cid)
 		child.Position = map[string]int{"x": x, "y": y}
 		l.taken[cid] = true
-		if right := x + w + childBaseX; right > maxW {
+		y += h + childGap
+	}
+}
+
+// chainChildren places a function body like the main flow: the chain from the entry runs left to right (branches hang below
+// it), and a child no edge reaches is stacked underneath, the same way top-level orphans are handled.
+func (l *diagramLayout) chainChildren(containerID string, children []string) {
+	entry := ""
+	for _, cid := range children {
+		if l.b.nodes[l.byID[cid]].Type == "entry" {
+			entry = cid
+			break
+		}
+	}
+	if entry != "" {
+		l.chain(entry, childBaseX, childBaseY, layoutRowMaxWidth)
+	}
+	bottom := childBaseY
+	for _, cid := range children {
+		if !l.taken[cid] {
+			continue
+		}
+		if _, h := l.sizeOf(cid); l.b.nodes[l.byID[cid]].Position["y"]+h > bottom {
+			bottom = l.b.nodes[l.byID[cid]].Position["y"] + h
+		}
+	}
+	y := bottom + childGap
+	for _, cid := range children {
+		if l.taken[cid] {
+			continue
+		}
+		child := &l.b.nodes[l.byID[cid]]
+		if containerTypes[child.Type] {
+			l.containerChildren(cid)
+		}
+		_, h := l.sizeOf(cid)
+		child.Position = map[string]int{"x": childBaseX, "y": y}
+		l.taken[cid] = true
+		y += h + childGap
+	}
+}
+
+// sizeContainer expands the container to the bounding box of its children and writes config.size: the frontend node reads it
+// directly, and without it the canvas renders the default 300x100 first and expands on the next frame (visible jitter).
+func (l *diagramLayout) sizeContainer(containerID string, children []string) {
+	maxW, maxH := 300, 100
+	for _, cid := range children {
+		w, h := l.sizeOf(cid)
+		p := l.b.nodes[l.byID[cid]].Position
+		if right := p["x"] + w + childBaseX; right > maxW {
 			maxW = right
 		}
-		y += h + childGap
-		if bottom := y - childGap + childBaseX; bottom > maxH {
+		if bottom := p["y"] + h + childBaseX; bottom > maxH {
 			maxH = bottom
 		}
 	}
-
-	// Write config.size back: the frontend LoopNode/ProcessNode/FunctionNode read it directly for width and height; without it
-	// the canvas renders at the default 300x100 first and only expands on the next frame, which looks like a jitter.
 	node := &l.b.nodes[l.byID[containerID]]
 	cfg, _ := node.Data["config"].(map[string]any)
 	if cfg == nil {
@@ -1149,6 +1209,38 @@ func (l *diagramLayout) containerChildren(containerID string) {
 		"height": fmt.Sprintf("%dpx", maxH),
 	}
 	l.sizes[containerID] = [2]int{maxW, maxH}
+}
+
+// placeFunctions puts every top-level function node below the graph. A function is entered by a call, not by an edge, so it
+// is not part of the chain; sitting it in the chain's row reads as if the main flow ran through it. It is sized from its
+// body first, so the next card's gap accounts for its real height.
+func (l *diagramLayout) placeFunctions() {
+	bottom, placed := 0, false
+	for i := range l.b.nodes {
+		n := &l.b.nodes[i]
+		if n.ParentNode != "" || !l.taken[n.ID] {
+			continue
+		}
+		placed = true
+		if _, h := l.sizeOf(n.ID); n.Position["y"]+h > bottom {
+			bottom = n.Position["y"] + h
+		}
+	}
+	y := layoutMarginY
+	if placed {
+		y = bottom + layoutOrphanGap
+	}
+	for i := range l.b.nodes {
+		n := &l.b.nodes[i]
+		if n.Type != "function" || n.ParentNode != "" || l.taken[n.ID] {
+			continue
+		}
+		l.containerChildren(n.ID)
+		_, h := l.sizeOf(n.ID)
+		n.Position = map[string]int{"x": layoutMarginX, "y": y}
+		l.taken[n.ID] = true
+		y += h + layoutRowGap
+	}
 }
 
 // placeOrphans appends top-level nodes unreachable from start to the bottom of the graph so they do not all pile up at (0,0).

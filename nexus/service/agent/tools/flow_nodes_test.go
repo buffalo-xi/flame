@@ -418,6 +418,96 @@ func TestCreateFlowContainerChildren(t *testing.T) {
 	}
 }
 
+// A function step is placed below the flow and never wired into the main chain: an edge into a function runs its body with
+// empty params, and the row would read as if the main flow passed through it.
+func TestCreateFlowLaysFunctionBelowTheFlow(t *testing.T) {
+	fk := &fakeFlows{createdID: "flow-fn"}
+	_, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
+		"name": "sum-demo", "description": "求和演示",
+		"steps": []any{
+			map[string]any{"type": "code", "label": "取值", "config": map[string]any{
+				"code":    map[string]any{"lang": "lua", "script": "return { a = 1, b = 2 }"},
+				"outputs": map[string]any{"a": map[string]any{"type": "number"}, "b": map[string]any{"type": "number"}},
+			}},
+			map[string]any{"type": "function", "label": "求和", "config": map[string]any{
+				"params":  map[string]any{"a": map[string]any{"type": "number"}, "b": map[string]any{"type": "number"}},
+				"outputs": map[string]any{"sum": map[string]any{"type": "number"}},
+			}, "children": []any{
+				map[string]any{"type": "code", "label": "函数体", "config": map[string]any{
+					"code":    map[string]any{"lang": "lua", "script": "return { sum = input.a + input.b }"},
+					"inputs":  map[string]any{"a": map[string]any{"type": "number", "source_type": "node", "source_ref": "求和", "source_key": "a"}},
+					"targets": map[string]any{"sum": map[string]any{"type": "number", "source_type": "node", "source_ref": "求和"}},
+				}},
+			}},
+			map[string]any{"type": "llm", "label": "汇报", "config": map[string]any{"prompt": "汇总"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	var doc struct {
+		Nodes []struct {
+			ID         string         `json:"id"`
+			Type       string         `json:"type"`
+			ParentNode string         `json:"parent_node"`
+			Position   map[string]int `json:"position"`
+			Data       struct {
+				Config map[string]any `json:"config"`
+			} `json:"data"`
+		} `json:"nodes"`
+		Edges []flowEdge `json:"edges"`
+	}
+	if err := json.Unmarshal(fk.created.Diagram, &doc); err != nil {
+		t.Fatalf("failed to parse the diagram: %v", err)
+	}
+
+	var startPos, readPos, fnPos map[string]int
+	var fnID string
+	for _, n := range doc.Nodes {
+		switch n.Type {
+		case "start":
+			startPos = n.Position
+		case "function":
+			fnID, fnPos = n.ID, n.Position
+		case "code":
+			if n.ParentNode == "" {
+				readPos = n.Position
+			}
+		}
+	}
+	if fnID == "" || startPos == nil || readPos == nil {
+		t.Fatalf("the diagram is missing a node: %+v", doc.Nodes)
+	}
+
+	// start -> read -> report: the function is not in the chain at all (the remaining edge is the body's entry -> its step)
+	inside := map[string]bool{}
+	for _, n := range doc.Nodes {
+		if n.ParentNode != "" {
+			inside[n.ID] = true
+		}
+	}
+	topEdges := 0
+	for _, e := range doc.Edges {
+		if !inside[e.Source] && !inside[e.Target] {
+			topEdges++
+		}
+	}
+	if topEdges != 2 {
+		t.Errorf("edges = %+v, want 2 top-level edges (the function must not be wired in)", doc.Edges)
+	}
+	for _, e := range doc.Edges {
+		if e.Target == fnID {
+			t.Errorf("an edge enters the function node: %+v", e)
+		}
+	}
+	if fnPos["y"] <= readPos["y"] {
+		t.Errorf("function position = %v, want it below the main row at y=%d", fnPos, readPos["y"])
+	}
+	if fnPos["x"] != startPos["x"] {
+		t.Errorf("function x = %d, want it aligned with the flow's left edge %d", fnPos["x"], startPos["x"])
+	}
+}
+
 // In create_flow, call.target / wait.fork_node_id also accept a label (the same rule as source_ref).
 func TestCreateFlowResolvesTargetAndForkIDByLabel(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-r"}
