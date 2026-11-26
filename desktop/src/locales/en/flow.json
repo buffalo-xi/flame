@@ -664,6 +664,7 @@
         "branch_condition": "A branch child has no condition script, so the runner skips it and that path never runs",
         "child_id": "A branch child has no id, so no edge can route to it",
         "call_target": "The call target is not a function node in this flow",
+        "call_args": "The args do not match the function's params: an unknown arg or a missing required one fails the run",
         "wait_fork": "The wait node does not point at a fork node",
         "dangling_ref": "A reference points at a node that does not exist, so the value is empty at run time",
         "loop_source": "The array this loop iterates is not declared in the inputs",

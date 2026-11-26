@@ -61,6 +61,7 @@ const (
 	CodeBranchCondition = "branch_condition" // a branch child has no condition script, so it is skipped
 	CodeChildID         = "child_id"         // a branch child has no id, so no edge can route to it
 	CodeCallTarget      = "call_target"      // call.target does not name a function node
+	CodeCallArgs        = "call_args"        // call.args does not match the target function's params
 	CodeWaitFork        = "wait_fork"        // wait.fork_node_id does not name a fork node
 	CodeDanglingRef     = "dangling_ref"     // source_ref points at a node that does not exist
 	CodeLoopSource      = "loop_source"      // each-mode source_key is not declared in inputs
@@ -709,7 +710,11 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 			add(SeverityError, CodeCallTarget, n.ID, n.Type, "target",
 				fmt.Sprintf("call node %s targets %q, which is a %s node, not a function", n.ID, target, t.Type),
 				"call can only invoke a function node")
+			continue
 		}
+		// The arguments must match the target's params: call.go refuses an unknown arg and a missing required one
+		// before the child process starts, and both sides of that comparison are in this diagram.
+		checkCallArgs(n, t, add)
 	}
 
 	// wait.fork_node_id must name a fork node.
@@ -770,6 +775,33 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 
 	sortFindings(out)
 	return out, nil
+}
+
+// checkCallArgs compares a call node's args with the target function's params.
+//
+// call.go refuses an unknown arg and a missing required one before the child process starts, and both lists live in this
+// diagram, so the run must not be the first place the mismatch shows up. `required` defaults to true, as in the executor.
+func checkCallArgs(call, fn *node, add func(severity, code, nodeID, nodeType, path, msg, hint string)) {
+	params := objectOf(fn.Data.Config["params"])
+	args := objectOf(call.Data.Config["args"])
+	for name := range args {
+		if _, ok := params[name]; !ok {
+			add(SeverityError, CodeCallArgs, call.ID, call.Type, "args."+name,
+				fmt.Sprintf("call node %s passes arg %q, which function %s does not declare in its params", call.ID, name, fn.ID),
+				"declare it in the function's params, or remove it from args")
+		}
+	}
+	for name, raw := range params {
+		required := true
+		if v, ok := objectOf(raw)["required"].(bool); ok {
+			required = v
+		}
+		if _, ok := args[name]; !ok && required {
+			add(SeverityError, CodeCallArgs, call.ID, call.Type, "args."+name,
+				fmt.Sprintf("call node %s passes no %q, a required param of function %s", call.ID, name, fn.ID),
+				"pass it in args, or mark the param optional (required: false)")
+		}
+	}
 }
 
 // loopScope marks every node a loop can consume a break / continue from: the loop body, the body of a process nested in

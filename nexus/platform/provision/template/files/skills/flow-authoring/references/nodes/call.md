@@ -44,8 +44,8 @@ An ordinary node: continues along **its first outgoing edge** after the call ret
 ## Common errors
 
 - `call target must not be empty` / `target node is not a function`.
-- `missing required arg "x" for function <id>` — the target function's required parameter (`required` defaults to `true`) has no matching argument.
-- `unknown arg "x" for function <id>` — `args` contains a key not declared in the target function's `params`.
+- `missing required arg "x" for function <id>` — the target function's required parameter (`required` defaults to `true`) has no matching argument. `validate_flow` / the canvas badge reports it as `call_args` before the run.
+- `unknown arg "x" for function <id>` — `args` contains a key not declared in the target function's `params`; also reported as `call_args`.
 - `failed to resolve args` — an argument's `source_key` has no matching upstream output.
 - Recursion limit exceeded — the function calls itself directly or indirectly with no terminating condition.
 

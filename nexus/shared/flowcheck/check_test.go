@@ -382,6 +382,58 @@ func TestCallTargetAcceptsLabelAndRejectsNonFunction(t *testing.T) {
 	}
 }
 
+// call.args and the target function's params must agree: the executor refuses an unknown arg and a missing required one
+// before the child process starts, and `required` defaults to true.
+func TestCallArgsMatchParams(t *testing.T) {
+	fn := &node{ID: "2", Type: "function"}
+	fn.Data.Config = map[string]any{"params": map[string]any{
+		"a": map[string]any{"type": "number"},
+		"b": map[string]any{"type": "number", "required": false},
+	}}
+	call := &node{ID: "4", Type: "call"}
+	collect := func() []Finding {
+		var out []Finding
+		checkCallArgs(call, fn, func(severity, code, nodeID, nodeType, path, msg, hint string) {
+			out = append(out, Finding{Severity: severity, Code: code, NodeID: nodeID, NodeType: nodeType, Path: path, Message: msg, Hint: hint})
+		})
+		return out
+	}
+
+	call.Data.Config = map[string]any{"args": map[string]any{"a": map[string]any{}}}
+	if fs := collect(); len(fs) != 0 {
+		t.Fatalf("a complete call must pass, got %v", codes(fs))
+	}
+
+	call.Data.Config = map[string]any{"args": map[string]any{"b": map[string]any{}}}
+	fs := collect()
+	if !has(fs, SeverityError, CodeCallArgs) {
+		t.Fatalf("a missing required arg must be an error, got %v", codes(fs))
+	}
+	for _, f := range fs {
+		if f.Path != "args.a" {
+			t.Errorf("path = %q, want args.a", f.Path)
+		}
+	}
+
+	call.Data.Config = map[string]any{"args": map[string]any{"a": map[string]any{}, "c": map[string]any{}}}
+	if fs := collect(); !has(fs, SeverityError, CodeCallArgs) {
+		t.Fatalf("an unknown arg must be an error, got %v", codes(fs))
+	}
+}
+
+// The diagram check reaches the same comparison, so a saved flow reports it without a run.
+func TestCallArgsInDiagram(t *testing.T) {
+	fs := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function","data":{"config":{"params":{"a":{"type":"number"}}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"call","data":{"config":{"target":"2"}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"2","target":"4"}]}`)
+	if !has(fs, SeverityError, CodeCallArgs) {
+		t.Fatalf("a call without the required arg must be reported, got %v", codes(fs))
+	}
+}
+
 // A dangling source_ref silently yields an empty value instead of failing loudly.
 func TestDanglingSourceRef(t *testing.T) {
 	fs := checkDiagram(t, `{"nodes":[
