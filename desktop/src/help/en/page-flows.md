@@ -8,6 +8,8 @@ rpc or "no endpoint") and who last updated it.
 
 Hovering a card reveals five actions: restore, deprecate, endpoints, export as an asset package, delete.
 **Deprecating a flow also retracts every endpoint it exposes**, so callers in production fail immediately.
+**Deleting a flow deletes its run history too** (it disappears from the run history screen), together with
+endpoints that are not exposed; retract any exposed endpoint first.
 
 ## The editor has three regions
 
@@ -74,6 +76,10 @@ run failed" cannot come from two rule sets.
 - **Switch production**: only moves the "which version is live" pointer; the canvas draft is untouched.
 - **Load into canvas**: writes that version back into the draft; production keeps the old version until
   you release again. This is also how you throw the draft away and return to what is live.
+- **Unrelease**: takes the current version off production by clearing the "which version is live"
+  pointer only; the history, the canvas and the endpoints stay, official calls report "no released
+  version", and you can release again later. **A flow with a released version cannot be deleted** —
+  unrelease first, then delete (a delete should not double as a service stop).
 
 The version button has three states: "unreleased" (never released, not callable from outside),
 "v3 · changed" (production runs v3, the draft is newer), and "v3".

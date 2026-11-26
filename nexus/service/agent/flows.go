@@ -19,6 +19,7 @@ import (
 	flowruns "flame/nexus/shared/repository/flowruns"
 	flows "flame/nexus/shared/repository/flows"
 	svcendpoints "flame/nexus/shared/repository/svcendpoints"
+	"flame/nexus/shared/versions"
 	"flame/tools/xsql"
 
 	"github.com/google/uuid"
@@ -272,8 +273,17 @@ func (m *flowsManager) Delete(ctx context.Context, id, name string) (*tools.Flow
 	}
 	// Endpoints are handled by DeleteFlow in one place: unexposed ones (including the auto-added RPC) are deleted with the flow; when an
 	// exposed endpoint remains the repository refuses - that is the signal "the outside is still using it", and a deletion started by a model
-	// must not cut it off quietly; the user retracts it first.
+	// must not cut it off quietly; the user retracts it first. The run history goes with the row for the same reason: the repository
+	// deletes flow_run_records / flow_node_records in the same transaction.
 	if err := m.repo.DeleteFlow(m.auth(), f.ID); err != nil {
+		// A released version means the flow is live: the repository refuses, and the model must not try to work around
+		// it - taking a service offline is the user's call (unrelease in the version panel), never a side effect of a
+		// delete the model started.
+		var released *versions.ErrHasReleasedVersion
+		if errors.As(err, &released) {
+			return nil, fmt.Errorf("v%d is still released, so %q is live and cannot be deleted; ask the user to unrelease it in the version panel first",
+				released.Version, f.Name)
+		}
 		return nil, err
 	}
 	deleted := flowInfo(f)

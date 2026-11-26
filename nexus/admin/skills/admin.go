@@ -5,6 +5,7 @@ package skills
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"flame/nexus/shared/skeleton"
 	"flame/nexus/shared/storage"
 	"flame/nexus/shared/versioning"
+	"flame/nexus/shared/versions"
 	"flame/tools/xhttp"
 	"flame/tools/xsql"
 
@@ -64,6 +66,26 @@ func ensureOwnerAgentModifiable(info *auth.AuthInfo, s *models.Skill) error {
 		return nil
 	}
 	return ensureAgentModifiable(info, string(s.AgentID))
+}
+
+// ensureOwnerAgentExists is the delete-side variant: a private skill of a deprecated agent may be deleted (that agent is
+// deletable in the same state), so only existence is required. Every write keeps ensureOwnerAgentModifiable.
+func ensureOwnerAgentExists(info *auth.AuthInfo, s *models.Skill) error {
+	if s == nil {
+		return nil
+	}
+	agentID := string(s.AgentID)
+	if agentID == "" {
+		return nil
+	}
+	oa, err := agentRepo.GetAgent(info, agentID)
+	if err != nil {
+		return err
+	}
+	if oa == nil {
+		return fmt.Errorf("skill owner agent %s not found", agentID)
+	}
+	return nil
 }
 
 // getStorage lazily builds the agent storage instance (the same configuration as service/agent.InitStorage).
@@ -557,16 +579,14 @@ func DeleteSkill(c *gin.Context) {
 		return
 	}
 
-	// A non-modifiable owner agent freezes its private skills entirely (same rule as skills.go / tools/gate.go)
-	if verr := ensureOwnerAgentModifiable(info, s); verr != nil {
+	// The owner agent only has to exist: a private skill of a deprecated agent may be deleted (same rule as skills.go).
+	if verr := ensureOwnerAgentExists(info, s); verr != nil {
 		xhttp.ErrCode(c, "skill.owner_agent_not_modifiable", nil, verr.Error(), "")
 		return
 	}
-	// A deprecated skill cannot be deleted (same rule as agents / flows)
-	if !s.IsModifiable() {
-		xhttp.ErrCode(c, "skill.deprecated", nil, "the skill is deprecated and cannot be deleted (switch it back to normal first)", "")
-		return
-	}
+	// A deprecated skill is deletable: deprecating already took it out of every agent's catalog, so the reverse rule -
+	// "switch it back to normal, then delete" - would put it back in service just to remove it. What still blocks a
+	// delete is a released version (handled by the repository): unrelease first.
 
 	// A built-in protected skill cannot be deleted
 	if models.IsProtectedSkill(s.Name) {
@@ -575,6 +595,12 @@ func DeleteSkill(c *gin.Context) {
 	}
 
 	if err := skillRepo.Delete(info.Schema, id); err != nil {
+		// A released version is what every agent's catalog serves: the delete is refused and the answer names the version.
+		var released *versions.ErrHasReleasedVersion
+		if errors.As(err, &released) {
+			xhttp.ErrCode(c, "skill.has_release", gin.H{"version": released.Version}, released.Error(), "")
+			return
+		}
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}

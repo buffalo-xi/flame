@@ -10,6 +10,7 @@ import (
 	"flame/nexus/shared/auth"
 	"flame/nexus/shared/db"
 	"flame/nexus/shared/models"
+	"flame/nexus/shared/versions"
 	"flame/tools/xsql"
 
 	"github.com/google/uuid"
@@ -352,6 +353,17 @@ func (r *PostgresRepository) DeleteAgent(authInfo *auth.AuthInfo, id string) err
 	}
 	if models.IsProtectedAgent(name) {
 		return errors.New("protected agent " + name + " cannot be deleted")
+	}
+
+	// A released version is what production runs: deleting the row would take the agent out of service, so it is refused
+	// and the prerequisite is named (unrelease). Same rule as "a version that is in use cannot be deleted", one level up.
+	var released int
+	switch err := tx.QueryRow(`SELECT version FROM `+authInfo.Schema+`.agent_versions
+		WHERE agent_id = $1 AND is_current`, id).Scan(&released); {
+	case err == nil:
+		return &versions.ErrHasReleasedVersion{Version: released}
+	case !errors.Is(err, sql.ErrNoRows):
+		return err
 	}
 
 	// Clean up this agent's grants (same transaction as the delete, so it is atomic)

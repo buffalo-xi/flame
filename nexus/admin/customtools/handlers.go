@@ -13,6 +13,7 @@ package customtools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,7 @@ import (
 	"flame/nexus/shared/sandboxinfo"
 	"flame/nexus/shared/toolfile"
 	"flame/nexus/shared/versioning"
+	"flame/nexus/shared/versions"
 	"flame/tools/xhttp"
 	"flame/tools/xlog"
 	"flame/tools/xsql"
@@ -412,6 +414,12 @@ func DeleteCustomTool(c *gin.Context) {
 	}
 	name := c.Param("name")
 	if err := storeFor(info.Schema).Delete(info.Schema, name); err != nil {
+		// A released version is what production runs: the delete is refused and the answer names the version.
+		var released *versions.ErrHasReleasedVersion
+		if errors.As(err, &released) {
+			xhttp.ErrCode(c, "tool.has_release", gin.H{"version": released.Version}, released.Error(), "")
+			return
+		}
 		xhttp.ErrCode(c, "common.internal", nil, "failed to delete the custom tool: "+err.Error(), "")
 		return
 	}

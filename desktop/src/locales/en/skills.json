@@ -68,6 +68,7 @@
     "statusUpdateFailed": "Failed to update the status",
     "deleteConfirm": "Delete skill \"{name}\"? Its whole content directory will be deleted as well.",
     "deleted": "Deleted",
+    "deleteFailed": "Delete failed",
     "fileNoTarget": "Created automatically after saving: {name}",
     "fileLockedContract": "Contract file: read-only (edit it through the form)",
     "fileLockedEntry": "Entry file: cannot be deleted",

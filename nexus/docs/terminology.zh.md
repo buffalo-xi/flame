@@ -53,11 +53,22 @@
 | 把某个版本推到线上 | **发布**（`release` / `deploy`） |
 | 线上切到某个历史版本（不动草稿） | **回滚**（`rollback`） |
 | 把某个历史版本写回草稿（不动线上） | **载入**（`apply`） |
+| 把当前版本从线上摘下来（不动草稿 / 历史 / 端点） | **取消发布**（`unrelease`） |
 | 灰度 | 灰度 |
 
 工作流版本已按这套用词落地：`ReleaseFlowVersion` / `ErrNoReleasedVersion`，库里的标记是
 `is_current`（唯一指向线上那一版）。删除历史版本（`DeleteFlowVersion`）只清历史、
 不动线上；当前版本拒绝删除 —— 停服是另一个动作，不要塞进删除里。
+
+`unrelease` 就是那个独立动作，也是这句话缺的另一半：它只清 `is_current`（版本行、版本目录、
+草稿、端点、授权都不动），正式调用随即得到 `ErrNoReleasedVersion` —— 明确的「线上没有版本」
+状态。四个域共用：`versions.Unrelease`，上层是 `UnreleaseFlowVersion` /
+`UnreleaseAgentVersion` / `UnreleaseSkillVersion` / `UnreleaseToolVersion`。由此有两条结论：
+
+- **删除实体要求线上没有发布版本**：有 `is_current` 时删除被拒（`versions.ErrHasReleasedVersion`，
+  带着版本号）—— 与「删版本」同一条规则，只是上升了一层，因为删除不该顺带停服；
+- **废弃态可以删**（智能体 / 技能以前要求「先切回正常再删」，那等于为了删除先把实体放回线上）；
+  废弃本身已经是明确的停服步骤，所以拦住删除的是发布版本，而不是状态。
 
 ### 实体版本（智能体 / 技能 / 自定义工具）
 

@@ -420,6 +420,44 @@ func RollbackAgentVersion(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
 }
 
+// UnreleaseAgentVersion POST /agents/:id/versions/unrelease
+//
+// Clears is_current only: the version row, its directory, the draft files and the endpoints stay as they are, so the
+// agent can be edited and released again. Production runs then report "no released version" - the explicit offline
+// state. Deleting the agent needs this step first: a delete must not be the thing that takes a service down.
+func UnreleaseAgentVersion(c *gin.Context) {
+	info, ok := authOf(c)
+	if !ok {
+		return
+	}
+	inst, ok := mustAgent(c, info)
+	if !ok {
+		return
+	}
+
+	tx, err := db.DB.Begin()
+	if err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	version, err := versions.Unrelease(tx, agentVersionTable(info.Schema), "agent_id", inst.ID)
+	if err != nil {
+		if errors.Is(err, versions.ErrNoReleasedVersion) {
+			xhttp.ErrCode(c, "version.none", nil, "nothing is released, so there is nothing to unrelease", "")
+			return
+		}
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	xhttp.OkJSON(c, "Success", gin.H{"version": version}, "")
+}
+
 // DeleteAgentVersion DELETE /agents/:id/versions/:version
 func DeleteAgentVersion(c *gin.Context) {
 	info, ok := authOf(c)

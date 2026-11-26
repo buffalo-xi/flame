@@ -9,6 +9,7 @@ import (
 
 	"flame/nexus/shared/db"
 	"flame/nexus/shared/models"
+	"flame/nexus/shared/versions"
 	"flame/tools/xsql"
 
 	"github.com/google/uuid"
@@ -125,6 +126,18 @@ func (r *PostgresRepository) Delete(schema, id string) error {
 			return errors.New("protected skill " + name + " cannot be deleted")
 		}
 	}
+	// A released version is what every agent's catalog serves: deleting the row would take the skill away from them, which
+	// is an explicit unrelease, not a side effect of delete. Private skills have no version of their own (their lifecycle
+	// follows the owning agent), so the check simply finds nothing for them.
+	var released int
+	switch err := tx.QueryRow(`SELECT version FROM `+schema+`.skill_versions
+		WHERE skill_id = $1 AND is_current`, id).Scan(&released); {
+	case err == nil:
+		return &versions.ErrHasReleasedVersion{Version: released}
+	case !errors.Is(err, sql.ErrNoRows):
+		return err
+	}
+
 	if _, err := tx.Exec(`DELETE FROM `+schema+`.agent_skill_bindings WHERE skill_id = $1`, id); err != nil {
 		return err
 	}

@@ -20,6 +20,7 @@ import (
 	"flame/nexus/shared/repository/toolgrants"
 	"flame/nexus/shared/storage"
 	"flame/nexus/shared/versioning"
+	"flame/nexus/shared/versions"
 	"flame/tools/xsql"
 )
 
@@ -148,6 +149,22 @@ func (m *skillManager) checkOwnerAgent(ownerID string) error {
 	}
 	if !inst.IsModifiable() {
 		return fmt.Errorf("agent %s is deprecated; its private skills are frozen", inst.Name)
+	}
+	return nil
+}
+
+// checkOwnerAgentForDelete is the delete-side variant of checkOwnerAgent: the owning agent must exist, its state does not
+// matter (an empty ownerID is a tenant-level skill). Every path that writes a definition keeps the stricter gate; deleting
+// an entity is how it leaves for good, and it must not require putting its owner back in service first.
+func (m *skillManager) checkOwnerAgentForDelete(ownerID string) error {
+	if ownerID == "" {
+		return nil
+	}
+	if _, err := m.agents.GetAgent(&auth.AuthInfo{Schema: m.schema}, ownerID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("skill owner agent %s not found", ownerID)
+		}
+		return err
 	}
 	return nil
 }
@@ -712,23 +729,28 @@ func (m *skillManager) Delete(ctx context.Context, ref tools.SkillRef) error {
 	if err := m.checkSkillScope(ref.Scope, ref.OwnerID, s); err != nil {
 		return err
 	}
-	// The owning agent must exist and be editable (the same criterion as the file gate / the admin side)
-	if err := m.checkOwnerAgent(string(s.AgentID)); err != nil {
+	// The owning agent only has to exist: deleting a private skill of a deprecated agent is the end of the same road
+	// (that agent is deletable in this state), so a status gate here would mean "reactivate the agent, delete the skill,
+	// deprecate it again" - and reactivating puts it back online.
+	if err := m.checkOwnerAgentForDelete(string(s.AgentID)); err != nil {
 		return err
 	}
 	// A built-in protected skill cannot be deleted
 	if models.IsProtectedSkill(s.Name) {
 		return fmt.Errorf("protected skill %q cannot be deleted", s.Name)
 	}
-	// Only the normal state may be deleted
-	if !s.IsModifiable() {
-		return fmt.Errorf("skill %q is locked or deprecated; switch it back to normal first", s.Name)
-	}
 	ownerName, err := m.ownerName(string(s.AgentID))
 	if err != nil {
 		return err
 	}
 	if err := m.repo.Delete(m.schema, s.ID); err != nil {
+		// A released version means the skill is live in every agent's catalog: the repository refuses, and the model
+		// must not work around it - the user unreleases first.
+		var released *versions.ErrHasReleasedVersion
+		if errors.As(err, &released) {
+			return fmt.Errorf("v%d is still released, so skill %q is live and cannot be deleted; ask the user to unrelease it in the version panel first",
+				released.Version, s.Name)
+		}
 		return err
 	}
 	// Delete the **whole skill directory** (SKILL.md plus auxiliary files / subdirectories), the same criterion as admin/skills.

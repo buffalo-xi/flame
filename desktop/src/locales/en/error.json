@@ -30,6 +30,7 @@
       "overwrite_unsupported": "{kind} packages do not support overwrite import yet; a suggested name is provided instead"
     },
     "tool": {
+      "has_release": "v{version} is still live, so deleting it would make production calls lose this tool immediately. Unrelease it in the version panel first, then delete.",
       "delete_failed": "Delete failed: the entry is still present after the attempt; retry or check the storage permissions.",
       "file_required": "Choose a file to upload.",
       "invalid_file_name": "That file name is not valid.",
@@ -55,6 +56,7 @@
       "last_version_undeletable": "v{version} is the only version and cannot be deleted. Release a new version before cleaning up history."
     },
     "agent": {
+      "has_release": "v{version} is still live, so deleting it would stop production calls immediately. Unrelease it in the version panel first, then delete.",
       "delete_failed": "Delete failed: the entry is still present after the attempt; retry or check the storage permissions.",
       "file_required": "Choose a file to upload.",
       "invalid_doc_refs": "A secret global variable cannot be referenced in a document; use a plain variable instead.",
@@ -81,6 +83,7 @@
       "relations_failed": "The agent was created, but saving its call grants failed. Check the agent and retry."
     },
     "skill": {
+      "has_release": "v{version} is still live, so deleting it would take the skill away from every agent immediately. Unrelease it in the version panel first, then delete.",
       "delete_failed": "Delete failed: the entry is still present after the attempt; retry or check the storage permissions.",
       "entry_undeletable": "{file} is the skill entry and cannot be deleted.",
       "file_required": "Choose a file to upload.",
@@ -110,7 +113,8 @@
     },
     "version": {
       "not_found": "Version not found",
-      "in_use": "This is the version in use and cannot be deleted. Roll back to another version first."
+      "in_use": "This is the version in use and cannot be deleted. Roll back to another version first.",
+      "none": "No version is released, so there is nothing to unrelease"
     },
     "llm": {
       "preset_invalid_id": "Invalid preset id",
@@ -248,7 +252,8 @@
       "deprecated": "Workflow {name} is deprecated and cannot be called.",
       "duplicate_label": "Node names must be unique: {names}. A name is used by source_ref / call.target references, so a duplicate points at the wrong node; rename before saving.",
       "node_limit_exceeded": "The diagram has {count} nodes, above this tenant's limit of {limit}. Split it into smaller workflows, or ask an administrator to raise the quota; comments do not count.",
-      "description_required": "The workflow description must not be empty."
+      "description_required": "The workflow description must not be empty.",
+      "has_release": "v{version} is still live, so deleting it would stop production calls immediately. Unrelease it in the version panel first, then delete."
     },
     "agentconfig": {
       "invalid_value": "{field} must be an integer of at least 1 (these four settings do not accept -1 for unlimited)",

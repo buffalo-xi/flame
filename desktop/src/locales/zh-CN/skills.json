@@ -68,6 +68,7 @@
     "statusUpdateFailed": "状态更新失败",
     "deleteConfirm": "确定删除技能「{name}」？将同时删除其整个内容目录。",
     "deleted": "已删除",
+    "deleteFailed": "删除失败",
     "fileNoTarget": "保存后自动生成 {name}",
     "fileLockedContract": "契约文件：只读（请用表单修改）",
     "fileLockedEntry": "入口文件：不可删除",

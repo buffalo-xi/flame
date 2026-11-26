@@ -128,6 +128,37 @@ func ApplyFlowVersion(c *gin.Context) {
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
 }
 
+// UnreleaseFlowVersion takes the current version off production.
+//
+// POST /admin/flows/:id/versions/unrelease
+//
+// Only is_current is cleared: the version row, the canvas and the endpoints stay as they are, so the workflow can be
+// edited and released again. Production entry points then report "no released version", which is the explicit
+// offline state. Deleting the workflow needs this step first (a delete must not be the thing that takes a service
+// down), which is why the button sits next to delete.
+func UnreleaseFlowVersion(c *gin.Context) {
+	raw, exists := c.Get("authInfo")
+	if !exists {
+		xhttp.ErrCode(c, "common.internal", nil, "Authentication info not found", "")
+		return
+	}
+	ai := raw.(*auth.AuthInfo)
+
+	version, err := repo.UnreleaseFlowVersion(ai, c.Param("id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
+		case errors.Is(err, repository.ErrNoReleasedVersion):
+			xhttp.ErrCode(c, "version.none", nil, "nothing is released, so there is nothing to unrelease", "")
+		default:
+			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		}
+		return
+	}
+	xhttp.OkJSON(c, "Success", gin.H{"version": version}, "")
+}
+
 // DeleteFlowVersion deletes one historical version (the current one cannot be deleted).
 //
 // DELETE /admin/flows/:id/versions/:version

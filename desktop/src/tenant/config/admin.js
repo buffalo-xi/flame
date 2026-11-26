@@ -95,7 +95,9 @@ const adminApi = {
     // 回滚 = 线上切到该版本（不动草稿）；载入 = 该版本写回草稿（不动线上）
     rollbackVersion: (id, version) => `${apiBase}/admin/agents/${id}/versions/${version}/rollback`,
     applyVersion: (id, version) => `${apiBase}/admin/agents/${id}/versions/${version}/apply`,
-    deleteVersion: (id, version) => `${apiBase}/admin/agents/${id}/versions/${version}`
+    deleteVersion: (id, version) => `${apiBase}/admin/agents/${id}/versions/${version}`,
+    // Unrelease (POST): clears is_current only; prerequisite for deleting the agent
+    unrelease: (id) => `${apiBase}/admin/agents/${id}/versions/unrelease`
   },
 
   // 内置工具清单（智能体设置 → 工具配置）
@@ -149,7 +151,9 @@ const adminApi = {
     versions: (id) => `${apiBase}/admin/skills/${id}/versions`,
     rollbackVersion: (id, version) => `${apiBase}/admin/skills/${id}/versions/${version}/rollback`,
     applyVersion: (id, version) => `${apiBase}/admin/skills/${id}/versions/${version}/apply`,
-    deleteVersion: (id, version) => `${apiBase}/admin/skills/${id}/versions/${version}`
+    deleteVersion: (id, version) => `${apiBase}/admin/skills/${id}/versions/${version}`,
+    // Unrelease (POST): clears is_current only; prerequisite for deleting the skill
+    unrelease: (id) => `${apiBase}/admin/skills/${id}/versions/unrelease`
   },
 
   // 会话管理API
@@ -211,7 +215,9 @@ const adminApi = {
     rollback: (id, version) => `${apiBase}/admin/flows/${id}/versions/${version}/rollback`,
     applyVersion: (id, version) => `${apiBase}/admin/flows/${id}/versions/${version}/apply`,
     // 删除历史版本（DELETE）：只清历史。当前版本不可删 —— 正式调用读的就是 is_current 那一行
-    deleteVersion: (id, version) => `${apiBase}/admin/flows/${id}/versions/${version}`
+    deleteVersion: (id, version) => `${apiBase}/admin/flows/${id}/versions/${version}`,
+    // Unrelease (POST): clears is_current only - the row, the draft and the endpoints stay; prerequisite for deleting the flow
+    unrelease: (id) => `${apiBase}/admin/flows/${id}/versions/unrelease`
   },
 
   // 工作流运行参数API（platform.Flow_configs）
@@ -296,7 +302,9 @@ const adminApi = {
     versions: (name) => `${apiBase}/admin/customtools/${encodeURIComponent(name)}/versions`,
     rollbackVersion: (name, version) => `${apiBase}/admin/customtools/${encodeURIComponent(name)}/versions/${version}/rollback`,
     applyVersion: (name, version) => `${apiBase}/admin/customtools/${encodeURIComponent(name)}/versions/${version}/apply`,
-    deleteVersion: (name, version) => `${apiBase}/admin/customtools/${encodeURIComponent(name)}/versions/${version}`
+    deleteVersion: (name, version) => `${apiBase}/admin/customtools/${encodeURIComponent(name)}/versions/${version}`,
+    // Unrelease (POST): clears is_current only; prerequisite for deleting the custom tool
+    unrelease: (name) => `${apiBase}/admin/customtools/${encodeURIComponent(name)}/versions/unrelease`
   },
 
   // MCP 鉴权（入站）配置API（mcp_server_configs，按 auth_type 分行）

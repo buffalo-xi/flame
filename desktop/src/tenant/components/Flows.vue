@@ -90,6 +90,10 @@
               <el-button size="small" type="primary" :loading="releasing" @click="doRelease">
                 {{ t('flow.versionPanel.publish') }}
               </el-button>
+              <!-- Unrelease clears is_current only; deleting the flow needs it done first (a release blocks the delete) -->
+              <el-button v-if="releasedVersion" size="small" :loading="unreleasing" @click="doUnrelease">
+                {{ t('flow.versionPanel.unrelease') }}
+              </el-button>
             </div>
             <div class="ver-hint">
               {{ t('flow.versionPanel.publishHint') }}
@@ -619,6 +623,7 @@ const versionPanelVisible = ref(false)
 const versionLoading = ref(false)
 const releaseNote = ref('')
 const releasing = ref(false)
+const unreleasing = ref(false)
 const rollingBack = ref(0)
 const applyingVersion = ref(0)
 const deletingVersion = ref(0)
@@ -747,6 +752,33 @@ const doRelease = async () => {
     ElMessage.error(error.message)
   } finally {
     releasing.value = false
+  }
+}
+
+// Unrelease takes the current version off production by clearing is_current only.
+// Official calls then report "unreleased"; the history, the canvas and the endpoints stay, and deleting the flow
+// requires this first.
+const doUnrelease = async () => {
+  const version = releasedVersion.value
+  try {
+    await ElMessageBox.confirm(
+      t('flow.save.unreleaseConfirm', { version }),
+      t('flow.save.unreleaseTitle', { version }),
+      { type: 'warning', confirmButtonText: t('flow.versionPanel.unrelease'), cancelButtonText: t('common.cancel') }
+    )
+  } catch {
+    return
+  }
+  unreleasing.value = true
+  try {
+    await versionRequest(adminApi.flows.unrelease(currentWFId.value), { method: 'POST', body: JSON.stringify({}) })
+    await loadVersions()
+    await refreshVersionState()
+    ElMessage.success({ message: t('flow.save.unreleased', { version }), duration: 2500 })
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    unreleasing.value = false
   }
 }
 

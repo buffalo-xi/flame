@@ -83,6 +83,9 @@ func SetupRoutes(router *gin.RouterGroup) {
 		customToolsGroup.POST("/:name/versions/:version/rollback", customtools.RollbackToolVersion)
 		// Apply = write that version back into the draft (production untouched); delete = history only (the current version is refused)
 		customToolsGroup.POST("/:name/versions/:version/apply", customtools.ApplyToolVersion)
+		// Unrelease = clear is_current only (the version row, the directory, the draft and the grants stay); the
+		// prerequisite for deleting the tool while anything is released
+		customToolsGroup.POST("/:name/versions/unrelease", customtools.UnreleaseToolVersion)
 		customToolsGroup.DELETE("/:name/versions/:version", customtools.DeleteToolVersion)
 	}
 
@@ -244,6 +247,9 @@ func SetupRoutes(router *gin.RouterGroup) {
 		// Rollback = switch production to that version (the draft is untouched); apply = write that version back into the draft (production is untouched)
 		agentsGroup.POST("/:id/versions/:version/rollback", agents.RollbackAgentVersion)
 		agentsGroup.POST("/:id/versions/:version/apply", agents.ApplyAgentVersion)
+		// Unrelease = clear is_current only (the version row, its directory, the draft and the endpoints stay); the
+		// prerequisite for deleting the agent while anything is released
+		agentsGroup.POST("/:id/versions/unrelease", agents.UnreleaseAgentVersion)
 		agentsGroup.DELETE("/:id/versions/:version", agents.DeleteAgentVersion)
 	}
 
@@ -302,6 +308,9 @@ func SetupRoutes(router *gin.RouterGroup) {
 		// Rollback = switch production to that version (the draft is untouched); apply = write that version back into the draft (production is untouched)
 		skillsGroup.POST("/:id/versions/:version/rollback", skills.RollbackSkillVersion)
 		skillsGroup.POST("/:id/versions/:version/apply", skills.ApplySkillVersion)
+		// Unrelease = clear is_current only (the version row, its directory and the draft stay); the prerequisite for
+		// deleting the skill while anything is released
+		skillsGroup.POST("/:id/versions/unrelease", skills.UnreleaseSkillVersion)
 		skillsGroup.DELETE("/:id/versions/:version", skills.DeleteSkillVersion)
 	}
 
@@ -350,6 +359,9 @@ func SetupRoutes(router *gin.RouterGroup) {
 		// Rollback = switch production to that version (the canvas is untouched); apply = load that version into the canvas (production is untouched)
 		flowsGroup.POST("/:id/versions/:version/rollback", flows.RollbackFlowVersion)
 		flowsGroup.POST("/:id/versions/:version/apply", flows.ApplyFlowVersion)
+		// Unrelease = take the current version off production (only is_current is cleared; the row, the canvas and the
+		// endpoints stay). It is the prerequisite for deleting the flow while anything is released.
+		flowsGroup.POST("/:id/versions/unrelease", flows.UnreleaseFlowVersion)
 		// Delete = history rows only. The current version (is_current) is the definition production calls use, so it is refused
 		flowsGroup.DELETE("/:id/versions/:version", flows.DeleteFlowVersion)
 	}

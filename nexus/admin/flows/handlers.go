@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -20,6 +21,7 @@ import (
 	svcendpoints "flame/nexus/shared/repository/svcendpoints"
 	"flame/nexus/shared/secureval"
 	"flame/nexus/shared/versioning"
+	"flame/nexus/shared/versions"
 	"flame/tools/xhttp"
 	"flame/tools/xlog"
 	"flame/tools/xsql"
@@ -609,6 +611,13 @@ func DeleteFlow(c *gin.Context) {
 			xhttp.ErrCode(c, "flow.not_found", nil, "flow instance not found", "")
 			return
 		}
+		// A released version is production's definition: the delete is refused and the answer names the version, so
+		// the UI can say "v3 is still live, unrelease it first" instead of a generic failure.
+		var released *versions.ErrHasReleasedVersion
+		if errors.As(err, &released) {
+			xhttp.ErrCode(c, "flow.has_release", gin.H{"version": released.Version}, released.Error(), "")
+			return
+		}
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
@@ -623,15 +632,9 @@ func DeleteFlow(c *gin.Context) {
 		xlog.Info("deleted %d session(s) together with flow schema=%s flow=%s", n, ai.Schema, id)
 	}
 
-	// The run history goes with it. flow_run_records / flow_node_records carry no foreign key (unlike agent_run_records,
-	// which cascades from agents), so without this the rows would survive forever: unreachable from the flow's own pages,
-	// yet still listed by the cross-flow history with a dangling flow_id. Best-effort for the same reason as the sessions
-	// above: the row is already gone, so a failure is logged instead of rolled back.
-	if n, derr := runRepo.DeleteRuns(ai.Schema, id); derr != nil {
-		xlog.Error("failed to delete the run records of the deleted flow schema=%s flow=%s: %v", ai.Schema, id, derr)
-	} else if n > 0 {
-		xlog.Info("deleted %d run record(s) together with flow schema=%s flow=%s", n, ai.Schema, id)
-	}
+	// The run history needs nothing here: the repository deletes flow_run_records / flow_node_records in the same
+	// transaction as the row, so the agent-side delete_flow tool (which goes through the same DeleteFlow) leaves no
+	// orphan history either.
 
 	xhttp.OkJSON(c, "flow instance deleted successfully", id, "")
 }

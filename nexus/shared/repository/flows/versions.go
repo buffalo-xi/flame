@@ -179,6 +179,47 @@ func (r *PostgresRepository) ApplyFlowVersionToDraft(authInfo *auth.AuthInfo, fl
 	return tx.Commit()
 }
 
+// UnreleaseFlowVersion takes the current version off production: it clears is_current and nothing else.
+//
+// The version row stays (the history keeps its number and its content), the draft is untouched, and no endpoint or
+// grant is touched. Production entry points then see ErrNoReleasedVersion — the explicit "nothing is released"
+// state, the same shape as an entity that never released. Deleting the entity requires this step first: a delete
+// must not be the thing that takes a service down.
+func (r *PostgresRepository) UnreleaseFlowVersion(authInfo *auth.AuthInfo, flowID string) (int, error) {
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Lock the entity row first: release / rollback / delete all move or check is_current, and the read below must
+	// see the final owner (ReleaseFlowVersion and DeleteFlowVersion serialise the same way).
+	var one int
+	if err := tx.QueryRow(`SELECT 1 FROM `+authInfo.Schema+`.flows WHERE id = $1 FOR UPDATE`, flowID).
+		Scan(&one); err != nil {
+		return 0, err
+	}
+
+	var version int
+	err = tx.QueryRow(`SELECT version FROM `+authInfo.Schema+`.flow_versions
+		WHERE flow_id = $1 AND is_current`, flowID).Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNoReleasedVersion
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	if _, err := tx.Exec(`UPDATE `+authInfo.Schema+`.flow_versions SET is_current = false
+		WHERE flow_id = $1 AND is_current`, flowID); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
 // DeleteFlowVersion deletes one historical version: it only clears the history row, touching neither production
 // nor the canvas.
 //

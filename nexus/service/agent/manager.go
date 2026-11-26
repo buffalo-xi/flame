@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	agents "flame/nexus/shared/repository/agents"
 	flows "flame/nexus/shared/repository/flows"
 	"flame/nexus/shared/storage"
+	"flame/nexus/shared/versions"
 	"flame/tools/xlog"
 	"flame/tools/xsql"
 )
@@ -308,13 +310,22 @@ func (m *agentManager) Delete(ctx context.Context, name string) error {
 	if inst == nil {
 		return fmt.Errorf("agent %q not found", name)
 	}
-	// Protection gate + status gate
+	// Protection gate only: a deprecated agent is deletable, because deprecating is already the explicit stop step and
+	// "switch it back to Active, then delete" would put it back in service just to remove it.
 	if err := ensureAgentDeletable(inst); err != nil {
 		return err
 	}
 	// Data removal: private skill rows, grant relations and the agents row are handled by the repository in one transaction
 	// (skills.agent_id has no foreign key, so the cascade can only be guaranteed by the application).
 	if err := m.repo.DeleteAgent(m.auth(), inst.ID); err != nil {
+		// A released version means the agent is live: the repository refuses, and the model must not try to work around
+		// it - taking a service offline is the user's call (unrelease in the version panel), never a side effect of a
+		// delete the model started.
+		var released *versions.ErrHasReleasedVersion
+		if errors.As(err, &released) {
+			return fmt.Errorf("v%d is still released, so agent %q is live and cannot be deleted; ask the user to unrelease it in the version panel first",
+				released.Version, inst.Name)
+		}
 		return err
 	}
 	// Clean the definition-domain directory and the version domain together (a database cascade cannot delete the disk).
@@ -342,10 +353,11 @@ func ensureAgentRenamable(inst *models.Agent, newName string) error {
 	return nil
 }
 
-// ensureAgentDeletable is the protection gate plus the status gate.
+// ensureAgentDeletable is the protection gate; the status gate does not apply, because a deprecated agent is deletable
+// (deleting is how an entity leaves for good; deprecating already took it out of service).
 func ensureAgentDeletable(inst *models.Agent) error {
 	if models.IsProtectedAgent(inst.Name) {
 		return fmt.Errorf("protected agent %q cannot be deleted", inst.Name)
 	}
-	return ensureAgentMutable(inst)
+	return nil
 }

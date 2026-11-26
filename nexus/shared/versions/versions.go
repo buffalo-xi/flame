@@ -13,6 +13,7 @@ package versions
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,6 +38,45 @@ var ErrNoReleasedVersion = errors.New("no released version yet")
 // It is the definition source of production calls and the only record of "what is running in production". To delete it, switch to another
 // version first - switching is a different action, and a delete should not also mean taking something offline.
 var ErrCannotDeleteCurrentVersion = errors.New("the current version cannot be deleted; switch production to another version first")
+
+// ErrHasReleasedVersion means the entity still has a version in production, so the entity itself cannot be deleted.
+//
+// The same rule one level up from ErrCannotDeleteCurrentVersion: deleting a version must not take the service down, and
+// neither must deleting the whole entity. The prerequisite is an explicit unrelease (Unrelease), which clears the
+// production pointer and leaves the entity, the draft and the history in place.
+type ErrHasReleasedVersion struct {
+	Version int
+}
+
+func (e *ErrHasReleasedVersion) Error() string {
+	return fmt.Sprintf("v%d is still released; unrelease it before deleting", e.Version)
+}
+
+// Unrelease clears is_current for one entity inside the caller's transaction and returns the version it took offline.
+//
+// Only the pointer moves: the version row, the version directory, the draft and the endpoints / grants stay as they
+// are, so the entity can be edited and released again. With nothing released it returns ErrNoReleasedVersion, which the
+// caller reports as "there is nothing to unrelease" rather than as a failure.
+//
+// table (a schema-qualified name such as "t0.flow_versions") and ownerColumn are internal constants, never request input:
+// the SQL text is assembled, the owner id is a parameter. The row is locked, so a concurrent release cannot slip a new
+// current version in between the read and the update.
+func Unrelease(tx *sql.Tx, table, ownerColumn, ownerID string) (int, error) {
+	var version int
+	err := tx.QueryRow(fmt.Sprintf(`SELECT version FROM %s WHERE %s = $1 AND is_current FOR UPDATE`,
+		table, ownerColumn), ownerID).Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNoReleasedVersion
+	}
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`UPDATE %s SET is_current = false WHERE %s = $1 AND is_current`,
+		table, ownerColumn), ownerID); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
 
 // ErrVersionExists means the version number is taken (the version directory already exists).
 //

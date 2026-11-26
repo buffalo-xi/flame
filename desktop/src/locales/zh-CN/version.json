@@ -3,7 +3,7 @@
     "badge": "版本随所属智能体",
     "releaseCurrent": "发布当前草稿",
     "readonlyNotice": "只读状态（已废弃）不可发布、切到线上、载入或删除",
-    "pointerNotice": "「切到线上」只改线上指针，草稿不动；「载入草稿」只改草稿，线上不动。",
+    "pointerNotice": "「切到线上」只改线上指针，草稿不动；「载入草稿」只改草稿，线上不动；「取消发布」只摘掉线上指针，版本历史 / 草稿 / 端点与授权都不动。有发布版本时不能删实体，先取消发布。",
     "empty": "还没有发布过版本",
     "currentTag": "当前版本",
     "filesCount": "{n} 个文件",
@@ -42,6 +42,11 @@
     "deleteTitle": "删除版本",
     "confirmDelete": "删除",
     "deleteFailed": "删除失败",
-    "deleted": "已删除 v{v}"
+    "deleted": "已删除 v{v}",
+    "unrelease": "取消发布",
+    "unreleaseTitle": "取消发布 v{v}",
+    "unreleaseConfirm": "取消发布 v{v}？线上正式调用（MCP / RPC / 端点 / 智能体 / 其它流程）会立刻报「未发布」；版本历史、草稿、端点与授权都不动，之后可以再次发布。\n\n删除实体之前必须先做这一步：删除不该顺带停服。",
+    "unreleaseFailed": "取消发布失败",
+    "unreleased": "已取消发布 v{v}，线上不再有可运行的版本"
   }
 }

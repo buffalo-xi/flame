@@ -420,6 +420,44 @@ func RollbackSkillVersion(c *gin.Context) {
 // is the only version (there is nothing to switch to).
 // Directory first, row second: numbers are never reused, and a row without its directory would
 // make the next release hit ErrVersionExists.
+// UnreleaseSkillVersion POST /skills/:id/versions/unrelease
+//
+// Clears is_current only: the version row and its directory stay, the draft files stay, and the agents' catalogs simply
+// have nothing to inject until the next release. Deleting the skill needs this step first: a delete must not be the thing
+// that takes the skill away from every agent.
+func UnreleaseSkillVersion(c *gin.Context) {
+	info, ok := authInfo(c)
+	if !ok {
+		return
+	}
+	s, ok := mustTenantSkill(c, info, "unrelease a version")
+	if !ok {
+		return
+	}
+
+	tx, err := db.DB.Begin()
+	if err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	version, err := versions.Unrelease(tx, skillVersionTable(info.Schema), "skill_id", s.ID)
+	if err != nil {
+		if errors.Is(err, versions.ErrNoReleasedVersion) {
+			xhttp.ErrCode(c, "version.none", nil, "nothing is released, so there is nothing to unrelease", "")
+			return
+		}
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	xhttp.OkJSON(c, "Success", gin.H{"version": version}, "")
+}
+
 func DeleteSkillVersion(c *gin.Context) {
 	info, ok := authInfo(c)
 	if !ok {

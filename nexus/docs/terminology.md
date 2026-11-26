@@ -56,12 +56,26 @@ grant revocation, section 4); `hide` (that is visibility — an endpoint is abou
 | Push a version to production | **release** (`release` / `deploy`) |
 | Switch production to a historical version (draft untouched) | **rollback** (`rollback`) |
 | Load a historical version back into the draft (production untouched) | **load** (`apply`) |
+| Take the current version off production (draft, history and endpoints untouched) | **unrelease** (`unrelease`) |
 | Canary | canary |
 
 Workflow versions are already shipped with this wording: `ReleaseFlowVersion` / `ErrNoReleasedVersion`, and the flag in the
 database is `is_current` (the single pointer to the production version). Deleting a historical version
 (`DeleteFlowVersion`) only clears history and leaves production alone; the current version refuses deletion — stopping
 service is a different action, do not smuggle it into delete.
+
+`unrelease` is that separate action, and it is the missing half of the same sentence: it clears `is_current` and nothing
+else (the version row, the version directory, the draft, the endpoints and the grants stay), so production reports
+`ErrNoReleasedVersion` — the explicit "nothing is released" state. All four domains share it:
+`versions.Unrelease` with `UnreleaseFlowVersion` / `UnreleaseAgentVersion` / `UnreleaseSkillVersion` /
+`UnreleaseToolVersion` on top. Two consequences follow:
+
+- **deleting an entity needs nothing released**: with a current version the delete is refused
+  (`versions.ErrHasReleasedVersion`, carrying the version number) — the same rule as deleting a version, one level up,
+  because a delete must not be the thing that takes a service down;
+- **a deprecated entity is deletable** (agents / skills used to require switching back to Active first, which put the
+  entity back in service just to remove it); deprecating is already the explicit stop step, so what still blocks a
+  delete is a release, not the status.
 
 ### Entity versions (agents / skills / custom tools)
 

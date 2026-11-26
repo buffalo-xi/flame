@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	svcendpoints "flame/nexus/shared/repository/svcendpoints"
 	"flame/nexus/shared/skeleton"
 	"flame/nexus/shared/versioning"
+	"flame/nexus/shared/versions"
 	"flame/tools/xhttp"
 	"flame/tools/xlog"
 	"flame/tools/xsql"
@@ -747,17 +749,22 @@ func DeleteAgent(c *gin.Context) {
 		xhttp.ErrCode(c, "agent.protected", gin.H{"name": inst.Name}, "protected agent "+inst.Name+" cannot be deleted", "")
 		return
 	}
-	// A deprecated agent cannot be deleted (switch it back to Active first).
-	if inst != nil && !inst.IsModifiable() {
-		xhttp.ErrCode(c, "agent.deprecated", nil, "this agent is deprecated, cannot be deleted (switch it back to Active first)", "")
-		return
-	}
+	// A deprecated agent is deletable: deprecating is the explicit "take it out of service" step (it retracts the
+	// endpoints), so the reverse rule - "switch it back to Active, then delete" - would put it back online just to
+	// remove it. What still blocks a delete is a released version (handled by the repository): unrelease first.
 
 	// Delete the rows: the private skill records, the grant links and the agents row are handled in one
 	// repository transaction (skills.agent_id has no foreign key, so DB-level cascading cannot be relied on).
 	if err := repo.DeleteAgent(ai, id); err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")
+			return
+		}
+		// A released version is what production runs: the delete is refused and the answer names the version, so the UI
+		// can say "v3 is still live, unrelease it first" instead of a generic failure.
+		var released *versions.ErrHasReleasedVersion
+		if errors.As(err, &released) {
+			xhttp.ErrCode(c, "agent.has_release", gin.H{"version": released.Version}, released.Error(), "")
 			return
 		}
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")

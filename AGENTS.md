@@ -11,10 +11,13 @@ This file is only an **entry summary and a set of red lines**; the full mapping,
 | Asset marketplace | `list` / `delist` | `listed` / `delisted` | `platform.shared_assets.status`, `listed_by` |
 | Endpoints | `expose` / `retract` | `exposed` (bool) | `svc_endpoints.exposed`, mirror JSON key `exposed` |
 | Grant / credential | `revoke` | — | `revoke_agent_tool` and friends |
-| Version / deployment | `release` / `deploy`; roll back with `rollback`; load with `apply` | `is_current` | version directory `versions/` + `is_current` |
+| Version / deployment | `release` / `deploy`; roll back with `rollback`; load with `apply`; take offline with `unrelease` | `is_current` | version directory `versions/` + `is_current` |
 
 The version domain is already shipped: `rollback` flips only `is_current` (the draft is left alone), `apply` writes only the
 draft (production is left alone); `revoke` reads the current grant, and neither rollback nor apply writes it back.
+`unrelease` clears only `is_current` (version row, directory, draft, endpoints and grants stay) and is the prerequisite for
+deleting an entity: a delete with a released version is refused with `versions.ErrHasReleasedVersion` — deleting must not
+double as a service stop. A deprecated entity is deletable (deprecating is already the explicit stop step).
 
 **Never mix them**:
 

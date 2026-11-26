@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"flame/nexus/shared/models"
 	svcendpoints "flame/nexus/shared/repository/svcendpoints"
 	"flame/nexus/shared/secureval"
+	"flame/nexus/shared/versions"
 	"flame/tools/xsql"
 
 	"github.com/google/uuid"
@@ -587,6 +589,19 @@ func (r *PostgresRepository) DeleteFlow(authInfo *auth.AuthInfo, id string) erro
 		return err
 	}
 
+	// A released version is what production runs: deleting the row would take the service down, so it is refused and the
+	// prerequisite is named (unrelease). Same rule as "a version that is in use cannot be deleted", one level up.
+	var releasedVersion int
+	switch err := tx.QueryRow(`SELECT version FROM `+authInfo.Schema+`.flow_versions
+		WHERE flow_id = $1 AND is_current`, id).Scan(&releasedVersion); {
+	case err == nil:
+		tx.Rollback()
+		return &versions.ErrHasReleasedVersion{Version: releasedVersion}
+	case !errors.Is(err, sql.ErrNoRows):
+		tx.Rollback()
+		return err
+	}
+
 	// Only an endpoint that is still exposed blocks the delete: a public entrance may be in use by callers outside the
 	// tenant and must not vanish with the flow. A not-exposed endpoint (including the RPC endpoint added automatically
 	// at creation) is derived data of the entity itself and goes with the flow — otherwise, once the automatic creation
@@ -625,6 +640,22 @@ func (r *PostgresRepository) DeleteFlow(authInfo *auth.AuthInfo, id string) erro
 	if rowsAffected == 0 {
 		tx.Rollback()
 		return sql.ErrNoRows
+	}
+
+	// The run history goes with the flow. flow_run_records / flow_node_records carry no foreign key to flows (unlike
+	// agent_run_records, which cascades from agents), so without this the rows outlive the flow: unreachable from its own
+	// pages, yet still listed by the cross-flow history under a flow_id that no longer resolves. Done in the same
+	// transaction as the row, so a failure leaves the flow in place instead of half-cleaned; node records first, since
+	// they only join on run_id.
+	if _, err := tx.Exec(`
+		DELETE FROM `+authInfo.Schema+`.flow_node_records
+		WHERE run_id IN (SELECT id FROM `+authInfo.Schema+`.flow_run_records WHERE flow_id = $1)`, id); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM `+authInfo.Schema+`.flow_run_records WHERE flow_id = $1`, id); err != nil {
+		tx.Rollback()
+		return err
 	}
 
 	// Commit

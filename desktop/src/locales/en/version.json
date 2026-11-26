@@ -3,7 +3,7 @@
     "badge": "Version follows its agent",
     "releaseCurrent": "Release current draft",
     "readonlyNotice": "Read-only (deprecated): cannot release, switch live, load or delete",
-    "pointerNotice": "\"Switch live\" only moves the live pointer and leaves the draft untouched; \"Load into draft\" only rewrites the draft and leaves the live version running.",
+    "pointerNotice": "\"Switch live\" only moves the live pointer and leaves the draft untouched; \"Load into draft\" only rewrites the draft and leaves the live version running; \"Unrelease\" only clears the live pointer - version history, draft, endpoints and permissions stay. An entity with a released version cannot be deleted: unrelease it first.",
     "empty": "No versions released yet",
     "currentTag": "Current",
     "filesCount": "{n} files",
@@ -42,6 +42,11 @@
     "deleteTitle": "Delete version",
     "confirmDelete": "Delete",
     "deleteFailed": "Delete failed",
-    "deleted": "Deleted v{v}"
+    "deleted": "Deleted v{v}",
+    "unrelease": "Unrelease",
+    "unreleaseTitle": "Unrelease v{v}",
+    "unreleaseConfirm": "Unrelease v{v}? Official calls (MCP / RPC / endpoint / agent / other workflows) will immediately report \"no released version\"; version history, the draft, the endpoints and permissions stay as they are, and you can release again later.\n\nThis is the prerequisite for deleting the entity: a delete must not double as a service stop.",
+    "unreleaseFailed": "Unrelease failed",
+    "unreleased": "Unreleased v{v}; nothing runs online any more"
   }
 }

@@ -30,6 +30,7 @@
       "overwrite_unsupported": "{kind}暂不支持覆盖导入：同名时会给出建议名，改名后重试即可"
     },
     "tool": {
+      "has_release": "v{version} 仍在线上，删除会让正式调用立刻拿不到这个工具。请先在版本面板「取消发布」，再删除。",
       "delete_failed": "删除失败：条目仍然存在，请重试或检查存储权限。",
       "file_required": "请选择要上传的文件。",
       "invalid_file_name": "文件名不合法。",
@@ -55,6 +56,7 @@
       "last_version_undeletable": "v{version} 是唯一的版本，不能删除；如需清理历史请先发布一个新版本"
     },
     "agent": {
+      "has_release": "v{version} 仍在线上，删除会立刻停掉正式调用。请先在版本面板「取消发布」，再删除。",
       "delete_failed": "删除失败：条目仍然存在，请重试或检查存储权限。",
       "file_required": "请选择要上传的文件。",
       "invalid_doc_refs": "文档里不能引用密钥型全局变量，请改用普通变量。",
@@ -81,6 +83,7 @@
       "relations_failed": "智能体已创建，但保存调用授权失败。请检查该智能体后重试。"
     },
     "skill": {
+      "has_release": "v{version} 仍在线上，删除会让所有智能体立刻失去这个技能。请先在版本面板「取消发布」，再删除。",
       "delete_failed": "删除失败：条目仍然存在，请重试或检查存储权限。",
       "entry_undeletable": "{file} 是技能入口文件，不能删除。",
       "file_required": "请选择要上传的文件。",
@@ -110,7 +113,8 @@
     },
     "version": {
       "not_found": "版本不存在",
-      "in_use": "这是正在使用的版本，不能删除。请先回滚到其它版本。"
+      "in_use": "这是正在使用的版本，不能删除。请先回滚到其它版本。",
+      "none": "当前没有发布版本，无需取消发布"
     },
     "llm": {
       "preset_invalid_id": "非法的预设 id",
@@ -248,7 +252,8 @@
       "deprecated": "工作流「{name}」已废弃，不可调用",
       "duplicate_label": "节点名称不能重复：{names}。名称可用于 source_ref / call.target 引用，重名会指错节点，请改名后再保存",
       "node_limit_exceeded": "流程图有 {count} 个节点，超过当前租户的节点数上限（{limit}）。请拆分成多个流程，或联系管理员调整配额；注释节点不计入。",
-      "description_required": "工作流描述不能为空"
+      "description_required": "工作流描述不能为空",
+      "has_release": "v{version} 仍在线上，删除会立刻停掉正式调用。请先在版本面板「取消发布」，再删除。"
     },
     "agentconfig": {
       "invalid_value": "{field} 必须是不小于 1 的整数（本组四项配置不支持 -1 表示不限）",

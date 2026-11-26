@@ -22,6 +22,11 @@
         <div v-if="!canRelease" class="version-hint">
           {{ $t('version.readonlyNotice') }}
         </div>
+        <!-- Unrelease clears is_current only; the backend refuses to delete an entity that still has a release -->
+        <el-button v-if="currentVersion" size="small" :loading="unreleasing" class="version-unrelease"
+                   :disabled="!canRelease" @click="unrelease">
+          {{ $t('version.unrelease') }}
+        </el-button>
         <div class="version-hint">
           {{ $t('version.pointerNotice') }}
         </div>
@@ -96,6 +101,7 @@ const headers = () => ({
 const visible = ref(false)
 const loading = ref(false)
 const releasing = ref(false)
+const unreleasing = ref(false)
 const versions = ref([])
 
 const privateTip = computed(() => t('version.privateTip'))
@@ -175,6 +181,40 @@ const release = async () => {
     ElMessage.error(e.message || t('version.releaseFailed'))
   } finally {
     releasing.value = false
+  }
+}
+
+// Unrelease clears is_current only: the entity stays alive (the draft can still be edited and released again),
+// while official calls immediately report "unreleased". A released version blocks deleting the entity, so this is
+// the prerequisite for a delete - a delete must not double as a service stop.
+const unrelease = async () => {
+  if (!props.currentVersion) return
+  try {
+    await ElMessageBox.confirm(
+      t('version.unreleaseConfirm', { v: props.currentVersion }),
+      t('version.unreleaseTitle', { v: props.currentVersion }),
+      {
+        type: 'warning',
+        confirmButtonText: t('version.unrelease'),
+        cancelButtonText: t('common.cancel')
+      }
+    )
+  } catch {
+    return
+  }
+  unreleasing.value = true
+  try {
+    const res = await fetch(api.value.unrelease(props.target), { method: 'POST', headers: headers() })
+    const body = await res.json().catch(() => ({}))
+    if (body.code !== 200) throw new Error(formatError(body) || t('version.unreleaseFailed'))
+    ElMessage.success(t('version.unreleased', { v: body.data?.version ?? props.currentVersion }))
+    // Neither the version row nor the draft moved: the parent only has to re-read the version state (badge -> unreleased)
+    emit('changed')
+    await load()
+  } catch (e) {
+    ElMessage.error(e.message || t('version.unreleaseFailed'))
+  } finally {
+    unreleasing.value = false
   }
 }
 
@@ -313,6 +353,10 @@ const remove = async (v) => {
 
 .version-release {
   margin: 12px 0;
+}
+
+.version-unrelease {
+  margin-top: 8px;
 }
 
 .version-hint {

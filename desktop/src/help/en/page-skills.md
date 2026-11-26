@@ -8,7 +8,8 @@ and New skill.
 The tags keep three things apart: version (`v3` / "unreleased") and scope (private / shared N). "Shared N"
 is how many agents can see it — the agent total when it is visible to everyone, the bound count for a
 whitelist, and it turns red when a whitelist has nobody in it. Hovering reveals: restore, deprecate, edit,
-export, delete.
+export, delete. **A delete needs nothing released**: with v3 live it is refused until you unrelease in the
+version panel; a deprecated skill (and a private one, whose version follows its agent) can be deleted directly.
 
 ## The content directory and the editor
 

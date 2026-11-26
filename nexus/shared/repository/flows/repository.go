@@ -58,6 +58,10 @@ type Repository interface {
 	// DeleteFlowVersion deletes a historical version (the current one cannot be deleted; production and the draft are both
 	// untouched).
 	DeleteFlowVersion(authInfo *auth.AuthInfo, flowID string, version int) error
+	// UnreleaseFlowVersion takes the current version off production (clears is_current, keeps the row, the draft and the
+	// endpoints). It is the prerequisite for DeleteFlow once anything has been released; with nothing released it returns
+	// ErrNoReleasedVersion.
+	UnreleaseFlowVersion(authInfo *auth.AuthInfo, flowID string) (int, error)
 	// GetCurrentFlowVersion returns the definition of the released version: the production entry points (MCP / RPC / an
 	// endpoint / a direct flow call) come through here; with no released version it returns ErrNoReleasedVersion and the
 	// caller should refuse to execute rather than fall back to the draft.

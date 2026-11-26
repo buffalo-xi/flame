@@ -1,6 +1,6 @@
-# Save, release, switch production, load into draft
+# Save, release, switch production, load into draft, unrelease
 
-Agents, skills, custom tools and flows all have versions. Four actions look alike; their scopes are not.
+Agents, skills, custom tools and flows all have versions. Five actions look alike; their scopes are not.
 
 ## What each action does
 
@@ -10,6 +10,14 @@ Agents, skills, custom tools and flows all have versions. Four actions look alik
 | Release | reads (must already be saved) | moves to the new version | You want production calls to use the new content |
 | Switch production | **no** | moves to an older version | Something went wrong and it must be rolled back now |
 | Load into draft ("load into canvas" for flows) | overwrites | **no** | Start over from an old version, or drop the draft back to what is live |
+| Unrelease | no | **takes the current version off production** (history, endpoints and permissions untouched) | You want to take it down for a while, or you are about to delete the entity |
+
+## An entity with a released version cannot be deleted
+
+Before an entity (agent / skill / custom tool / flow) can be deleted, nothing may be released: with v3 live the
+delete is refused and the answer points at "unrelease". Unrelease only clears the live pointer — the draft and the
+history stay, so you can release again later; after a delete the version history goes with the entity. Deprecating
+does not block a delete: deprecation is already the stop step.
 
 ## The draft and production are two different things
 

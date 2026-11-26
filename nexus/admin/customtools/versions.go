@@ -485,6 +485,51 @@ func RollbackToolVersion(c *gin.Context) {
 // DeleteToolVersion DELETE /customtools/:name/versions/:version
 //
 // History only: production still runs the is_current version, and the draft is untouched.
+// UnreleaseToolVersion POST /customtools/:name/versions/unrelease
+//
+// Clears is_current only: the version row and its directory stay, the draft stays, and a production run simply has no
+// definition to load until the next release. Deleting the tool needs this step first: a delete must not be the thing that
+// takes the tool out of the catalog.
+func UnreleaseToolVersion(c *gin.Context) {
+	info, ok := mustAuth(c)
+	if !ok {
+		return
+	}
+	name := c.Param("name")
+	store := storeFor(info.Schema)
+	t, err := store.Get(info.Schema, name)
+	if errors.Is(err, sql.ErrNoRows) || t == nil {
+		errToolNotFound(c)
+		return
+	}
+	if err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, "failed to read the custom tool: "+err.Error(), "")
+		return
+	}
+
+	tx, err := db.DB.Begin()
+	if err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	version, err := versions.Unrelease(tx, toolVersionTable(info.Schema), "tool_id", t.ID)
+	if err != nil {
+		if errors.Is(err, versions.ErrNoReleasedVersion) {
+			xhttp.ErrCode(c, "version.none", nil, "nothing is released, so there is nothing to unrelease", "")
+			return
+		}
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
+		return
+	}
+	xhttp.OkJSON(c, "Success", gin.H{"version": version}, "")
+}
+
 // The current version is always rejected - it is the definition source of live calls; the only
 // version is rejected too (there is nothing to switch to).
 //

@@ -8,7 +8,8 @@ agents (such as main) are shown; it changes no data.
 
 A card shows name, status, version (`v3` / "unreleased"), endpoint protocol tag, description and who last
 updated it. Hovering reveals five actions: restore, deprecate, endpoints, export as an asset package,
-delete.
+delete. **A delete needs nothing released**: with v3 live it is refused until you unrelease in the version
+panel; a deprecated agent can be deleted directly (deprecation is already the stop step).
 
 ## The editor is a directory of files
 

@@ -42,3 +42,25 @@ func TestResolveTargetAgentStatusGate(t *testing.T) {
 		})
 	}
 }
+
+// Deleting is the one exception to that gate: a private skill of a deprecated agent can be removed without reactivating
+// the agent first (the agent itself is deletable in that state), so the delete-side resolver only checks existence.
+func TestResolveTargetAgentForDeleteSkipsStatusGate(t *testing.T) {
+	c := &Context{
+		Schema: "t0",
+		Agents: stubAgentsByName{byName: map[string]*AgentInfo{
+			"gone": {ID: "a1", Name: "gone", Status: models.StatusDeprecated},
+		}},
+		Skills: stubSkillsForWrite{byOwner: map[string]map[string]*SkillInfo{}},
+	}
+	name, id, err := resolveTargetAgentForDelete(context.Background(), c, map[string]any{"agent": "gone"})
+	if err != nil {
+		t.Fatalf("resolveTargetAgentForDelete(deprecated) = %v, want nil", err)
+	}
+	if name != "gone" || id != "a1" {
+		t.Fatalf("resolved = (%q, %q), want (gone, a1)", name, id)
+	}
+	if _, _, err := resolveTargetAgentForDelete(context.Background(), c, map[string]any{"agent": "missing"}); err == nil {
+		t.Fatal("resolveTargetAgentForDelete(missing) = nil, want an error")
+	}
+}

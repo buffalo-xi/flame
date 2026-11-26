@@ -783,7 +783,7 @@ func (t *deleteAgentSkillTool) Meta() ToolMeta {
 }
 
 func (t *deleteAgentSkillTool) Execute(ctx context.Context, c *Context, args map[string]any) (any, error) {
-	_, ownerID, err := resolveTargetAgent(ctx, c, args)
+	_, ownerID, err := resolveTargetAgentForDelete(ctx, c, args)
 	if err != nil {
 		return nil, err
 	}
@@ -1114,6 +1114,30 @@ func resolveTargetAgent(ctx context.Context, c *Context, args map[string]any) (s
 	}
 	if !models.IsModifiable(info.Status) {
 		return "", "", fmt.Errorf("agent %q is deprecated; switch it back to normal first", name)
+	}
+	return name, info.ID, nil
+}
+
+// resolveTargetAgentForDelete is resolveTargetAgent without the status gate: deleting a private skill of a deprecated
+// agent is allowed (that agent is deletable in the same state), and requiring "switch it back to normal first" would put
+// the agent back online just to remove a file. Every write keeps resolveTargetAgent.
+func resolveTargetAgentForDelete(ctx context.Context, c *Context, args map[string]any) (string, string, error) {
+	name := argString(args, "agent")
+	if !ValidName(name) {
+		return "", "", fmt.Errorf("invalid agent name %q", name)
+	}
+	if c.Agents == nil {
+		return "", "", errors.New("agent manager not available")
+	}
+	if c.Skills == nil {
+		return "", "", errors.New("skill manager not available")
+	}
+	info, err := c.Agents.Get(ctx, name)
+	if err != nil {
+		return "", "", err
+	}
+	if info == nil {
+		return "", "", fmt.Errorf("agent %q not found", name)
 	}
 	return name, info.ID, nil
 }

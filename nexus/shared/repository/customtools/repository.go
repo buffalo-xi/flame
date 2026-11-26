@@ -11,10 +11,12 @@ package customtools
 import (
 	"crypto/rand"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"flame/nexus/shared/db"
 	"flame/nexus/shared/models"
+	"flame/nexus/shared/versions"
 	"flame/tools/xsql"
 )
 
@@ -155,8 +157,36 @@ func (r *postgresRepository) Update(schema string, t *models.CustomTool) error {
 }
 
 func (r *postgresRepository) Delete(schema, name string) error {
-	_, err := db.DB.Exec(`DELETE FROM `+table(schema)+` WHERE name = $1`, name)
-	return err
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// A missing name keeps the previous semantics (a DELETE that matches nothing is not an error).
+	var id string
+	switch qerr := tx.QueryRow(`SELECT id FROM `+table(schema)+` WHERE name = $1 FOR UPDATE`, name).Scan(&id); {
+	case errors.Is(qerr, sql.ErrNoRows):
+		return nil
+	case qerr != nil:
+		return qerr
+	}
+
+	// A released version is what production runs: deleting the row would take the tool out of the catalog, which is an
+	// explicit unrelease, not a side effect of delete. Same rule as the other three domains.
+	var released int
+	switch qerr := tx.QueryRow(`SELECT version FROM `+schema+`.tool_versions
+		WHERE tool_id = $1 AND is_current`, id).Scan(&released); {
+	case qerr == nil:
+		return &versions.ErrHasReleasedVersion{Version: released}
+	case !errors.Is(qerr, sql.ErrNoRows):
+		return qerr
+	}
+
+	if _, err := tx.Exec(`DELETE FROM `+table(schema)+` WHERE name = $1`, name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // newID generates a UUIDv4.

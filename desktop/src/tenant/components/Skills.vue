@@ -571,11 +571,14 @@ const removeSkill = async (row) => {
   }
   try {
     const response = await fetch(adminApi.skills.delete(row.id), { method: 'DELETE', headers: authHeaders() })
-    if (!response.ok) throw new Error(t('agent.deleteFailed'))
+    // The API answers 200 with a business code: a reflected message (`skill.has_release` = "unrelease first") only
+    // reaches the user if the body is read, so `response.ok` alone would hide the reason behind a generic failure.
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok || body.code !== 200) throw new Error(formatError(body) || t('skill.deleteFailed'))
     ElMessage.success(t('skill.deleted'))
     await fetchSkills()
   } catch (e) {
-    ElMessage.error(e.message || t('agent.deleteFailed'))
+    ElMessage.error(e.message || t('skill.deleteFailed'))
   }
 }
 
