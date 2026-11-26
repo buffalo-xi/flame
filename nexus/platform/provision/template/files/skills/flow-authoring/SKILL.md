@@ -230,11 +230,12 @@ The "fixed outputs" column comes from node configs the **front end actually gene
 | `mcp` | `connection_id`, `tool_name` | `arguments` / `progress` | `result` `progress` `error` |
 | `rpc` | by `target_type`: `endpoint` → `endpoint` (**the endpoint name**, not an id); `connection` → `connection_id` + `tool_name` | `target_type` / `arguments` / `progress` | `result` `progress` `error` |
 
-Three easy traps:
+Four easy traps:
 
 - `headers` / `params` are `[{key,value}]` **arrays**, not objects
 - `mcp.arguments` is stored by the front end as a **JSON string** (`"{\"a\":6,\"b\":7}"`), not an object
 - for `code`, a variable not declared in `outputs` makes the script **fail outright** when returned (the runtime rejects it as an "undeclared variable"), it is not silently dropped
+- for `code`, the return syntax is **per language**: `lua` returns a table from the top level, `python` assigns **`__return__`** (a `return` statement is a `SyntaxError`), `js` returns an object. Copying the Lua form into a Python script produces a dead node — see `references/script-languages.md`
 
 ### Node reference: read only when needed
 
@@ -251,6 +252,7 @@ read_file("/skills/flow-authoring/references/nodes/<type>.md")
 | Edge shapes / examples / return values / troubleshooting (handle rules are authoritative in `create_edge`'s parameters, not repeated here) | `references/edges.md` |
 | Add / insert / update / delete nodes (`create_node` `insert_node` `update_node` `delete_node`), containers and entry rules | `references/nodes-edit.md` |
 | Retry / skip / fallback script shapes and precedence on failure | `references/on-error.md` |
+| Script conventions shared by every surface: how `lua` / `python` / `js` return a value, and what the `code` node, conditions, handlers, `on_error`, binding transforms and `result` / `progress` each expect back | `references/script-languages.md` |
 | Execution nodes: `llm` `http` `code` `mcp` `rpc` | `references/nodes/<type>.md` |
 | Control / containers: `branch` `intent` `loop` `process` `function` `call` `assign` `memory` `wait` `fork` `result` `progress` | `references/nodes/<type>.md` |
 | Control signals (`break` / `continue` / `return` / `exit`), structural kinds (`start` / `entry` / `comment`) | `references/nodes/control-signals.md`, `references/nodes/visual.md` |
@@ -528,6 +530,7 @@ declared `arguments`; undeclared keys can still be passed, but they never appear
 | A branch matches but nothing happens | the `children` `id` and the `branches` `key` do not match (the tool blocks it), or `condition` forgot `return` |
 | Run reports "branch / intent node has no branches configured" | `branches` **only builds outgoing edges**; the candidate branches / intents still have to be written in full under `config.children` |
 | Run reports `output var xxx not defined` | the `mcp` / `rpc` node's `config.outputs` does not declare that output (these two have no fallback; `http` / `llm` fill it in) |
+| A `code` node succeeds but every declared output is empty | the script never returned: `python` must assign `__return__` (a `return` statement is a `SyntaxError`), `lua` / `js` return a table / object from the top level, and `print` only reaches the node log |
 | A config-related error on the very first step | the node's required sub-object is missing: `llm.messages` / `http.url` / `code.script` / `mcp.connection_id` + `tool_name` |
 | `<no value>` in the result | a template field name is misspelled, or `config.inputs` does not declare that variable |
 | Error "node result not found" | `source_ref` points at a node that does not exist or has not run yet (ids start at `1`, so the first step is `2`) |

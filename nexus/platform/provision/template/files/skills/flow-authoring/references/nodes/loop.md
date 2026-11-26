@@ -30,6 +30,11 @@ A container node: repeats its own child nodes (`parentNode = loop.id`), starting
 `while` / `do_while` condition scripts support `loop.timeout = {enabled, seconds}`; when off (or unset) there is no node-level
 timeout and the run limit applies.
 
+**The condition must return a real boolean**, and the return form depends on the language: `return input.i < 5` in lua / js,
+`__return__ = input["i"] < 5` in python. Unlike a `branch` condition — which also accepts `"true"` and non-zero numbers — a
+loop treats anything but `true` as false, so a string `"true"` ends the loop on the first check. See
+[`../script-languages.md`](../script-languages.md).
+
 `loop_vars` declares loop variables (`index` / `item` or custom ones), referenceable from child nodes.
 
 `loop_vars` and `outputs` are two separate channels; do not mix them: loop variables (the index, the current element) go into

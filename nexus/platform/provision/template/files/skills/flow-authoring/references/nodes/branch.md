@@ -28,7 +28,7 @@ canvas it is wired by hand.
 | `children[].label` | — | `id` | used in logs only |
 | `children[].condition` | — | empty = skip that branch | script text that must `return` a value; truthiness: a bool itself, a string only if `"true"/"True"/"TRUE"`, a number if non-zero |
 | `children[].exclusive` | — | `true` | **exclusive by default**: on a match, the node ends immediately after that sub-chain, without trying later branches or the default branch. Only an explicit `false` makes it non-exclusive (keep comparing; every match runs) |
-| `branch.lang` | — | `lua` | condition script language |
+| `branch.lang` | — | `lua` | condition script language: `return` in lua / js, `__return__ = ...` in python (see [`../script-languages.md`](../script-languages.md)) |
 | `branch.timeout` | — | off | `{enabled,seconds}`; when off there is no node-level timeout and the run limit applies |
 | `inputs` | — | — | variables shared by all branches, available as `input.*` in condition scripts |
 

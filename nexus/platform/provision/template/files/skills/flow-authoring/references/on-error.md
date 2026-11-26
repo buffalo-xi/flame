@@ -51,12 +51,15 @@ The script returns:
 - a map carrying `error_code` / `error_message` → the code and text are **rewritten** and the node still fails;
 - anything else → the node still fails.
 
+**The return form is per language**, and the `"return 'skip'"` above is lua / js only — in python the same handler is
+`__return__ = "skip"` (a `return` statement is a `SyntaxError`). See [`script-languages.md`](script-languages.md).
+
 ## post (fallback, only effective on certain nodes)
 
 | Key | Meaning |
 |---|---|
 | `set_outputs` | static outputs, written straight into the node's output variables |
-| `handler` | fallback script `{lang, script, inputs}`; the returned map overwrites the output variables |
+| `handler` | fallback script `{lang, script, inputs}`; the returned map overwrites the output variables — `return { text = 'fallback' }` in lua / js, `__return__ = {"text": "fallback"}` in python |
 
 - runs only on **final failure / skip** (not on the path where the `handler` script itself errors).
 - **only `http` / `llm` / `code` / `mcp` / `rpc` / `call` support post**; on other nodes it is ignored even if written (the

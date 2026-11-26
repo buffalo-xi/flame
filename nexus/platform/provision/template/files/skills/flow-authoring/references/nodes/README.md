@@ -53,6 +53,17 @@ context.
 | `on_error` | all execution nodes | retry / skip / fallback script by error code, see `../on-error.md`. **The action must be within that node's declared capabilities** (`post` only for six types, `intent` supports `retry` only, `wait` only `skip`, `branch`/`fork`/`assign` support none), out-of-declaration config is dropped with a warning |
 | `concurrency` | execution nodes (llm / code / http / mcp / rpc / call, etc.) | **Off by default: do not write this key** (the tools strip it and return a warning). Write it only when the user explicitly asks for concurrency, choosing as they ask: `{"mode":"mono"}` mono concurrency (one node processes several records concurrently), `{"mode":"fork","fork_node_id":"<id>"}` concurrency group (several nodes run at once, a `wait` joins them). Also declare `concurrency=mono\|group` in the tool arguments, or it is stripped again. **`loop` / `process` containers never carry this key** |
 
+## Scripts in `config`
+
+`code` / `branch` / `loop` / `result` / `progress` nodes, plus every `handler`, `on_error` script and binding transform, run
+a script — and **the return form depends on the language**: `return` in lua and js, **`__return__ = ...` in python** (a
+`return` statement there is a `SyntaxError: 'return' outside function`). What the value has to be differs per surface: an
+object of declared variable names for `code` and handlers, a boolean for `branch` / `loop` conditions, a string for
+`result` / `progress` and binding transforms.
+
+Full table, examples and the two silent failures (`print` is not a return; `__return__` inside a function needs
+`global`): [`../script-languages.md`](../script-languages.md).
+
 ## Three facts about edges
 
 1. Except for `branch` / `intent`, a node **can have only one outgoing edge**: more than one reports a `config` error at

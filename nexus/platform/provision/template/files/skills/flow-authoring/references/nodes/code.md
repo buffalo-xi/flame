@@ -27,9 +27,26 @@ Runs a script in the sandbox and assigns the returned values to declared output 
 | `code.lang` | — | `lua` | **only** the languages listed under "workflow script languages" in the system prompt; do not write one from memory — common languages such as `js` are usually not pooled and only report `unsupported_lang` at runtime. When that list is unavailable, use `lua`; `template` is only for Result / Progress nodes, not for a Code node |
 | `code.timeout` | — | not enabled → the run limit applies | `{enabled, seconds}` |
 | `config.inputs` | — | — | resolved into the script's `input` |
-| `config.outputs` | ✅ | — | every key the script returns must be declared here, otherwise `output var X not defined` |
+| `config.outputs` | ✅ | — | every key the script returns must be declared here; an undeclared key fails the node with `the script returned an undeclared variable: X` |
 | `config.targets` | — | — | used to write results into an **ancestor container**'s outputs/locals or into **flow variables** (`source_type: node` / `flow`) |
 | `config.locals` | — | — | node-local variables |
+
+## Return value
+
+The node reads a **return value**, not stdout, and the form depends on `code.lang`:
+
+| `lang` | How the script returns |
+|---|---|
+| `lua` | a top-level `return` of a table |
+| `python` | assign to **`__return__`** |
+| `js` | an ordinary `return` of an object |
+
+In every language the value must be an **object whose keys are declared variable names** (outputs / targets / locals).
+`print` / `log` is not a return: it only reaches the node log, so a script that only prints succeeds with every output
+empty.
+
+The reasoning, the three-language examples and the same convention for every other script surface (conditions, handlers,
+on_error, binding transforms) are in [`../script-languages.md`](../script-languages.md).
 
 ## Output variables
 
