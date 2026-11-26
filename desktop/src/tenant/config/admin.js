@@ -197,6 +197,8 @@ const adminApi = {
   flows: {
     base: `${apiBase}/admin/flows/`,
     create: `${apiBase}/admin/flows/create`,
+    // 保存前静态校验（POST { diagram }）：与 agent 的 validate_flow 同一套规则，不落库、不执行
+    validate: `${apiBase}/admin/flows/validate`,
     get: `${apiBase}/admin/flows/`,
     update: `${apiBase}/admin/flows/`,
     delete: `${apiBase}/admin/flows/`,

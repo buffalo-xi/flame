@@ -631,6 +631,40 @@
       "deleteFailedLog": "Failed to delete the flow:",
       "deleteFailedRetry": "Delete failed, please try again later"
     },
+    "check": {
+      "titleError": "Pre-save check: {count} error(s)",
+      "titleWarning": "Pre-save check: {count} warning(s)",
+      "leadError": "As written, these will not run: each line points at the node and the config key. Fixing them first is the safer route - saving anyway is allowed, because the canvas is a draft.",
+      "leadWarning": "This will save, but the run probably will not do what you meant: each line points at the node and the config key. You can deal with them later.",
+      "where": "Node {node}",
+      "severity": {
+        "error": "Error",
+        "warning": "Warning"
+      },
+      "continue": "Continue saving",
+      "saveAnyway": "Save anyway",
+      "code": {
+        "shape": "Wrong config shape: a block that should be an object holds another type",
+        "incomplete": "A required key is missing or empty: this step fails at run time, or does nothing",
+        "unsupported_lang": "The sandbox does not offer this script language; the run fails with unsupported_lang",
+        "duplicate_label": "Two nodes share one label, so a reference written as a label points at the wrong node",
+        "unknown_type": "No executor exists for this node type; the run fails when it reaches it",
+        "edge_endpoint": "One end of this edge is a node that does not exist",
+        "cross_parent": "The edge crosses a container boundary; neither the canvas nor the runner accepts that",
+        "multi_outgoing": "More than one outgoing edge: unless this is a branch / intent, only the first one is followed",
+        "container_entry": "The container has no single entry child: it reports success while running nothing",
+        "branch_edge": "A branch condition has no outgoing edge, so it has nowhere to go",
+        "call_target": "The call target is not a function node in this flow",
+        "wait_fork": "The wait node does not point at a fork node",
+        "dangling_ref": "A reference points at a node that does not exist, so the value is empty at run time",
+        "loop_source": "The array this loop iterates is not declared in the inputs",
+        "unreachable": "No incoming edge, so this node never runs",
+        "on_error_action": "This node type does not declare that fallback action; the runner ignores it",
+        "on_error_code": "This node never produces that error code (or it does not exist), so the rule can never fire",
+        "on_error_post": "This node type does not support a post block; the runner drops it",
+        "unknown": "The configuration has a problem"
+      }
+    },
     "endpoints": {
       "panelTitle": "Endpoints: {name}",
       "formTitle": "New endpoint",

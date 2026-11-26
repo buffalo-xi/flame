@@ -41,6 +41,24 @@ Before referencing one in a node's inputs, pick the right source — only then i
 the "execution result" sub-page of the variables panel, and the debug highlight on each node (running /
 done / skipped / error / breakpoint).
 
+## The pre-save check
+
+Pressing Save (and the automatic save before a run) first hands the canvas to the backend for a static check. Nothing is
+executed: config-block shape, container entries, cross-container edges, dangling `source_ref` / `call.target` /
+`fork_node_id`, branch conditions with no outgoing edge, a `loop each` source the inputs do not declare, unreachable
+nodes, and `on_error` actions / error codes the node does not support or can never produce.
+
+The result is listed as errors and warnings, each line naming the node and the config key:
+
+- **error**: as written, it will not run;
+- **warning**: it runs, but probably not as intended (a missing required key, a fallback rule that can never fire).
+
+The check only informs and never blocks the save — the canvas is a draft, and a half-built graph is a normal state. Only
+the hard server-side rules block a write (duplicate labels, the node quota). Once you have answered "save anyway" for one
+list on a flow, the same list does not pop up again; it returns only when it changes (one item fixed, another one
+appeared). The agent gets the same list from `validate_flow` in a conversation, so "the canvas said it was fine, then the
+run failed" cannot come from two rule sets.
+
 ## Save ≠ release ≠ live
 
 - **Save**: writes the draft only.

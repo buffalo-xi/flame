@@ -317,6 +317,33 @@
       </template>
     </el-dialog>
 
+    <!-- Pre-save static check. The findings come from the backend's shared/flowcheck, the same list the agent's
+         validate_flow tool returns - so the canvas and the agent cannot disagree about what is wrong.
+         It warns and lets the author save anyway: the canvas is a draft, and a half-built graph is a normal state. -->
+    <el-dialog v-model="checkDialogVisible" :title="checkDialogTitle" width="600px" append-to-body
+               class="wf-check-dialog" @closed="settleCheck(false)">
+      <div class="wf-check-lead">
+        {{ checkErrorCount
+          ? t('flow.check.leadError', { count: checkErrorCount })
+          : t('flow.check.leadWarning', { count: checkFindings.length }) }}
+      </div>
+      <ul class="wf-check-list">
+        <li v-for="(f, i) in checkFindings" :key="i" class="wf-check-item" :class="f.severity">
+          <span class="wf-check-sev">{{ t('flow.check.severity.' + f.severity) }}</span>
+          <span>
+            <span class="wf-check-text">{{ checkCodeText(f) }}</span>
+            <span v-if="checkWhere(f)" class="wf-check-where">{{ checkWhere(f) }}</span>
+          </span>
+        </li>
+      </ul>
+      <template #footer>
+        <el-button size="small" @click="settleCheck(false)">{{ t('common.cancel') }}</el-button>
+        <el-button size="small" :type="checkErrorCount ? 'warning' : 'primary'" @click="settleCheck(true)">
+          {{ checkErrorCount ? t('flow.check.saveAnyway') : t('flow.check.continue') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -340,7 +367,7 @@ import HelpButton from '../../help/HelpButton.vue'
 import { formatError } from '../../locales'
 import { formatDateTime } from '@/utils/datetime.js'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 // 搜索关键词
 const searchQuery = ref('')
@@ -895,6 +922,99 @@ const confirmDescDialog = () => {
   descDialogVisible.value = false
 }
 
+// Pre-save static check state. The findings arrive from the backend (shared/flowcheck), so this file holds only the
+// presentation: how a code / node_id / path turns into a sentence, and whether the author may go on.
+const checkDialogVisible = ref(false)
+const checkFindings = ref([])
+const checkErrorCount = ref(0)
+// Node id -> label, built when the check runs so a rename made just before saving is reflected in the list.
+const checkLabels = ref({})
+// Resolver of the promise handleSave awaits; the dialog only decides "run the write or not".
+let checkSettle = null
+// The finding set the author already said "save anyway" to. Saving is frequent on a canvas, and asking the same question
+// again is how a dialog starts being clicked without being read.
+let confirmedCheckSignature = ''
+
+const checkDialogTitle = computed(() => (checkErrorCount.value
+  ? t('flow.check.titleError', { count: checkErrorCount.value })
+  : t('flow.check.titleWarning', { count: checkFindings.value.length })))
+
+// checkCodeText falls back to one generic line: a newer backend may add a code before this bundle knows its wording.
+const checkCodeText = (f) => (te(`flow.check.code.${f.code}`)
+  ? t(`flow.check.code.${f.code}`)
+  : t('flow.check.code.unknown'))
+
+// checkWhere names the node (by label, what the author sees on the canvas) and the config path inside it.
+const checkWhere = (f) => {
+  const parts = []
+  if (f.node_id) parts.push(t('flow.check.where', { node: checkLabels.value[f.node_id] || f.node_id }))
+  if (f.path) parts.push(f.path)
+  return parts.join(' · ')
+}
+
+// checkSignature identifies one finding set for one flow: same set = the author already answered this question.
+const checkSignature = (findings) => {
+  const items = findings
+    .map((f) => [f.severity, f.code, f.node_id || '', f.path || ''].join('|'))
+    .sort()
+  return `${currentWFId.value || 'new'}::${items.join(';')}`
+}
+
+// settleCheck resolves the pending save; the dialog's @closed covers closing with X / ESC.
+const settleCheck = (go) => {
+  checkDialogVisible.value = false
+  const fn = checkSettle
+  checkSettle = null
+  if (fn) fn(go)
+}
+
+// runSaveCheck asks the backend for the static findings before writing anything.
+//
+// It never blocks on its own failure: the endpoint is a courtesy that turns "the run failed somewhere" into a list, and
+// an unreachable check must not become "you cannot save". It resolves true (write) / false (the author said cancel).
+const runSaveCheck = async (diagramData) => {
+  const token = getToken()
+  if (!token) return true
+  let data = null
+  try {
+    const response = await fetch(adminApi.flows.validate, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ diagram: JSON.stringify(diagramData) })
+    })
+    if (response.ok) {
+      data = (await response.json())?.data
+    }
+  } catch {
+    return true
+  }
+  const findings = Array.isArray(data?.findings) ? data.findings : []
+  const errorCount = Number(data?.error_count || 0)
+  if (!findings.length && !errorCount) return true
+
+  const signature = checkSignature(findings)
+  if (signature === confirmedCheckSignature) return true
+
+  const labels = {}
+  for (const n of diagramData?.nodes || []) {
+    if (n?.id) labels[n.id] = n.data?.label || n.id
+  }
+  checkLabels.value = labels
+  checkFindings.value = findings
+  checkErrorCount.value = errorCount
+  return new Promise((resolve) => {
+    checkSettle = (go) => {
+      // Only "save anyway" is an answer to this exact set; cancelling means the list is still to be dealt with.
+      if (go) confirmedCheckSignature = signature
+      resolve(go)
+    }
+    checkDialogVisible.value = true
+  })
+}
+
 // 处理返回
 const handleBack = () => {
   fullScreenMode.value = false
@@ -1022,6 +1142,9 @@ const handleSave = async () => {
     }
 
     const diagramData = flowRef.value?.getDiagramData?.() || { nodes: [], edges: [] }
+    // Static check before the write: the same findings the agent gets from validate_flow. Errors are shown as such but
+    // the author may still save - a draft is allowed to be half-built (the server keeps the hard invariants).
+    if (!(await runSaveCheck(diagramData))) return null
     const flowArguments = flowRef.value?.getFlowArguments?.() || {}
     const flowLimits = flowRef.value?.getFlowLimits?.() || {}
     const flowVariables = flowRef.value?.getFlowVariables?.() || {}
@@ -1405,6 +1528,62 @@ onActivated(() => {
   font-size: 12px;
   color: #909399;
   line-height: 1.5;
+}
+
+/* Pre-save check dialog: one line per finding, severity first, the location underneath */
+.wf-check-lead {
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
+}
+
+.wf-check-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.wf-check-item {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid #f0f0f0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wf-check-item:first-child {
+  border-top: none;
+}
+
+.wf-check-sev {
+  flex: none;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: #fdf6ec;
+  color: #e6a23c;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.wf-check-item.error .wf-check-sev {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+
+.wf-check-text {
+  color: #303133;
+}
+
+.wf-check-where {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #909399;
 }
 
 .header-buttons {

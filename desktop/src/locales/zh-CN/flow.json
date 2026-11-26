@@ -631,6 +631,40 @@
       "deleteFailedLog": "删除工作流失败:",
       "deleteFailedRetry": "删除失败，请稍后重试"
     },
+    "check": {
+      "titleError": "保存前检查：{count} 处错误",
+      "titleWarning": "保存前检查：{count} 处提醒",
+      "leadError": "这些配置在现在的写法下跑不起来：每条都定位到节点与配置项，建议先修好再保存。仍然保存也可以 —— 画布上的内容本来就是草稿。",
+      "leadWarning": "能保存，但运行结果很可能不是预期的：每条都定位到节点与配置项，可以之后再处理。",
+      "where": "节点 {node}",
+      "severity": {
+        "error": "错误",
+        "warning": "提醒"
+      },
+      "continue": "继续保存",
+      "saveAnyway": "仍然保存",
+      "code": {
+        "shape": "配置结构不对：本该是对象的配置块写成了别的类型",
+        "incomplete": "缺少必填项或内容为空：运行时这一步会失败，或者什么都不做",
+        "unsupported_lang": "脚本语言不在沙箱的可用列表里，运行时会报 unsupported_lang",
+        "duplicate_label": "两个节点用了同一个标签：按标签引用会指到错误的节点",
+        "unknown_type": "节点类型没有对应的执行器，运行到它就会失败",
+        "edge_endpoint": "连线的一端指向不存在的节点",
+        "cross_parent": "连线跨了容器边界：画布与运行时都不接受",
+        "multi_outgoing": "一个节点有多条出边：除分支 / 意图外只走第一条",
+        "container_entry": "容器缺少唯一的入口节点：运行时会「成功但什么都不跑」",
+        "branch_edge": "分支条件没有对应的出边，命中后无处可去",
+        "call_target": "调用的目标不是本流程里的函数节点",
+        "wait_fork": "等待节点没有指向一个 fork 节点",
+        "dangling_ref": "引用了不存在的节点：运行时拿到的是空值",
+        "loop_source": "遍历的数据源没有在入参里声明",
+        "unreachable": "节点没有入边，不会被执行",
+        "on_error_action": "该节点不支持这个兜底动作，运行时会直接忽略",
+        "on_error_code": "该节点不会产生这个错误码（或它根本不存在），这条规则永远不会命中",
+        "on_error_post": "该节点不支持收尾处理 post，运行时会丢弃",
+        "unknown": "配置有问题"
+      }
+    },
     "endpoints": {
       "panelTitle": "端点: {name}",
       "formTitle": "新建端点",
