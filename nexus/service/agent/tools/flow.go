@@ -1777,7 +1777,9 @@ func (t *createFlowTool) Meta() ToolMeta {
 					"description": "**Omit by default = not exposed** (the flow stays internal to the tenant; do not add it just to look complete). " +
 						"Pass it only when the user explicitly asks to expose it / let others call it / mount it as an MCP or RPC endpoint, and list only the protocols they named; " +
 						"a user merely describing a capability (e.g. \"can look up weather\", \"can output HTML\", \"needs to reach baidu\") is not an exposure request — " +
-						"if unsure, leave it out and ask: which flow, mcp or rpc, endpoint name, who may call it.",
+						"if unsure, leave it out and ask: which flow, mcp or rpc, endpoint name, who may call it. " +
+						"Exposing requires a released version, and a flow created here has none: creating it with external_protocols fails and rolls the flow back, " +
+						"so create it internally, ask the user to publish it in the console, and expose it there.",
 				},
 				"concurrency": map[string]any{
 					"type": "string",

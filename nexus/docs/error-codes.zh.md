@@ -55,7 +55,7 @@
 |---|---|---|
 | `auth` | `auth.invalid_credentials` | 登录失败（不与「用户不存在」区分） |
 | `tenant` | `tenant.not_found`、`tenant.schema_taken` | `schema_taken` 对应 409 |
-| `endpoint` | `endpoint.not_found`、`endpoint.not_exposed` | 端点域用 expose/retract 用词 |
+| `endpoint` | `endpoint.not_found`、`endpoint.not_exposed`、`endpoint.not_released` | 端点域用 expose/retract 用词；`not_released` = 目标没有正式发布过版本，管理接口拒绝对外开放（超级智能体除外：它始终按草稿运行） |
 | `asset` | `asset.not_found`、`asset.not_available`、`asset.storage_unavailable`、`asset.build_conflict`（`params.build`、`data.existing`） | `not_available` = 存在但未对本租户开放 |
 | `flow` | `flow.not_released`、`flow.deprecated`、`flow.node_limit_exceeded`（`params.count`、`params.limit`） | 与 `models.StatusDeprecated`「废弃」同词，界面也叫废弃。`node_limit_exceeded` = 图里的节点数超过租户配额（`flow_configs.max_node_count`），在保存与资产导入时校验 |
 | `agent` | `agent.call_depth_exceeded`、`agent.not_found` | |

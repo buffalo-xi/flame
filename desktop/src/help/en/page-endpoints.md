@@ -24,6 +24,11 @@ follows. That is deliberate — it avoids the endpoint signature and the impleme
 - **Retract**: external calls stop immediately; the endpoint row, its input schema and its binding all stay,
   and exposing it again restores them.
 
+Exposing requires the target to **have a released version**: when the agent or flow was never released, the
+switch is refused and tells you to release first. An external call runs the live version, so without one the
+endpoint would answer "no released version yet" on every call. The super agent is the exception — it always runs
+the draft, so no release is required.
+
 Retracting is not deleting, and it is not "internal only" — it decides **whether the endpoint can be called**.
 
 ## Delete and deprecate

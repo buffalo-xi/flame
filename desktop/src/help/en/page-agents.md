@@ -51,7 +51,8 @@ switch production, load into draft" in the help center.
 Agents can be exposed too. The entry is the "endpoints" icon on a hovered card, which opens a right-side
 drawer: the protocol is MCP or RPC and only one of each, the endpoint name is the entity name and cannot be
 changed, and an agent declares no inputs — callers pass free-form JSON. An exposed endpoint cannot be
-deleted; deprecating the agent retracts all of its endpoints automatically.
+deleted; deprecating the agent retracts all of its endpoints automatically. An agent that never released a
+version cannot be exposed — release it first. The super agent is exempt: it always runs the draft.
 
 ## Three things that are easy to confuse
 

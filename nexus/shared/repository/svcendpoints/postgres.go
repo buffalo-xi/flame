@@ -39,6 +39,14 @@ var ErrManagedEndpoint = errors.New("the RPC endpoint is managed with its flow a
 // service disappearing; retract it first.
 var ErrEndpointExposed = errors.New("the endpoint is still exposed; retract it first, then delete")
 
+// ErrNoReleasedVersion means the endpoint's target has no released version (no is_current row in its version table).
+//
+// An exposed endpoint is a production entry point, and a production call only runs the is_current version (see
+// shared/versioning/query.go): exposing a target that was never released would hand out an entrance that answers "no
+// released version yet" on every call. The refusal therefore belongs at the moment the switch is flipped, not at call
+// time. Retracting is never blocked by this.
+var ErrNoReleasedVersion = errors.New("the target has no released version yet; release a version before exposing its endpoint")
+
 // columns are the columns selected from svc_endpoints.
 const columns = "id, name, description, created_at, updated_at, target_id, target_type, protocol, input_schema, exposed"
 
@@ -78,7 +86,8 @@ func (r *PostgresRepository) GetByID(authInfo *auth.AuthInfo, id string) (*model
 	return &svcEndpoint, nil
 }
 
-// ensureExposableTarget validates the target's state before the endpoint is exposed: it **refuses only "deprecated"**.
+// ensureExposableTarget validates the target's state before the endpoint is exposed: it refuses "deprecated" and
+// "never released".
 //
 // "Offering an entrance to the outside" and "may the definition change" are two different things: the normal state can of
 // course be exposed.
@@ -104,7 +113,43 @@ func ensureExposableTarget(schema, targetType, targetID string) error {
 	if status == models.StatusDeprecated {
 		return fmt.Errorf("%s is deprecated (status=%d) and cannot expose an endpoint", targetType, status)
 	}
-	return nil
+	return ensureTargetReleased(schema, targetType, targetID)
+}
+
+// ensureTargetReleased refuses a target that has never released a version (see ErrNoReleasedVersion).
+//
+// The supervisor is the one exception: every entry point makes it read the draft (resolveDefinitionMode in
+// service/agent), so its endpoint runs the draft and a release would not change what callers get. Exposing the
+// supervisor endpoint is a supported (and documented) scenario, so requiring a release it never uses would only block
+// it.
+func ensureTargetReleased(schema, targetType, targetID string) error {
+	versionTable, entityColumn := "flow_versions", "flow_id"
+	if targetType == "agent" {
+		versionTable, entityColumn = "agent_versions", "agent_id"
+	}
+	var released bool
+	if err := db.DB.QueryRow(
+		fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s.%s WHERE %s = $1 AND is_current)`, schema, versionTable, entityColumn),
+		targetID,
+	).Scan(&released); err != nil {
+		return err
+	}
+	if released {
+		return nil
+	}
+	if targetType != "agent" {
+		return ErrNoReleasedVersion
+	}
+	var supervisor bool
+	if err := db.DB.QueryRow(
+		fmt.Sprintf(`SELECT is_supervisor FROM %s.agents WHERE id = $1`, schema), targetID,
+	).Scan(&supervisor); err != nil {
+		return err
+	}
+	if supervisor {
+		return nil
+	}
+	return ErrNoReleasedVersion
 }
 
 // Create creates a service endpoint.

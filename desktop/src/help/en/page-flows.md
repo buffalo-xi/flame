@@ -83,7 +83,7 @@ The version button has three states: "unreleased" (never released, not callable 
 The Endpoints button in the editor header manages this flow's entries in place, no trip to the endpoints
 screen. It refuses to open before the flow has been saved. Endpoint parameters cannot be typed by hand —
 they always mirror the start node's inputs; an RPC endpoint is managed by the flow and cannot be deleted
-separately.
+separately. A flow that has never released a version cannot be exposed — release it first.
 
 **Saving with exposed endpoints asks for confirmation**: renaming also renames the exposed tool
 (`local__<name>`), and external callers have to be updated.

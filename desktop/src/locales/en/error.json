@@ -2,7 +2,8 @@
   "error": {
     "endpoint": {
       "not_found": "Endpoint not found: {name}",
-      "not_exposed": "Endpoint is not exposed: {name}"
+      "not_exposed": "Endpoint is not exposed: {name}",
+      "not_released": "The endpoint's agent or workflow has no released version yet. Release a version in the editor before exposing the endpoint."
     },
     "asset": {
       "build_conflict": "This asset (build {build}) was imported before; confirm the overwrite or use another build.",

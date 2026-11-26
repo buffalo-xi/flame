@@ -61,7 +61,7 @@ Constraints:
 |---|---|---|
 | `auth` | `auth.invalid_credentials` | login failure (not distinguished from "user does not exist") |
 | `tenant` | `tenant.not_found`, `tenant.schema_taken` | `schema_taken` maps to 409 |
-| `endpoint` | `endpoint.not_found`, `endpoint.not_exposed` | the endpoint domain uses expose / retract |
+| `endpoint` | `endpoint.not_found`, `endpoint.not_exposed`, `endpoint.not_released` | the endpoint domain uses expose / retract; `not_released` = the target was never released, so the admin API refuses to expose its endpoint (the supervisor is exempt: it always runs the draft) |
 | `asset` | `asset.not_found`, `asset.not_available`, `asset.storage_unavailable`, `asset.build_conflict` (`params.build`, `data.existing`) | `not_available` = exists but is not listed to this tenant |
 | `flow` | `flow.not_released`, `flow.deprecated`, `flow.node_limit_exceeded` (`params.count`, `params.limit`) | same word as `models.StatusDeprecated`; the UI says "deprecated" too. `node_limit_exceeded` = the diagram is larger than the tenant quota (`flow_configs.max_node_count`), checked on save and on asset install |
 | `agent` | `agent.call_depth_exceeded`, `agent.not_found` | |

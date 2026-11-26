@@ -2,6 +2,7 @@ package svcendpoints
 
 import (
 	"database/sql"
+	"errors"
 	"flame/tools/xsql"
 
 	"flame/nexus/shared/auth"
@@ -104,6 +105,12 @@ func UpdateSvcEndpoint(c *gin.Context) {
 		if err := repo.UpdateExposed(authInfo.(*auth.AuthInfo), id, *req.Exposed); err != nil {
 			if err == sql.ErrNoRows {
 				xhttp.ErrCode(c, "endpoint.not_found", gin.H{"name": id}, "Service endpoint not found", "")
+				return
+			}
+			// Exposure requires a released version: the copy the user reads lives in the bundle, msg stays an
+			// English diagnostic.
+			if errors.Is(err, repository.ErrNoReleasedVersion) {
+				xhttp.ErrCode(c, "endpoint.not_released", nil, err.Error(), "")
 				return
 			}
 			xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")

@@ -2,7 +2,8 @@
   "error": {
     "endpoint": {
       "not_found": "服务端点不存在：{name}",
-      "not_exposed": "服务端点未对外开放：{name}"
+      "not_exposed": "服务端点未对外开放：{name}",
+      "not_released": "端点所属的智能体或工作流尚未发布正式版本，请先在编辑页发布，再对外开放"
     },
     "asset": {
       "build_conflict": "该资产（build {build}）此前已导入过，请确认覆盖或换一个 build。",
