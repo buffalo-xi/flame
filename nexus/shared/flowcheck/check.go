@@ -64,6 +64,9 @@ const (
 	CodeWaitFork        = "wait_fork"        // wait.fork_node_id does not name a fork node
 	CodeDanglingRef     = "dangling_ref"     // source_ref points at a node that does not exist
 	CodeFunctionRef     = "function_ref"     // a function node is referenced from outside its own body
+	CodeFunctionEdge    = "function_edge"    // an edge touches a function node
+	CodeNestedFunction  = "nested_function"  // a function node sits inside another container
+	CodeTargetVar       = "target_var"       // targets.X writes a variable the container does not declare
 	CodeSourceKey       = "source_key"       // source_key is not an output the source node declares
 	CodeLoopSource      = "loop_source"      // each-mode source_key is not declared in inputs
 	CodeControlScope    = "control_scope"    // a break / continue that no loop can consume
@@ -588,6 +591,31 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 		}
 	}
 
+	// A function is entered by a call node, never by an edge: an in-edge runs the body right there with empty params, and an
+	// edge out of a function is never followed (the body runs under the call, not as a step of the chain).
+	for _, e := range valid {
+		for _, end := range []string{e.Source, e.Target} {
+			if byID[end].Type != "function" {
+				continue
+			}
+			add(SeverityError, CodeFunctionEdge, end, "function", "edges",
+				fmt.Sprintf("edge %s touches function node %s; a function is entered by a call node, not by an edge", e.ID, end),
+				"delete the edge and let a call node target the function")
+		}
+	}
+
+	// A function is a top-level container. create_node refuses a nested one; a hand-written diagram could still place it
+	// inside another container, where nothing can call it and the canvas cannot lay it out.
+	for i := range doc.Nodes {
+		n := &doc.Nodes[i]
+		if n.Type != "function" || n.ParentNode == "" {
+			continue
+		}
+		add(SeverityError, CodeNestedFunction, n.ID, n.Type, "parent_node",
+			fmt.Sprintf("function node %s is nested inside %s; a function has to sit at the top level", n.ID, n.ParentNode),
+			"move it out of the container: a function is called through call.target, it is not a step of a parent body")
+	}
+
 	// Outgoing edges: one at most, except branch / intent which route by handle. Containers are checked the same way.
 	outCount := make(map[string]int, len(doc.Nodes))
 	inCount := make(map[string]int, len(doc.Nodes))
@@ -765,6 +793,41 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 		// The arguments must match the target's params: call.go refuses an unknown arg and a missing required one
 		// before the child process starts, and both sides of that comparison are in this diagram.
 		checkCallArgs(n, t, add)
+	}
+
+	// A targets entry writes into a variable the container declares: miss the name and the run fails with
+	// "output var X not defined" - the same shape as the source_key check, in the write direction. A missing source_key
+	// means the targets key itself, which is what the executors fall back to.
+	for i := range doc.Nodes {
+		n := &doc.Nodes[i]
+		for key, raw := range objectOf(n.Data.Config["targets"]) {
+			def := objectOf(raw)
+			if def == nil {
+				continue
+			}
+			if sourceType, _ := def["source_type"].(string); sourceType != "node" {
+				continue
+			}
+			ref, _ := def["source_ref"].(string)
+			container := resolve(ref)
+			if container == nil || !containerTypes[container.Type] {
+				continue // a dangling / non-container write target is reported elsewhere
+			}
+			name, _ := def["source_key"].(string)
+			if strings.TrimSpace(name) == "" {
+				name = key
+			}
+			name = topLevelName(name)
+			if _, ok := objectOf(container.Data.Config["outputs"])[name]; ok {
+				continue
+			}
+			if _, ok := objectOf(container.Data.Config["locals"])[name]; ok {
+				continue
+			}
+			add(SeverityError, CodeTargetVar, n.ID, n.Type, "targets."+key+".source_key",
+				fmt.Sprintf("targets.%s writes %q into %s node %s, which declares no such output or local", key, name, container.Type, container.ID),
+				"declare it in that container's outputs (or locals), or fix the name")
+		}
 	}
 
 	// wait.fork_node_id must name a fork node.

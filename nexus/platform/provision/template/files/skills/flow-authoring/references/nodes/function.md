@@ -34,6 +34,10 @@ chain into it and the executor runs the body right there with **empty parameters
 `var path a not found in function params` — and nothing after it in the chain runs. Route the main chain around the
 function and let a `call` node enter it.
 
+`validate_flow` checks the shape as well: an edge touching a function (`function_edge`), a function nested inside another
+container (`nested_function`), and a `targets` entry that writes a variable the function does not declare
+(`target_var` — a missing `source_key` counts as the targets key itself).
+
 ## Only a `call` may name it from outside
 
 Everything outside the body reads the function's result through a `call` node: the call's `outputs` mirror the function's, so

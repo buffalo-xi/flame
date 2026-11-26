@@ -739,3 +739,49 @@ func TestFunctionRefOutsideBody(t *testing.T) {
 		t.Fatalf("a call node and an in-body reference must pass, got %v", codes(ok))
 	}
 }
+
+// Three function shapes that used to pass validation: an edge touching the function, a function nested in another
+// container, and a targets entry writing a variable the container never declares.
+func TestFunctionShapeRules(t *testing.T) {
+	edge := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function","data":{"config":{"outputs":{"sum":{"type":"number"}}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","parent_node":"2","data":{"config":{
+			"code":{"script":"return { sum = 1 }"},
+			"targets":{"sum":{"type":"number","source_type":"node","source_ref":"2"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"3","target":"4"}]}`)
+	if !has(edge, SeverityError, CodeFunctionEdge) {
+		t.Fatalf("an edge into a function must be reported, got %v", codes(edge))
+	}
+
+	nested := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"loop","data":{"config":{"loop":{"type":"count","total_times":2}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"function","parent_node":"2","data":{"config":{"outputs":{"sum":{"type":"number"}}}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"}]}`)
+	if !has(nested, SeverityError, CodeNestedFunction) {
+		t.Fatalf("a nested function must be reported, got %v", codes(nested))
+	}
+
+	written := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function","data":{"config":{"outputs":{"sum":{"type":"number"}}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","parent_node":"2","data":{"config":{
+			"code":{"script":"return { total = 1 }"},
+			"targets":{"total":{"type":"number","source_type":"node","source_ref":"2"}}
+		}}},
+		{"id":"5","type":"call","data":{"config":{"target":"2"}}}
+	],"edges":[{"id":"e1","source":"1","target":"5"},{"id":"e2","source":"3","target":"4"}]}`)
+	if !has(written, SeverityError, CodeTargetVar) {
+		t.Fatalf("writing an undeclared container variable must be reported, got %v", codes(written))
+	}
+	for _, f := range written {
+		if f.Code == CodeTargetVar && f.Path != "targets.total.source_key" {
+			t.Errorf("path = %q, want targets.total.source_key", f.Path)
+		}
+	}
+}
