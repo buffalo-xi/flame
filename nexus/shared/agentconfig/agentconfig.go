@@ -56,12 +56,13 @@ type Limits struct {
 //	max_iterations  40  every iteration is a model call plus tool executions; 40 already covers
 //	                    read -> edit -> test -> fix. The old 80 doubled the cost ceiling of every tenant that never
 //	                    touched this page.
-//	max_tools       60  the cost is hidden: every tool ships its JSON schema into every round (~300 tokens each). The
+//	max_tools      100  the cost is hidden: every tool ships its JSON schema into every round (~300 tokens each). The
 //	                    cap has to cover the resident core plus the on-demand groups it exists for: the supervisor
-//	                    already carries 20 resident (required) tools, and flow-admin alone is 16 - at 30 the group was
-//	                    truncated before read_flow / run_flow / validate_flow, i.e. the tools the skill is used for.
-//	                    60 holds 20 + 36 (every shipped group at once) = 56 with a little headroom; past it the
-//	                    truncation warning lists exactly what was dropped.
+//	                    carries 20 resident (required) tools and the shipped groups add 36 more (flow-admin alone is
+//	                    16), so 56 can be bound in one run - at 30 the flow group was truncated before read_flow /
+//	                    run_flow / validate_flow, i.e. the tools the skill is used for. 100 matches the seeded system
+//	                    row (platform/sql/zz_limit_defaults.sql), so the fallback and the ceiling tell the same story;
+//	                    past it the truncation warning lists exactly what was dropped.
 //	max_output_bytes 64 KiB  already about 16k tokens for one record, and it is a quarter of the 256 KB session-history
 //	                    budget, so a single truncation cannot swallow the conversation.
 //	max_run_records 100 / max_session_records 50  match the flow side, so the two owner types agree on one order of
@@ -72,7 +73,7 @@ type Limits struct {
 var fallback = Limits{
 	MaxIterations:     40,
 	MaxCallDepth:      3,
-	MaxTools:          60,
+	MaxTools:          100,
 	MaxOutputBytes:    64 << 10,
 	MaxRunRecords:     100,
 	MaxSessionRecords: 50,

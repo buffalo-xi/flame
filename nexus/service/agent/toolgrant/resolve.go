@@ -10,9 +10,10 @@ import (
 
 // DefaultMaxTools is the cap on how many tools end up bound (beyond it the list is truncated with a warning).
 //
-// It mirrors shared/agentconfig's code fallback: the supervisor's 20 resident tools plus every shipped on-demand group
-// (36) must fit in one run, so a cap below 56 truncates a group the skill was activated for.
-const DefaultMaxTools = 60
+// It mirrors shared/agentconfig's code fallback and the seeded system row (platform/sql/zz_limit_defaults.sql): the
+// supervisor's 20 resident tools plus every shipped on-demand group (36) must fit in one run, so a cap below 56
+// truncates a group the skill was activated for.
+const DefaultMaxTools = 100
 
 // VisibleSkill is a skill **activated in this run** (the model read its body with use_skill; supplied by the caller to avoid an import
 // cycle with the skills package).
