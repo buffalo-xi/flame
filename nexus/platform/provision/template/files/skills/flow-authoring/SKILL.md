@@ -202,29 +202,31 @@ When you do not know which variables this tenant has, call `list_global_vars` fi
 
 ## Iron rule: node config must be complete (only shapes are refused, completeness is merely warned)
 
-The tools decide three different things about a step's `config`. Knowing which is which tells you what a successful call
+The tools decide two different things about a step's `config`. Knowing which is which tells you what a successful call
 actually proved:
 
 - **shape is refused** — the call fails: a behaviour block (`code` / `http` / `llm` / `loop` / `mcp` / `rpc` / `branch`) that
   is not an object, `children` that is not an array, a `loop.type` outside `count` / `each` / `while` / `do_while`;
-- **completeness is only warned** — the node **is created**: `code` without `code.script` or `config.outputs`, `http` without
-  `http.url`, `llm` without `config.llm`, `loop` without `config.loop`, `branch` / `intent` with empty `children`, `call`
-  without `target`, `wait` without `fork_node_id`, a `lang` the sandbox does not list;
-- **everything else is not checked at all**: `mcp.connection_id` / `tool_name`, `rpc.endpoint` and the connection fields,
-  `assign.assignments`, `result` / `progress` `config.code`, a container's `entry` child, `loop each`'s `source_key`.
-  Measured: `config: {}` for `http` / `llm` / `code` / `mcp` / `rpc` returns success every time and reads back with no `config`
-  key at all, only `{"label": ...}`.
+- **completeness is warned** — the node **is created** and the findings come back as warnings. The same findings are errors
+  on the canvas / in `validate_flow`, because the step cannot run: `code` / `result` / `progress` without `code.script`,
+  `http` without `http.url`, `llm` without `config.llm` or `llm.messages`, `loop` without `config.loop` / `loop.type` or with
+  a non-numeric count, `branch` / `intent` with empty `children`, `call` without `target`, `wait` without `fork_node_id`,
+  `mcp` without its connection, `rpc` without its endpoint or connection, a `lang` the sandbox does not list, a
+  `response_mode` outside `complete` / `sse_stream`. Three findings stay warnings everywhere because the step still runs: a
+  missing `config.outputs`, an `assign` with no `assignments`, a `branch` child with no condition.
+  Measured: `config: {}` for `http` / `llm` / `code` / `mcp` / `rpc` still returns success — the findings are in `warnings`.
 
 So `create_flow` returning success proves the shape and nothing else, and a returned warning is a TODO rather than advice. The
 per-level table is in `references/nodes/README.md` ("What creation checks, per type").
 
-**`validate_flow` closes that gap without running anything.** It applies the same rule set to a saved flow (or to a diagram
-passed inline) and returns findings with a severity, a `node_id`, the config path and a hint: nothing is executed, no request
-is sent, no model is billed. Besides config completeness it checks the structure creation ignores — container `entry`
-children, cross-container edges, dangling `source_ref` / `call.target` / `fork_node_id`, branch children with no routing edge,
-`loop each` sources missing from `inputs`, unreachable nodes — and it validates `on_error` against each node's declared
-capabilities: an action the node does not declare is dropped by the runner, and a code it cannot produce never matches, so
-both are config that looks present and does nothing.
+**`validate_flow` covers the half that needs neighbours, without running anything.** It applies the same rule set to a saved
+flow (or to a diagram passed inline) and returns findings with a severity, a `node_id`, the config path and a hint: nothing is
+executed, no request is sent, no model is billed. Besides the per-node findings it checks the structure creation cannot see —
+container `entry` children, cross-container edges, dangling `source_ref` / `call.target` / `fork_node_id`, a `source_key` the
+source node does not produce, `call.args` that do not match the target's `params`, branch children with no routing edge,
+`loop each` sources missing from `inputs`, a `break` / `continue` no loop can reach, unreachable nodes — and it validates
+`on_error` against each node's declared capabilities: an action the node does not declare is dropped by the runner, and a code
+it cannot produce never matches, so both are config that looks present and does nothing.
 
 The loop is **create → `validate_flow` → fix → `run_flow`**, and the run is worth starting only when `error_count` is 0. It
 still cannot see what needs real data (an enabled connection, an existing model, a template rendered against real inputs, the

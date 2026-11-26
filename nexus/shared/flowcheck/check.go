@@ -56,7 +56,6 @@ const (
 	CodeCrossParent     = "cross_parent"     // an edge crosses a container boundary
 	CodeMultiOutgoing   = "multi_outgoing"   // more than one outgoing edge on a single-edge node
 	CodeContainerEntry  = "container_entry"  // a container has no (or several) entry children
-	CodeContainerOut    = "container_out"    // a container has more than one outgoing edge
 	CodeBranchEdge      = "branch_edge"      // a branch child has no outgoing edge to route to
 	CodeBranchCondition = "branch_condition" // a branch child has no condition script, so it is skipped
 	CodeChildID         = "child_id"         // a branch child has no id, so no edge can route to it
