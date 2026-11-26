@@ -122,7 +122,11 @@
       "scriptSection": "脚本配置"
     },
     "codeNode": {
+      "scriptSection": "脚本",
       "codePlaceholder": "输入要执行的代码...",
+      "codePlaceholderLua": "-- input 是 table\n-- 顶层 return 一个表，键名 = 变量名",
+      "codePlaceholderPython": "# input 是 dict\n# 把返回值赋给 __return__（exec 环境没有 return 语句）",
+      "codePlaceholderJs": "// input 是对象\n// 直接 return 一个对象，键名 = 变量名",
       "writeTargets": "写目标变量",
       "noWriteTargets": "暂无写目标变量"
     },

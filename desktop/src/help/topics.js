@@ -44,6 +44,7 @@ export const HELP_GROUPS = [
       'page-skills',
       'page-tenant-tools',
       'page-flows',
+      'page-flows-code-node',
       'page-running',
       'page-endpoints',
       'page-market',

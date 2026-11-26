@@ -122,7 +122,11 @@
       "scriptSection": "Script settings"
     },
     "codeNode": {
+      "scriptSection": "Script",
       "codePlaceholder": "Enter the code to run...",
+      "codePlaceholderLua": "-- input is a table\n-- return a table from the top level, keys = variable names",
+      "codePlaceholderPython": "# input is a dict\n# assign the return value to __return__ (exec has no return statement)",
+      "codePlaceholderJs": "// input is an object\n// return an object directly, keys = variable names",
       "writeTargets": "Write target variables",
       "noWriteTargets": "No write target variables yet"
     },

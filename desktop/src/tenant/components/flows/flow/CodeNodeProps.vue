@@ -82,13 +82,17 @@
         </div>
 
         <div class="props-section">
+          <div class="section-title">
+            <span>{{ t('flow.codeNode.scriptSection') }}</span>
+            <HelpButton topic="page-flows-code-node" />
+          </div>
           <div class="prop-group">
             <textarea
               class="prop-textarea"
               v-model="codeContent"
               @keydown="handleCodeKeydown"
               @blur="handleCodeChange"
-              :placeholder="t('flow.codeNode.codePlaceholder')"
+              :placeholder="codePlaceholder"
             ></textarea>
           </div>
 
@@ -209,6 +213,7 @@ import { Plus, ArrowDown, Delete, ChromeFilled, Notification, User, Timer, Help,
 import OnErrorConfig from './OnErrorConfig.vue'
 import OutputVarsConfig from './OutputVarsConfig.vue'
 import NodeLastRun from './NodeLastRun.vue'
+import HelpButton from '../../../../help/HelpButton.vue'
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
@@ -265,6 +270,18 @@ const codeContent = ref('')
 const codeLanguage = ref('lua')
 const timeout = ref(30)
 const timeoutEnabled = ref(false)
+
+// The placeholder is language-specific on purpose: Lua returns with a top-level `return`, while Python
+// runs under exec (no return statement) and assigns `__return__`. Showing the Lua shape inside a Python
+// editor is the quickest route to a syntax error.
+const codePlaceholder = computed(() => {
+  const key = {
+    lua: 'flow.codeNode.codePlaceholderLua',
+    python: 'flow.codeNode.codePlaceholderPython',
+    js: 'flow.codeNode.codePlaceholderJs'
+  }[codeLanguage.value]
+  return key ? t(key) : t('flow.codeNode.codePlaceholder')
+})
 
 const inputVariables = ref({})
 
