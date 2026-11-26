@@ -72,11 +72,17 @@
 | `http` | `http.{url,method,params,headers,body,body_type,response_mode,timeout,handler}`、`inputs`、`outputs` | 一致 |
 | `llm` | `llm.{messages,gateway_model,params,response_mode,handler}`、`inputs`、`outputs`、`locals` | 一致 |
 
-目前已有的运行时证据：`executors/http_request_test.go` 覆盖了 `http.md` 关于请求构造的承诺——url/参数/请求头模板、
-`GET` 默认值、`body_type` 决定默认 `Content-Type`、显式请求头优先、无 body 时不设 `Content-Type`、`url` 必填。
+目前已有的运行时证据：
 
-本批次仍待完成：三者的完整 `Execute` 路径（输出变量、`on_error`、流式）需要 `ExecContext` 测试脚手架；三个面板只做了
-代码阅读，没有实际点击验证。
+- `executors/http_request_test.go` —— `http.md` 关于请求构造的承诺：url/参数/请求头模板、`GET` 默认值、`body_type` 决定
+  默认 `Content-Type`、显式请求头优先、无 body 时不设 `Content-Type`、`url` 必填；
+- `executors/http_execute_test.go` —— 对真实服务跑 `Execute`：四个固定输出（`mode` / `status` / `headers` / `body`）、
+  未知 `response_mode` 在**请求发出之后**才失败、缺 `url` 时一个请求都不发；
+- `executors/exec_harness_test.go` —— 上述测试共用的 `node` / `ExecContext` / `NodeResult` 构造器，剩下的 `Execute`
+  路径不必各写一套脚手架。
+
+本批次仍待完成：`code` 需要代码沙箱、`llm` 需要网关客户端才能跑 `Execute`，两者保持 ⬜；http 这一侧的 SSE 流式、
+`handler` 脚本与 `on_error` 处理还没覆盖（所以是 ⚠️ 而不是 ✅）。三个面板只做了代码阅读，没有实际点击验证。
 
 ## 审计中已发现
 

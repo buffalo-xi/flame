@@ -72,12 +72,19 @@ Field mapping - the executor's read set, the props panel's write set and the doc
 | `http` | `http.{url,method,params,headers,body,body_type,response_mode,timeout,handler}`, `inputs`, `outputs` | match |
 | `llm` | `llm.{messages,gateway_model,params,response_mode,handler}`, `inputs`, `outputs`, `locals` | match |
 
-Runtime evidence so far: `executors/http_request_test.go` covers what `http.md` promises about request construction -
-url/param/header templates, the `GET` default, `body_type` deciding the default `Content-Type`, an explicit header winning,
-no `Content-Type` when there is no body, and `url` being required.
+Runtime evidence so far:
 
-Still open for this batch: the full `Execute` path of all three (outputs, `on_error`, streaming) needs an `ExecContext`
-harness; the three panels were read, not clicked.
+- `executors/http_request_test.go` - what `http.md` promises about request construction: url/param/header templates, the
+  `GET` default, `body_type` deciding the default `Content-Type`, an explicit header winning, no `Content-Type` when there
+  is no body, and `url` being required;
+- `executors/http_execute_test.go` - `Execute` against a real server: the four fixed outputs (`mode` / `status` / `headers`
+  / `body`), an unknown `response_mode` failing *after* the request was sent, and a missing `url` sending nothing;
+- `executors/exec_harness_test.go` - the shared `node` / `ExecContext` / `NodeResult` builders those tests use, so the
+  remaining `Execute` paths do not need a new harness each.
+
+Still open for this batch: `code` needs a code sandbox and `llm` a gateway client to run `Execute`, so both stay ⬜; on the
+http side, SSE streaming, `handler` scripts and `on_error` handling are not covered yet (hence ⚠️ rather than ✅). The
+three panels were read, not clicked.
 
 ## Found while auditing
 
