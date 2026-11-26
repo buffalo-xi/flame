@@ -454,6 +454,17 @@ Key points:
   `update_node` first.
 - Full rules in `references/nodes-edit.md`.
 
+## Before the first run: three checks that save a rebuild
+
+1. **Function nodes stay off the main chain** — no in-edge, no out-edge; only `call` enters them. Wired in, the body runs
+   with empty params and dies on the first param read.
+2. **`read_flow` first, then ids** — labels are resolved only for `config.inputs.source_ref` / `call.target` /
+   `config.wait.fork_node_id`, and only in `create_flow`. `targets.*.source_ref` and `call.args.*.source_ref` need real
+   node ids; `create_node` / `update_node` resolve nothing.
+3. **Filter the validator** — `validate_flow` compares a `source_key` against the source node's `outputs`, which for a
+   function node excludes its `params`: reading a param inside the body is reported as "produces no such output" while the
+   run itself succeeds. Confirm such a finding with one run before restructuring anything.
+
 ## Test run right after building (`run_flow`)
 
 ```json
@@ -561,6 +572,7 @@ declared `arguments`; undeclared keys can still be passed, but they never appear
 | A `code` node succeeds but every declared output is empty | the script never returned: `python` must assign `__return__` (a `return` statement is a `SyntaxError`), `lua` / `js` return a table / object from the top level, and `print` only reaches the node log |
 | A config-related error on the very first step | the node's required sub-object is missing: `llm.messages` / `http.url` / `code.script` / `mcp.connection_id` + `tool_name` |
 | `<no value>` in the result | a template field name is misspelled, or `config.inputs` does not declare that variable |
+| Run reports `var path b not found in function params` | the function was entered by an edge instead of a `call`, or `call.args` did not pass that param — the body cannot default it (`input.b or 0` runs too late) |
 | Error "node result not found" | `source_ref` points at a node that does not exist or has not run yet (ids start at `1`, so the first step is `2`) |
 | `create_edge` reports "target_handle is required" | both handles must be supplied; the tool fills in no defaults. The error already suggests values based on the two nodes' positions — copy them |
 | `create_edge` reports "only one incoming edge allowed" | that entry position already has an edge; use `update_edge` to change the source, or pick another entry position (the old edge is displaced) |

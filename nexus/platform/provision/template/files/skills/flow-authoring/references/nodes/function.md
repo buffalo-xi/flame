@@ -20,12 +20,41 @@ An inline function container callable by `call` (**not** a sub-flow invocation; 
 | `outputs` | — | `{}` | return value declarations; `call` syncs the target function's `outputs` into its own outputs |
 | `locals` | — | `{}` | local variables |
 
-It **does not read** `inputs`. Entering a `function` node directly (not through a `call`) leaves the parameters empty.
+It **does not read** `inputs`: parameters only arrive from a `call` node.
+
+`required: false` relaxes the **call-site** check only. The body cannot make up for a parameter that was not passed:
+`local b = input.b or 0` is too late, because `config.inputs` is resolved from the params **before** the script runs and a
+missing key fails there (`var path b not found in function params`). An optional parameter means "the caller may pass it",
+not "the body may skip it" — pass it every time.
+
+## Never wire it into the main chain
+
+A function node is entered by `call`, never by an edge: it has **no incoming edge and no outgoing edge**. Wire the main
+chain into it and the executor runs the body right there with **empty parameters** — the first parameter read fails with
+`var path a not found in function params` — and nothing after it in the chain runs. Route the main chain around the
+function and let a `call` node enter it.
+
+## Writing the function's outputs
+
+A step inside the body writes into the function's `outputs` through **`targets`**, not through its own `outputs`:
+
+```json
+{"targets": {"sum": {"type": "number", "source_type": "node", "source_ref": "<function node id>"}}}
+```
+
+- the same name must not also appear in that step's `outputs` (`the variable is declared in both outputs and targets`) —
+  `outputs` / `targets` / `locals` are pairwise disjoint;
+- `source_ref` here is the function node's **id**: labels are not resolved in `targets`, and ids are not derivable from the
+  step index once the graph has containers — read them back with `read_flow` (see `../nodes-edit.md`);
+- a `code` step written this way still draws `code step has no config.outputs` from `validate_flow`; that check reads only
+  `config.outputs`, so here it is noise, not a defect.
 
 ## Structural requirements
 
 - it must have an `entry` child (`parentNode = function.id`, `label: start`).
 - the body chain runs from that entry along the first outgoing edge to the end; each invocation gets a fresh child process.
+- `return` is **not required**: the body simply ending returns normally with whatever was written to `outputs`. Use `return`
+  only for an early exit.
 
 ## Control signals (unlike `process`)
 

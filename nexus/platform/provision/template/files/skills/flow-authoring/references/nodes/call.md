@@ -25,6 +25,10 @@ Calls another `function` node **within the same flow** (recursion supported, lim
 
 It **does not read** `inputs` / `locals`. Exceeding the recursion depth → `internal` error.
 
+`args` is **not** a place for labels: only `config.inputs.source_ref`, `config.target` and `config.wait.fork_node_id` are
+rewritten from a label, and only by `create_flow`. `args.*.source_ref` needs the real node id, and `create_node` /
+`update_node` resolve nothing — read the diagram back before writing `args`.
+
 ## Output variables
 
 Mirror the target function's `OutputVars` after it runs (names and types come from the function), and mirror its status as well.
@@ -46,6 +50,9 @@ An ordinary node: continues along **its first outgoing edge** after the call ret
 - `call target must not be empty` / `target node is not a function`.
 - `missing required arg "x" for function <id>` — the target function's required parameter (`required` defaults to `true`) has no matching argument. `validate_flow` / the canvas badge reports it as `call_args` before the run.
 - `unknown arg "x" for function <id>` — `args` contains a key not declared in the target function's `params`; also reported as `call_args`.
+- `var path b not found in function params` — the parameter was never passed: either the function was entered by an edge
+  instead of a `call`, or `args` omits it. Declaring it `required: false` does not help; the body resolves params before
+  any script runs, so an in-body default is too late.
 - `failed to resolve args` — an argument's `source_key` has no matching upstream output.
 - Recursion limit exceeded — the function calls itself directly or indirectly with no terminating condition.
 

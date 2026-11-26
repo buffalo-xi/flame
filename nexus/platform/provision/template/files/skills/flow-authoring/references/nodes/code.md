@@ -56,6 +56,11 @@ A missing `code.script` or `config.outputs` is **only a creation warning** — t
 There is no fixed output; everything comes from `config.outputs`. Returning an **undeclared** key fails outright
 (`the script returned an undeclared variable: X`), it is not silently dropped; a declared variable that is not returned stays empty.
 
+When this step writes into an ancestor container (e.g. a `function`'s outputs) through `config.targets`, the keys belong in
+`targets`, not in `outputs`. `validate_flow` still emits `code step has no config.outputs` — the check reads only
+`config.outputs`, so with a non-empty `targets` this is noise, not a defect. Never declare the same name in both sets
+(`declared in both outputs and targets`).
+
 ## Outgoing edges
 
 An ordinary node: continues along **its first outgoing edge** when done.

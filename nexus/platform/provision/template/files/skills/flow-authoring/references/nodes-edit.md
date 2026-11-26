@@ -59,6 +59,12 @@ Arguments: `flow`, `type`, `label?`, `config?`, `parent_node?`.
 ```
 
 - `config` and `config_patch` are **mutually exclusive**. The return value carries the final `config`; glance at it afterwards.
+- **`config_patch` deletes only a top-level key.** `{"args": {"c": null}}` does not remove `c` from `args` — the nested object
+  is merged, `c` survives as null, and the run then reports `unknown arg "c"`. To drop something inside a nested object, pass
+  that whole object (`{"args": {"a": {...}, "b": {...}}}`), or replace `config` wholesale.
+- **`targets.*.source_ref` and `call.args.*.source_ref` are not rewritten from labels.** Only `config.inputs.source_ref`,
+  `config.target` and `config.wait.fork_node_id` accept a label, and only in `create_flow`. Everywhere else write node ids
+  read back from `read_flow` — a label passes creation and then fails at run time.
 - `position` is canvas coordinates: absolute for top-level nodes, **relative to the parent container** for nodes inside one.
   Use it to fine-tune when automatic layout looks off, following the same rules as "Layout" in `SKILL.md`: `x`/`y` are
   multiples of 20, the main chain shares one `y` with an `x` step of 200 between adjacent leaves (380 after `branch` /
