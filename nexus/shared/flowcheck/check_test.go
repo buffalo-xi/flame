@@ -453,6 +453,65 @@ func TestDanglingSourceRef(t *testing.T) {
 	}
 }
 
+// A source_key must be an output the source node really produces: a typo yields an empty value with no error at all.
+// Fixed outputs (llm.content, http.body, intent.index ...) count as declared, a sub-path only needs its root, and a call
+// node is read through the target function's outputs because that is what it mirrors.
+func TestSourceKeyMustBeDeclared(t *testing.T) {
+	bad := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"llm","data":{"config":{"llm":{"messages":[{"role":"user","content":"hi"}]}}}},
+		{"id":"3","type":"code","data":{"config":{
+			"code":{"script":"return {}"},
+			"outputs":{"total":{"type":"number"}},
+			"inputs":{"x":{"type":"string","source_type":"node","source_ref":"2","source_key":"contnet"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"2","target":"3"}]}`)
+	if !has(bad, SeverityError, CodeSourceKey) {
+		t.Fatalf("a misspelled source_key must be an error, got %v", codes(bad))
+	}
+	for _, f := range bad {
+		if f.Code == CodeSourceKey && f.Path != "inputs.x.source_key" {
+			t.Errorf("path = %q, want inputs.x.source_key", f.Path)
+		}
+	}
+
+	ok := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"llm","data":{"config":{"llm":{"messages":[{"role":"user","content":"hi"}]}}}},
+		{"id":"3","type":"code","data":{"config":{
+			"code":{"script":"return {}"},
+			"outputs":{"a":{"type":"string"},"b":{"type":"string"},"c":{"type":"string"}},
+			"inputs":{
+				"a":{"type":"string","source_type":"node","source_ref":"2","source_key":"content"},
+				"b":{"type":"string","source_type":"node","source_ref":"2","source_key":"content.parts[0]"},
+				"c":{"type":"string","source_type":"node","source_ref":"1","source_key":"anything"}
+			}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"2","target":"3"}]}`)
+	if has(ok, SeverityError, CodeSourceKey) {
+		t.Fatalf("a fixed output, a sub-path and a visual node must pass, got %v", codes(ok))
+	}
+
+	call := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"function","data":{"config":{"outputs":{"total":{"type":"number"}}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"call","data":{"config":{"target":"2"}}},
+		{"id":"5","type":"code","data":{"config":{
+			"code":{"script":"return {}"},
+			"outputs":{"a":{"type":"number"}},
+			"inputs":{"a":{"type":"number","source_type":"node","source_ref":"4","source_key":"total"}}
+		}}}
+	],"edges":[
+		{"id":"e1","source":"1","target":"2"},
+		{"id":"e2","source":"2","target":"4"},
+		{"id":"e3","source":"4","target":"5"}
+	]}`)
+	if has(call, SeverityError, CodeSourceKey) {
+		t.Fatalf("a call node exposes the function's outputs, got %v", codes(call))
+	}
+}
+
 // each-mode reads the array from config.inputs by name; a typo is a run-time failure.
 func TestLoopEachSourceKey(t *testing.T) {
 	fs := checkDiagram(t, `{"nodes":[

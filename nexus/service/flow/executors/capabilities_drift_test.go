@@ -36,6 +36,9 @@ func TestCapabilitiesMatchFlowcheck(t *testing.T) {
 		if want.HasPost != got.HasPost {
 			t.Errorf("%s HasPost: executors %v, flowcheck %v", typ, want.HasPost, got.HasPost)
 		}
+		if !sameSet(want.FixedOutputs, got.FixedOutputs) {
+			t.Errorf("%s fixed outputs: executors %v, flowcheck %v", typ, want.FixedOutputs, got.FixedOutputs)
+		}
 	}
 
 	if !sameSet(flow.AllErrorCodes(), flowcheck.AllErrorCodes) {

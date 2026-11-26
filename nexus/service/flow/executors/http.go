@@ -358,8 +358,9 @@ func (e *HttpExecutor) Capabilities() NodeCapabilities {
 			flow.ErrCodeVar,
 			flow.ErrCodeOther,
 		},
-		Actions: []flow.ErrorAction{flow.ErrorActionRetry, flow.ErrorActionSkip, flow.ErrorActionHandler},
-		HasPost: true,
+		Actions:      []flow.ErrorAction{flow.ErrorActionRetry, flow.ErrorActionSkip, flow.ErrorActionHandler},
+		HasPost:      true,
+		FixedOutputs: outputNames(httpFixedOutputVars),
 	}
 }
 

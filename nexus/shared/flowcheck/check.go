@@ -64,6 +64,7 @@ const (
 	CodeCallArgs        = "call_args"        // call.args does not match the target function's params
 	CodeWaitFork        = "wait_fork"        // wait.fork_node_id does not name a fork node
 	CodeDanglingRef     = "dangling_ref"     // source_ref points at a node that does not exist
+	CodeSourceKey       = "source_key"       // source_key is not an output the source node declares
 	CodeLoopSource      = "loop_source"      // each-mode source_key is not declared in inputs
 	CodeControlScope    = "control_scope"    // a break / continue that no loop can consume
 	CodeUnreachable     = "unreachable"      // no incoming edge and not the start node
@@ -689,6 +690,43 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 		}
 	}
 
+	// inputs / args read a variable from a source node. The dangling check above only proves the node exists; a
+	// source_key the node does not produce yields an empty value with no error at all, so it is compared here against
+	// the outputs the source really has.
+	for i := range doc.Nodes {
+		n := &doc.Nodes[i]
+		for _, section := range []string{"inputs", "args"} {
+			for name, raw := range objectOf(n.Data.Config[section]) {
+				def := objectOf(raw)
+				if def == nil {
+					continue
+				}
+				if sourceType, _ := def["source_type"].(string); sourceType != "node" {
+					continue
+				}
+				ref, _ := def["source_ref"].(string)
+				key, _ := def["source_key"].(string)
+				if strings.TrimSpace(ref) == "" || strings.TrimSpace(key) == "" {
+					continue
+				}
+				src := resolve(ref)
+				if src == nil {
+					continue // dangling_ref reports the missing node
+				}
+				outs, known := declaredOutputs(src, resolve)
+				if !known {
+					continue // a visual node has no outputs to compare against
+				}
+				if outs[topLevelName(key)] {
+					continue
+				}
+				add(SeverityError, CodeSourceKey, n.ID, n.Type, section+"."+name+".source_key",
+					fmt.Sprintf("%s %s reads %q from %s node %s, which produces no such output", section+"."+name, n.ID, key, src.Type, src.ID),
+					"use one of: "+strings.Join(sortedNames(outs), ", "))
+			}
+		}
+	}
+
 	// call.target must be a function node in this flow.
 	for i := range doc.Nodes {
 		n := &doc.Nodes[i]
@@ -775,6 +813,54 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 
 	sortFindings(out)
 	return out, nil
+}
+
+// declaredOutputs returns the output variables a node can hand downstream: the ones it declares in config.outputs plus
+// the fixed ones its executor writes. ok is false when this package cannot judge the type (a visual node), so the caller
+// stays silent instead of guessing.
+//
+// A call node is the exception twice over: it mirrors the target function's outputs (SetOutputVarsFrom replaces the whole
+// map) and its own copy is only a front-end convenience, so the function's declaration is the truth.
+func declaredOutputs(n *node, resolve func(string) *node) (map[string]bool, bool) {
+	caps, known := CapabilitiesOf(n.Type)
+	if !known {
+		return nil, false
+	}
+	out := make(map[string]bool)
+	for _, name := range caps.FixedOutputs {
+		out[name] = true
+	}
+	if n.Type == "call" {
+		target, _ := n.Data.Config["target"].(string)
+		fn := resolve(target)
+		if fn == nil || fn.Type != "function" {
+			return nil, false // call_target reports this
+		}
+		for name := range objectOf(fn.Data.Config["outputs"]) {
+			out[name] = true
+		}
+		return out, true
+	}
+	for name := range objectOf(n.Data.Config["outputs"]) {
+		out[name] = true
+	}
+	return out, true
+}
+
+// topLevelName takes the top-level name of a variable path: "a.b" / "a[0]" -> "a" (the same rule the executors use).
+func topLevelName(path string) string {
+	name := strings.Split(path, ".")[0]
+	return strings.Split(name, "[")[0]
+}
+
+// sortedNames returns the keys of a set in a stable order, so a hint does not change between two runs.
+func sortedNames(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // checkCallArgs compares a call node's args with the target function's params.

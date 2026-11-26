@@ -1,16 +1,17 @@
 package flowcheck
 
 // Capabilities is the part of a node type's declaration this package needs: which error codes it can produce, which
-// on_error actions it supports and whether it supports a post block.
+// on_error actions it supports, whether it supports a post block and which output variables it writes itself.
 //
 // It mirrors executors.NodeCapabilities as a **copy**, on purpose: the executors package imports service/agent/tools
 // (flowtest.go), so a check package that imported executors would make tools -> flowcheck -> executors -> tools a cycle.
 // executors/capabilities_drift_test.go asserts this table equals GetExecutor(...).Capabilities() for every registered
 // type, so the copy cannot silently drift.
 type Capabilities struct {
-	ErrorCodes []string
-	Actions    []string
-	HasPost    bool
+	ErrorCodes   []string
+	Actions      []string
+	HasPost      bool
+	FixedOutputs []string
 }
 
 // AllErrorCodes is every code the runtime can produce (flow.AllErrorCodes), duplicated for the same reason and guarded
@@ -24,24 +25,28 @@ var AllErrorCodes = []string{
 // against (visual nodes, or a type the caller invented - the unknown-type finding covers that).
 var capabilities = map[string]Capabilities{
 	"llm": {
-		ErrorCodes: []string{"config", "connection", "timeout", "not_found", "script", "busy", "var", "other"},
-		Actions:    []string{"retry", "skip", "handler"},
-		HasPost:    true,
+		ErrorCodes:   []string{"config", "connection", "timeout", "not_found", "script", "busy", "var", "other"},
+		Actions:      []string{"retry", "skip", "handler"},
+		HasPost:      true,
+		FixedOutputs: []string{"content", "reasoning_content", "tool_calls"},
 	},
 	"http": {
-		ErrorCodes: []string{"config", "connection", "timeout", "auth", "not_found", "script", "busy", "var", "other"},
-		Actions:    []string{"retry", "skip", "handler"},
-		HasPost:    true,
+		ErrorCodes:   []string{"config", "connection", "timeout", "auth", "not_found", "script", "busy", "var", "other"},
+		Actions:      []string{"retry", "skip", "handler"},
+		HasPost:      true,
+		FixedOutputs: []string{"body", "headers", "mode", "sse_events", "status", "stream_finished"},
 	},
 	"mcp": {
-		ErrorCodes: []string{"config", "connection", "timeout", "auth", "not_found", "script", "busy", "var", "other"},
-		Actions:    []string{"retry", "skip", "handler"},
-		HasPost:    true,
+		ErrorCodes:   []string{"config", "connection", "timeout", "auth", "not_found", "script", "busy", "var", "other"},
+		Actions:      []string{"retry", "skip", "handler"},
+		HasPost:      true,
+		FixedOutputs: []string{"error", "progress", "result"},
 	},
 	"rpc": {
-		ErrorCodes: []string{"config", "connection", "timeout", "auth", "not_found", "script", "busy", "var", "other"},
-		Actions:    []string{"retry", "skip", "handler"},
-		HasPost:    true,
+		ErrorCodes:   []string{"config", "connection", "timeout", "auth", "not_found", "script", "busy", "var", "other"},
+		Actions:      []string{"retry", "skip", "handler"},
+		HasPost:      true,
+		FixedOutputs: []string{"error", "progress", "result"},
 	},
 	"code": {
 		ErrorCodes: []string{"script", "capability", "var", "timeout", "busy", "other"},
@@ -55,8 +60,9 @@ var capabilities = map[string]Capabilities{
 		HasPost:    true,
 	},
 	"intent": {
-		ErrorCodes: []string{"config", "connection", "timeout", "not_found", "var", "other"},
-		Actions:    []string{"retry"},
+		ErrorCodes:   []string{"config", "connection", "timeout", "not_found", "var", "other"},
+		Actions:      []string{"retry"},
+		FixedOutputs: []string{"index", "intent"},
 	},
 	"wait": {
 		ErrorCodes: []string{"config", "timeout", "other"},
@@ -72,13 +78,16 @@ var capabilities = map[string]Capabilities{
 		ErrorCodes: []string{"config", "script", "var"},
 	},
 	"memory": {
-		ErrorCodes: []string{"config", "internal", "var"},
+		ErrorCodes:   []string{"config", "internal", "var"},
+		FixedOutputs: []string{"messages"},
 	},
 	"result": {
-		ErrorCodes: []string{"script", "capability", "timeout", "busy", "other"},
+		ErrorCodes:   []string{"script", "capability", "timeout", "busy", "other"},
+		FixedOutputs: []string{"output"},
 	},
 	"progress": {
-		ErrorCodes: []string{"script", "capability", "timeout", "busy", "other"},
+		ErrorCodes:   []string{"script", "capability", "timeout", "busy", "other"},
+		FixedOutputs: []string{"output"},
 	},
 	// Containers: the child chain's codes pass through, so nothing is declared and nothing is validated.
 	"loop":     {},

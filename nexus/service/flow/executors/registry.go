@@ -11,6 +11,19 @@ type NodeCapabilities struct {
 	ErrorCodes []string           `json:"error_codes"` // the error codes this node can produce
 	Actions    []flow.ErrorAction `json:"actions"`     // additional actions supported besides fail
 	HasPost    bool               `json:"has_post"`    // whether it supports post-processing (failure cleanup)
+	// FixedOutputs are the output variables the executor writes itself, on top of whatever config.outputs declares.
+	// The static checks need them to answer "does this node really produce that source_key" without running it.
+	FixedOutputs []string `json:"fixed_outputs"`
+}
+
+// outputNames returns the sorted names of a fixed-output declaration, so a capability list does not depend on map order.
+func outputNames(decl map[string]string) []string {
+	out := make([]string, 0, len(decl))
+	for name := range decl {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 type Executor interface {

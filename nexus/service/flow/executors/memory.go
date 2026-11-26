@@ -100,8 +100,9 @@ func (e *MemoryExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 
 func (e *MemoryExecutor) Capabilities() NodeCapabilities {
 	return NodeCapabilities{
-		ErrorCodes: []string{flow.ErrCodeConfig, flow.ErrCodeInternal, flow.ErrCodeVar},
-		HasPost:    false,
+		ErrorCodes:   []string{flow.ErrCodeConfig, flow.ErrCodeInternal, flow.ErrCodeVar},
+		HasPost:      false,
+		FixedOutputs: []string{"messages"},
 	}
 }
 

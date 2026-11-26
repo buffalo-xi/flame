@@ -667,6 +667,7 @@
         "call_args": "调用的参数和函数的 params 对不上：多传参数或少传必填参数，运行都会失败",
         "wait_fork": "等待节点没有指向一个 fork 节点",
         "dangling_ref": "引用了不存在的节点：运行时拿到的是空值",
+        "source_key": "来源节点没有这个输出变量：运行时拿到的是空值",
         "loop_source": "遍历的数据源没有在入参里声明",
         "unreachable": "节点没有入边，不会被执行",
         "control_scope": "没有任何循环能接住这个 break / continue，运行时会报配置错误（函数边界同样超出了循环范围）",

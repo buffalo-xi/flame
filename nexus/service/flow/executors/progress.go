@@ -30,8 +30,9 @@ func (e *ProgressExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proce
 
 func (e *ProgressExecutor) Capabilities() NodeCapabilities {
 	return NodeCapabilities{
-		ErrorCodes: []string{flow.ErrCodeScript, flow.ErrCodeCapability, flow.ErrCodeTimeout, flow.ErrCodeBusy, flow.ErrCodeOther},
-		HasPost:    false,
+		ErrorCodes:   []string{flow.ErrCodeScript, flow.ErrCodeCapability, flow.ErrCodeTimeout, flow.ErrCodeBusy, flow.ErrCodeOther},
+		HasPost:      false,
+		FixedOutputs: []string{"output"},
 	}
 }
 

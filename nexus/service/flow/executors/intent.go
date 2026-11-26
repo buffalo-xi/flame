@@ -278,6 +278,8 @@ func (e *IntentExecutor) Capabilities() NodeCapabilities {
 		// trigger this node's on_error (see executeBranch in branch.go)
 		Actions: []flow.ErrorAction{flow.ErrorActionRetry},
 		HasPost: false,
+		// intent / index are merged into config.outputs at run time (mergeIntentOutputs), so they are readable here too.
+		FixedOutputs: []string{"index", "intent"},
 	}
 }
 
