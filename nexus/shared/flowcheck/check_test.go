@@ -624,3 +624,29 @@ func TestEmptyDiagramIsAnError(t *testing.T) {
 		t.Fatal("an empty diagram must be refused, not reported as clean")
 	}
 }
+
+// A function node is entered by a call node's target, not by an edge, so it must not be reported as unreachable; an
+// ordinary node with no incoming edge still is. Reporting the function would mean every flow with a function carries a
+// warning it can never clear.
+func TestUnreachableSkipsCalledNodes(t *testing.T) {
+	fs := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"code","data":{"label":"body","config":{"code":{"lang":"lua","script":"return 1"},"outputs":{"x":{"type":"string"}}}}},
+		{"id":"3","type":"function","data":{"label":"fn"}},
+		{"id":"4","type":"entry","parent_node":"3"},
+		{"id":"5","type":"code","data":{"label":"lonely","config":{"code":{"lang":"lua","script":"return 1"},"outputs":{"x":{"type":"string"}}}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"}]}`)
+
+	unreachable := map[string]bool{}
+	for _, f := range fs {
+		if f.Code == CodeUnreachable {
+			unreachable[f.NodeID] = true
+		}
+	}
+	if unreachable["3"] {
+		t.Errorf("the function node was reported as unreachable: %v", codes(fs))
+	}
+	if !unreachable["5"] {
+		t.Errorf("an unwired code node must still be reported, got %v", codes(fs))
+	}
+}

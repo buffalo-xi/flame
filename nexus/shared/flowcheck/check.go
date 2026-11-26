@@ -797,10 +797,11 @@ func Diagram(raw json.RawMessage, langs []string) ([]Finding, error) {
 	}
 
 	// Unreachable nodes: no incoming edge and not the start node. A warning, because a node inside a container is
-	// entered from its parent rather than by an edge.
+	// entered from its parent rather than by an edge, and a function node is entered by a call node's target rather
+	// than by an edge - neither needs an incoming edge to run.
 	for i := range doc.Nodes {
 		n := &doc.Nodes[i]
-		if n.Type == "start" || n.Type == "entry" || n.Type == "comment" || n.ParentNode != "" {
+		if n.Type == "start" || n.Type == "entry" || n.Type == "comment" || n.Type == "function" || n.ParentNode != "" {
 			continue
 		}
 		if inCount[n.ID] == 0 {
