@@ -138,7 +138,7 @@ After creation the returned `nodes` carry `position`; if you dislike it, move a 
 | source_type | Taken from | Key fields |
 |---|---|---|
 | `argument` | this run's arguments | `source_key` = the argument name, supports `a.b` / `a[0]` |
-| `node` | an earlier node's output | `source_ref` = **node id**; `source_key` = output variable name |
+| `node` | an earlier node's output | `source_ref` = **node id**; `source_key` = output variable name. **Never a `function` node seen from outside its body** — see the rule below |
 | `env` | flow environment variables (`flows.env_vars`) | `source_key` = variable name |
 | `global` | tenant-level global variables ("Settings → Global variables") | `source_key` = variable name |
 | `flow` | flow variables (writable at runtime) | `source_key` = variable name |
@@ -148,6 +148,11 @@ A missing value **fails outright** (the node fails); it never silently yields em
 `source_key` is misspelled.
 `global` behaves the same: a variable name that does not exist, or cannot be read at runtime, fails the node, and the error
 names the variable.
+
+**A `function` node is not a variable source.** Its `params` and `outputs` belong to the body and are readable only by the
+steps inside that body. From outside, read the **`call` node** instead — its `outputs` are copied from the function's — and
+never put a function's id in `source_ref` (in `inputs`, `targets` or `args`): the value is empty at run time and
+`validate_flow` reports `function_ref`. The same rule for edges: nothing wires into a function, only `call` reaches it.
 
 ### Writing `config.targets`
 
