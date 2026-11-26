@@ -28,15 +28,20 @@
        generic "unknown" line, and a bundle entry no rule emits is a stale sentence. Section 8 compares
        the two in both directions.
 
+    5. Node types, their doc page and their palette label. Every type in knownTypes is reachable from the
+       palette and from the create tools, so it needs a page under references/nodes (its own, or one of
+       the two shared pages) and a flow.nodeType.<type> label. Section 9 checks presence only - whether
+       the page is *right* is the node audit, not something a regex can answer.
+
     This is a baseline, not a gate. Regex cannot follow variables or helper wrappers, so the numbers are
     a lower bound and the lists are meant to be read by a human, not asserted on by CI.
 
     -Gate narrows that to the checks that are unambiguous and finishes with an exit code: Chinese comments
     anywhere, Chinese outside comments in a Go file that is not a test, un-bundled Chinese copy in the
-    desktop sources, ErrJSON, a Chinese msg on an ErrCode line, and a finding code without wording (or a
-    wording without a code). Test fixtures are allowed - they are data, and the whole point of the split
-    above is that they are not a todo list. The remaining exceptions are the short allowlists at the
-    bottom of this file, each with its reason.
+    desktop sources, ErrJSON, a Chinese msg on an ErrCode line, a finding code without wording (or a
+    wording without a code), and a node type without a doc page or palette label. Test fixtures are
+    allowed - they are data, and the whole point of the split above is that they are not a todo list. The
+    remaining exceptions are the short allowlists in the script, each with its reason.
 
 .PARAMETER Module
     Limit the scan to some Go modules. Default: all four.
@@ -357,7 +362,71 @@ else {
     Write-Host '  every code has a wording and every wording has a code' -ForegroundColor DarkGray
 }
 
-# ---------------------------------------------------------------- 9. gate
+# ---------------------------------------------------------------- 9. node types vs docs and labels
+# Every type in flowcheck's knownTypes is reachable from the palette and from the create tools, so it needs a doc page
+# (its own, or one of the two shared pages) and a palette label. No gate can tell whether that page is *right* - that is
+# the node audit - but a missing page or a missing label is decidable, and it is how a new type ships undocumented.
+$nodeDocsDir = Join-Path $repoRoot 'nexus/platform/provision/template/files/skills/flow-authoring/references/nodes'
+$nodeDocAliases = @{
+    # the four control signals share one page, and the canvas-only kinds share another
+    'break'     = 'control-signals.md'
+    'continue'  = 'control-signals.md'
+    'return'    = 'control-signals.md'
+    'exit'      = 'control-signals.md'
+    'start'     = 'visual.md'
+    'entry'     = 'visual.md'
+    'comment'   = 'visual.md'
+    'layout'    = 'visual.md'
+    'knowledge' = 'visual.md'
+}
+# Canvas-only kinds drawn without a palette label, so the bundle has no key for them.
+$nodeLabelSkip = @('start', 'entry', 'knowledge')
+
+$nodeTypes = @()
+$flowcheckPath = Join-Path $repoRoot 'nexus/shared/flowcheck/check.go'
+if (Test-Path $flowcheckPath) {
+    $flowcheckText = Get-Content -Path $flowcheckPath -Raw -Encoding UTF8
+    $knownBlock = ($flowcheckText -split 'var knownTypes')[1]
+    if ($knownBlock) {
+        $knownBlock = $knownBlock.Split('}')[0]
+        foreach ($m in [regex]::Matches($knownBlock, '"([a-z_]+)":\s*true')) {
+            $nodeTypes += $m.Groups[1].Value
+        }
+    }
+}
+$nodeProblems = New-Object System.Collections.Generic.List[string]
+# Load the palette label keys once for both bundles: the loop below walks every type.
+$nodeLabels = @{}
+foreach ($locName in @('en', 'zh-CN')) {
+    $bundlePath = Join-Path $repoRoot ("desktop/src/locales/{0}/flow.json" -f $locName)
+    if (-not (Test-Path $bundlePath)) { continue }
+    $nodeBundle = Get-Content -Path $bundlePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $nodeLabels[$locName] = @($nodeBundle.flow.nodeType.PSObject.Properties.Name)
+}
+foreach ($typ in ($nodeTypes | Sort-Object)) {
+    $docName = $typ + '.md'
+    if ($nodeDocAliases.ContainsKey($typ)) { $docName = $nodeDocAliases[$typ] }
+    if (-not (Test-Path (Join-Path $nodeDocsDir $docName))) {
+        $nodeProblems.Add(("node type {0} has no doc page (expected references/nodes/{1})" -f $typ, $docName))
+    }
+    if ($nodeLabelSkip -contains $typ) { continue }
+    foreach ($locName in @('en', 'zh-CN')) {
+        if (-not $nodeLabels.ContainsKey($locName)) { continue }
+        if ($nodeLabels[$locName] -notcontains $typ) {
+            $nodeProblems.Add(("node type {0} has no palette label in {1} (flow.nodeType.{0})" -f $typ, $locName))
+        }
+    }
+}
+Write-Host ''
+Write-Host ("9. node types: {0} in knownTypes" -f $nodeTypes.Count) -ForegroundColor Yellow
+if ($nodeProblems.Count -gt 0) {
+    foreach ($p in $nodeProblems) { Write-Host ("  {0}" -f $p) -ForegroundColor DarkGray }
+}
+else {
+    Write-Host '  every type has a doc page and a palette label' -ForegroundColor DarkGray
+}
+
+# ---------------------------------------------------------------- 10. gate
 # Two short allowlists and nothing else: every entry is Chinese the product deliberately keeps, and adding
 # one is a decision that belongs in review, not in a passing build.
 $nonTestChineseAllowed = @(
@@ -393,6 +462,9 @@ foreach ($f in $msgChinese.Keys) {
 foreach ($p in $findingProblems) {
     $gateProblems.Add($p)
 }
+foreach ($p in $nodeProblems) {
+    $gateProblems.Add($p)
+}
 
 if ($Gate) {
     Write-Host ''
@@ -401,7 +473,7 @@ if ($Gate) {
         foreach ($p in $gateProblems) { Write-Host ("  - " + $p) -ForegroundColor Red }
         exit 1
     }
-    Write-Host 'GATE PASSED: no Chinese in comments, no Chinese in non-test Go sources beyond the allowlist, no un-bundled desktop copy, no ErrJSON, no Chinese msg, every finding code has a wording' -ForegroundColor Green
+    Write-Host 'GATE PASSED: no Chinese in comments, no Chinese in non-test Go sources beyond the allowlist, no un-bundled desktop copy, no ErrJSON, no Chinese msg, every finding code has a wording, every node type has a doc page and a label' -ForegroundColor Green
 }
 
 Write-Host ''

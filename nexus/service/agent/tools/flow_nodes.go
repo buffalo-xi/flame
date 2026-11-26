@@ -206,6 +206,16 @@ func (d *flowDoc) subtree(id string) []string {
 }
 
 // ancestorIs walks up from id looking for an ancestor container of type typ.
+// isOrInside reports whether id is a container of the given type itself, or sits inside one. The "itself" half matters for
+// tools that take a parent_node: a node created directly under a function has the function as its parent, not as an
+// ancestor.
+func (d *flowDoc) isOrInside(id, typ string) bool {
+	if n, ok := d.node(id); ok && n.Type == typ {
+		return true
+	}
+	return d.ancestorIs(id, typ)
+}
+
 func (d *flowDoc) ancestorIs(id, typ string) bool {
 	cur := id
 	for i := 0; i < 32 && cur != ""; i++ {
@@ -429,7 +439,7 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	if typ == "function" && parentID != "" {
 		return "", "", "", nil, errors.New("a function node can only be created at the top level: call nodes invoke it through config.target and it takes no edges")
 	}
-	if typ == "return" && !doc.ancestorIs(parentID, "function") {
+	if typ == "return" && !doc.isOrInside(parentID, "function") {
 		return "", "", "", nil, errors.New("a return node can only be created inside a function container (a direct child or deeper)")
 	}
 
