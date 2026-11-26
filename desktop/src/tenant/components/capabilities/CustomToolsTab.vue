@@ -80,6 +80,10 @@
           <el-button size="small" text @click="exportEntity('custom_tool', p.name, p.name)">{{ t('common.export') }}</el-button>
           <el-button size="small" text @click="openConfig(p)">{{ t('common.config') }}</el-button>
           <el-button size="small" text @click="openEdit(p)">{{ t('common.edit') }}</el-button>
+          <!-- Delete is on the card too: the panel danger zone is only reachable after opening a tool, which reads as "cannot be deleted". -->
+          <el-button size="small" text type="danger" :loading="deleting === p.name"
+                     :title="t('customTools.deleteHint', { dir: 'tools/' + p.name + '/' })"
+                     @click="removeTool(p)">{{ t('common.delete') }}</el-button>
         </div>
       </div>
     </div>
@@ -331,7 +335,7 @@
         </div>
 
         <div v-if="!isNew" class="st-danger">
-          <el-button size="small" type="danger" plain :loading="deleting" @click="removeTool">{{ t('customTools.deleteTool') }}</el-button>
+          <el-button size="small" type="danger" plain :loading="deleting === editing.name" @click="removeTool()">{{ t('customTools.deleteTool') }}</el-button>
           <span class="st-hint">{{ t('customTools.deleteHint', { dir: 'tools/' + editing.name + '/' }) }}</span>
         </div>
       </div>
@@ -412,7 +416,8 @@ const issues = ref([])
 const loading = ref(false)
 const loadError = ref('')
 const busy = ref('')
-const deleting = ref(false)
+// Name of the tool being deleted, so only that button shows a spinner (the card and the panel each have one).
+const deleting = ref('')
 
 // 编辑面板：editing 非空即打开；没有 id 表示新建
 const editing = ref(null)
@@ -951,8 +956,10 @@ const toggle = async (p, on) => {
   }
 }
 
-const removeTool = async () => {
-  const name = editing.value?.name
+// Delete, shared by the card action and the settings-panel danger zone. The argument is the card's tool
+// object; the panel passes nothing and means "the tool being edited".
+const removeTool = async (target) => {
+  const name = target?.name || editing.value?.name
   if (!name) return
   try {
     await ElMessageBox.confirm(
@@ -967,20 +974,24 @@ const removeTool = async () => {
   } catch {
     return
   }
-  deleting.value = true
+  deleting.value = name
   try {
     const res = await fetch(adminApi.customTools.remove(name), { method: 'DELETE', headers: authHeaders() })
     const body = await res.json().catch(() => ({}))
     if (body.code !== 200) throw new Error(formatError(body) || t('customTools.deleteFailed'))
     ElMessage.success(t('customTools.deleted'))
-    settingsOpen.value = false
-    editorOpen.value = false
-    editing.value = null
+    // Only close the open panel when it belongs to the deleted tool: deleting another card must not throw
+    // away the unsaved config / files of the one being edited.
+    if (!editing.value || editing.value.name === name) {
+      settingsOpen.value = false
+      editorOpen.value = false
+      editing.value = null
+    }
     await load()
   } catch (e) {
     ElMessage.error(e.message || t('customTools.deleteFailed'))
   } finally {
-    deleting.value = false
+    deleting.value = ''
   }
 }
 
@@ -1118,7 +1129,8 @@ onUnmounted(() => {
 }
 .st-card-meta { display: flex; flex-wrap: wrap; gap: 8px; color: #888; font-size: 11px; }
 .st-warn { color: #e6a23c; }
-.st-card-actions { display: flex; justify-content: flex-end; gap: 2px; }
+/* Four actions now (export / config / edit / delete): wrap instead of pushing the danger action out of the card. */
+.st-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
 /* 操作按钮跟着卡片缩：默认 small 高 32px，会把卡片撑回原来的高度 */
 .st-card-actions :deep(.el-button) { height: 24px; padding: 0 8px; font-size: 12px; }
 
