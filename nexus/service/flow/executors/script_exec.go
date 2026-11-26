@@ -379,6 +379,22 @@ func applyScriptResult(nr *flow.NodeResult, result any) error {
 	return nil
 }
 
+// targetSourceKey is the variable name a target writes to: its own source_key, or - when the config left it empty - the name
+// the step returns under, with anything from the first "." / "[" dropped because a returned key may carry a sub-path.
+//
+// An empty name used to be passed through to SetOutputVar(""), which failed with "output var  not defined" and said nothing
+// about the missing field. An explicit source_key still wins, which is how a step maps its key onto a differently named
+// variable.
+func targetSourceKey(def map[string]any, returnedKey string) string {
+	if key, _ := def["source_key"].(string); key != "" {
+		return key
+	}
+	if i := strings.IndexAny(returnedKey, ".["); i != -1 {
+		return returnedKey[:i]
+	}
+	return returnedKey
+}
+
 // applyTargetVar lands the return value on the target declared in targets.
 func applyTargetVar(nr *flow.NodeResult, path string, value any) error {
 	def, err := nr.GetTargetDef(path)
@@ -396,7 +412,8 @@ func applyTargetVar(nr *flow.NodeResult, path string, value any) error {
 	for k, v := range target {
 		tgt[k] = v
 	}
-	sourceKey, _ := tgt["source_key"].(string)
+	sourceKey := targetSourceKey(tgt, path)
+	tgt["source_key"] = sourceKey
 	if firstDot := strings.IndexAny(path, ".["); firstDot != -1 {
 		tgt["source_key"] = sourceKey + path[firstDot:]
 	}

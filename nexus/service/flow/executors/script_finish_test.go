@@ -60,6 +60,29 @@ func TestFinishScriptErrorCodes(t *testing.T) {
 
 // Cancellation errors must be split by ctx into "the user stopped it" and "the workflow timed out", never by
 // matching the message text.
+// A target without source_key writes to the key the step returns. The field used to be passed through empty, which reached
+// SetOutputVar("") and failed with "output var  not defined" - an error that named nothing.
+func TestTargetSourceKeyFallsBackToReturnedKey(t *testing.T) {
+	cases := []struct {
+		name        string
+		def         map[string]any
+		returnedKey string
+		want        string
+	}{
+		{"an explicit source_key wins", map[string]any{"source_key": "total"}, "sum", "total"},
+		{"a missing source_key uses the returned key", map[string]any{}, "sum", "sum"},
+		{"a returned sub-path is dropped", map[string]any{}, "sum.value", "sum"},
+		{"an array sub-path is dropped", map[string]any{}, "items[0]", "items"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := targetSourceKey(tc.def, tc.returnedKey); got != tc.want {
+				t.Errorf("targetSourceKey = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFinishScriptErrorCancelVsTimeout(t *testing.T) {
 	node := &flow.Node{ID: "n1", Type: "code"}
 

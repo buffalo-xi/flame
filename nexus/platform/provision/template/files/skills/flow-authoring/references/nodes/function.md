@@ -39,8 +39,12 @@ function and let a `call` node enter it.
 A step inside the body writes into the function's `outputs` through **`targets`**, not through its own `outputs`:
 
 ```json
-{"targets": {"sum": {"type": "number", "source_type": "node", "source_ref": "<function node id>"}}}
+{"targets": {"sum": {"type": "number", "source_type": "node", "source_ref": "<function node id>", "source_key": "sum"}}}
 ```
+
+`source_key` names the function variable the value lands in; **omitted, the outer key is used** — so the example above
+writes the function's `sum`. Write it explicitly to map a script key onto a differently named output. The name must exist in
+the function's `outputs`, otherwise the run fails with `output var X not defined`.
 
 - the same name must not also appear in that step's `outputs` (`the variable is declared in both outputs and targets`) —
   `outputs` / `targets` / `locals` are pairwise disjoint;

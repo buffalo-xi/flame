@@ -94,17 +94,19 @@ func (e *AssignExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, process
 				return failf(nr, flow.ErrCodeConfig, fmt.Sprintf("target %s: invalid definition", a.Target))
 			}
 
-			// With a sub-path, fix up source_key
+			// source_key names the variable to write; when it is empty the targets key is used. A sub-path is appended to
+			// that name.
+			target = copyMap(target)
+			sourceKey := targetSourceKey(target, a.Target)
 			if a.Path != "" {
-				target = copyMap(target)
-				sourceKey, _ := target["source_key"].(string)
 				targetType, _ := target["type"].(string)
 				if strings.HasPrefix(targetType, "array") {
-					target["source_key"] = sourceKey + a.Path
+					sourceKey += a.Path
 				} else {
-					target["source_key"] = sourceKey + "." + a.Path
+					sourceKey += "." + a.Path
 				}
 			}
+			target["source_key"] = sourceKey
 
 			if err := ctx.SetVariableWithFire(target, converted, processID); err != nil {
 				return failf(nr, flow.ErrCodeVar, err.Error())

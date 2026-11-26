@@ -123,6 +123,7 @@ After creation the returned `nodes` carry `position`; if you dislike it, move a 
 1. **`config.inputs`** — this node's input declarations (variable name → where the data comes from)
 2. **`{{ }}` templates** — reference resolved inputs and node outputs inside url / body / messages / script
 3. **`config.outputs`** — this node's output variable declarations (script nodes must declare them; other nodes have fixed outputs)
+4. **`config.targets`** — where a step **writes** a variable (a container's output / local, or a flow variable)
 
 ### Writing `config.inputs`
 
@@ -147,6 +148,24 @@ A missing value **fails outright** (the node fails); it never silently yields em
 `source_key` is misspelled.
 `global` behaves the same: a variable name that does not exist, or cannot be read at runtime, fails the node, and the error
 names the variable.
+
+### Writing `config.targets`
+
+A step **writes** through `targets` (a container's output / local, or a flow variable) — the mirror of `config.inputs`:
+
+```json
+"targets": {"sum": {"type": "number", "source_type": "node", "source_ref": "<container node id>", "source_key": "sum"}}
+```
+
+| Field | Meaning |
+|---|---|
+| `type` | the variable's type, same vocabulary as `outputs` |
+| `source_type` | `node` = the container holding this step (`source_ref` = its node id); `flow` = a flow variable |
+| `source_ref` | required for `node`: the container node's id |
+| `source_key` | the variable name to write; **omitted → the outer key** (what the step returns). It must exist in the container's `outputs` / `locals`, or as a flow variable, or the run fails with `output var X not defined` |
+
+The outer key is what the step returns, and the two may differ — that is how a script key is mapped onto a differently named
+variable. A name may not appear in both `outputs` and `targets` (`declared in both outputs and targets`).
 
 ### Template syntax
 
