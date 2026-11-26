@@ -196,6 +196,8 @@ MCP 买的是触达，rpc 买的是掌控，而「一个目标 × 一种协议 =
 - `nexus/docs/design-highlights.md` — 设计要点：调用链防环、多租户配额、端点模型（[中文版](nexus/docs/design-highlights.zh.md)）
 - `nexus/docs/i18n-plan.md` — 中英双语的分层方案、成本与坑位（[中文版](nexus/docs/i18n-plan.zh.md)）
 - `nexus/docs/error-codes.md` — 业务错误码规范（UI 双语的前置条件）（[中文版](nexus/docs/error-codes.zh.md)）
+- `nexus/docs/node-audit.md` — 逐节点审计：每个节点类型查哪些维度、哪些已由测试或门禁保证、哪些还要继续审计
+  （[中文版](nexus/docs/node-audit.zh.md)）
 - `browserd/README.md` — 独立浏览器池：nexus 如何访问、如何构建与部署、哪三项配置必须对齐
   （[中文版](browserd/README.zh.md)）
 - `browserg/README.md` — 浏览器网关：粘性路由、租户上限，以及为什么它不并进 sandboxg
