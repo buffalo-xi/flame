@@ -3,13 +3,23 @@ package executors
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"flame/nexus/service/flow/core"
 	"flame/nexus/shared/models"
 	flowruns "flame/nexus/shared/repository/flowruns"
+	"flame/tools/xlog"
 	"flame/tools/xsql"
 )
+
+// maxStoredProcessID caps flow_node_records.process_id (the column is varchar(255) for the same reason).
+// The value is the child-process chain built by ProcessManager.NewProcess, so it grows with nesting depth: a
+// recursive function adds at least two segments per level, and max_recursion_depth allows 100. The column is
+// history - nothing joins, filters or indexes on it - so past the cap the useful part is how deep the chain
+// went, not the full path.
+const maxStoredProcessID = 255
 
 // persistRun stores the result of one run (the run plus its node records).
 // A storage failure is only logged; it does not affect the outcome of the run itself.
@@ -33,8 +43,40 @@ func persistRun(execCtx *flow.ExecContext, flowErr error) {
 	}
 
 	if err := flowruns.NewRepository().SaveRun(execCtx.Schema, run, nodes, maxRecords); err != nil {
-		execCtx.LogError("failed to persist the run records: " + err.Error())
+		// Storage is observation, not the run: LogError would SetError, and the caller reads GetError to decide
+		// status and err_msg - a failed write would then report a finished run as failed, with a raw driver error
+		// (a bare "value too long for type character varying" names no column). Log the identity plus the longest
+		// process chain instead, which is the one value that can outgrow its column.
+		xlog.Error("failed to persist the run records schema=%s flow=%s run=%s nodes=%d max_process_id=%d: %v",
+			execCtx.Schema, flowId, execCtx.GetRunID(), len(nodes), maxProcessIDLen(nodes), err)
 	}
+}
+
+// storedProcessID keeps the head of a process chain (which branch) and replaces the tail with the depth (the
+// real question a recursive run raises). Truncation happens only on the way into the database: the in-memory
+// process ids stay full, because ProcessManager and ExecutedNodeMap are keyed by them.
+func storedProcessID(processID string) string {
+	if len(processID) <= maxStoredProcessID {
+		return processID
+	}
+	marker := fmt.Sprintf("...depth=%d", strings.Count(processID, "_")+1)
+	head := processID[:maxStoredProcessID-len(marker)]
+	if i := strings.LastIndexByte(head, '_'); i > 0 {
+		head = head[:i] // do not leave a dangling segment separator
+	}
+	return head + marker
+}
+
+// maxProcessIDLen reports the longest stored process chain: what the failure log needs to tell a too-long
+// value apart from any other write error.
+func maxProcessIDLen(nodes []*models.FlowNodeRecord) int {
+	longest := 0
+	for _, n := range nodes {
+		if n != nil && len(n.ProcessID) > longest {
+			longest = len(n.ProcessID)
+		}
+	}
+	return longest
 }
 
 // BuildRunRecord builds the run record from the execution context (shared by persistence and the debug
@@ -226,7 +268,7 @@ func buildNodeRecord(nr *flow.NodeResult) *models.FlowNodeRecord {
 		ID:                  nr.ID,
 		RunID:               "", // filled in by SaveRun with run.ID
 		NodeID:              nr.NodeID,
-		ProcessID:           nr.ProcessID,
+		ProcessID:           storedProcessID(nr.ProcessID),
 		NodeType:            string(nr.NodeType),
 		Status:              string(nr.Status),
 		InputVars:           ivJSON,

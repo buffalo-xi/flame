@@ -74,7 +74,7 @@ CREATE TABLE flow_node_records (
     id uuid CONSTRAINT pipe_node_records_id_not_null NOT NULL,
     run_id uuid CONSTRAINT pipe_node_records_run_id_not_null NOT NULL,
     node_id character varying(64) CONSTRAINT pipe_node_records_node_id_not_null NOT NULL,
-    process_id character varying(64) DEFAULT ''::character varying CONSTRAINT pipe_node_records_process_id_not_null NOT NULL,
+    process_id character varying(255) DEFAULT ''::character varying CONSTRAINT pipe_node_records_process_id_not_null NOT NULL,
     node_type character varying(32) DEFAULT ''::character varying CONSTRAINT pipe_node_records_node_type_not_null NOT NULL,
     status character varying(32) CONSTRAINT pipe_node_records_status_not_null NOT NULL,
     output_vars jsonb,

@@ -3,6 +3,7 @@ package executors
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,6 +198,38 @@ func TestBuildNodeRecord(t *testing.T) {
 	}
 	if rec.RunID != "" {
 		t.Errorf("RunID = %q, want empty: SaveRun fills it in", rec.RunID)
+	}
+}
+
+// A deep recursion must not lose the whole run to a too-long process chain: the stored value is capped and
+// still says how deep it went, while the in-memory id (the key of ExecutedNodeMap) stays untouched.
+func TestStoredProcessIDTruncatesDeepChains(t *testing.T) {
+	short := "1_1_1"
+	if got := storedProcessID(short); got != short {
+		t.Errorf("storedProcessID(%q) = %q, want it unchanged", short, got)
+	}
+
+	// 150 levels is well past the column width, and the depth is the part that has to survive.
+	deep := "1" + strings.Repeat("_1", 150)
+	got := storedProcessID(deep)
+	if len(got) > maxStoredProcessID {
+		t.Errorf("len(stored) = %d, want <= %d", len(got), maxStoredProcessID)
+	}
+	if !strings.HasPrefix(got, "1_1_1") {
+		t.Errorf("stored = %q, want the head of the chain kept", got)
+	}
+	if !strings.HasSuffix(got, "...depth=151") {
+		t.Errorf("stored = %q, want the depth marker last", got)
+	}
+
+	// The record builder is the boundary that applies it, and it must not rewrite the in-memory id.
+	ec := newPersistContext()
+	nr := flow.NewNodeResult(&flow.Node{ID: "n1", Type: "code"}, deep, ec)
+	if rec := buildNodeRecord(nr); rec.ProcessID != got {
+		t.Errorf("buildNodeRecord ProcessID = %q, want %q", rec.ProcessID, got)
+	}
+	if nr.ProcessID != deep {
+		t.Error("the in-memory process id was modified: it is the key of ExecutedNodeMap")
 	}
 }
 

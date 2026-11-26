@@ -5,8 +5,9 @@
 -- every flow deleted before the handler learned to clean up left its runs and node records behind. They are unreachable
 -- from the flow's own pages, yet the cross-flow history still lists them with a dangling flow_id.
 --
--- The handler now deletes both tables on flow delete (admin/flows/handlers.go), so this script is the one-off backfill for
--- whatever piled up before that. It is idempotent and safe to run twice.
+-- The repository now deletes both tables in the same transaction as the flow row
+-- (flows.PostgresRepository.DeleteFlow), so this script is the one-off backfill for whatever piled up before that.
+-- It is idempotent and safe to run twice.
 -- Order: node records first, then the runs that point at the missing flow.
 -- Run:
 --   psql -h <host> -p <port> -U <user> -d <db> -f nexus/sql/runs_orphans_cleanup.sql
