@@ -26,6 +26,7 @@
           <div class="node-description">
             <p>{{ t('flow.nodeProps.exit.p1') }}</p>
             <p>{{ t('flow.nodeProps.exit.p2') }}</p>
+            <p>{{ t('flow.nodeProps.exit.p4') }}</p>
             <p><strong>{{ t('flow.nodeProps.notice') }}</strong>{{ t('flow.nodeProps.exit.p3') }}</p>
           </div>
         </div>

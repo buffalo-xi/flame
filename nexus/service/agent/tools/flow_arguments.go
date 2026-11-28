@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"flame/nexus/shared/flowcheck"
 )
 
 // ===== update_flow_arguments =====
@@ -30,7 +32,7 @@ func (t *updateFlowArgumentsTool) Meta() ToolMeta {
 			"remove deletes by name. Declared parameters are the run_flow inputs keys and the input_schema of an exposed endpoint. " +
 			"**Only entry parameters are touched**: name / description / diagram / limits are never changed (use the node tools to change structure). " +
 			"Changes land in the working copy: run_flow test runs and the endpoint input_schema pick them up immediately; " +
-			"but formal calls run the **released version**, so the new declaration only takes effect after you hit Publish in the editor. " +
+			"but formal calls run the **released version**, so the new declaration only takes effect after the user releases it in the console's version panel. " +
 			"Changing a type or adding a required parameter makes existing callers send wrong or missing values — call read_flow first to see the current state.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -148,6 +150,13 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 	if _, err := c.Flows.UpdateArguments(ctx, ref, ref, json.RawMessage(merged)); err != nil {
 		return nil, err
 	}
+	// The new declaration is checked against the diagram the flow already has: dropping a parameter the graph still reads, or
+	// leaving a read one out of required, is exactly how a flow stops being callable - and the run only says "var path X not
+	// found". Reported, not refused: the declaration is written, and validate_flow counts the hard cases as errors.
+	var warnings []string
+	for _, f := range flowcheck.Arguments(detail.Diagram, json.RawMessage(merged)) {
+		warnings = append(warnings, f.Message)
+	}
 
 	names := make([]string, 0, len(props))
 	for name := range props {
@@ -168,11 +177,15 @@ func (t *updateFlowArgumentsTool) Execute(ctx context.Context, c *Context, args 
 	}
 	sort.Strings(touched)
 
-	return map[string]any{
+	out := map[string]any{
 		"flow_id":   detail.ID,
 		"flow_name": detail.Name,
 		"arguments": names,
 		"changed":   touched,
 		"note":      "written to the working copy: run_flow picks it up immediately; the live entry point switches to the new declaration only after you release it in the editor",
-	}, nil
+	}
+	if len(warnings) > 0 {
+		out["warnings"] = warnings
+	}
+	return out, nil
 }

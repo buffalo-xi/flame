@@ -72,6 +72,34 @@ func TestFindUsesIDDirectly(t *testing.T) {
 	}
 }
 
+// The stop summary is derived, so its rule has to be exactly "the first successful exit node": a skipped or failed exit
+// proves nothing, and a second exit can never have run (the first one ended the run).
+func TestRunStopSummary(t *testing.T) {
+	node := func(id, typ, status string) *models.FlowNodeRecord {
+		return &models.FlowNodeRecord{NodeID: id, NodeType: typ, Status: status}
+	}
+	cases := []struct {
+		name   string
+		nodes  []*models.FlowNodeRecord
+		reason string
+		nodeID string
+	}{
+		{"normal end", []*models.FlowNodeRecord{node("1", "start", "success"), node("2", "code", "success")}, "", ""},
+		{"exit ends the run", []*models.FlowNodeRecord{node("1", "code", "success"), node("7", "exit", "success")}, "exit", "7"},
+		{"a skipped exit proves nothing", []*models.FlowNodeRecord{node("7", "exit", "skipped")}, "", ""},
+		{"a failed exit is a failed run", []*models.FlowNodeRecord{node("7", "exit", "failed")}, "", ""},
+		{"first successful exit wins", []*models.FlowNodeRecord{
+			node("5", "exit", "success"), node("9", "exit", "success"),
+		}, "exit", "5"},
+	}
+	for _, c := range cases {
+		reason, nodeID := runStopSummary(c.nodes)
+		if reason != c.reason || nodeID != c.nodeID {
+			t.Errorf("%s: got (%q,%q), want (%q,%q)", c.name, reason, nodeID, c.reason, c.nodeID)
+		}
+	}
+}
+
 // flow_run_records.id is a uuid column too: a non-UUID run_id has to count as "does not exist",
 // and the 22P02 SQL error must not be thrown at the model.
 func TestGetRunTreatsNonUUIDAsNotFound(t *testing.T) {

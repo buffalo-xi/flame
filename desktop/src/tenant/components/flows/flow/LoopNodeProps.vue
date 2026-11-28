@@ -19,14 +19,19 @@
 
     <div class="tab-content">
       <div v-if="activeTab === 'settings'" class="settings-panel">
+        <ConcurrencyScopeConfig
+          :selected-node="selectedNode"
+          @update-node-data="(data) => emit('update-node-data', data)"
+        />
+
         <div class="props-section">
           <div class="prop-group-horizontal">
             <div class="prop-item">
               <el-radio-group v-model="loopType" class="radio-group" @change="handleLoopTypeChange">
-                <el-radio label="count">{{ t('flow.loopNode.modeCount') }}</el-radio>
-                <el-radio label="each">{{ t('flow.loopNode.modeEach') }}</el-radio>
-                <el-radio label="while">{{ t('flow.loopNode.modeWhile') }}</el-radio>
-                <el-radio label="do_while">{{ t('flow.loopNode.modeDoWhile') }}</el-radio>
+                <el-radio value="count">{{ t('flow.loopNode.modeCount') }}</el-radio>
+                <el-radio value="each">{{ t('flow.loopNode.modeEach') }}</el-radio>
+                <el-radio value="while">{{ t('flow.loopNode.modeWhile') }}</el-radio>
+                <el-radio value="do_while">{{ t('flow.loopNode.modeDoWhile') }}</el-radio>
               </el-radio-group>
             </div>
           </div>
@@ -76,11 +81,11 @@
                 class="show-content-btn expand-btn variable-select-btn" 
                 @click="handleShowVariableSelectForEach($event)"
               >
-                <template v-if="foreachSourceData.source_key">
+                <template v-if="foreachSourceKey">
                   <span class="type-badge" :class="getDataTypeIconClass(foreachSourceType)">
                     {{ getDataTypeIcon(foreachSourceType) }}
                   </span>
-                  <span class="var-key">{{ foreachSourceData.source_key }}</span>
+                  <span class="var-key">{{ foreachSourceKey }}</span>
                   <template v-if="getSourceIcon(foreachSourceSrcType, foreachSourceRef)">
                     <template v-if="foreachSourceSrcType === 'node'">
                       <span class="node-icon" :class="getSourceIcon(foreachSourceSrcType, foreachSourceRef).class">
@@ -235,7 +240,8 @@
         <OutputVarsConfig
           :selected-node="selectedNode"
           :existing-names="existingOutputNames"
-          :reserved-names="['index', 'item']"
+          :reserved-names="['index', 'item', 'total', 'iterations']"
+          :builtin-variables="builtinOutputVariables"
           @update-node-data="(data) => emit('update-node-data', data)"
         />
 
@@ -325,72 +331,19 @@
       </div>
 
       <div v-if="activeTab === 'lastRun'" class="last-run-panel">
-        <div v-if="!loopResult" class="nr-empty">{{ t('flow.node.run.empty') }}</div>
-        <div v-else class="props-section">
-          <div class="result-item result-meta-row">
-            <span class="meta-item">
-              <label class="result-label">{{ t('flow.node.run.status') }}</label>
-              <span class="result-value" :class="loopStatusClass">{{ loopStatusText }}</span>
-            </span>
-            <span class="meta-item">
-              <label class="result-label">{{ t('flow.node.run.time') }}</label>
-              <span class="result-value">{{ loopStartTimeText || '-' }}</span>
-            </span>
-            <span class="meta-item">
-              <label class="result-label">{{ t('flow.node.run.duration') }}</label>
-              <span class="result-value">{{ loopResult.duration_ms }}ms</span>
-            </span>
-          </div>
-
-          <div class="result-item result-meta-row">
-            <span class="meta-item">
-              <label class="result-label">{{ t('flow.loopNode.resultType') }}</label>
-              <span class="result-value">{{ loopTypeText || '-' }}</span>
-            </span>
-            <span class="meta-item">
-              <label class="result-label">{{ t('flow.loopNode.resultIterations') }}</label>
-              <span class="result-value">{{ loopIterations }}</span>
-            </span>
-          </div>
-
-          <div class="result-item">
-            <label class="result-label">{{ t('flow.node.run.input') }}</label>
-            <pre class="result-output">{{ loopInputText }}</pre>
-          </div>
-
-          <div class="result-item">
-            <label class="result-label">{{ t('flow.node.run.output') }}</label>
-            <pre class="result-output">{{ loopOutputText }}</pre>
-          </div>
-
-          <div v-if="loopLocalText" class="result-item">
-            <label class="result-label">{{ t('flow.node.run.localVars') }}</label>
-            <pre class="result-output">{{ loopLocalText }}</pre>
-          </div>
-
-          <div v-if="loopLogs.length" class="result-item">
-            <label class="result-label">{{ t('flow.node.run.logs') }}</label>
-            <div class="nr-logs">
-              <div v-for="(log, i) in loopLogs" :key="i" class="nr-log">{{ log }}</div>
-            </div>
-          </div>
-
-          <div v-if="loopResult.err_msg" class="result-item">
-            <label class="result-label">{{ t('flow.node.run.error') }}</label>
-            <div class="nr-log nr-error">{{ loopResult.err_msg }}</div>
-          </div>
-        </div>
+        <NodeLastRun :selected-node="selectedNode" />
       </div>
     </div>
   </div>
 </template>
 
 <script setup>import { ref, watch, computed, inject, nextTick } from 'vue';
-import { nodeResults } from '@/tenant/composables/runData.js';
+import NodeLastRun from './NodeLastRun.vue';
 import { ElRadio, ElRadioGroup, ElInput, ElSelect, ElOption, ElDropdown, ElDropdownMenu, ElDropdownItem } from 'element-plus';
 import { Plus, Delete, ChromeFilled, Notification, User, Timer, Help, Link, MagicStick, Lightning, Promotion, RefreshRight, CircleClose, ChatLineSquare, Collection, Operation, Coin, Minus, Upload, CircleCheck, ScaleToOriginal, Monitor, Mouse, RefreshLeft } from '@element-plus/icons-vue';
 import OnErrorConfig from './OnErrorConfig.vue';
 import OutputVarsConfig from './OutputVarsConfig.vue';
+import ConcurrencyScopeConfig from './ConcurrencyScopeConfig.vue';
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { useInputVariables } from './inputVariables.js'
@@ -447,6 +400,23 @@ const foreachSourceSrcType = ref('');
 const foreachItemName = ref('item');
 const foreachItemType = ref('string');
 const localVariables = ref({});
+
+// Names this node already uses: OutputVarsConfig refuses a duplicate before it reaches the config.
+const getOutputVarNames = () => Object.keys(props.selectedNode?.data?.config?.outputs || {})
+const existingOutputNames = computed(() => [
+  ...Object.keys(loopInputVariables.value),
+  ...Object.keys(localVariables.value)
+])
+
+// The loop writes iterations itself (the runner resolves it, the run record stores it), so it belongs in the outputs
+// section but must NOT become a config.outputs entry: a declared output is initialised to the type default and shadows the
+// real count, because NodeResult.GetVariable reads OutputVars before LoopResult. Display-only row, hence builtin-variables
+// rather than fixed-variables (that one only locks an entry that already exists in the config).
+const builtinOutputVariables = computed(() => [{
+  name: 'iterations',
+  type: 'number',
+  description: t('flow.nodeFactory.loopVarIterations')
+}])
 
 // ── 下拉菜单动态对齐右边缘 ──
 const localSectionRef = ref(null)
@@ -560,7 +530,7 @@ const handleLoopTypeChange = () => {
       timeout: buildLoopTimeout()
     };
     newConfig.inputs = inputs;
-    newConfig.loop_vars = undefined;
+    newConfig.loop_vars = conditionLoopVars();
   }
  
  emit('update-node-data', {
@@ -614,13 +584,59 @@ const handleLoopVariableNameChange = () => {
  data: { config: newConfig }
  });
 };
-// 循环输入变量的快照复用输入变量那套实现（字段一致，只是 ref 名字不同）
-const { snapshot: buildLoopInputs } = useInputVariables({ inputVariables: loopInputVariables });
+// Input variables follow the shared implementation (validation, unique names, add / rename / delete, snapshot).
+const {
+  snapshot: buildLoopInputs,
+  addInputVariable,
+  updateInputVariableName,
+  deleteInputVariable,
+  applySelectedVariable
+} = useInputVariables({
+  inputVariables: loopInputVariables,
+  // index / item are published as loop variables; an input with the same name would be shadowed in the script.
+  reservedNames: () => ['index', 'item'],
+  onChange: () => handleLoopInputsChange()
+})
 
 const buildLoopTimeout = () => ({
   enabled: conditionTimeoutEnabled.value,
   seconds: Math.max(1, Math.floor(conditionTimeout.value) || 30)
 });
+
+// while / do_while publish only index, but it still has to be declared: the variable picker and the static check read
+// config.loop_vars, and the executor writes index every round regardless.
+const conditionLoopVars = () => ({
+  [loopVariableName.value]: {
+    type: 'number',
+    description: t('flow.nodeFactory.loopVarIndex')
+  }
+})
+
+// Only while / do_while read config.inputs (the condition script's parameters); count / each get their data
+// elsewhere, so this handler never rewrites their loop block.
+const handleLoopInputsChange = () => {
+  const newConfig = { ...props.selectedNode.data.config };
+  newConfig.inputs = buildLoopInputs();
+  if (loopType.value === 'while' || loopType.value === 'do_while') {
+    newConfig.loop = {
+      type: loopType.value,
+      lang: conditionLang.value,
+      condition: loopCondition.value,
+      max_times: positiveInt(maxLoopCount.value, -1),
+      timeout: buildLoopTimeout()
+    };
+    newConfig.loop_vars = conditionLoopVars();
+  }
+  emit('update-node-data', { nodeId: props.selectedNode.id, data: { config: newConfig } });
+}
+
+const handleLoopInputVariableFocus = () => {}
+const handleAddLoopInputVariable = addInputVariable
+const handleUpdateLoopInputVariableName = updateInputVariableName
+const handleDeleteLoopInputVariable = deleteInputVariable
+const handleShowLoopInputVariableSelect = (name, event) => {
+  emit('show-variable-select', event, name, (value) => applySelectedVariable(name, value))
+}
 
 const handleConditionKeydown = (event) => {
   if (event.key === 'Tab') {
@@ -647,7 +663,7 @@ const handleConditionChange = () => {
     timeout: buildLoopTimeout()
   };
   newConfig.inputs = inputs;
-  newConfig.loop_vars = undefined;
+  newConfig.loop_vars = conditionLoopVars();
   emit('update-node-data', { nodeId: props.selectedNode.id, data: { config: newConfig } });
 };
 
@@ -670,7 +686,7 @@ const handleMaxLoopCountChange = () => {
     timeout: buildLoopTimeout()
   };
   newConfig.inputs = inputs;
-  newConfig.loop_vars = undefined;
+  newConfig.loop_vars = conditionLoopVars();
   emit('update-node-data', { nodeId: props.selectedNode.id, data: { config: newConfig } });
 };
 const handleForeachItemNameChange = () => {
@@ -1201,7 +1217,7 @@ const handleDeleteLocalVariable = (key) => {
 .input-variable-btn .icon-start { background-color: #00704A; }
 .input-variable-btn .icon-branch { background-color: #00bcd4; }
 .input-variable-btn .icon-wait { background-color: #00bcd4; }
-.input-variable-btn .icon-code { background-color: #f56565; }
+.input-variable-btn .icon-code { background-color: #a0522d; }
 .input-variable-btn .icon-http { background-color: #409eff; }
 .input-variable-btn .icon-process { background-color: #00bcd4; }
 .input-variable-btn .icon-result { background-color: #67c23a; }
@@ -1458,103 +1474,6 @@ const handleDeleteLocalVariable = (key) => {
   border-radius: 4px;
 }
 
-.last-run-panel {
-  padding: 0;
-}
-
-/* 执行结果页的 section 单独加足内边距（不动设置页共用的 .props-section 5px） */
-.last-run-panel .props-section {
-  padding: 16px 12px;
-}
-
-.result-item {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.result-meta-row {
-  flex-direction: row;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
-.result-meta-row .meta-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.nr-empty {
-  padding: 24px 0;
-  text-align: center;
-  color: #999;
-  font-size: 13px;
-}
-
-.nr-logs {
-  max-height: 200px;
-  overflow: auto;
-  padding: 8px 10px;
-  background: #fff;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
-}
-
-.nr-log {
-  font-size: 12px;
-  color: #555;
-  line-height: 1.6;
-  word-break: break-all;
-}
-
-.nr-error {
-  color: #f56565;
-}
-
-.result-label {
-  font-size: 12px;
-  color: #333;
-  font-weight: 600;
-}
-
-.result-value {
-  font-size: 13px;
-  color: #333;
-}
-
-.status-success {
-  color: #67c23a;
-}
-
-.status-error {
-  color: #f56565;
-}
-
-.status-running {
-  color: #409eff;
-}
-
-.status-default {
-  color: #999;
-}
-
-.result-output {
-  width: 100%;
-  min-height: 100px;
-  padding: 10px;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
-  font-size: 12px;
-  color: #333;
-  background: #fafafa;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
 .variable-select-btn {
   display: flex;
   align-items: center;
@@ -1616,7 +1535,7 @@ const handleDeleteLocalVariable = (key) => {
 }
 
 .variable-select-btn .icon-code {
-  background-color: #f56565;
+  background-color: #a0522d;
 }
 
 .variable-select-btn .icon-http {

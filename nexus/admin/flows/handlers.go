@@ -179,10 +179,10 @@ func ListFlows(c *gin.Context) {
 
 // validateDiagramLabels rejects a diagram whose node labels are not unique.
 //
-// label is the writable form of config.inputs.*.source_ref / call.target / wait.fork_node_id
-// (tools and the executor both turn a label into a node id), so a duplicate makes those
-// references point at the wrong node. The check sits at the save point, so no amount of
-// canvas editing can get past it.
+// label is the writable form of config.inputs.*.source_ref / call.target (tools and the
+// executor both turn a label into a node id), so a duplicate makes those references point at
+// the wrong node. The check sits at the save point, so no amount of canvas editing can get
+// past it.
 //
 // An empty code means the diagram is fine; otherwise the caller turns the triple into an
 // error response (code + params for the locale bundle, msg as the operator diagnostic).
@@ -222,7 +222,7 @@ func validateDiagramNodeCount(limits flowconfig.FlowLimits, diagram json.RawMess
 //
 // An unparsable diagram is itself a finding rather than a failed request: the editor gets one response shape (counts +
 // findings) whatever it sends, and "the body is not even a diagram" ends up in the same list as everything else.
-func flowFindings(diagram json.RawMessage) []flowcheck.Finding {
+func flowFindings(diagram json.RawMessage, ceiling int) []flowcheck.Finding {
 	// langs is nil: the sandbox's workflow language list belongs to the agent side, and the editor only offers languages
 	// from its own list - guessing here would report every lang when the snapshot is missing.
 	findings, err := flowcheck.Diagram(diagram, nil)
@@ -237,7 +237,9 @@ func flowFindings(diagram json.RawMessage) []flowcheck.Finding {
 	if findings == nil {
 		return []flowcheck.Finding{}
 	}
-	return findings
+	// The one rule that needs the tenant's configuration rather than the diagram alone: a body with more members than
+	// the per-scope ceiling still runs, but the extra members queue.
+	return append(findings, flowcheck.ScopeOverCeiling(diagram, ceiling)...)
 }
 
 // ValidateFlow statically checks a diagram without saving it.
@@ -258,7 +260,13 @@ func ValidateFlow(c *gin.Context) {
 		xhttp.ErrCode(c, "common.invalid_params", nil, "diagram must not be empty", "")
 		return
 	}
-	findings := flowFindings(req.Diagram)
+	ceiling := 0
+	if authInfo, exists := c.Get("authInfo"); exists {
+		if info, ok := authInfo.(*auth.AuthInfo); ok {
+			ceiling = flowconfig.Resolve(info.Schema).ConcurrencyLimit()
+		}
+	}
+	findings := flowFindings(req.Diagram, ceiling)
 	errs, warns := flowcheck.Summarize(findings)
 	xhttp.OkJSON(c, "Success", gin.H{
 		"ok":            errs == 0,
@@ -386,7 +394,7 @@ func CreateFlow(c *gin.Context) {
 		return
 	}
 
-	// Node labels must be unique: a duplicate makes source_ref / call.target / fork_node_id point at the wrong node.
+	// Node labels must be unique: a duplicate makes source_ref / call.target point at the wrong node.
 	if code, params, msg := validateDiagramLabels(req.Diagram); code != "" {
 		xhttp.ErrCode(c, code, params, msg, "")
 		return
@@ -524,7 +532,7 @@ func UpdateFlow(c *gin.Context) {
 	// resolved req.Name: otherwise the stored name keeps its spaces while the endpoint name is migrated trimmed.
 	Instance.Name = req.Name
 
-	// Node labels must be unique: a duplicate makes source_ref / call.target / fork_node_id point at the wrong node.
+	// Node labels must be unique: a duplicate makes source_ref / call.target point at the wrong node.
 	if code, params, msg := validateDiagramLabels(req.Diagram); code != "" {
 		xhttp.ErrCode(c, code, params, msg, "")
 		return
@@ -598,13 +606,9 @@ func DeleteFlow(c *gin.Context) {
 
 	id := c.Param("id")
 
-	// Delete every protocol endpoint attached to this flow first (target_type=flow).
-	if err := svcendpoints.NewRepository().DeleteByTarget(authInfo.(*auth.AuthInfo), "flow", id); err != nil {
-		xhttp.ErrCode(c, "common.internal", nil, "failed to delete endpoints: "+err.Error(), "")
-		return
-	}
-
-	// Delete the row.
+	// Nothing is removed here before the delete: the repository cascades the derived endpoints in the same transaction
+	// as the row, and refuses the whole thing while one of them is still exposed. Deleting the endpoints beforehand
+	// would bypass that guard, and would destroy them even when the row delete is then refused (a released version).
 	err := repo.DeleteFlow(authInfo.(*auth.AuthInfo), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -616,6 +620,13 @@ func DeleteFlow(c *gin.Context) {
 		var released *versions.ErrHasReleasedVersion
 		if errors.As(err, &released) {
 			xhttp.ErrCode(c, "flow.has_release", gin.H{"version": released.Version}, released.Error(), "")
+			return
+		}
+		// An exposed endpoint is a public entrance that outside callers may be using right now: the delete is refused
+		// and the answer names the endpoints, so the UI can say "retract it first" instead of a generic failure.
+		var exposed *repository.ErrHasExposedEndpoint
+		if errors.As(err, &exposed) {
+			xhttp.ErrCode(c, "flow.endpoint_exposed", gin.H{"names": strings.Join(exposed.Names, ", ")}, exposed.Error(), "")
 			return
 		}
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")

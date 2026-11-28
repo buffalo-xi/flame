@@ -26,7 +26,7 @@ canvas it is wired by hand.
 | `children` | ✅ | — | the branch array; an empty array → `config` error |
 | `children[].id` | ✅ | — | corresponds to the outgoing edge's `source_handle` (`source<id>left` / `source<id>right`); a branch with an empty id is ignored |
 | `children[].label` | — | `id` | used in logs only |
-| `children[].condition` | — | empty = skip that branch, and the pre-save check warns about it | script text that must `return` a value; truthiness: a bool itself, a string only if `"true"/"True"/"TRUE"`, a number if non-zero |
+| `children[].condition` | — | empty = skip that branch, and the pre-save check warns about it | script text that must `return` a value; truthiness: a bool itself, a string only if `"true"/"True"/"TRUE"`, a number if non-zero. A script with no return token at all, or reading an `input.<name>` that `config.inputs` does not declare, is reported by `validate_flow` |
 | `children[].exclusive` | — | `true` | **exclusive by default**: on a match, the node ends immediately after that sub-chain, without trying later branches or the default branch. Only an explicit `false` makes it non-exclusive (keep comparing; every match runs) |
 | `branch.lang` | — | `lua` | condition script language: `return` in lua / js, `__return__ = ...` in python (see [`../script-languages.md`](../script-languages.md)) |
 | `branch.timeout` | — | off | `{enabled,seconds}`; when off there is no node-level timeout and the run limit applies |
@@ -38,8 +38,12 @@ It **does not read** `outputs` / `locals`: a `branch` node has no output variabl
 
 | Branch | `source_handle` |
 |---|---|
-| an ordinary branch `children[i]` | `source<childId>left` or `source<childId>right` (prefix match, first edge per key) |
+| an ordinary branch `children[i]` | `source<childId>left` or `source<childId>right` (**exactly one** edge per child: the two positions are the same outlet) |
 | the default branch | `source<nodeId>left` / `right` / `bottom` (key = **the branch node's own id**) |
+
+So the node is not a "many outgoing edges" node: it has one outlet **per declared child** (plus at most one default). A second
+edge for the same child is refused by `create_edge` and reported as `branch_outlet` by `validate_flow`, and so is a handle that
+names neither the node itself nor a declared child.
 
 When nothing matches and there is no default outgoing edge, the node succeeds and **no sub-chain runs** (no error).
 Each branch's sub-chain runs in its own child process with variables isolated from the main chain, running to the end from the
@@ -75,8 +79,10 @@ c2 chain; a `key: "default"` chain uses `source<the branch node's own id>right`.
 - **It must be the last step in its chain**: after a branch runs, only the default edge is taken, so a main chain after the
   branch has no meaning.
 - Sub-chains may nest `branch` again (ids are assigned consecutively in build order, no mental arithmetic needed).
-- Sub-branches present in `children` but missing from `branches` only produce `warnings` (skipped when matched); creation is
-  not blocked.
+- Sub-branches present in `children` but missing from `branches` are still **created** (`create_flow` returns a warning, so a
+  skeleton can be built first), but `validate_flow` reports `branch_edge` as an **error**, and the run agrees with it: once
+  that child's condition matches there is nowhere to go, so the node fails with a `config` error naming the child instead of
+  reporting success having run nothing.
 
 ## The default branch is a "closing chain", not an else
 
@@ -96,7 +102,12 @@ once it matches, so if a tail is needed, chain it at the end of that branch's ow
 ## Common errors
 
 - `branch node has no branches configured` — `children` is empty.
+- `branch <label> matched but has no outgoing edge (source<id>)` — the condition matched and nothing is wired to that child: a
+  `config` failure of the node. Wire the child's sub-chain, or remove the child.
 - `branch X condition failed to execute` — the condition script errored (**a straight failure**, not a skip).
-- A branch is never taken — `condition` was written as `input.score > 90` (no `return`), or `score` is not declared in `inputs`.
+- `condition_no_return` / `condition_input_ref` — a broken condition script is a **failure of the node**, not a missed branch:
+  `input.score > 90` without `return` is a syntax error in lua (and returns nothing in js / python, so the condition can never
+  be true), and a name `config.inputs` does not declare is `nil` at run time, so the comparison itself errors. A branch is
+  skipped only when its `condition` is empty.
 
 Source: `service/flow/executors/branch.go`

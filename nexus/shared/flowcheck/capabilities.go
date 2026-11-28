@@ -21,6 +21,19 @@ var AllErrorCodes = []string{
 	"connection", "auth", "not_found", "internal", "other",
 }
 
+// RaisableCodes are the codes a raise node may carry: every global code except the three the runtime treats as the
+// platform's own. config / internal bypass on_error entirely, and cancel means the user stopped the run - raising it
+// would record a failure whose code claims a cancellation that never happened.
+//
+// Duplicated from executors.IsRaisableCode for the same cycle reason as AllErrorCodes above, and guarded by the same
+// drift test.
+var RaisableCodes = []string{
+	"timeout", "busy", "script", "capability", "var", "connection", "auth", "not_found", "other",
+}
+
+// IsRaisableCode reports whether a raise node may carry code.
+func IsRaisableCode(code string) bool { return contains(RaisableCodes, code) }
+
 // capabilities is the declaration of every node type with an executor. A type missing here has nothing to check
 // against (visual nodes, or a type the caller invented - the unknown-type finding covers that).
 var capabilities = map[string]Capabilities{
@@ -64,18 +77,17 @@ var capabilities = map[string]Capabilities{
 		Actions:      []string{"retry"},
 		FixedOutputs: []string{"index", "intent"},
 	},
-	"wait": {
-		ErrorCodes: []string{"config", "timeout", "other"},
-		Actions:    []string{"skip"},
-	},
-	"fork": {
-		ErrorCodes: []string{"config", "other"},
-	},
 	"branch": {
 		ErrorCodes: []string{"config", "script"},
 	},
 	"assign": {
 		ErrorCodes: []string{"config", "script", "var"},
+	},
+	"raise": {
+		// Undeclared: the author picks the code, so every global code passes through and none is validated here. No
+		// actions and no post, for the same reason branch / assign declare none - the failure is authored, so the catch
+		// point is the enclosing host or the call node, never this node.
+		ErrorCodes: nil,
 	},
 	"memory": {
 		ErrorCodes:   []string{"config", "internal", "var"},
@@ -89,9 +101,16 @@ var capabilities = map[string]Capabilities{
 		ErrorCodes:   []string{"script", "capability", "timeout", "busy", "other"},
 		FixedOutputs: []string{"output"},
 	},
-	// Containers: the child chain's codes pass through, so nothing is declared and nothing is validated.
-	"loop":     {},
-	"process":  {},
+	// Containers: the child chain's codes pass through, so nothing is declared and nothing is validated. The two hosts
+	// accept skip / handler on their own failure (a member failure fails the host): skip lets the main chain continue past
+	// an optional concurrent section, handler rewrites the error or turns it into a skip. There is no retry - re-running
+	// the body would repeat every member's side effects - and function declares nothing, because its failure belongs to the
+	// call node that invoked it. Both hosts accept post: it is the only way a skipped host can leave a marker behind, since
+	// a handler script cannot write outputs.
+	// A loop's iterations is the one readable name it writes itself: the run record stores it as the node's extra, and
+	// NodeResult.GetVariable resolves it (the exact round count, including "no round" and "cut short by break / exit").
+	"loop":     {Actions: []string{"skip", "handler"}, HasPost: true, FixedOutputs: []string{"iterations"}},
+	"process":  {Actions: []string{"skip", "handler"}, HasPost: true},
 	"function": {},
 	// Control signals can never fail.
 	"break":    {},

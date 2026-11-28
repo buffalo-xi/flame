@@ -780,8 +780,15 @@ watch(() => fileState.value.hasDirty, (now, before) => {
   if (before && !now) refreshVersionState()
 })
 
-// ESC 关抽屉：走 closeSettings（编辑模式下只收抽屉，配置模式下退出并问未保存）
-useEscClose(settingsOpen, () => closeSettings())
+// ESC 关抽屉：走 closeSettings（编辑模式下只收抽屉，配置模式下退出并问未保存）。
+// skipWhenEditable：抽屉里的行内输入正在编辑时 ESC 归输入框；导入对话框由它自己处理 ESC。
+useEscClose(settingsOpen, () => closeSettings(), {
+  skipWhenEditable: true,
+  enabled: () => !importVisible.value
+})
+
+// 全屏目录编辑器：抽屉收起时 ESC 退出编辑器回列表 —— closeEditor 已按两处脏状态问过确认
+useEscClose(editorOpen, () => closeEditor(), { enabled: () => !importVisible.value })
 
 // 左缘拖拽调宽：与插件 / 技能设置面板同款手感（越往左拖越宽）
 const startResize = (e) => {

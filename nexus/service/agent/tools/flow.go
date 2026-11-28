@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"flame/nexus/shared/callchain"
@@ -89,9 +90,16 @@ type FlowDetail struct {
 	FlowInfo
 	Diagram   json.RawMessage `json:"diagram"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
+	// Blocks lists the concurrency scopes of this diagram: the host, the nodes it dispatches, and its limit / join mode.
+	// "Which scope am I in" is then answerable from the tool output instead of inferred from parent_node plus a flag.
+	Blocks []map[string]any `json:"blocks,omitempty"`
 }
 
 // FlowInput is the input of workflow creation (the diagram has already been assembled by the tool layer).
+//
+// It deliberately carries no endpoint protocols: a workflow created here has never been released, and exposure needs a
+// released version, so "create + expose" in one call can only fail (and taking the whole create down with it). Slots and
+// their switches are the endpoint tools' business.
 type FlowInput struct {
 	Name        string
 	Description string
@@ -99,7 +107,6 @@ type FlowInput struct {
 	// Arguments is the entry argument declaration (flows.arguments); empty = none declared.
 	// Once exposed it is the endpoint's input_schema and also the inputs key of run_flow.
 	Arguments json.RawMessage
-	Endpoints []string // which protocols to expose it on; empty = internal only
 }
 
 // flowRefHint is the shared description of the flow / workflow locator argument (used by read / delete / run).
@@ -122,10 +129,15 @@ type FlowRunResult struct {
 	FlowName string `json:"flow_name"`
 	RunID    string `json:"run_id"`
 	// Status: success / failed / cancelled (the same values as flow_run_records.status).
-	Status     string `json:"status"`
-	ErrCode    string `json:"err_code,omitempty"` // the error code of the earliest failing node
-	ErrMsg     string `json:"err_msg,omitempty"`
-	Result     string `json:"result,omitempty"` // the final output (the result node / what return collected)
+	Status  string `json:"status"`
+	ErrCode string `json:"err_code,omitempty"` // the error code of the earliest failing node
+	ErrMsg  string `json:"err_msg,omitempty"`
+	Result  string `json:"result,omitempty"` // the final output (the result node / what return collected)
+	// StopReason is "exit" when an exit node ended the run early, so everything after it never ran; absent means the flow
+	// walked its normal end. Derived from the node traces (a successful exit node is the proof), so status stays "success"
+	// either way - this is the summary that tells the two apart.
+	StopReason string `json:"stop_reason,omitempty"`
+	StopNodeID string `json:"stop_node_id,omitempty"`
 	DurationMs int64  `json:"duration_ms"`
 	// Nodes are the nodes that ran, in ascending start time. Successful ones are included too - on a failure they show how far
 	// it got.
@@ -141,6 +153,11 @@ type FlowNodeTrace struct {
 	ErrCode    string `json:"err_code,omitempty"`
 	ErrMsg     string `json:"err_msg,omitempty"`
 	DurationMs int64  `json:"duration_ms"`
+	// StartTime / EndTime are the node's own window (RFC3339 with milliseconds). They are what makes a concurrency claim
+	// checkable: whether two members' windows overlap cannot be derived from duration_ms alone, and comparing total run time
+	// by eye is the only other way to tell a parallel group from a serial chain.
+	StartTime string `json:"start_time,omitempty"`
+	EndTime   string `json:"end_time,omitempty"`
 	// Logs / ErrStack / PostError are only given for non-successful nodes (script stderr, traceback, variable lookup errors -
 	// the diagnostic material); a successful node's log is mostly noise such as "executed successfully", and returning it only
 	// wastes context.
@@ -148,10 +165,11 @@ type FlowNodeTrace struct {
 	// ErrStack is far longer than ErrMsg but the most useful for locating a failure: lua / python / js tracebacks live here
 	// only.
 	ErrStack string `json:"err_stack,omitempty"`
-	// PostError is an error from the post-processing script (post): it does not affect the node's main status, but it is still
-	// one of the failure causes.
-	PostError  string `json:"post_error,omitempty"`
-	RetryCount int    `json:"retry_count,omitempty"`
+	// PostError / HandlerError are the on_error fallbacks failing on their own (post script, handler script): neither
+	// affects the node's main status, but they are still failure causes.
+	PostError    string `json:"post_error,omitempty"`
+	HandlerError string `json:"handler_error,omitempty"`
+	RetryCount   int    `json:"retry_count,omitempty"`
 }
 
 // FlowRunDetail is the body of read_flow_run: one run record + the node records (including node-level variables).
@@ -160,12 +178,17 @@ type FlowNodeTrace struct {
 // stacks and logs are all in the database and remain queryable after the run ends, and not only for the run started by
 // run_flow (a frontend debug run, or one started by another agent, has a run_id too).
 type FlowRunDetail struct {
-	FlowID     string `json:"flow_id"`
-	RunID      string `json:"run_id"`
-	Status     string `json:"status"`
-	RunType    string `json:"run_type,omitempty"` // call / debug / task
-	ErrMsg     string `json:"err_msg,omitempty"`
-	Result     string `json:"result,omitempty"`
+	FlowID  string `json:"flow_id"`
+	RunID   string `json:"run_id"`
+	Status  string `json:"status"`
+	RunType string `json:"run_type,omitempty"` // call / debug / task
+	ErrMsg  string `json:"err_msg,omitempty"`
+	Result  string `json:"result,omitempty"`
+	// StopReason / StopNodeID are the same summary as on FlowRunResult, derived from the stored node records: "exit" means an
+	// exit node ended this run early. Derived rather than stored, because the exit node's own record is the evidence - a
+	// separate column would be a second copy that can drift.
+	StopReason string `json:"stop_reason,omitempty"`
+	StopNodeID string `json:"stop_node_id,omitempty"`
 	DurationMs int64  `json:"duration_ms"`
 	StartedAt  string `json:"started_at,omitempty"`
 	FinishedAt string `json:"finished_at,omitempty"`
@@ -188,7 +211,15 @@ type FlowRunNode struct {
 	ErrStack    string `json:"err_stack,omitempty"`
 	RetryCount  int    `json:"retry_count,omitempty"`
 	ErrorAction string `json:"error_action,omitempty"`
-	DurationMs  int64  `json:"duration_ms"`
+	// PostError / HandlerError are the on_error fallbacks' own failures, stored beside err_msg: they never change the
+	// node's status or err_code, so without them the only trace would be a line in the run logs.
+	PostError    string `json:"post_error,omitempty"`
+	HandlerError string `json:"handler_error,omitempty"`
+	DurationMs   int64  `json:"duration_ms"`
+	// StartTime / EndTime are the node's own window (RFC3339 with milliseconds), the same fields as on FlowNodeTrace: they are
+	// how a group's overlap is read off the record instead of inferred from total duration.
+	StartTime string `json:"start_time,omitempty"`
+	EndTime   string `json:"end_time,omitempty"`
 	// The three variable fields come from the stored jsonb and are decoded into objects; over the limit they degrade into a
 	// {_truncated, _bytes, keys} summary.
 	InputVars  any    `json:"input_vars,omitempty"`
@@ -199,6 +230,16 @@ type FlowRunNode struct {
 	// Truncated means it was already truncated when stored - re-reading will not reveal the whole value, so do not conclude
 	// "these are all the values there are".
 	Truncated bool `json:"truncated,omitempty"`
+}
+
+// FormatNodeTime renders a node's start / end for the trace and the run detail: RFC3339 with milliseconds, so two nodes of
+// the same group can be compared directly (their overlap is routinely well under a second). A zero time renders empty instead
+// of year 1, which would read as a real timestamp.
+func FormatNodeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2006-01-02T15:04:05.000Z07:00")
 }
 
 // FlowsManager registers and queries workflows (injected by service/agent; it carries the tenant schema and repository).
@@ -239,22 +280,25 @@ type FlowsManager interface {
 // layout (a placeholder the runner skips straight through, but the tool does not create it).
 //
 // "Allowed to create" is not the same as "runs once wired linearly": branch / intent need several outgoing edges with handles,
-// loop / process / function need children, wait needs a fork on the same chain, and call's target must point at an existing
-// function node id. Those structural gaps do not block creation, but they are returned as warnings so the caller knows where to
-// fill them in (the frontend canvas).
+// loop / process / function need children, and call's target must point at an existing function node id. Those structural gaps do
+// not block creation, but they are returned as warnings so the caller knows where to fill them in (the frontend canvas).
 var flowStepTypes = map[string]bool{
 	// Executing types: one in, one out, runnable when wired linearly
 	"llm": true, "code": true, "http": true, "mcp": true, "rpc": true,
 	"assign": true, "memory": true, "result": true, "progress": true,
 	// Control flow / containers: creatable, but need extra structure (see flowStepHint)
 	"branch": true, "intent": true, "loop": true, "process": true, "function": true,
-	"call": true, "wait": true, "fork": true,
+	"call": true,
 	// Control signals: they end the flow early and usually do not belong on the main chain
 	"break": true, "continue": true, "return": true, "exit": true,
 	// Visual nodes: layout is skipped straight through by the runner, which makes it a good "wrap point / grouping anchor" to
 	// use the main chain's height; comment / knowledge have no executor and knowledge errors out, so they stay closed.
 	"layout": true,
 }
+
+// terminalStepTypes end their chain: an outgoing edge after one of them is dead code, and flowcheck reports that edge as
+// no_outgoing. create_flow refuses the shape instead of building a graph its own validator rejects.
+var terminalStepTypes = map[string]bool{"break": true, "continue": true, "return": true, "exit": true}
 
 // flowStepHint points out "why this node will not do anything in a linear graph"; an empty string = no hint.
 // It only hints, never blocks: the node itself is legal, it merely lacks structure, which the user can add on the canvas.
@@ -267,11 +311,8 @@ func flowStepHint(typ, id string, idx int) string {
 	case "loop", "process", "function":
 		return fmt.Sprintf("step %d (%s, id=%s) is a container node and a linear graph has no children — it spins empty at run time; "+
 			"nested nodes can only be dragged into the container (entry included) on the front-end canvas", idx+1, typ, id)
-	case "wait":
-		return fmt.Sprintf("step %d (wait, id=%s) waits on a fork group, but a linear graph has no group members; "+
-			"wait's config.fork_node_id and each member's config.concurrency have to be set explicitly", idx+1, id)
 	case "break", "continue", "return", "exit":
-		return fmt.Sprintf("step %d (%s, id=%s) is a control signal: on the main chain it ends or jumps the rest of the flow right at this step — "+
+		return fmt.Sprintf("step %d (%s, id=%s) is a control signal: the steps after it in this chain do not run at this point — "+
 			"confirm this is the effect you want", idx+1, typ, id)
 	}
 	return ""
@@ -319,23 +360,23 @@ type diagramBuild struct {
 // sub-chains in branches declaration order). The same input always yields the same ids and edge order.
 //
 // The Warnings in the result are structural-gap hints (e.g. a container with no children); they do not block creation.
-func buildFlowDiagram(steps []FlowStep, concurrency string) (*diagramBuild, error) {
+func buildFlowDiagram(steps []FlowStep) (*diagramBuild, error) {
 	if len(steps) == 0 {
 		return nil, errors.New("steps must not be empty: a workflow needs at least one step")
 	}
-	b := &diagramBuilder{concurrency: concurrency}
+	b := &diagramBuilder{}
 	b.addStart()
 	if _, err := b.emitChain(steps, "1", "", 0, ""); err != nil {
 		return nil, err
 	}
 	// Layout: with a full set of model coordinates the layout follows them (it knows better than any rule what the graph is
-	// meant to express); only when they are missing or partial does code lay it out (main chain horizontal, branches vertical,
-	// containers sized to their content).
+	// meant to express); only when they are missing or partial does code lay it out (main chain horizontal, branch rows
+	// opening to the right of their card, containers sized to their content).
 	if !b.applyModelPositions() {
 		b.layoutDiagram()
 	}
-	// Handles are written once the coordinates are final: the main chain is on one row -> right->left, branch sub-chains sit
-	// bottom-right -> right->top.
+	// Handles are written once the coordinates are final: the main chain is on one row -> right->left, a branch row beside its
+	// card -> right->left, a deeper branch row -> right->top.
 	// A branch sub-chain's source_handle is a semantic key and is left as is when backfilled.
 	b.fillEdgeHandles()
 	b.resolveSourceRefs()
@@ -349,118 +390,32 @@ func buildFlowDiagram(steps []FlowStep, concurrency string) (*diagramBuild, erro
 	return &diagramBuild{Diagram: raw, Warnings: b.warnings, Nodes: b.nodes}, nil
 }
 
-// ===== Concurrency policy (off by default) =====
-//
-// Concurrency is a capability that is only turned on "when the user explicitly asks": generated definitions never write
-// config.concurrency, because a concurrent node runs only itself and does not continue along its outgoing edge (a wait has to
-// join it), which is entirely different from serial semantics - a model copying one concurrency line from a doc example breaks
-// the whole flow.
-//
-// The two shapes are declared explicitly by the caller (the model, judging from the user's request):
-//   - mono  single-node concurrency: one node processes several items concurrently, no group ({"mode":"mono"})
-//   - group concurrency group: several nodes run at the same time and a wait joins them ({"mode":"fork","fork_node_id":...})
-const (
-	concurrencyOff   = "off"
-	concurrencyMono  = "mono"
-	concurrencyGroup = "group"
-)
-
-// concurrencyTypes are the types that can really be configured on the canvas (CodeNode / HttpNode / CallNode carry the
-// concurrency dropdown).
-// Other executors accept config.concurrency too, but the frontend cannot change it, so no hint is offered for them.
-var concurrencyTypes = map[string]bool{"code": true, "http": true, "call": true}
-
-// concurrencyParamSchema is the concurrency argument shared by the node tools (create_node / insert_node).
-var concurrencyParamSchema = map[string]any{
-	"type": "string",
-	"enum": []any{"off", "mono", "group"},
-	"description": "Optional: concurrency shape, **omit for off**, pass it only when the user explicitly asks for concurrency. " +
-		"mono = single-node concurrency (this node processes several items concurrently; config becomes {\"mode\":\"mono\"}); " +
-		"group = concurrency group (this node joins a fork group; config becomes " +
-		"{\"mode\":\"fork\",\"fork_node_id\":\"<fork node id>\"}). " +
-		"When omitted, config.concurrency is stripped and a warning is returned.",
+// concurrentParamSchema is the scope-membership flag (data.concurrent) of the scope model, shared by the node tools. The flag
+// lives on the node itself rather than in its config, so a config rewrite never loses it.
+var concurrentParamSchema = map[string]any{
+	"type": "boolean",
+	"description": "Optional: mark this node as a member of its parent's concurrency scope (parent_node must be a process or loop). " +
+		"The body dispatches it and keeps walking; the body's end joins it, a member failure fails the run, and a member's result " +
+		"is readable only after the host. Default false (serial). It is data.concurrent: the flag sits on the node, while the " +
+		"scope settings (limit, join, timeout) go in the host's config.parallel.",
 }
 
-// parseConcurrencyPolicy parses the concurrency argument: off (default) / mono / group.
-func parseConcurrencyPolicy(args map[string]any) (string, error) {
-	raw := strings.ToLower(strings.TrimSpace(argString(args, "concurrency")))
-	switch raw {
-	case "", "off", "none", "serial":
-		return concurrencyOff, nil
-	case "mono", "single":
-		return concurrencyMono, nil
-	case "group", "fork", "fork-group", "fork_group":
-		return concurrencyGroup, nil
-	}
-	return "", fmt.Errorf("concurrency supports off / mono / group only, got %q"+
-		" (off = off by default, mono = single-node concurrency, group = concurrency group)", raw)
-}
-
-// concurrencyShape is how a concurrency shape is written in config (for echoing back).
-func concurrencyShape(policy string) string {
-	switch policy {
-	case concurrencyMono:
-		return "{\"mode\":\"mono\"}"
-	case concurrencyGroup:
-		return "{\"mode\":\"fork\",\"fork_node_id\":\"<fork node id>\"}"
-	}
-	return ""
-}
-
-// applyConcurrencyPolicy handles one node's config.concurrency per the policy and returns the echo back to the caller (an
-// empty string = untouched).
+// applyInputsPolicy drops config.inputs from a node type that never reads it and returns the echo back to the caller (an
+// empty string = nothing to say).
 //
-// where locates the node (create_flow passes "step 3", the node tools pass "the new node").
-// Containers (loop / process / function) never carry the key: concurrency is an attribute of "a group member".
-func applyConcurrencyPolicy(cfg map[string]any, typ, policy, where string) string {
-	if cfg == nil {
+// It exists for the process case: the body chain reads the outer nodes' outputs directly (a source_type: node reference
+// resolves through the process chain) and writes back through targets, so an inputs block has no reader - it looks like
+// data flow and does nothing at run time. The canvas cannot produce such a block (ProcessNodeProps has no inputs section);
+// create_flow and the node tools can, which is why the rule lives here.
+func applyInputsPolicy(cfg map[string]any, typ, where string) string {
+	if cfg == nil || !flowcheck.IgnoresInputs(typ) {
 		return ""
 	}
-	raw, ok := cfg["concurrency"]
-	if !ok || raw == nil {
-		// A concurrency shape was declared but the key was not written: without a hint that reads as "I turned it on" while it
-		// actually runs serially.
-		if policy != concurrencyOff && concurrencyTypes[typ] {
-			return fmt.Sprintf("%s (%s) has no config.concurrency: concurrency shape %s was declared, "+
-				"so write %s into the node config", where, typ, policy, concurrencyShape(policy))
-		}
+	if _, ok := cfg["inputs"]; !ok {
 		return ""
 	}
-	cc, _ := raw.(map[string]any)
-	if len(cc) == 0 {
-		delete(cfg, "concurrency")
-		return ""
-	}
-	mode, _ := cc["mode"].(string)
-	forkID, _ := cc["fork_node_id"].(string)
-	forkID = strings.TrimSpace(forkID)
-
-	if containerTypes[typ] {
-		delete(cfg, "concurrency")
-		return fmt.Sprintf("%s (%s): config.concurrency ignored — loop / process containers are serial by default, "+
-			"concurrency belongs on the member nodes inside the group", where, typ)
-	}
-	switch policy {
-	case concurrencyMono:
-		if mode == "mono" && forkID == "" {
-			return ""
-		}
-		delete(cfg, "concurrency")
-		return fmt.Sprintf("%s (%s): config.concurrency ignored — only single-node concurrency is on this time "+
-			"({\"mode\":\"mono\"}); declare concurrency=group explicitly for a concurrency group", where, typ)
-	case concurrencyGroup:
-		if mode == "fork" && forkID != "" {
-			return ""
-		}
-		delete(cfg, "concurrency")
-		return fmt.Sprintf("%s (%s): config.concurrency ignored — a concurrency group is on this time "+
-			"({\"mode\":\"fork\",\"fork_node_id\":\"<fork node>\"}); declare concurrency=mono explicitly for single-node concurrency",
-			where, typ)
-	default:
-		delete(cfg, "concurrency")
-		return fmt.Sprintf("%s (%s): config.concurrency ignored — concurrency is off by default and is only generated "+
-			"when the user explicitly asks for it (single-node concurrency=mono, concurrency group=group)", where, typ)
-	}
+	delete(cfg, "inputs")
+	return fmt.Sprintf("%s (%s): config.inputs removed — %s", where, typ, flowcheck.InputsIgnoredReason(typ))
 }
 
 // diagramBuilder is the build accumulator: it owns id allocation, edge numbering and warnings.
@@ -469,9 +424,6 @@ type diagramBuilder struct {
 	edges    []diagramEdge
 	seq      int
 	warnings []string
-	// concurrency is the policy: off (default) / mono / group; the build applies it uniformly to every node's
-	// config.concurrency (see applyConcurrencyPolicy).
-	concurrency string
 	// hasBranches records whether any branch sub-chain was built: it decides how the call id hint reads (k+1 only holds in a
 	// purely linear graph)
 	hasBranches bool
@@ -598,6 +550,44 @@ func (b *diagramBuilder) nodeType(id string) string {
 	return ""
 }
 
+// loopScope reports whether parentID sits inside a loop a break / continue can reach: "loop" (a loop above it; process /
+// branch are transparent), "function" (a function boundary comes first, and it is isolation), or "" at the top level. Kept in
+// step with control.go signalScope (run time) and flowcheck's control_scope (static check).
+func (b *diagramBuilder) loopScope(parentID string) string {
+	cur := parentID
+	for i := 0; i < 32 && cur != ""; i++ {
+		idx := b.nodeIndex(cur)
+		if idx < 0 {
+			return ""
+		}
+		switch b.nodes[idx].Type {
+		case "loop":
+			return "loop"
+		case "function":
+			return "function"
+		}
+		cur = b.nodes[idx].ParentNode
+	}
+	return ""
+}
+
+// insideFunction reports whether parentID is a function or sits inside one. A return is only legal there: the function is the
+// signal's only consumer, so anywhere else the node would end the whole flow instead of leaving a container.
+func (b *diagramBuilder) insideFunction(parentID string) bool {
+	cur := parentID
+	for i := 0; i < 32 && cur != ""; i++ {
+		idx := b.nodeIndex(cur)
+		if idx < 0 {
+			return false
+		}
+		if b.nodes[idx].Type == "function" {
+			return true
+		}
+		cur = b.nodes[idx].ParentNode
+	}
+	return false
+}
+
 // emitChain wires one step chain into nodes and edges and returns the chain's tail node id (an empty chain returns from).
 //
 // A non-empty handle means this chain hangs off one of the branch node's outlets (source<childID>right), in which case the first
@@ -611,7 +601,7 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 		if !flowStepTypes[typ] {
 			return "", fmt.Errorf("unsupported step type %q. "+
 				"Available: llm / code / http / mcp / rpc / branch / intent / loop / process / function / call / "+
-				"assign / memory / wait / fork / result / progress / break / continue / return / exit / layout; "+
+				"assign / memory / result / progress / break / continue / return / exit / layout; "+
 				"start is generated by the tool, entry is generated by the front end, knowledge has no executor and cannot be created, "+
 				"comment can only be created with create_node (pure annotation, no wiring), layout can be created and the runner skips it (pass-through)", st.Type)
 		}
@@ -626,6 +616,30 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 					"put the steps after the branch into branches[].steps (a branch only takes its default edge once it runs)", i+1, typ)
 			}
 		}
+		// A return belongs to a function body; anywhere else it would end the whole flow while the run reports success, which
+		// validate_flow reports as return_scope. Refused here so the rule holds at the write, not only in the check.
+		if typ == "return" && !b.insideFunction(parentID) {
+			return "", fmt.Errorf("step %d (return) must sit inside a function: outside one it would end the whole flow instead of "+
+				"returning from a function; use exit to end the whole flow, or put the return in a function body", i+1)
+		}
+		// A control signal ends its chain: the steps after it would never run, and the stored diagram would carry the
+		// no_outgoing error ("a continue node has an outlet"). Refused at the write; the steps belong on another path.
+		if terminalStepTypes[typ] && i != len(steps)-1 {
+			return "", fmt.Errorf("step %d (%s) ends this chain, so the %d step(s) after it would never run: "+
+				"move them onto another path (a branch sub-chain) or delete them", i+1, typ, len(steps)-i-1)
+		}
+		// break / continue need a loop the signal can reach: the node itself fails at run time otherwise (control.go
+		// checkSignalScope), and validate_flow reports control_scope.
+		if typ == "break" || typ == "continue" {
+			switch b.loopScope(parentID) {
+			case "loop":
+			case "function":
+				return "", fmt.Errorf("step %d (%s) sits inside a function body, and a function is an isolation scope: "+
+					"declare the loop inside that function", i+1, typ)
+			default:
+				return "", fmt.Errorf("step %d (%s) has no loop above it: put the loop around this step, or delete it", i+1, typ)
+			}
+		}
 		// Config shape check: a wrong type is refused outright, a missing required key only produces a warning
 		// (the tool allows starting with a minimal config and filling it in on the canvas, consistent with what warnings are
 		// for).
@@ -635,9 +649,9 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 		}
 		b.warnings = append(b.warnings, cfgWarnings...)
 
-		// Concurrency is off by default: this node's concurrency is handled per the declared policy, and with none declared (off)
-		// it is stripped and echoed back; containers never carry the key whatever the policy.
-		if w := applyConcurrencyPolicy(st.Config, typ, b.concurrency, fmt.Sprintf("step %d", i+1)); w != "" {
+		// A type with no consumer for inputs: the block is dropped rather than stored, so a copy-pasted one does not sit in
+		// the diagram looking like data flow.
+		if w := applyInputsPolicy(st.Config, typ, fmt.Sprintf("step %d", i+1)); w != "" {
 			b.warnings = append(b.warnings, w)
 		}
 
@@ -647,7 +661,7 @@ func (b *diagramBuilder) emitChain(steps []FlowStep, from, handle string, depth 
 		} else if owner := b.labelOwner(label); owner != "" {
 			return "", fmt.Errorf(
 				"step %d's label %q collides with node %s: node labels must be unique across the flow "+
-					"(source_ref / call.target / fork_node_id can all be written as labels, and a duplicate points at the wrong node)",
+					"(source_ref / call.target can both be written as labels, and a duplicate points at the wrong node)",
 				i+1, label, owner)
 		}
 		id := b.addNodeIn(typ, label, st.Config, depth, parentID)
@@ -764,9 +778,10 @@ func (b *diagramBuilder) emitBranchChains(typ, nodeID string, st FlowStep, depth
 //
 //	the main chain runs left to right (nodes on one row share a y), and when a row is full it wraps at the end - no single
 //	vertical line stretching hundreds of pixels;
-//	each branch of branch / intent gets its own row below the branch node (right -> top into the sub-chain);
-//	at a wrap point and at a branch's first node the incoming edge switches to top, so the line follows the height instead of
-//	crossing nodes;
+//	the branches of branch / intent open to the right of the card: the first branch row sits on the card's own row, the
+//	deeper rows are stacked below it, and every row grows to the right;
+//	at a wrap point and at a deeper branch row the incoming edge switches to top, so the line follows the height instead of
+//	crossing nodes; the branch row beside the card keeps the left inlet, straight out of the card's right outlet;
 //	container children (loop / process / function) are stacked vertically, and the container is sized to its content and the
 //	size written into config.size.
 //
@@ -774,12 +789,13 @@ func (b *diagramBuilder) emitBranchChains(typ, nodeID string, st FlowStep, depth
 // high, branch / container 300 wide, and label width estimated at 13px per character. Better to leave a little slack than to
 // overlap.
 const (
-	layoutRowMaxWidth = 1500 // how wide one row may get before it wraps
-	layoutColGap      = 80   // horizontal gap between adjacent nodes on a row
-	layoutRowGap      = 120  // vertical gap after a wrap (the height a row's branches take is counted separately)
-	layoutBranchGap   = 60   // distance from the branch node's bottom to its first branch node
-	layoutBranchStep  = 40   // extra gap between two branches of the same branch node
-	layoutOrphanGap   = 120  // gap below the graph for orphan nodes (no incoming edge, unreachable from start)
+	// layoutRowMaxWidth is the width budget of one row, measured from that row's own start: a branch row begins at the branch
+	// card's right edge and still gets a full row instead of wrapping early just because it starts further right.
+	layoutRowMaxWidth = 1500
+	layoutColGap      = 80  // horizontal gap between adjacent nodes on a row
+	layoutRowGap      = 120 // vertical gap after a wrap (the height a row's branches take is counted separately)
+	layoutBranchStep  = 40  // vertical gap between two branch rows of the same branch node (row height 32 + 40 = 72)
+	layoutOrphanGap   = 120 // gap below the graph for orphan nodes (no incoming edge, unreachable from start)
 	// Leading margin: the canvas viewport is pinned at (0,0) and nodes hugging the top-left corner look cramped; this matches
 	// the frontend "new flow" default of putting start at (100,50)
 	layoutMarginX = 100
@@ -817,45 +833,31 @@ func nodeSize(n diagramNode) (int, int) {
 	if w > 280 {
 		w = 280
 	}
-	h := 32
-	// A node with concurrency on (config.concurrency = {mode, fork_node_id}) gains an extra row of "concurrency control +
-	// dropdown + cancel": its width reaches 280 and its height roughly doubles.
-	// Missing this block makes the layout overlap its neighbours and the overlap check misjudge.
-	if hasConcurrency(cfg) {
-		if w < 280 {
-			w = 280
-		}
-		h = 64
-	}
-	return w, h
-}
-
-// hasConcurrency reports whether a node has concurrency on (config.concurrency is non-empty).
-func hasConcurrency(cfg map[string]any) bool {
-	c, ok := cfg["concurrency"].(map[string]any)
-	return ok && len(c) > 0
+	return w, 32
 }
 
 // diagramLayout is the layout context: the graph's adjacency, the placed set and the final sizes.
 type diagramLayout struct {
-	b     *diagramBuilder
-	byID  map[string]int
-	out   map[string][]int // edge indexes by source node id
-	topTo map[string]bool  // nodes whose incoming edge enters via top (a wrap head / a branch head)
-	sizes map[string][2]int
-	taken map[string]bool
+	b      *diagramBuilder
+	byID   map[string]int
+	out    map[string][]int // edge indexes by source node id
+	topTo  map[string]bool  // nodes whose incoming edge enters via top (a wrap head / a deeper branch row)
+	leftTo map[string]bool  // nodes whose incoming edge enters via left (a branch row beside the card)
+	sizes  map[string][2]int
+	taken  map[string]bool
 }
 
 // newDiagramLayout builds the layout context (the adjacency maps to edge indexes, so a target_handle can be rewritten
 // directly).
 func newDiagramLayout(b *diagramBuilder) *diagramLayout {
 	l := &diagramLayout{
-		b:     b,
-		byID:  make(map[string]int, len(b.nodes)),
-		out:   make(map[string][]int, len(b.edges)),
-		topTo: make(map[string]bool, len(b.nodes)),
-		sizes: make(map[string][2]int, len(b.nodes)),
-		taken: make(map[string]bool, len(b.nodes)),
+		b:      b,
+		byID:   make(map[string]int, len(b.nodes)),
+		out:    make(map[string][]int, len(b.edges)),
+		topTo:  make(map[string]bool, len(b.nodes)),
+		leftTo: make(map[string]bool, len(b.nodes)),
+		sizes:  make(map[string][2]int, len(b.nodes)),
+		taken:  make(map[string]bool, len(b.nodes)),
 	}
 	for i := range b.nodes {
 		l.byID[b.nodes[i].ID] = i
@@ -979,7 +981,7 @@ func (b *diagramBuilder) layoutContainersOnly() {
 	}
 }
 
-// layoutDiagram lays out the whole graph and rewrites the incoming edges that need to enter via top.
+// layoutDiagram lays out the whole graph and rewrites the incoming edges that have to enter via top or left.
 func (b *diagramBuilder) layoutDiagram() {
 	l := newDiagramLayout(b)
 	start := "1"
@@ -992,11 +994,15 @@ func (b *diagramBuilder) layoutDiagram() {
 	l.placeFunctions()
 	l.placeOrphans()
 	for i := range b.edges {
-		if !l.topTo[b.edges[i].Target] {
-			continue
+		id := b.edges[i].Target
+		switch {
+		case l.topTo[id]:
+			h := "target" + id + "top"
+			b.edges[i].TargetHandle = &h
+		case l.leftTo[id]:
+			h := "target" + id + "left"
+			b.edges[i].TargetHandle = &h
 		}
-		h := "target" + b.edges[i].Target + "top"
-		b.edges[i].TargetHandle = &h
 	}
 }
 
@@ -1039,7 +1045,7 @@ func (l *diagramLayout) next(id string) string {
 }
 
 // chain places one chain starting at startID on the canvas and returns that chain's right and bottom bounds.
-// x/y is where the chain starts; limit is the row width cap (after a wrap it returns to the column at x).
+// x/y is where the chain starts; limit is the row's width budget, measured from x (after a wrap it returns to the column at x).
 func (l *diagramLayout) chain(startID string, x, y, limit int) (int, int) {
 	cur := startID
 	baseX := x
@@ -1053,8 +1059,10 @@ func (l *diagramLayout) chain(startID string, x, y, limit int) (int, int) {
 			break
 		}
 		w, h := l.sizeOf(cur)
-		// Wrap: when the row is full, start a new one and clear the height this row's branches occupy
-		if cur != startID && x > baseX && x+w > limit {
+		// Wrap: when this row has used up its budget, start a new one and clear the height this row's branches occupy.
+		// The budget is measured from the row's own start, so a branch row - which begins at the branch card's right
+		// edge - still gets a full row instead of wrapping early just because it starts further right.
+		if cur != startID && x > baseX && x-baseX+w > limit {
 			rowY = branchBottom + layoutRowGap
 			branchBottom = rowY
 			x = baseX
@@ -1076,17 +1084,27 @@ func (l *diagramLayout) chain(startID string, x, y, limit int) (int, int) {
 			bottom = rowY + h
 		}
 
-		// Branch node: each branch gets its own row below and the main chain ends here (the same rule as emitChain's build)
+		// Branch node: the branches open to the right of the card - the first row on the card's own row, the deeper rows
+		// stacked below it, each row growing to the right. The main chain ends here.
 		if node.Type == "branch" || node.Type == "intent" {
-			cursor := rowY + h + layoutBranchGap
+			branchX := x + w + layoutColGap
+			cursor := rowY
 			for _, ei := range l.out[cur] {
 				target := l.b.edges[ei].Target
 				if l.taken[target] {
 					continue
 				}
-				// The first node sits below-right of the branch node: its right outlet feeds the node's top
-				l.topTo[target] = true
-				_, bBottom := l.chain(target, x+layoutBranchStep, cursor, limit)
+				// The row beside the card keeps the left inlet (straight out of the branch's right outlet); a deeper row
+				// takes the top, so the drop lands in the gap right of the card instead of on top of it.
+				if cursor == rowY {
+					l.leftTo[target] = true
+				} else {
+					l.topTo[target] = true
+				}
+				r, bBottom := l.chain(target, branchX, cursor, layoutRowMaxWidth)
+				if r > right {
+					right = r
+				}
 				if bBottom > bottom {
 					bottom = bBottom
 				}
@@ -1110,9 +1128,9 @@ func (l *diagramLayout) chain(startID string, x, y, limit int) (int, int) {
 
 // containerChildren lays out a container's children (relative coordinates) and expands the container to its bounding box.
 //
-// A function body is laid out like the main flow - entry on the left, the chain to the right, branches below it - because
-// the same graph reads that way outside a container and the function card is read as a small flow. loop / process keep the
-// vertical stack: their children are iterations / embedded steps, read top to bottom.
+// A function body is laid out like the main flow - entry on the left, the chain to the right, branch rows opening further
+// right - because the same graph reads that way outside a container and the function card is read as a small flow. loop /
+// process keep the vertical stack: their children are iterations / embedded steps, read top to bottom.
 func (l *diagramLayout) containerChildren(containerID string) {
 	children := make([]string, 0, 4)
 	for i := range l.b.nodes {
@@ -1146,8 +1164,9 @@ func (l *diagramLayout) stackChildren(children []string) {
 	}
 }
 
-// chainChildren places a function body like the main flow: the chain from the entry runs left to right (branches hang below
-// it), and a child no edge reaches is stacked underneath, the same way top-level orphans are handled.
+// chainChildren places a function body like the main flow: the chain from the entry runs left to right (branch rows open to
+// the right of their branch card), and a child no edge reaches is stacked underneath, the same way top-level orphans are
+// handled.
 func (l *diagramLayout) chainChildren(containerID string, children []string) {
 	entry := ""
 	for _, cid := range children {
@@ -1270,8 +1289,8 @@ func (l *diagramLayout) placeOrphans() {
 
 // labelOwner returns the id of the node already using that label ("" = unused).
 //
-// label is the writable form of source_ref / call.target / fork_node_id, and a duplicate makes those references point at the
-// wrong node, so every node's label must be unique while the graph is built.
+// label is the writable form of source_ref / call.target, and a duplicate makes those references point at the wrong node, so
+// every node's label must be unique while the graph is built.
 func (b *diagramBuilder) labelOwner(label string) string {
 	label = strings.TrimSpace(label)
 	if label == "" {
@@ -1552,6 +1571,36 @@ func parseFlowEndpoints(args map[string]any) ([]string, error) {
 	return out, nil
 }
 
+// prepareFlowEndpointSlots adds the endpoint slots a just-created workflow can hold without a release, unexposed.
+//
+// Why the manager does not expose as part of creation: exposure needs a released version, a flow created a moment ago has
+// none, so that call is always refused - and it used to roll the whole flow back, leaving the caller with nothing but an
+// error to report. Returns the warnings worth showing (no EndpointAdmin in this context, or a slot that could not be
+// written).
+func prepareFlowEndpointSlots(ctx context.Context, c *Context, name string, protocols []string) []string {
+	if c.EndpointAdmin == nil {
+		return []string{"endpoint administration is unavailable in this context, so no endpoint slot was created"}
+	}
+	existing, err := c.EndpointAdmin.List(ctx, "flow", name)
+	if err != nil {
+		return []string{"failed to read the workflow's endpoints: " + err.Error()}
+	}
+	have := make(map[string]bool, len(existing))
+	for _, ep := range existing {
+		have[ep.Protocol] = true
+	}
+	var warns []string
+	for _, p := range protocols {
+		if have[p] {
+			continue
+		}
+		if _, err := c.EndpointAdmin.Create(ctx, "flow", name, p, false); err != nil {
+			warns = append(warns, fmt.Sprintf("failed to create the %s endpoint slot: %v", p, err))
+		}
+	}
+	return warns
+}
+
 // ===== Entry arguments (flows.arguments) =====
 //
 // arguments is a "declaration", not run-time input: it is at once the endpoint's external input_schema and what the frontend
@@ -1768,22 +1817,20 @@ func (t *createFlowTool) Meta() ToolMeta {
 		Category: CategoryFlowAdmin,
 		Description: "Create a workflow: assemble a list of steps into \"start → main chain\", then branch / intent pull out their own sub-chains with branches. " +
 			"steps may use every node type in the executor registry (llm / code / http / mcp / rpc / branch / intent / loop / process / " +
-			"function / call / assign / memory / wait / fork / result / progress / break / continue / return / exit / layout). " +
+			"function / call / assign / memory / result / progress / break / continue / return / exit / layout). " +
 			"layout is a purely visual node (a 32px dot): the runner skips it and continues along its first outgoing edge, which makes it a good wrap point or grouping anchor. " +
 			"**Conditional routing**: write branches on the branch / intent step — each key maps to a config.children[].id (use key=\"default\" for the unconditional fallback), " +
 			"its value is that branch's own step chain, and the tool generates a source<sub-branch id> outgoing edge; a step that declares branches must be the last step of its chain. " +
 			"**Inside containers**: write children on the loop / process / function step (same shape as steps, may nest further) — " +
 			"the tool creates the entry automatically and links the sub-chain to it; without children it is an empty container (which spins empty at run time). " +
-			"**Concurrency is off by default**: do not write config.concurrency on any node (the tool strips it and returns a warning). " +
-			"Only when the user explicitly asks for concurrency, declare the shape with the concurrency parameter: mono = single-node concurrency (one node processes several items concurrently), " +
-			"group = concurrency group (several nodes run at once and a wait joins them; pair with fork + wait); if the user asks for concurrency without naming a shape, judge by the task — " +
-			"it is group only when several nodes must run at the same time. " +
-			"wait's concurrency-group membership (config.concurrency) and config.fork_node_id still have to be supplied; any gap is reported in the returned warnings. " +
+			"**Concurrency comes from the scope model, set in two places**: wrap the steps in a `process` (or use a `loop`) and mark each parallel " +
+			"direct child with `concurrent: true` (the node's own data flag), then put the scope settings in that host's " +
+			"config.parallel ({max_concurrency, join, timeout}); the body dispatches the members and joins them at its end. " +
 			"Each step's config is written verbatim into the node's data.config (the shape matches the front-end node form; when unsure, give the minimal config and calibrate in the UI afterwards); " +
-			"source_ref in config.inputs, config.target on call and config.fork_node_id on wait may all be node labels — the tool replaces them with real ids. " +
+			"source_ref in config.inputs, config.target on call may both be node labels — the tool replaces them with real ids. " +
 			"nodes in the result is the list of created nodes (id / type / label), for checking source_ref and branch routing. " +
 			"**Layout**: you may give each step a position to lay it out yourself (top-level nodes must all be given; the tool only detects overlaps and reports warnings); " +
-			"otherwise it lays out automatically (main chain horizontal, branches vertical). After creating, update_node's position can fine-tune a single node. " +
+			"otherwise it lays out automatically (main chain horizontal, the branches of branch / intent opening to the right of their card). After creating, update_node's position can fine-tune a single node. " +
 			"**Entry arguments**: arguments declares the workflow's input parameters (JSON Schema); once exposed it is the endpoint's input_schema, " +
 			"and it is also the run_flow inputs keys. Do not invent parameters the user never mentioned. " +
 			"Endpoints are the workflow's external entry points (mcp / rpc), but they are **not exposed by default**: " +
@@ -1814,7 +1861,7 @@ func (t *createFlowTool) Meta() ToolMeta {
 							"type": map[string]any{"type": "string", "enum": []any{
 								"llm", "code", "http", "mcp", "rpc",
 								"branch", "intent", "loop", "process", "function", "call",
-								"assign", "memory", "wait", "fork", "result", "progress",
+								"assign", "memory", "result", "progress",
 								"break", "continue", "return", "exit", "layout",
 							}},
 							"label": map[string]any{"type": "string", "description": "Node title (the short name shown on the canvas); it can be referenced directly by source_ref in config.inputs"},
@@ -1825,7 +1872,7 @@ func (t *createFlowTool) Meta() ToolMeta {
 									"Nodes inside a container need none (they are relative to the parent container and the tool lays them out itself). " +
 									"Layout aesthetics: use multiples of 20 for x / y; keep the main chain on one row (same y) running left to right; " +
 									"a leaf node is only 100–160 wide, so **use an x step of 200 between neighbours** (branch and containers are 300 wide, " +
-									"so use 380 after them; **a node with concurrency on is about 280×64**) — do not stretch the step past 300 just to be safe, " +
+									"so use 380 after them) — do not stretch the step past 300 just to be safe, " +
 									"the canvas ends up looking empty; place branches to the lower right of the branch node, one row per branch, with ≥ 72 between rows; " +
 									"when a row would exceed 1500 wide, wrap at the branch / container — to control where it wraps, insert a " +
 									"type=layout step there as the wrap point (a 32px dot that passes through at run time) and put the following nodes on the next row; " +
@@ -1877,19 +1924,8 @@ func (t *createFlowTool) Meta() ToolMeta {
 						"Pass it only when the user explicitly asks to expose it / let others call it / mount it as an MCP or RPC endpoint, and list only the protocols they named; " +
 						"a user merely describing a capability (e.g. \"can look up weather\", \"can output HTML\", \"needs to reach baidu\") is not an exposure request — " +
 						"if unsure, leave it out and ask: which flow, mcp or rpc, endpoint name, who may call it. " +
-						"Exposing requires a released version, and a flow created here has none: creating it with external_protocols fails and rolls the flow back, " +
-						"so create it internally, ask the user to publish it in the console, and expose it there.",
-				},
-				"concurrency": map[string]any{
-					"type": "string",
-					"enum": []any{"off", "mono", "group"},
-					"description": "Concurrency scope, **default off, do not pass it proactively**: turn it on only when the user explicitly asks for concurrent execution, " +
-						"and pick one of the two shapes according to what they asked — mono (single-node concurrency: one node processes several items concurrently, no teaming), " +
-						"group (concurrency group: several nodes run at once and a wait joins them; needs fork + wait). " +
-						"If the user just says \"concurrent\" without a shape, judge by the task: several inputs of the same job → mono; " +
-						"several independent jobs running at the same time → group. " +
-						"With off, config.concurrency on every node is stripped and a warning is returned; " +
-						"mono keeps only {\"mode\":\"mono\"}; group keeps only {\"mode\":\"fork\",\"fork_node_id\":\"<id>\"}.",
+						"Exposing requires a released version and a flow created here has none, so the slots are created unexposed and the result carries " +
+						"release_required: tell the user which version to release in the console, then call expose_flow_endpoint.",
 				},
 			},
 			"required": []any{"name", "description", "steps"},
@@ -1927,13 +1963,16 @@ func (t *createFlowTool) Execute(ctx context.Context, c *Context, args map[strin
 	if err != nil {
 		return nil, err
 	}
-	concurrency, err := parseConcurrencyPolicy(args)
+	build, err := buildFlowDiagram(steps)
 	if err != nil {
 		return nil, err
 	}
-	build, err := buildFlowDiagram(steps, concurrency)
-	if err != nil {
-		return nil, err
+	// The entry-argument declaration and what the diagram reads have to agree: a row pointing at an argument the declaration
+	// does not have fails that node at run time ("var path X not found"), and one declared but left out of required fails it
+	// the moment a caller omits the value. Reported here like the other structural gaps (creation is not blocked);
+	// validate_flow counts the first one as an error.
+	for _, f := range flowcheck.Arguments(build.Diagram, arguments) {
+		build.Warnings = append(build.Warnings, f.Message)
 	}
 	endpoints, err := parseFlowEndpoints(args)
 	if err != nil {
@@ -1945,7 +1984,6 @@ func (t *createFlowTool) Execute(ctx context.Context, c *Context, args map[strin
 		Description: description,
 		Diagram:     build.Diagram,
 		Arguments:   arguments,
-		Endpoints:   endpoints,
 	})
 	if err != nil {
 		return nil, err
@@ -1958,6 +1996,16 @@ func (t *createFlowTool) Execute(ctx context.Context, c *Context, args map[strin
 		"steps":     len(steps),
 		"nodes":     nodeOutlines(build.Nodes),
 		"endpoints": endpoints,
+	}
+	if len(endpoints) > 0 {
+		// Slots first, unexposed: the RPC slot already exists (inserted with the flow), so MCP is the only one that can be
+		// missing. Exposure is never attempted here - a fresh flow has no released version, so it would be refused and the
+		// old path took the whole create down with it.
+		build.Warnings = append(build.Warnings, prepareFlowEndpointSlots(ctx, c, name, endpoints)...)
+		build.Warnings = append(build.Warnings,
+			"the workflow was created but its endpoints are not exposed yet: production entry points only serve a released version, "+
+				"and this flow has none. Ask the user to release a version in the console's version panel, then call expose_flow_endpoint")
+		out["release_required"] = releaseRequired("flow", name, endpoints)
 	}
 	if len(argNames) > 0 {
 		// Echo the parameter names rather than the whole schema: what needs verifying is "which ones were declared", and the raw
@@ -2062,6 +2110,10 @@ func (t *readFlowTool) Execute(ctx context.Context, c *Context, args map[string]
 	if detail == nil {
 		return nil, fmt.Errorf("workflow %q does not exist: confirm the name with list_flows first", ref)
 	}
+	// A diagram that does not parse is reported by validate_flow; read_flow still returns the raw text.
+	if doc, derr := parseFlowDoc(detail.Diagram); derr == nil {
+		detail.Blocks = concurrencyBlocks(doc)
+	}
 	return detail, nil
 }
 
@@ -2077,7 +2129,9 @@ func (t *validateFlowTool) Meta() ToolMeta {
 			"Give either `flow` (a saved workflow) or `diagram` (a definition you assembled yourself). " +
 			"Each finding carries severity (error = it cannot run as written; warning = it runs but probably does not do what you meant), a node_id, the config path and a hint. " +
 			"Call it after create_flow and after every structural edit, and only call run_flow once error_count is 0 — create_flow returning success only proves the JSON shape. " +
-			"It cannot check what needs real data: whether a connection is enabled, whether a model exists, how a template renders with real inputs, or whether the entry arguments match the JSON Schema.",
+			"Branch / loop condition scripts are also read as text: a condition with no return token at all (return in lua/js, __return__ in python) or one that reads an input.<name> the node does not declare is reported, because both fail the node on its first evaluation. That is a text check, not a parser: any other script error stays invisible until the run. " +
+			"With a saved workflow it also reconciles the entry-argument declaration with what the diagram reads: argument_undeclared (a node reads an argument the declaration does not have) and argument_optional (declared, but not in required, so a caller may omit it). " +
+			"It cannot check what needs real data: whether a connection is enabled, whether a model exists, how a template renders with real inputs, or whether a caller actually sends the values the schema requires.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -2104,6 +2158,7 @@ func (t *validateFlowTool) Execute(ctx context.Context, c *Context, args map[str
 	}
 
 	var raw json.RawMessage
+	var arguments json.RawMessage
 	if ref != "" {
 		if c.Flows == nil {
 			return nil, errors.New("flow manager not available")
@@ -2116,6 +2171,9 @@ func (t *validateFlowTool) Execute(ctx context.Context, c *Context, args map[str
 			return nil, fmt.Errorf("workflow %q does not exist: confirm the name with list_flows first", ref)
 		}
 		raw = detail.Diagram
+		// A saved flow also carries its entry-argument declaration: reconcile it with the diagram in the same pass (an inline
+		// diagram has no declaration, so there is nothing to compare there).
+		arguments = detail.Arguments
 	} else {
 		raw = json.RawMessage(rawDiagram)
 		if !json.Valid(raw) {
@@ -2127,6 +2185,7 @@ func (t *validateFlowTool) Execute(ctx context.Context, c *Context, args map[str
 	if err != nil {
 		return nil, fmt.Errorf("cannot check the diagram: %w", err)
 	}
+	findings = append(findings, flowcheck.Arguments(raw, arguments)...)
 	if findings == nil {
 		findings = []flowcheck.Finding{}
 	}
@@ -2152,7 +2211,9 @@ func (t *deleteFlowTool) Meta() ToolMeta {
 	return ToolMeta{
 		Name:     "delete_flow",
 		Category: CategoryFlowAdmin,
-		Description: "Delete a workflow (definition only; its exposed endpoints stop working with it. Run records are not cascade-deleted). " +
+		Description: "Delete a workflow **together with everything derived from it**: its endpoints, its version history and its run records " +
+			"(flow_run_records / flow_node_records of that flow, deleted in the same transaction). " +
+			"A released version blocks the delete until it is unreleased, and a still-exposed endpoint blocks it until it is retracted. " +
 			"The result returns the flow_id and flow_name of the one that was deleted — a name may point at a different definition after a rename or a delete-then-recreate, " +
 			"so verify destructive operations against the returned id + name.",
 		Parameters: map[string]any{
@@ -2214,6 +2275,7 @@ func (t *runFlowTool) Meta() ToolMeta {
 		Category: CategoryFlowAdmin,
 		Description: "Test-run a **saved** workflow and return the overall status (success / failed / cancelled), the final output, " +
 			"and each executed node's outcome, error code and duration — when it fails, use the node list to see where it stopped and why. " +
+			"A run an exit node cut short still counts as success: `stop_reason` is `exit` and `stop_node_id` names the node that ended it. " +
 			"This is a **real execution**: http / rpc / mcp really send requests, llm really bills, code / handler really run scripts, " +
 			"so use it only when you need to verify the flow actually works. " +
 			"The whole call is bounded by the tool timeout (default 60s): a long flow is cancelled at that point and returns cancelled plus the nodes reached so far. " +
@@ -2318,6 +2380,7 @@ func (t *readFlowRunTool) Meta() ToolMeta {
 		Category: CategoryFlowAdmin,
 		Description: "Read the full detail of one workflow run: overall status, inputs / flow variables, " +
 			"and each node's input / output / local variables, error code, error stack, logs, retry count and error-handling action. " +
+			"`stop_reason` = exit means an exit node ended the run early, so the steps after it never ran (status stays success). " +
 			"run_flow only answers \"did it succeed, where did it stop\"; this answers \"why\" — fetched by run_id. " +
 			"run_id comes from run_flow's result or from the run-records list in the UI (records produced by UI debug runs are queryable too). " +
 			"Only failed nodes are returned by default; the variables are a persisted snapshot, already truncated per top-level key at 64KB when stored.",

@@ -62,14 +62,16 @@ func (r *PostgresRepository) SaveRun(schema string, run *models.FlowRunRecord, n
 				 local_vars, local_vars_truncated, local_vars_size,
 				 run_logs, run_logs_truncated, run_logs_lines,
 				 err_code, err_msg, err_stack, retry_count, error_action,
+				 post_error, handler_error,
 				 start_time, end_time, duration_ms, extra)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)`,
 			n.ID, run.ID, n.NodeID, n.ProcessID, n.NodeType, n.Status,
 			n.InputVars, n.InputVarsTruncated, n.InputVarsSize,
 			n.OutputVars, n.OutputVarsTruncated, n.OutputVarsSize,
 			n.LocalVars, n.LocalVarsTruncated, n.LocalVarsSize,
 			n.RunLogs, n.RunLogsTruncated, n.RunLogsLines,
 			n.ErrCode, n.ErrMsg, n.ErrStack, n.RetryCount, n.ErrorAction,
+			n.PostError, n.HandlerError,
 			n.StartTime, n.EndTime, n.DurationMs, n.Extra,
 		); err != nil {
 			return err
@@ -241,7 +243,7 @@ func (r *PostgresRepository) GetRunDetail(schema string, runID string) (*models.
 			output_vars, output_vars_truncated, output_vars_size,
 			local_vars, local_vars_truncated, local_vars_size,
 			run_logs, run_logs_truncated, run_logs_lines,
-			err_code, err_msg, err_stack, retry_count, error_action,
+			err_code, err_msg, err_stack, retry_count, error_action, post_error, handler_error,
 			start_time, end_time, duration_ms, extra
 		FROM `+schema+`.flow_node_records WHERE run_id = $1 ORDER BY start_time ASC, id ASC`, runID)
 	if err != nil {
@@ -258,6 +260,7 @@ func (r *PostgresRepository) GetRunDetail(schema string, runID string) (*models.
 			&n.LocalVars, &n.LocalVarsTruncated, &n.LocalVarsSize,
 			&n.RunLogs, &n.RunLogsTruncated, &n.RunLogsLines,
 			&n.ErrCode, &n.ErrMsg, &n.ErrStack, &n.RetryCount, &n.ErrorAction,
+			&n.PostError, &n.HandlerError,
 			&n.StartTime, &n.EndTime, &n.DurationMs, &n.Extra); err != nil {
 			return nil, nil, err
 		}

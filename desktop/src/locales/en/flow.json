@@ -5,13 +5,26 @@
       "tabTool": "Tools",
       "groupCommon": "Common",
       "groupLogic": "Logic",
-      "groupOther": "Other"
+      "groupOther": "Other",
+      "searchTools": "Search tools",
+      "groupEndpoints": "Local endpoints",
+      "groupMcp": "MCP connections",
+      "groupRpc": "RPC connections",
+      "emptyMcp": "No MCP connection yet",
+      "emptyRpc": "No RPC connection yet",
+      "loadingTools": "Loading…",
+      "noTools": "This connection exposes no tool",
+      "emptyCatalog": "Nothing to call yet: add a connection under Settings → Tools, or expose a flow as an endpoint",
+      "searchEmpty": "No matching tool",
+      "targetFlow": "Flow",
+      "targetAgent": "Agent"
     },
     "nodeType": {
       "llm": "LLM",
       "memory": "Memory",
       "code": "Code",
       "assign": "Assign",
+      "raise": "Raise error",
       "http": "HTTP request",
       "mcp": "MCP",
       "rpc": "RPC",
@@ -23,10 +36,8 @@
       "continue": "Continue",
       "return": "Return",
       "exit": "Terminate",
-      "process": "Embedded flow",
+      "process": "Flow segment",
       "function": "Function",
-      "fork": "Fork group",
-      "wait": "Fork join",
       "call": "Call",
       "loop": "Loop",
       "layout": "Layout",
@@ -47,6 +58,18 @@
       "handlerScriptDefault": "-- write the response handling script here\n{'return { content = input.content }'}",
       "tabConfig": "Settings",
       "tabResult": "Last run",
+      "concurrentMember": "Run concurrently in the parent body",
+      "concurrentMemberHint": "Dispatched by the enclosing process / loop and joined when its body ends; a member failure fails the run. Members cannot read each other's results.",
+      "scopeSection": "Concurrency scope",
+      "maxConcurrency": "Max concurrency",
+      "scopeUnlimited": "Unlimited (queues behind the system ceiling {max})",
+      "scopeTimeout": "Timeout (s)",
+      "scopeNoTimeout": "No timeout",
+      "joinMode": "Join mode",
+      "joinCollect": "collect (wait for every member)",
+      "joinDrain": "drain (start nothing new after a failure)",
+      "joinAbort": "abort (and cancel the members still running)",
+      "scopeHint": "With the limit switch off there is no author limit, but members still queue behind the system ceiling ({max}): beyond it they wait for a slot instead of failing. Only direct children with \"Run concurrently in the parent body\" checked become members. The timeout cancels the members still running when it expires; the body's own chain is not interrupted.",
       "noteTitle": "About this node",
       "notice": "Note: ",
       "loopOnly": " must be inside a loop node",
@@ -54,7 +77,8 @@
       "exit": {
         "p1": "The terminate node exits the whole flow immediately.",
         "p2": "When the flow reaches this node, the whole flow stops and no later node runs.",
-        "p3": "This node also runs inside a function node, but mind the difference from the return node."
+        "p3": "This node also runs inside a function node, but mind the difference from the return node.",
+        "p4": "Written inside a member's own body it still works: the whole flow stops at once, and the members still running in the outer scope are cancelled (recorded as cancelled, not failed). The exit node is never a concurrent member - control flow stays on the chain."
       },
       "return": {
         "p1": "The return node exits the current function.",
@@ -68,17 +92,6 @@
       "continue": {
         "p1": "The continue node",
         "p2": "When the flow reaches this node, it skips the remaining steps of the current iteration and moves to the next one."
-      },
-      "fork": {
-        "maxConcurrency": "Max concurrency",
-        "positiveInt": "Positive integer",
-        "unlimited": "Unlimited"
-      },
-      "wait": {
-        "syncTitle": "Fork group join",
-        "selectGroup": "Select fork group:",
-        "selectPlaceholder": "Select",
-        "hint": "Select the fork group node to wait for"
       }
     },
     "common": {
@@ -207,6 +220,13 @@
       "noLimits": "No limits",
       "limitMax": "max {max}"
     },
+    "raiseNode": {
+      "code": "Error code",
+      "codeHint": "The code this node fails with. config / internal / cancel are not offered: on_error never matches the first two, and the third means the user stopped the run.",
+      "message": "Message",
+      "messagePlaceholder": "e.g. order not found",
+      "messageHint": "Only the variables declared under Inputs are available: this node writes no local variables and has no outputs."
+    },
     "assignNode": {
       "listTitle": "Assignments",
       "empty": "No assignments yet; click + to add one",
@@ -246,6 +266,27 @@
         "p3": "When the tool returns is_error (business error) the node still counts as succeeded; the error text is in the ",
         "p4": " variable."
       }
+    },
+    "toolDetail": {
+      "open": "Show tool details",
+      "openEndpoint": "Show endpoint details",
+      "empty": "No tool selected",
+      "connection": "Connection",
+      "exposure": "Exposure",
+      "exposed": "Exposed",
+      "retracted": "Not exposed",
+      "noDescription": "This tool provides no description",
+      "params": "Arguments",
+      "noParams": "This tool declares no arguments",
+      "colName": "Argument",
+      "colType": "Type",
+      "colRequired": "Required",
+      "colDescription": "Description",
+      "enum": "Allowed values",
+      "yes": "Yes",
+      "no": "No",
+      "rawSchema": "Input schema",
+      "close": "Close"
     },
     "llmNode": {
       "responseMode": "Response mode",
@@ -480,6 +521,7 @@
       "varError": "Call error message",
       "loopVarIndex": "Loop index",
       "loopVarItem": "Loop item",
+      "loopVarIterations": "Rounds executed",
       "intentPrompt": "You classify the user's intent from the conversation history and the user input.\n\nConversation history:\n{'{{json .input.messages}}'}\n\nUser input:\n{'{{.input.input}}'}",
       "returnOnlyInFunction": "A return node can only be created inside a function node"
     },
@@ -535,7 +577,12 @@
       "deleteTip": "Delete",
       "emptySearch": "No matching flows",
       "emptyNone": "No flows yet",
-      "emptyDeprecated": "No deprecated flows"
+      "emptyDeprecated": "No deprecated flows",
+      "emptyTitle": "No workflows yet",
+      "emptyTipWhat": "A workflow connects a series of nodes into a chain that runs the same steps each time: a node can call an LLM, run code, make an HTTP request, call an MCP / RPC tool, or invoke another agent, while branches, loops and concurrency turn those steps into structure. It can also be called by name from another flow, or exposed as an MCP / RPC endpoint so callers outside the platform can reach it.",
+      "emptyTipChat": "The easiest way is to let the main agent build it: say what should happen, where the data comes from and what the result should look like, for example “read yesterday's orders, total them by region, then write a short summary”. It picks the nodes, wires them up and runs a trial for you. Answer its questions as they come, and when something is off just say “count by province in the second step instead”. You never touch the canvas — a few sentences and you have a workflow that runs.",
+      "emptyTipManual": "To control every step yourself, use the Create a workflow button below: start from a blank canvas, add nodes, connect them, run it, then release it.",
+      "emptyCreateFlow": "Create a workflow"
     },
     "canvas": {
       "addNode": "Add node",
@@ -666,15 +713,36 @@
         "container_entry": "The container has no single entry child: it reports success while running nothing",
         "branch_edge": "A branch condition has no outgoing edge, so it has nowhere to go",
         "branch_condition": "A branch child has no condition script, so the runner skips it and that path never runs",
+        "condition_no_return": "The condition script never returns a value: a bare expression is a syntax error in Lua (the node fails), and in JS / Python the condition is never true",
+        "condition_input_ref": "The condition reads input.X, which the node does not declare: the value is nil at run time, so the comparison itself fails the node",
+        "input_source": "An input row has no resolvable source (source_type / source_key / source_ref missing or unknown), so the runner fails the whole batch and the step never runs",
+        "argument_undeclared": "A node reads an entry argument the flow's arguments do not declare: the run fails with \"var path not found\" and the node stops",
+        "argument_optional": "An entry argument is declared but not in required: a caller may omit it, and the node then fails",
+        "intent_temperature": "The intent step classifies at a sampled temperature (unset or above 0): the same input can take a different branch between runs; set llm.params.temperature to 0",
         "child_id": "A branch child has no id, so no edge can route to it",
         "call_target": "The call target is not a function node in this flow",
         "call_args": "The args do not match the function's params: an unknown arg or a missing required one fails the run",
-        "wait_fork": "The wait node does not point at a fork node",
+        "concurrent_member_parent": "A node with the concurrent tick has a parent that is not a process / loop: only a container body is a scope, so the run rejects it as a config error",
+        "concurrent_member_not_on_chain": "A node with the concurrent tick is not on the body's entry chain (branch sub-chain, dangling child), so no scope ever dispatches it",
+        "concurrent_member_type": "A control, output or instant node is marked as a concurrent member: entry, break / continue / return / exit express control flow on the chain, comment / layout nodes never execute, result / progress record their output in call order on this run, and assign / memory never wait for anything - clear the flag (an exit inside a member's own body still ends the run)",
+        "parallel_visibility": "A node reads a value whose producer has not finished (a sibling member, or a member read from the chain): a member's result is readable only from the host's outputs after the join",
+        "concurrent_member_write": "A member writes a flow variable or another node's variable: concurrent writes are unsynchronised and last-write-wins; a member may write only its own variables and the host's outputs",
+        "parallel_output_conflict": "One host output has several writers and at least one is a member: only one value survives the join, the rest are lost silently",
+        "parallel_degenerate": "This scope cannot run concurrently (one member, or max_concurrency is 1), so it never overlaps",
+        "parallel_fanout": "Concurrency scopes nested too deep or with limits that stack: three or more levels, or nested max_concurrency multiplying past 8 - the canvas does not show how many nodes are in flight, and a failure has to unwind through every level",
+        "parallel_members_queued": "This scope has more members than the tenant's max concurrency: the extra members queue for a slot instead of running at once - the run still succeeds, it is just slower than the canvas suggests",
         "dangling_ref": "A reference points at a node that does not exist, so the value is empty at run time",
+        "self_ref": "A node reads its own output or local variable: inputs are resolved before the node runs, so the value is always empty",
         "function_ref": "A function node is referenced from outside its body, so the value is empty at run time - read the call node instead",
         "function_edge": "An edge touches a function node: only a call node enters a function, and an edge runs the body with empty params",
         "nested_function": "A function node sits inside another container: it has to be at the top level or nothing can call it",
         "target_var": "A write target names a variable the container does not declare, so the run fails with an undefined variable",
+        "ignored_inputs": "This node type reads no inputs, so the block does nothing at run time and is removed on save",
+        "return_scope": "A return is only allowed inside a function: in a process/loop body it would end the whole flow, not the container",
+        "branch_outlet": "Each branch child routes through exactly one edge (left and right are the same outlet), and a handle must name the node itself or a declared child",
+        "multi_incoming": "A node takes exactly one incoming edge: the extra ones are never followed",
+        "no_incoming": "start / entry are entered by the runner and take no incoming edge",
+        "no_outgoing": "This node ends the chain and has no outlet, so the edge is never followed",
         "source_key": "The source node produces no such output, so the value is empty at run time",
         "loop_source": "The array this loop iterates is not declared in the inputs",
         "unreachable": "No incoming edge, so this node never runs",
@@ -683,6 +751,8 @@
         "on_error_code": "That error code does not exist, so the rule can never fire",
         "on_error_code_unused": "This node never produces that error code, so the rule can never fire",
         "on_error_post": "This node type does not support a post block; the runner drops it",
+        "on_error_shadowed": "skip matches before handler, so the same codes or messages are taken by skip first and this handler never runs",
+        "skipped_output_read": "This step skips an error without leaving a fallback, and a downstream node reads its outputs: a skipped node leaves \"\" / 0 / false, indistinguishable from a real empty result. Add post.set_outputs with a marker (ok = false), or let the step fail",
         "unknown": "The configuration has a problem"
       }
     },
@@ -820,6 +890,8 @@
       "emptyNoTarget": "Select a target function first",
       "emptyDefault": "No output variables yet",
       "fixedVariable": "Fixed variable",
+      "builtinVariable": "Written by the runner",
+      "builtinNote": "A locked variable is written by the runner at run time; there is nothing to configure here.",
       "bindingTitle": "Streaming output binding"
     },
     "binding": {
@@ -887,15 +959,7 @@
         "unset": "Clear breakpoint"
       },
       "commentPlaceholder": "Enter a comment...",
-      "forkGroup": "Fork group:",
       "notSelected": "Not selected",
-      "concurrency": {
-        "title": "Concurrency",
-        "enable": "Enable concurrency",
-        "disable": "Disable concurrency",
-        "mono": "Single-node concurrency",
-        "forkGroup": "Fork group"
-      },
       "branch": {
         "defaultBranch": "Default branch",
         "deleteChild": "Delete branch",
@@ -926,6 +990,8 @@
         "output": "Output",
         "logs": "Logs",
         "error": "Error",
+        "handlerError": "Handler error",
+        "postError": "Post-processing error",
         "unassigned": "(not assigned)",
         "statusMap": {
           "success": "Succeeded",
@@ -944,20 +1010,17 @@
         "start": "Start",
         "entry": "Entry",
         "assign": "Assign",
+        "raise": "Raise error",
         "break": "Break",
         "continue": "Continue",
         "exit": "Terminate",
-        "fork": "Fork",
         "knowledge": "Knowledge",
         "memory": "Memory",
         "progress": "Progress output",
         "result": "Result output",
         "return": "Return",
-        "wait": "Wait",
         "comment": "Comment",
-        "forkGroup": "Fork group",
-        "waitJoin": "Fork join",
-        "process": "Embedded flow",
+        "process": "Flow segment",
         "breakOut": "Break out",
         "loop": "Loop",
         "code": "Code",

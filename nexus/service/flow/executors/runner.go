@@ -14,7 +14,9 @@ import (
 	"flame/nexus/shared/runledger"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,6 +75,27 @@ func legacyGlobalRefIn(v any) (string, bool) {
 	return "", false
 }
 
+// checkRequiredArguments enforces flows.arguments.required before anything runs. Order is the declaration's own order, so the
+// message reads the way the schema was written.
+func checkRequiredArguments(declaration, args map[string]interface{}) error {
+	required, _ := declaration["required"].([]interface{})
+	missing := make([]string, 0, len(required))
+	for _, raw := range required {
+		name, ok := raw.(string)
+		if !ok || name == "" {
+			continue
+		}
+		if v, exists := args[name]; !exists || v == nil {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("missing required argument(s) %s: the flow's entry arguments mark them as required and this call did not send them",
+		strings.Join(missing, ", "))
+}
+
 func NewFlow(Instance *models.Flow, args map[string]interface{}, reqID, runID, schema, userID string, ctx context.Context) (*flow.ExecContext, error) {
 	if args == nil {
 		args = make(map[string]interface{})
@@ -118,6 +141,14 @@ func NewFlow(Instance *models.Flow, args map[string]interface{}, reqID, runID, s
 		if err := Instance.Arguments.Unmarshal(&defArguments); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal Arguments: %v", err)
 		}
+	}
+
+	// Enforce the declaration's required list here, at the one construction point every entry goes through (agent tool, RPC /
+	// MCP call, nested flow, editor debug). flows.arguments only ever becomes the endpoint's input_schema, and no layer
+	// validates the payload against it, so without this a missing value surfaces as "var path X not found" - a config error
+	// attributed to whichever node happened to read it, long after the caller could still fix it.
+	if err := checkRequiredArguments(defArguments, args); err != nil {
+		return nil, err
 	}
 
 	var nodes []*flow.Node
@@ -200,6 +231,8 @@ func NewFlow(Instance *models.Flow, args map[string]interface{}, reqID, runID, s
 		ExecutedProcessMap: flow.NewProcessExecMap(),
 		ExecutedNodeMap:    flow.NewNodeExecMap(),
 		ProcessManager:     flow.NewProcessManager(),
+		// Shared by every context derived from this run (a concurrency member, see WithContext): one lock per store.
+		VarsMu: &sync.RWMutex{},
 
 		OutputBindingFire: fireOutputBinding,
 	}
@@ -235,10 +268,9 @@ func Start(execCtx *flow.ExecContext) (err error) {
 		return nil
 	}
 	defer unregister()
-	// Cancel the ctx once the flow is over: when a fork group is abandoned on timeout (ForkStateAbandoned) the
-	// background branches are still running LLM / sandbox calls while the ledger has already been unregistered
-	// and the user has seen "finished". It comes after runFlow (the defer runs when this function returns) and
-	// persistence does not depend on StdCtx, so it is unaffected.
+	// Cancel the ctx once the flow is over: when a scope is abandoned on timeout, the members are still running LLM /
+	// sandbox calls while the ledger has already been unregistered and the user has seen "finished". It comes after
+	// runFlow (the defer runs when this function returns) and persistence does not depend on StdCtx, so it is unaffected.
 	defer execCtx.Cancel()
 	err = runFlow(execCtx)
 	persistRun(execCtx, err)
@@ -485,24 +517,20 @@ func runFlow(execCtx *flow.ExecContext) (err error) {
 	if err != nil {
 		if errors.Is(err, SignalReturn) || errors.Is(err, SignalExit) {
 			err = nil // return/exit signals: normal termination of the flow
-		} else if errors.Is(err, SignalBreak) {
-			// A break leaking to the top means no loop ever consumed it: a configuration error
-			msg := "a break node outside any loop is a config error"
+		} else if errors.Is(err, SignalBreak) || errors.Is(err, SignalContinue) {
+			// Safety net only: the break / continue node itself already fails when no loop can consume it (control.go
+			// checkSignalScope), so a signal reaching the root means something bypassed that check. Keep a classified error
+			// instead of a bare string, so a caller can still tell this apart from a script failure.
+			msg := "a break / continue signal reached the flow root: no loop consumed it (config error)"
 			execCtx.LogError(msg)
-			err = errors.New(msg)
-		} else if errors.Is(err, SignalContinue) {
-			// A continue leaking to the top means no loop ever consumed it: a configuration error
-			msg := "a continue node outside any loop is a config error"
-			execCtx.LogError(msg)
-			err = errors.New(msg)
+			err = newExecError(flow.ErrCodeConfig, msg)
 		} else {
 			execCtx.LogError(fmt.Sprintf("flow execution error: %v", err))
 		}
 	}
 
-	// Wait for every mono standalone concurrent node to finish, so no orphan goroutine is left behind (success or
-	// failure)
-	execCtx.MonoWGWait()
+	// No detached goroutines are left to collect here: a concurrency scope joins its members before its host returns, so a
+	// finished walk means every member has already reached a terminal state.
 
 	return err
 }
@@ -518,11 +546,21 @@ func execute(node *flow.Node, execCtx *flow.ExecContext, processID string, depth
 
 	currentNode := node
 	f := execCtx.Flow
+	// The scope this walk is inside: nil for the flow root, a function body and a branch lane, which are not hosts.
+	bodyScope := execCtx.BodyScope(processID)
 	for currentNode != nil {
 		select {
 		case <-execCtx.StdCtx.Done():
 			return execCtx.StdCtx.Err()
 		default:
+		}
+
+		// A draining scope stops starting new work: no further chain node and no further member. The node where the
+		// walk stops is recorded as skipped so the missing tail of the body is explained by the run itself.
+		if bodyScope != nil && bodyScope.Draining() {
+			execCtx.LogInfo("scope stopped starting work, stopping the walk at node: " + currentNode.ID)
+			markScopeDraining(currentNode, execCtx, processID, bodyScope)
+			return nil
 		}
 
 		// Debug suspend hook: decide before executing whether to pause / step / hit a breakpoint
@@ -537,17 +575,36 @@ func execute(node *flow.Node, execCtx *flow.ExecContext, processID string, depth
 			}
 		}
 
-		// A concurrent node: dispatched to a goroutine plus a child process; the main flow neither executes it nor
-		// follows its outgoing edge
-		if concurrency := getConcurrency(currentNode); concurrency != nil {
-			if err := dispatchConcurrent(currentNode, execCtx, processID, concurrency); err != nil {
-				execCtx.LogError(fmt.Sprintf("failed to dispatch the concurrent node: %s: %v", currentNode.ID, err))
+		// A scope member (data.concurrent): dispatched to its own goroutine and child process. The goroutine executes only
+		// this node; this walk starts it and continues along the outgoing edge, which is how the next member is reached.
+		if isConcurrencyMember(currentNode) {
+			if bodyScope == nil {
+				return newExecError(flow.ErrCodeConfig, fmt.Sprintf(
+					"node %s carries the concurrent flag but its body has no concurrency scope (only a process / loop body is one)",
+					currentNode.ID))
+			}
+			if err := dispatchMember(currentNode, execCtx, processID, bodyScope); err != nil {
+				execCtx.LogError(fmt.Sprintf("failed to dispatch the member: %s: %v", currentNode.ID, err))
 				return err
 			}
-			execCtx.LogInfo("dispatching concurrent node: " + currentNode.ID)
+			execCtx.LogInfo("dispatching concurrent member: " + currentNode.ID)
 		} else {
 			err := executeNode(currentNode, execCtx, processID)
 			if err != nil {
+				// `exit` is global and immediate: it stops the work this scope already started, not just the walk. The
+				// scope records the node that fired it, so the members it cancels say why, and a queued member is
+				// abandoned instead of starting after the run has already ended.
+				if bodyScope != nil && errors.Is(err, SignalExit) {
+					bodyScope.StopOnExit(currentNode.ID)
+				}
+				// Name the failure: the container above reports this error as its own, and its ErrMsg is what the author
+				// reads in the run record and what an on_error handler receives as error_message. Left unstamped, a
+				// process or loop says "connection refused" with no hint of which child said it. Only when empty, so a
+				// nested container names its own direct child and the inner text keeps the deeper detail.
+				var ee *ExecError
+				if errors.As(err, &ee) && ee.NodeID == "" {
+					ee.NodeID = currentNode.ID
+				}
 				return err
 			}
 		}
@@ -582,108 +639,6 @@ func execute(node *flow.Node, execCtx *flow.ExecContext, processID string, depth
 
 		currentNode = GetNodeByID(f, nextNodeID)
 	}
-	return nil
-}
-
-// concurrencyConfig is a node's concurrency config:
-//   - absent: a serial node
-//   - {mode: "mono"}: standalone concurrency (not part of any fork group)
-//   - {mode: "fork", fork_node_id: "<id>"}: join the given fork group
-type concurrencyConfig struct {
-	Mode       string
-	ForkNodeID string
-}
-
-// getConcurrency parses a node's concurrency config; an absent or invalid config returns nil (treated as
-// serial).
-func getConcurrency(node *flow.Node) *concurrencyConfig {
-	if node == nil || node.Data == nil || node.Data.Config == nil {
-		return nil
-	}
-	raw, ok := node.Data.Config["concurrency"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	mode, _ := raw["mode"].(string)
-	switch mode {
-	case "mono":
-		return &concurrencyConfig{Mode: mode}
-	case "fork":
-		forkNodeID, _ := raw["fork_node_id"].(string)
-		return &concurrencyConfig{Mode: mode, ForkNodeID: forkNodeID}
-	default:
-		return nil
-	}
-}
-
-// dispatchConcurrent dispatches a concurrent node to a separate goroutine plus child process.
-// The main flow only dispatches: it neither executes the node nor follows its outgoing edge.
-func dispatchConcurrent(node *flow.Node, ctx *flow.ExecContext, parentProcessID string, cc *concurrencyConfig) error {
-	if cc.Mode == "fork" && cc.ForkNodeID == "" {
-		return newExecError(flow.ErrCodeConfig,
-			fmt.Sprintf("concurrent node %s: fork_node_id is required when mode is fork", node.ID))
-	}
-
-	// Create the child process
-	childProcessID, err := ctx.ProcessManager.NewProcess(parentProcessID, nil)
-	if err != nil {
-		return newExecError(flow.ErrCodeInternal,
-			fmt.Sprintf("create child process for concurrent node %s: %v", node.ID, err))
-	}
-
-	var forkNR *flow.NodeResult
-	if cc.Mode == "fork" {
-		// Look up the fork node's NodeResult (on the parent process chain)
-		forkNR = ctx.FindNodeResultByProcessChain(cc.ForkNodeID, parentProcessID)
-		if forkNR == nil || forkNR.ForkResult == nil {
-			return newExecError(flow.ErrCodeConfig,
-				fmt.Sprintf("fork node result not found for concurrent node %s: %s", node.ID, cc.ForkNodeID))
-		}
-		// Join the fork group (blocking on a semaphore is what enforces maxConcurrency; a cancelled ctx aborts the
-		// flow)
-		member := flow.ForkMember{ProcessID: childProcessID, NodeID: node.ID}
-		if err := forkNR.ForkResult.Add(1, ctx.StdCtx, member); err != nil {
-			// The child process exists but could not join the group: reclaim it so no dangling record is left
-			ctx.ProcessManager.RemoveProcess(childProcessID)
-			// A cancelled ctx: return it unwrapped so the caller takes the StatusCancelled path
-			if ctx.StdCtx.Err() != nil {
-				return ctx.StdCtx.Err()
-			}
-			return newExecError(flow.ErrCodeInternal,
-				fmt.Sprintf("fork add failed for node %s: %v", node.ID, err))
-		}
-	} else {
-		ctx.MonoWGAdd(1)
-	}
-
-	// Dispatch the goroutine; it executes only this node and does not follow outgoing edges
-	go func(n *flow.Node, c *flow.ExecContext, pid string, fnr *flow.NodeResult) {
-		defer func() {
-			if r := recover(); r != nil {
-				c.LogError(fmt.Sprintf("concurrent node %s panic: %v", n.ID, r))
-			}
-			if fnr != nil && fnr.ForkResult != nil {
-				fnr.ForkResult.Done()
-			} else {
-				c.MonoWGDone()
-			}
-		}()
-
-		// Debug: a concurrent node also does the breakpoint / step suspension plus the all-stop barrier before it
-		// runs (same as a serial node). Push the child process to get the correct depth, then pop it once the
-		// suspend / all-stop checks are done.
-		if c.Debug != nil && c.Debug.Enabled {
-			c.Debug.PushStack(pid)
-			c.Debug.SuspendIfNeeded(n, pid, c.Debug.CurrentDepth())
-			c.Debug.WaitIfGloballySuspended()
-			c.Debug.PopStack()
-		}
-
-		// A concurrent node records its error on its own NodeResult and does not propagate it to the main flow
-		_ = executeNode(n, c, pid)
-		//println("concurrent node finished: " + n.Data.Label)
-	}(node, ctx, childProcessID, forkNR)
-
 	return nil
 }
 
@@ -884,8 +839,12 @@ func executeNode(node *flow.Node, ctx *flow.ExecContext, processID string) error
 		if cfg.Handler != nil && matchCodes(cfg.Handler.Codes, currentCode, currentMsg, cfg.Handler.Patterns) {
 			action, handlerErr := runHandlerScript(ctx, cfg.Handler, node, activeNR)
 			if handlerErr != nil {
+				// The node keeps failing with its original code and message: the handler failed, so it did not decide
+				// anything. The failure reason gets its own field instead of being appended to ErrMsg, so the code that
+				// on_error matches on stays the one the root cause produced.
+				activeNR.HandlerError = handlerErr.Error()
 				activeNR.AddLogf("failed to run the handler script: %v", handlerErr)
-				//applyPost(activeNR, cfg.Post)
+				applyPost(activeNR, cfg.Post)
 				return newExecError(activeNR.ErrCode, activeNR.ErrMsg)
 			}
 			if action == "skip" {
@@ -1083,9 +1042,12 @@ func containsAction(actions []flow.ErrorAction, a flow.ErrorAction) bool {
 func runHandlerScript(ctx *flow.ExecContext, cfg *HandlerRule,
 	node *flow.Node, nr *flow.NodeResult) (string, error) {
 
-	inputs, _ := ctx.GetVariables(cfg.Inputs, nr.ProcessID)
-	if inputs == nil {
-		inputs = make(map[string]interface{})
+	// GetVariables is all-or-nothing: a non-nil error means none of the declared inputs were resolved. Running the
+	// script anyway would hand the author a map that only carries the built-ins, and the symptom would surface as a
+	// Lua nil somewhere in their code instead of "this input could not be read".
+	inputs, err := ctx.GetVariables(cfg.Inputs, nr.ProcessID)
+	if err != nil {
+		return "", fmt.Errorf("resolve handler inputs: %w", err)
 	}
 	inputs["error_code"] = nr.ErrCode
 	inputs["error_message"] = nr.ErrMsg
@@ -1126,28 +1088,54 @@ func applyPost(nr *flow.NodeResult, post *PostConfig) {
 	if post == nil {
 		return
 	}
-	for path, value := range post.SetOutputs {
-		nr.SetOutputVarWithFire(path, value)
+	// Sorted so that two undeclared keys always produce the same PostError text: it is stored on the record, and a
+	// message whose order depends on map iteration is a diff nobody can read.
+	paths := make([]string, 0, len(post.SetOutputs))
+	for path := range post.SetOutputs {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		// A key that is not declared in the node's outputs cannot be written (SetOutputVar refuses it). This is a post
+		// failure like any other, not just a log line: dropping it silently leaves the author believing the marker is
+		// there while downstream reads the type default - the exact failure post exists to prevent.
+		if err := nr.SetOutputVarWithFire(path, post.SetOutputs[path]); err != nil {
+			addPostError(nr, fmt.Sprintf("failed to write post output %s: %v", path, err))
+		}
 	}
 	if post.Handler != nil {
-		inputs, _ := nr.Ctx.GetVariables(post.Handler.Inputs, nr.ProcessID)
-		if inputs == nil {
-			inputs = make(map[string]interface{})
-		}
-		inputs["error_code"] = nr.ErrCode
-		inputs["error_message"] = nr.ErrMsg
-		inputs["retry_count"] = nr.RetryCount
-		result, err := ExecuteScript(nr.Ctx.StdCtx, post.Handler.Lang, post.Handler.Script, inputs, nr, 10)
+		inputs, err := nr.Ctx.GetVariables(post.Handler.Inputs, nr.ProcessID)
 		if err != nil {
-			nr.AddLogf("failed to run the post-processing script: %v", err)
-			nr.PostError = err.Error()
-		} else if result != nil {
-			if aerr := applyScriptResult(nr, result); aerr != nil {
-				nr.AddLogf("failed to write the post-processing script result: %v", aerr)
-				nr.PostError = aerr.Error()
+			// Same reasoning as the set_outputs case above: the author declared these inputs for a reason, and running
+			// the script without them turns their absence into a type default rather than an error.
+			nr.AddLogf("failed to resolve the post-processing inputs: %v", err)
+			addPostError(nr, fmt.Sprintf("failed to resolve the post-processing inputs: %v", err))
+		} else {
+			inputs["error_code"] = nr.ErrCode
+			inputs["error_message"] = nr.ErrMsg
+			inputs["retry_count"] = nr.RetryCount
+			result, err := ExecuteScript(nr.Ctx.StdCtx, post.Handler.Lang, post.Handler.Script, inputs, nr, 10)
+			if err != nil {
+				nr.AddLogf("failed to run the post-processing script: %v", err)
+				addPostError(nr, err.Error())
+			} else if result != nil {
+				if aerr := applyScriptResult(nr, result); aerr != nil {
+					nr.AddLogf("failed to write the post-processing script result: %v", aerr)
+					addPostError(nr, aerr.Error())
+				}
 			}
 		}
 	}
+}
+
+// addPostError appends to PostError instead of overwriting it: a bad set_outputs key and a failing script are two
+// separate facts, and the second one must not erase the first (the record is the only structured trace either way).
+func addPostError(nr *flow.NodeResult, msg string) {
+	if nr.PostError == "" {
+		nr.PostError = msg
+		return
+	}
+	nr.PostError += "; " + msg
 }
 
 func GetNodeByID(f *flow.Flow, id string) *flow.Node {

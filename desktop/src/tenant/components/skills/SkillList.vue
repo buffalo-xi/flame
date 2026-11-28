@@ -183,6 +183,17 @@
       </el-tooltip>
       </template>
     </div>
+
+    <!-- No skill of the tenant's own in view: the preinstalled ones may be the only cards, or the list may be empty.
+         The title is a question, so it stays true whether you own none or just filtered them out. -->
+    <EmptyGuide v-if="showOwnGuide" class="skill-guide"
+                :title="$t('skill.guideTitle')"
+                :lead="$t('skill.guideLead')"
+                :steps="[$t('skill.guideStepChat'), $t('skill.guideStepManual')]">
+      <template #action>
+        <el-button size="small" type="primary" plain @click="emit('create')">{{ $t('skill.create') }}</el-button>
+      </template>
+    </EmptyGuide>
   </div>
 </template>
 
@@ -192,6 +203,7 @@ import { useI18n } from 'vue-i18n'
 import { Plus, Search, Refresh, Edit, Delete, CircleCheck, CircleClose, ArrowDown, Close, CaretRight, Upload, Download } from '@element-plus/icons-vue'
 import { useHeaderCompact } from '../../utils/useHeaderCompact.js'
 import HelpButton from '../../../help/HelpButton.vue'
+import EmptyGuide from '../EmptyGuide.vue'
 
 const { t } = useI18n()
 
@@ -299,9 +311,19 @@ const skillGroups = computed(() => {
   const groups = []
   if (sys.length) groups.push({ key: 'system', label: t('skill.groupSystem'), items: sys })
   if (rest.length) groups.push({ key: 'other', label: t('skill.groupOther'), items: rest })
-  // 只有一组时不画组头：本来就是一个扁平列表，再加个标题纯是噪声
-  const headed = groups.length > 1
+  // The built-in group keeps its header even when it is the only one (same rule as the agents list): the header says
+  // "these ship with the product and cannot be renamed or deleted", which is not just a partition. A lone "other"
+  // group stays flat — that would be a title on a single list.
+  const headed = groups.length > 1 || groups[0]?.key === 'system'
   return groups.map(g => ({ ...g, headed }))
+})
+
+// Show the nudge whenever the list holds no skill of the tenant's own: with the system toggle off there are no cards
+// at all, with it on there may be only the preinstalled ones. Judged on the visible groups, so a filter that hides
+// your own skills still gets the nudge (hence the question-shaped title).
+const showOwnGuide = computed(() => {
+  if (props.loading || keyword.value) return false
+  return !skillGroups.value.some(g => g.key === 'other')
 })
 
 // 空列表提示文案（区分「搜索无结果」与「该状态下暂无数据」）
@@ -554,8 +576,14 @@ const activeStatusLabel = computed(() => {
   align-content: start;
 }
 
-/* 分组的段标题：跨满整行（列表本身是 grid），把「系统内置 / 其他技能」切成两段。
-   只有两组同时存在时才渲染（见 skillGroups 的 headed）——单一分组时它只是噪声。 */
+/* The guide sits under whatever the list shows: the cards, or the one-line empty hint */
+.skill-guide {
+  max-width: 620px;
+  margin-top: 14px;
+}
+
+/* Group heading: spans the whole row (the list is a grid), splitting "built-in / other skills". Rendered when there
+   are two groups, or when the built-in group stands alone (see `headed` in skillGroups). */
 .skill-group-head {
   grid-column: 1 / -1;
   display: flex;
@@ -802,11 +830,13 @@ const activeStatusLabel = computed(() => {
   white-space: nowrap;
 }
 
+/* Same as the agents list (and the flows list): one empty-hint style across the three list screens */
 .no-data,
 .loading {
   padding: 40px;
   text-align: center;
-  color: #909399;
+  color: #999;
+  font-size: 14px;
 }
 
 /* ===== 主列表滚动条：位置常驻、悬浮才上色 =====

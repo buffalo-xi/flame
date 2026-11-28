@@ -15,7 +15,7 @@ This skill covers: deciding whether a workflow is the right shape, what the tool
 | Super agent | `create_flow` → `run_flow` test run → (optional) `grant_agent_tool` | linear flows in one shot; run it, then expose |
 | A person | "Workflows → New" and build on the canvas | every node type (branch / loop / sub-flow) |
 
-Fourteen meta tools (category `flow-admin`, super agent only). **Building a complex flow = these tools working together**:
+Twenty meta tools (category `flow-admin`, super agent only). **Building a complex flow = these tools working together**:
 
 | Tool | Role |
 |---|---|
@@ -25,7 +25,11 @@ Fourteen meta tools (category `flow-admin`, super agent only). **Building a comp
 | `read_flow` | fetch the diagram source by id or name |
 | `run_flow` | **test run**: really execute once, returning the overall status plus per-node success or failure (failed nodes carry an error code, stack and logs) |
 | `read_flow_run` | **inspect a run**: per-node inputs / outputs / local variables and error details by `run_id` |
-| `delete_flow` | delete the definition (endpoints go with it; **run records are kept**); echoes the deleted `flow_id` + `flow_name` |
+| `delete_flow` | delete the definition **and everything derived from it** (endpoints, version history and run records all go; unrelease / retract first); echoes the deleted `flow_id` + `flow_name` |
+| `create_flow_endpoint` | add the workflow's **MCP** endpoint slot (`protocol=mcp`; a newly created slot is not exposed unless `exposed=true` — and while the flow has no released version the slot is still created unexposed, the answer carrying `release_required`). `protocol=rpc` changes nothing: the RPC slot is created with the flow and only has an exposure switch |
+| `delete_flow_endpoint` | delete the **MCP** slot (retract it first). `protocol=rpc` is refused — it is managed by the flow, so take it offline with `retract_flow_endpoint` or by deprecating the flow |
+| `expose_flow_endpoint` | expose the workflow's `mcp` / `rpc` endpoints to callers outside the tenant; **needs a released version**, so a flow you just created must be released by the user in the console first |
+| `retract_flow_endpoint` | retract them (omit `protocols` for all); never refused, and the prerequisite for deleting an exposed MCP slot |
 | `create_node` | **add a node** (`parent_node` builds a child node inside a container); containers get an `entry` automatically |
 | `insert_node` | insert a node **in the middle of an existing edge**: delete the old edge + connect A→new→B, atomically |
 | `update_node` | change `label` / `config` (full replacement or `config_patch` merge) / `parent_node` (move into a container) |
@@ -60,19 +64,21 @@ When these intents appear:
 | One-off task | just do it (existing tools / `exec`) | runs once, no reuse |
 | Pure function: model supplies arguments, structured result | custom tool (`custom-tool-authoring`) | stateless, single step |
 | Knowledge / conventions / phrasing | a skill (`skill-authoring`) | nothing executable |
-| Needs container children (loop / sub-flow / function body), or concurrency groups | **workflow** (the tools can build it) | `create_flow`'s `children` or `create_node(parent_node=…)`; `entry` is added automatically |
+| Needs container children (loop / sub-flow / function body), or a concurrent body | **workflow** (the tools can build it) | `create_flow`'s `children` or `create_node(parent_node=…)`; `entry` is added automatically |
 | Fixed order + several node kinds + an external entry point | **workflow** | this skill |
 
 ## Hard constraints (read first, to avoid wasted work)
 
 | Constraint | Details |
 |---|---|
-| Name | letters, digits and dashes only (no leading dash, ≤64), **Chinese is not allowed**. It *is* the endpoint name → the MCP `tool.name`, the agent-side tool name `local__<name>`, and the grant ref `local:rpc:<name>`; the latter two accept ASCII only. Put the Chinese purpose in `description`. Unique across the tenant, and **must not collide with an agent name** — the endpoint name always equals the entity name, and `svc_endpoints` is unique on `(name, protocol)`, so a collision makes exposing the endpoint fail outright |
+| Name | letters, digits and dashes only (no leading dash, ≤64), **Chinese is not allowed**. It *is* the endpoint name → the MCP `tool.name`, the agent-side tool name `local__<name>`, and the grant ref `local:rpc:<name>`; the latter two accept ASCII only. Put the Chinese purpose in `description`. Unique across the tenant, and **must not collide with an agent name on the same protocol** — the endpoint name always equals the entity name, and `svc_endpoints` is unique on `(name, protocol)`, so the collision fails the insert that creates the slot, not a later expose: the RPC slot goes in when the flow is created (`create_flow` itself fails), the MCP slot when `create_flow_endpoint` runs |
 | Description | required: lists distinguish purposes by it, and the front-end editor rejects an empty description |
 | Shape | the top level is a **linear main chain**: `start → step 1 → step 2 → …`; `branch` / `intent` pull sub-chains out with `branches`, and `loop` / `process` / `function` hold sub-chains in `children` (`entry` is added automatically). For anything else (inserting a node mid-chain, moving into a container, changing config, deleting a node) use `insert_node` / `update_node` / `delete_node` |
-| Supported nodes | every type the executor registers can be created: `llm` `code` `http` `mcp` `rpc` (single in, single out, runnable as-is), `branch` `intent` `loop` `process` `function` `call` `assign` `memory` `wait` `fork` `result` `progress`, `break` `continue` `return` `exit`. `branch`/`intent` build their outgoing edges from `branches` (omit it and they no-op); when the user explicitly asks for a concurrency group, the members of `wait`'s group (`config.concurrency`) and `wait.config.fork_node_id` still have to be supplied by you or later with `update_node`. `start` (generated automatically), `entry` (added by containers) and `knowledge` (no backend executor) **cannot be created**; `comment` (a pure note, not connected) and `layout` (runner passes straight through) have no executor but can be created |
-| Coordinates | either way: give `position` and the layout is yours (all top-level nodes or none, see "Layout" below); omit it and the tool lays it out (main chain left to right, each branch on its own row under the branch node, containers sized by content). Position does not affect execution |
-| Concurrency (off by default) | **never** write `config.concurrency` on any node — the tools strip it and return a warning. Enable it only when the user **explicitly asks for concurrency**, choosing one of two forms as they ask: **mono concurrency** = one node processes several records concurrently, write `{"mode":"mono"}`; **group concurrency** = several nodes run at once and a `wait` joins them, write `{"mode":"fork","fork_node_id":"<fork node id>"}`. Also declare the shape in the tool arguments (`concurrency=mono\|group` on `create_flow` / `create_node` / `insert_node`), or it is stripped again. `loop` / `process` containers never carry this key. Concurrency already hardcoded in existing flows is left alone (an `update_node` without `concurrency` keeps it) |
+| Supported nodes | every type the executor registers can be created: `llm` `code` `http` `mcp` `rpc` (single in, single out, runnable as-is), `branch` `intent` `loop` `process` `function` `call` `assign` `memory` `raise` `result` `progress`, `break` `continue` `return` `exit`. `raise` is terminal: it takes an incoming edge and no outgoing one, because it never succeeds. `branch`/`intent` build their outgoing edges from `branches` (omit it and they no-op). `start` (generated automatically), `entry` (added by containers) and `knowledge` (no backend executor) **cannot be created**; `comment` (a pure note, not connected) and `layout` (runner passes straight through) have no executor but can be created |
+| Coordinates | either way: give `position` and the layout is yours (all top-level nodes or none, see "Layout" below); omit it and the tool lays it out (main chain left to right, the branches of `branch` / `intent` opening to the right of their card — the first branch row on the card's own row, the rest one row each below it — containers sized by content). Position does not affect execution |
+| Concurrency | One model: the **scope**, and it is set in two places only — `concurrent: true` on a **direct child** of a `process` / `loop` (node data, so the `concurrent` argument), and the host's `config.parallel` (`max_concurrency`, `join`, `timeout`). The body dispatches the members and joins them at its end. A member failure fails the host, and the host's own `on_error` is where that is handled: `skip` / `handler` / `post` (no `retry` — see `references/on-error.md`) — see `references/nodes/process.md` |
+| `inputs` on a type that reads none | **never** write `config.inputs` on `process` / `function` / `call` / `memory`, or on `break` / `continue` / `return` / `exit`. Nothing reads it: a `process` body reaches the outer nodes directly (a `source_type: node` reference resolves up the process chain) and writes back through `targets`; a `function` gets its values from a `call` node's `args`; a `call` node's arguments go in `config.args`. The tools remove the block on save and return a warning, and `validate_flow` reports `ignored_inputs` on diagrams that already carry one — never "fix" that warning by moving the values somewhere else, the block itself was the mistake |
+| Control signals | `break` / `continue` are consumed by the nearest **loop** (a function boundary ends that scope). `return` is consumed by the nearest **function**: inside a function body, nested containers included, it returns from the function (which succeeds) and `call` receives its outputs. **A return must have a function above it** — at the top level or in a `process` / `loop` body the same node ends the whole flow while the run reports success, so `create_flow` / `create_node` refuse it and `validate_flow` reports `return_scope` as an error. Use `exit` to end the whole flow; to leave only a container, route around the rest of the body with a `branch` |
 
 ### Layout (you may place coordinates yourself)
 
@@ -83,7 +89,8 @@ Every step of `create_flow` can carry `position: {x, y}`, and **either every top
 - container children need none (coordinates are relative to the parent container; the tool lays them out and writes `config.size`).
 - `function` nodes are **not** part of the main row: the tool places them below the flow (a function is entered by a `call`,
   not by an edge) and sizes the card to its body. A function body is laid out like the main flow — `entry` at the left, the
-  chain to the right, branches below — while `loop` / `process` children are stacked vertically, one iteration per row.
+  chain to the right, branch rows opening further right — while `loop` / `process` children are stacked vertically, one
+  iteration per row.
 
 Aesthetic baseline (following it matches the flow's intent better than automatic layout):
 
@@ -92,10 +99,9 @@ Aesthetic baseline (following it matches the flow's intent better than automatic
 | Grid | `x` / `y` are multiples of 20 |
 | Main chain | same row, same `y`, left to right |
 | Horizontal spacing | a leaf node is only 100–160 wide in practice (`min-width: 100px`; close to 300 only with very long labels): use an `x` step of **200** between adjacent main-chain nodes (leaving roughly 60–100 of gap); `branch` and containers are 300 wide, so use a step of **380** after them. Do not stretch past 300 "to be safe" — the canvas looks emptily ugly |
-| Concurrency nodes | a node with `config.concurrency` gains an extra "concurrency control + dropdown" row, so reserve **280×64** (only appears when the user asked for concurrency) |
-| Vertical spacing | ≥ 40 (a leaf is 32 tall; a concurrency node 64) |
-| Branches | placed below and to the right of the branch node, one row per branch, rows ≥ 72 apart |
-| Wrapping | wrap once a row is wider than 1500; to control where it turns, insert a `type: "layout"` step there |
+| Vertical spacing | ≥ 40 (a leaf is 32 tall) |
+| Branches | placed to the right of the branch node — the first branch on the node's own row (so its right outlet feeds the sub-chain's left inlet straight), the rest one row each below it; rows ≥ 72 apart and each row runs left to right |
+| Wrapping | wrap once a row is wider than 1500, measured from that row's own start (a branch row begins at the branch card's right edge and still gets a full row); to control where it turns, insert a `type: "layout"` step there |
 | Edges | avoid crossings; on conflict reorder the branches or widen the gap, do not route around with diagonal lines. Choose handles from the two nodes' relative positions (same row → left/right ends; big vertical offset → vertical ends) — the exact positions and suggested values are in `create_edge`'s parameter description, and a missing handle makes the tool state the value to use |
 
 **Reuse vertical space with `layout` nodes**: `layout` is a 32px dot that the runner skips, continuing along its first outgoing
@@ -116,7 +122,7 @@ After creation the returned `nodes` carry `position`; if you dislike it, move a 
 `position`.
 | Status | "normal" on creation; deprecating is console-only, meta tools cannot change it |
 | Endpoints | only an exposed endpoint can be referenced by a "service credential" or an agent grant; a flow that is not exposed is invisible outside |
-| Run records | deleting a flow does **not** cascade-delete run records (history stays inspectable) |
+| Run records | deleting a flow **deletes its run records too**: `flow_run_records` / `flow_node_records` of that flow go in the same transaction as the row, and the version history cascades by foreign key. To drop old runs but keep the flow, use the run history page's clean-up — deleting the flow is not that tool |
 
 ## Variables: three concepts, do not mix them
 
@@ -148,6 +154,18 @@ A missing value **fails outright** (the node fails); it never silently yields em
 `source_key` is misspelled.
 `global` behaves the same: a variable name that does not exist, or cannot be read at runtime, fails the node, and the error
 names the variable.
+
+The one case that reads as empty instead: a **declared** variable (a container's `outputs` / `locals`, a `call`'s outputs, a
+flow variable) is initialised to its type's zero value before the run. A member that never wrote it back therefore yields
+`""` / `0` / `{}` — no error at all. So "did the concurrent member actually produce something" has to be checked by testing
+the value (a `branch`, an `assign`, or a `code` script that fails on a blank), never by expecting a failure.
+
+An `argument` row is only readable when the flow's entry-argument declaration declares that name (`arguments` on
+`create_flow`, `set` on `update_flow_arguments`), and it is only **guaranteed to be there** when the declaration also lists it
+in `required`: that declaration is the endpoint's `input_schema`, and nothing on the server rejects a call that omits a
+parameter the schema calls optional — the node then fails with `var path <name> not found`. So declare every argument a node
+reads, and mark it required unless the node tolerates an absent value. `validate_flow` reports `argument_undeclared` (error:
+the name is not declared at all) and `argument_optional` (warning: declared, but a caller may omit it).
 
 **A `function` node is not a variable source.** Its `params` and `outputs` belong to the body and are readable only by the
 steps inside that body. From outside, read the **`call` node** instead — its `outputs` are copied from the function's — and
@@ -232,13 +250,14 @@ When you do not know which variables this tenant has, call `list_global_vars` fi
 The tools decide two different things about a step's `config`. Knowing which is which tells you what a successful call
 actually proved:
 
-- **shape is refused** — the call fails: a behaviour block (`code` / `http` / `llm` / `loop` / `mcp` / `rpc` / `branch`) that
+- **shape is refused** — the call fails: a behaviour block (`code` / `http` / `llm` / `loop` / `mcp` / `rpc` / `branch` / `raise`) that
   is not an object, `children` that is not an array, a `loop.type` outside `count` / `each` / `while` / `do_while`;
 - **completeness is warned** — the node **is created** and the findings come back as warnings. The same findings are errors
   on the canvas / in `validate_flow`, because the step cannot run: `code` / `result` / `progress` without `code.script`,
   `http` without `http.url`, `llm` without `config.llm` or `llm.messages`, `loop` without `config.loop` / `loop.type` or with
-  a non-numeric count, `branch` / `intent` with empty `children`, `call` without `target`, `wait` without `fork_node_id`,
-  `mcp` without its connection, `rpc` without its endpoint or connection, a `lang` the sandbox does not list, a
+  a non-numeric count, `branch` / `intent` with empty `children`, `call` without `target`,
+  `mcp` without its connection, `rpc` without its endpoint or connection, a `raise` without `raise.code` / `raise.message`,
+  a `lang` the sandbox does not list, a
   `response_mode` outside `complete` / `sse_stream`. Three findings stay warnings everywhere because the step still runs: a
   missing `config.outputs`, an `assign` with no `assignments`, a `branch` child with no condition.
   Measured: `config: {}` for `http` / `llm` / `code` / `mcp` / `rpc` still returns success — the findings are in `warnings`.
@@ -249,7 +268,7 @@ per-level table is in `references/nodes/README.md` ("What creation checks, per t
 **`validate_flow` covers the half that needs neighbours, without running anything.** It applies the same rule set to a saved
 flow (or to a diagram passed inline) and returns findings with a severity, a `node_id`, the config path and a hint: nothing is
 executed, no request is sent, no model is billed. Besides the per-node findings it checks the structure creation cannot see —
-container `entry` children, cross-container edges, dangling `source_ref` / `call.target` / `fork_node_id`, a `source_key` the
+container `entry` children, cross-container edges, dangling `source_ref` / `call.target`, a `source_key` the
 source node does not produce, `call.args` that do not match the target's `params`, branch children with no routing edge,
 `loop each` sources missing from `inputs`, a `break` / `continue` no loop can reach, unreachable nodes — and it validates
 `on_error` against each node's declared capabilities: an action the node does not declare is dropped by the runner, and a code
@@ -303,13 +322,13 @@ read_file("/skills/flow-authoring/references/nodes/<type>.md")
 
 | Read what first | File |
 |---|---|
-| Node index + `config` keys shared by all nodes (`inputs` / `outputs` / `locals` / `targets` / `on_error` / `concurrency`) | `references/nodes/README.md` |
+| Node index + `config` keys shared by all nodes (`inputs` / `outputs` / `locals` / `targets` / `on_error`) | `references/nodes/README.md` |
 | Edge shapes / examples / return values / troubleshooting (handle rules are authoritative in `create_edge`'s parameters, not repeated here) | `references/edges.md` |
 | Add / insert / update / delete nodes (`create_node` `insert_node` `update_node` `delete_node`), containers and entry rules | `references/nodes-edit.md` |
 | Retry / skip / fallback script shapes and precedence on failure | `references/on-error.md` |
 | Script conventions shared by every surface: how `lua` / `python` / `js` return a value, and what the `code` node, conditions, handlers, `on_error`, binding transforms and `result` / `progress` each expect back | `references/script-languages.md` |
 | Execution nodes: `llm` `http` `code` `mcp` `rpc` | `references/nodes/<type>.md` |
-| Control / containers: `branch` `intent` `loop` `process` `function` `call` `assign` `memory` `wait` `fork` `result` `progress` | `references/nodes/<type>.md` |
+| Control / containers: `branch` `intent` `loop` `process` `function` `call` `assign` `memory` `result` `progress` | `references/nodes/<type>.md` |
 | Control signals (`break` / `continue` / `return` / `exit`), structural kinds (`start` / `entry` / `comment`) | `references/nodes/control-signals.md`, `references/nodes/visual.md` |
 
 Suggested order: read the index in `README.md` (one screen), then only the file for the node you are configuring. Writing a
@@ -370,14 +389,14 @@ the container "succeeds but runs nothing", without an error.
 sub-chains in the `branches` order they are declared). In a purely linear graph the first step is `2`, the second `3`… **branches
 make ids stop matching step order**, so:
 
-- `config.inputs`'s `source_ref`, `call`'s `config.target` and `wait`'s `config.fork_node_id` may all be **written as the node
-  label** (e.g. `"fetch data"`); the tool replaces it with the real id;
+- `config.inputs`'s `source_ref` and `call`'s `config.target` may both be **written as the node label** (e.g. `"fetch data"`);
+  the tool replaces it with the real id;
 - when unsure, `read_flow` right after creating and read the diagram back; ids always follow the returned `nodes` / diagram.
 
 Suggested order:
 
 1. `list_flows` — confirm there is no duplicate name and it was not already built
-2. `create_flow` — supply all `steps` at once; when the user mentions passing arguments, declare entry arguments with `arguments`; pass `external_protocols` **only when the user explicitly asks for exposure**
+2. `create_flow` — supply all `steps` at once; when the user mentions passing arguments, declare entry arguments with `arguments`; pass `external_protocols` **only when the user explicitly asks for exposure** — a flow created here has no released version, so this prepares those slots unexposed and returns `release_required`; nothing failed, the user releases, then you call `expose_flow_endpoint`
 3. `read_flow` — read back to confirm the structure: a linear graph has "node count = step count + 1, edge count = step count"; with `branches` each sub-branch adds one edge carrying `source<childId>`, so check ids against `nodes`
 4. `run_flow` — **run it once**, and only move on when you see `status: success` (see the next section)
 5. to make it available to an agent: `grant_agent_tool(agent="<target>", ref="local:rpc:<flow name>")`
@@ -422,8 +441,8 @@ Rules:
 
 ### Connecting / rewiring: `create_edge` / `update_edge` / `delete_edge`
 
-`branches` can only express "a branch node's sub-chains". For everything else — child nodes inside a container, `fork`/`wait`
-concurrency groups, and any "move this edge somewhere else" — use these three tools:
+`branches` can only express "a branch node's sub-chains". For everything else — child nodes inside a container, and any "move
+this edge somewhere else" — use these three tools:
 
 ```json
 {"flow": "daily-sales-report", "source": "2", "target": "3",
@@ -469,16 +488,15 @@ Key points:
 
 - **A container must have an `entry`**: `create_node` / `create_flow` add it automatically; a hand-written diagram or one copied
   from elsewhere may lack it, and then the container "succeeds but runs nothing", without an error.
-- **Node labels are unique across the graph**: `source_ref` / `call.target` / `fork_node_id` can all be written as labels, and a
+- **Node labels are unique across the graph**: `source_ref` / `call.target` can both be written as labels, and a
   duplicate points at the wrong node. An explicit duplicate is an error; leaving `label` empty makes the tool append a `-2`
   suffix (`entry` included — the second container would be called `entry-2`).
 - **`config` is a full replacement, `config_patch` is a top-level merge** — pick one. The return value carries the final
   `config`; check it once.
 - **`function` can only be created at the top level, and `return` only inside a `function`**; `insert_node` can only insert a node
   that ends up with both an incoming and an outgoing edge.
-- **Deleting a node is blocked while it is referenced**: when `config.inputs.*.source_ref`, `config.target` (call) or
-  `config.fork_node_id` (wait) points at it, the delete is refused and the sources are listed; change the references with
-  `update_node` first.
+- **Deleting a node is blocked while it is referenced**: when `config.inputs.*.source_ref` or `config.target` (call) points at
+  it, the delete is refused and the sources are listed; change the references with `update_node` first.
 - Full rules in `references/nodes-edit.md`.
 
 ## Before the first run: three checks that save a rebuild
@@ -486,9 +504,9 @@ Key points:
 1. **Function nodes stay off the main chain** — no in-edge, no out-edge; only `call` enters them, and only `call` may name
    them from outside (a `source_ref` pointing at a function from outside its body is `function_ref`). Wired in, the body runs
    with empty params and dies on the first param read.
-2. **`read_flow` first, then ids** — every node reference (`inputs` / `targets` / `args` `source_ref`, `call.target`,
-   `wait.fork_node_id`) accepts a label, but ids are what the diagram stores, and the step index stops predicting them once
-   the graph has branches or containers. Read the real ids back before wiring values between nodes.
+2. **`read_flow` first, then ids** — every node reference (`inputs` / `targets` / `args` `source_ref`, `call.target`) accepts a
+   label, but ids are what the diagram stores, and the step index stops predicting them once the graph has branches or
+   containers. Read the real ids back before wiring values between nodes.
 3. **`validate_flow` is not the run** — a finding names a config key, not a proven failure. Fix what it points at, then
    confirm with one `run_flow`; do not restructure a working graph because of a single finding.
 
@@ -540,7 +558,8 @@ Four facts you must know:
 
 - by default only **failed nodes** are returned (`only_failed: false` returns the whole chain); `nodes: ["3","4"]` fetches specific steps.
 - each node carries `input_vars` / `output_vars` / `local_vars` / `extra` (type-specific results such as HTTP status, token
-  usage), plus `err_code` / `err_msg` / `err_stack` / `logs` / `retry_count` / `error_action`.
+  usage), plus `err_code` / `err_msg` / `err_stack` / `logs` / `retry_count` / `error_action` / `post_error` /
+  `handler_error` (the last two are the `on_error` fallbacks' own failures: the node keeps its original code).
 - when a variable is over the limit it degrades to `{"_truncated": true, "_bytes": 12345, "keys": [...]}` — meaning "the keys are
   all there, the values are too big", not data loss; storage itself truncates each top-level key at 64KB, and `truncated: true`
   on a node means it was truncated at storage time.
@@ -557,11 +576,12 @@ declared `arguments`; undeclared keys can still be passed, but they never appear
 > **Exposing an endpoint means making an interface callable from outside**; it is a side-effecting action. Unless the user
 > explicitly asks, `create_flow` never passes `external_protocols`. "It can reach Baidu and output HTML" describes functionality,
 > not permission to expose. To expose, ask first: which flow, mcp or rpc, the endpoint name, and who may call it. If something
-> was exposed by mistake, retract it at once with `delete_flow` + recreate, and say plainly that the ID changed.
+> was exposed by mistake, **retract that endpoint** — deleting the flow is not the way to do it: it is a different
+> action, it changes the flow id, and it now takes the version history and run records with it.
 
-- **Exposing**: `external_protocols=["mcp"]` / `["rpc"]` / both; not exposing = no external entry point
+- **Exposing**: `external_protocols=["mcp"]` / `["rpc"]` / both prepares those slots; the switch itself waits for a release (`release_required`), because a flow created here has no released version; not exposing = no external entry point
 - **The endpoint name = the flow name**: renaming the flow renames the endpoint, and the old `local:rpc:<old name>` grant **silently stops working**
-- **Confirm exposure succeeded**: the protocol appears in `list_flows`'s `endpoints`; if it is absent, nothing was published
+- **Confirm exposure succeeded**: the protocol appears in `list_flows`'s `endpoints`; if it is absent, nothing is exposed yet (a prepared slot alone answers nobody)
 - **Who can use it**:
   - an agent → `grant_agent_tool(agent, ref="local:rpc:<flow name>")` (the MCP-side tool name is `local__<flow name>`)
   - an external system → "service credentials" can only be granted **exposed** endpoints; flows that are not exposed are invisible there
@@ -582,7 +602,7 @@ declared `arguments`; undeclared keys can still be passed, but they never appear
 | Delete a node | `delete_node(node_id=…)`; a container takes its whole subtree |
 | Connect / rewire / delete edges | `create_edge` / `update_edge` / `delete_edge` (edges only) |
 | Status (normal / deprecated) | the console; once deprecated the definition is read-only and cannot be exposed |
-| Delete | `delete_flow(flow=<id or name>)`; endpoints go with it, run records are kept |
+| Delete | `delete_flow(flow=<id or name>)`; deletes the definition, its endpoints, its version history and its run records — unrelease a released version and retract an exposed endpoint first |
 | Inspect the structure | `read_flow` for the diagram source; `list_flows` for an overview |
 
 ## Troubleshooting
@@ -590,7 +610,7 @@ declared `arguments`; undeclared keys can still be passed, but they never appear
 | Symptom | Most likely cause |
 |---|---|
 | In `read_flow` a node has only `{"label"}` and no `config` | `config: {}` was passed — an empty object has no shape to refuse and nothing to warn about, so the call succeeds and the empty object is dropped as-is, leaving a dead node |
-| Creation succeeds but `warnings` says some step is a no-op | `branch`/`intent` without `branches` (or a missing sub-branch) → add `branches`; `loop`/`process`/`function` with no children → add them with `children` or `create_node(parent_node=…)`; `wait` with no concurrency group members → when the user asked for a group, add `config.concurrency` with `update_node(concurrency=group)` |
+| Creation succeeds but `warnings` says some step is a no-op | `branch`/`intent` without `branches` (or a missing sub-branch) → add `branches`; `loop`/`process`/`function` with no children → add them with `children` or `create_node(parent_node=…)` |
 | Run reports `body entry node not found` | the container is missing its `entry` child. `loop` / `process` / `function` all report this `config` error (it used to silently succeed and skip, so a sub-flow never ran and nobody noticed): `create_node` / `create_flow` add it automatically, a hand-written diagram does not |
 | Error "label … must be unique" | a node with that name already exists (labels are how `source_ref` / `call.target` are written, so a duplicate points at the wrong node): pick another, or leave `label` empty so the tool appends a `-2` suffix |
 | A branch matches but nothing happens | the `children` `id` and the `branches` `key` do not match (the tool blocks it), or `condition` forgot `return` |

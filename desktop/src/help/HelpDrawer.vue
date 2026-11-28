@@ -212,7 +212,17 @@ onUnmounted(() => {
   min-height: 0;
   /* Reserve the scrollbar gutter so switching topics does not shift the text sideways */
   scrollbar-gutter: stable;
+  /* Bar space stays reserved, the thumb is painted only while the pointer is inside the drawer:
+     a permanently drawn bar makes this overlay read like a page (same rule as .et-pre / Chat.vue) */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
+
+.hp-body::-webkit-scrollbar { width: 6px; height: 6px; }
+.hp-body::-webkit-scrollbar-track { background: transparent; }
+.hp-body::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
+.hp-body:hover { scrollbar-color: #c1c1c1 transparent; }
+.hp-body:hover::-webkit-scrollbar-thumb { background: #c1c1c1; }
 
 /* ===== Rendered Markdown =====
    Markdown output is injected with v-html by the consumers, so those elements never receive this
@@ -275,6 +285,14 @@ onUnmounted(() => {
   border: 1px solid #ebeef5;
   border-radius: 4px;
   overflow: auto;
+  /* Same rule as the panel body. Only the standard properties: a ::-webkit-scrollbar rule behind
+     :deep() would compile to a selector nobody notices is wrong if it ever stops matching. */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.hp-body :deep(.hp-doc pre:hover) {
+  scrollbar-color: #c1c1c1 transparent;
 }
 
 .hp-body :deep(.hp-doc pre code) {

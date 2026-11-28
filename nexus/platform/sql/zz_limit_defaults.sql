@@ -16,6 +16,12 @@
 -- deploy/poc/entrypoint.sh) is a no-op. The trade-off is the same as llm_presets_seed.sql: deleting the system row from
 -- the console brings it back on the next boot; clear individual columns instead if a value must stay unset.
 --
+-- One hole that DO NOTHING leaves open: a row that already existed when a column was added keeps NULL in that column
+-- forever, because the row is no longer "missing". max_concurrency hit exactly that (the ALTER in flow_configs.sql adds it
+-- to an existing store), so the ceiling silently dropped to the code fallback of 16 instead of the 32 below. The
+-- column-level UPDATE after the flow INSERT fills only that unset cell of the system row: a value an operator typed is
+-- never overwritten, and tenant rows stay NULL so they keep inheriting.
+--
 -- Execution order is declared in two places, not inferred: scripts/verify-sql.ps1 lists this file last, and
 -- deploy/poc/Dockerfile copies it as 25-limit_defaults.sql (after the scripts that create the three tables). The zz_
 -- prefix only keeps it at the bottom of the directory listing, so nobody mistakes a seed for a schema file.
@@ -30,13 +36,24 @@
 --                       to min(tenant, system), so a tenant row alone can never exceed this number.
 --   max_loop_times      pinned to max_exec_count: every loop iteration records a node execution, so a larger loop
 --                       ceiling could never be reached and would only look generous
+--   max_concurrency     32: concurrent members one scope may run at once. It is a ceiling on a queue, not a refusal:
+--                       beyond it the members wait for a slot, so a bad diagram degrades into "slower" instead of into
+--                       sandbox / provider rate-limit failures. The code fallback is 16, and a new flow segment in the
+--                       editor defaults to 8, so normal use never reaches the ceiling.
 --   max_run_records     / max_session_records: 10x / 4x the code fallback, so the ceiling is usable but still bounded
 INSERT INTO platform.flow_configs
     (tenant_id, max_timeout, max_recursion_depth, max_node_count, max_exec_count, max_loop_times,
-     max_run_records, max_session_records)
+     max_run_records, max_session_records, max_concurrency)
 VALUES
-    ('', 1800, 100, 500, 2000, 2000, 1000, 200)
+    ('', 1800, 100, 500, 3000, 3000, 1000, 200, 32)
 ON CONFLICT (tenant_id) DO NOTHING;
+
+-- Backfill the one column that can be NULL on an upgraded store: see the header note. Tenant rows are left alone - NULL
+-- there means "inherit the system row", which is the documented behaviour.
+UPDATE platform.flow_configs
+   SET max_concurrency = 32
+ WHERE tenant_id = ''
+   AND max_concurrency IS NULL;
 
 -- Agent run limits.
 --   max_output_bytes    262144 (256 KiB) matches maxSessionHistoryBytes, so one truncated record cannot swallow the

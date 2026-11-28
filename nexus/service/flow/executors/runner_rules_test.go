@@ -2,12 +2,57 @@ package executors
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"flame/nexus/service/flow/core"
+	"flame/nexus/shared/models"
+	"flame/tools/xsql"
 )
+
+// The entry arguments' required list is enforced at the one construction point every entry goes through (agent tool, RPC /
+// MCP call, nested flow), so a missing value is a caller error instead of a config error inside whichever node reads it.
+func TestCheckRequiredArguments(t *testing.T) {
+	declaration := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"city": map[string]any{"type": "string"}, "days": map[string]any{"type": "number"}},
+		"required":   []any{"city", "days"},
+	}
+	if err := checkRequiredArguments(declaration, map[string]any{"city": "上海", "days": float64(3)}); err != nil {
+		t.Fatalf("checkRequiredArguments = %v, want nil when every required value is present", err)
+	}
+	err := checkRequiredArguments(declaration, map[string]any{"city": "上海"})
+	if err == nil || !strings.Contains(err.Error(), "days") {
+		t.Fatalf("err = %v, want the missing parameter named", err)
+	}
+	// An explicit null is not a value: the node would read nil and fail later.
+	if err := checkRequiredArguments(declaration, map[string]any{"city": nil, "days": float64(3)}); err == nil || !strings.Contains(err.Error(), "city") {
+		t.Fatalf("err = %v, want a nil value treated as missing", err)
+	}
+	// No declaration, or one without a required list: nothing to enforce.
+	if err := checkRequiredArguments(nil, map[string]any{}); err != nil {
+		t.Fatalf("checkRequiredArguments = %v, want nil without a declaration", err)
+	}
+	if err := checkRequiredArguments(map[string]any{"properties": map[string]any{}}, map[string]any{}); err != nil {
+		t.Fatalf("checkRequiredArguments = %v, want nil without a required list", err)
+	}
+}
+
+// The check runs before the definition is parsed and before any limit is resolved, so a missing value never reaches a node.
+func TestNewFlowRejectsMissingRequiredArgument(t *testing.T) {
+	inst := &models.Flow{
+		ID:        "f1",
+		Name:      "demo",
+		Diagram:   xsql.JSONB{Data: json.RawMessage(`{"nodes":[{"id":"1","type":"start","data":{"label":"开始"}}],"edges":[]}`)},
+		Arguments: xsql.JSONB{Data: json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`)},
+	}
+	_, err := NewFlow(inst, map[string]interface{}{}, "", "run-1", "t0", "u1", context.Background())
+	if err == nil || !strings.Contains(err.Error(), "missing required argument") {
+		t.Fatalf("NewFlow = %v, want the missing argument refused before the run", err)
+	}
+}
 
 // on_error is the only way a flow author can react to a failure, so its parsing is the contract: retry / skip /
 // handler / post each carry the codes and patterns that decide whether they fire.
@@ -242,46 +287,38 @@ func TestApplyPost(t *testing.T) {
 			t.Errorf("PostError = %q, want the dispatch failure", nr.PostError)
 		}
 	})
-}
 
-// Only mono / fork make a node concurrent; an absent, unknown or half-configured block stays serial.
-func TestGetConcurrency(t *testing.T) {
-	cases := []struct {
-		name string
-		node *flow.Node
-		want *concurrencyConfig
-	}{
-		{"no node", nil, nil},
-		{"no config", newExecNode("2", "code", nil), nil},
-		{"no concurrency", newExecNode("2", "code", map[string]any{}), nil},
-		{"mono", newExecNode("2", "code", map[string]any{"concurrency": map[string]any{"mode": "mono"}}), &concurrencyConfig{Mode: "mono"}},
-		{
-			"fork",
-			newExecNode("2", "code", map[string]any{"concurrency": map[string]any{"mode": "fork", "fork_node_id": "f1"}}),
-			&concurrencyConfig{Mode: "fork", ForkNodeID: "f1"},
-		},
-		{
-			// The missing id is reported by the dispatcher, not silently repaired here.
-			"fork without an id",
-			newExecNode("2", "code", map[string]any{"concurrency": map[string]any{"mode": "fork"}}),
-			&concurrencyConfig{Mode: "fork"},
-		},
-		{"unknown mode", newExecNode("2", "code", map[string]any{"concurrency": map[string]any{"mode": "parallel"}}), nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := getConcurrency(tc.node)
-			if tc.want == nil {
-				if got != nil {
-					t.Errorf("getConcurrency = %#v, want nil", got)
-				}
-				return
-			}
-			if got == nil || *got != *tc.want {
-				t.Errorf("getConcurrency = %#v, want %#v", got, tc.want)
-			}
+	// A set_outputs key that is not declared in outputs cannot be written. That is a post failure, not a curiosity:
+	// downstream then reads the type default while the author believes the marker is there.
+	t.Run("an undeclared set_outputs key is recorded", func(t *testing.T) {
+		nr, _ := newPostResult(t, map[string]any{"fixed": map[string]any{"type": "string"}})
+		applyPost(nr, &PostConfig{SetOutputs: map[string]any{"missing": "x"}})
+		if !strings.Contains(nr.PostError, "failed to write post output missing") {
+			t.Errorf("PostError = %q, want the write failure", nr.PostError)
+		}
+		if got, _ := nr.OutputVars["fixed"].(string); got != "" {
+			t.Errorf("fixed = %q, want untouched", got)
+		}
+	})
+
+	// Two failures must both survive: the second one used to overwrite PostError, and then the record shows only the
+	// script while the unwritten output silently stays missing.
+	t.Run("a write failure and a script failure are both kept", func(t *testing.T) {
+		nr, _ := newPostResult(t, map[string]any{"fixed": map[string]any{"type": "string"}})
+		applyPost(nr, &PostConfig{
+			SetOutputs: map[string]any{"missing": "x"},
+			Handler:    &PostScript{Lang: "template", Script: "{{"},
 		})
-	}
+		if !strings.Contains(nr.PostError, "failed to write post output missing") {
+			t.Errorf("PostError = %q, want the write failure kept", nr.PostError)
+		}
+		if !strings.Contains(nr.PostError, "template") {
+			t.Errorf("PostError = %q, want the script failure appended", nr.PostError)
+		}
+		if n := strings.Count(nr.PostError, "; "); n != 1 {
+			t.Errorf("PostError = %q, want both reasons joined once", nr.PostError)
+		}
+	})
 }
 
 // The retired {{ .global_vars.X }} form fails at load time with an actionable message: left in, the template would

@@ -5,15 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand/v2"
+	"strconv"
 	"strings"
+
+	"flame/nexus/shared/flowcheck"
 )
 
 // ===== Edge tools (create_edge / update_edge / delete_edge) =====
 //
-// Why a separate set: create_flow can only build "the main chain + branch sub-chains" and never reaches container children,
-// concurrency groups or any rewiring; letting the model write the whole diagram again would make it trip over the config /
-// coordinates / handles of 20-odd node types. So only the "edge" layer is exposed here.
+// Why a separate set: create_flow can only build "the main chain + branch sub-chains" and never reaches container children or
+// any rewiring; letting the model write the whole diagram again would make it trip over the config / coordinates / handles of
+// 20-odd node types. So only the "edge" layer is exposed here.
 //
 // The rules are strictly the same as the frontend canvas (onConnect in Flow.vue plus the Handle declarations in each
 // *Node.vue): loosen one rule and the next drag on the canvas corrupts the graph; tighten one and structures the canvas can
@@ -41,9 +43,11 @@ var nodeHandleRules = map[string]nodeHandleRule{
 	"start": sourceOnlyNode, "entry": sourceOnlyNode,
 	"llm": ioNode, "code": ioNode, "http": ioNode, "mcp": ioNode, "rpc": ioNode,
 	"assign": ioNode, "memory": ioNode, "result": ioNode, "progress": ioNode,
-	"call": ioNode, "wait": ioNode, "fork": ioNode, "layout": ioNode, "knowledge": ioNode,
+	"call": ioNode, "layout": ioNode, "knowledge": ioNode,
 	"loop": containerNode, "process": containerNode, "branch": containerNode, "intent": containerNode,
 	"exit": sinkNode, "break": sinkNode, "continue": sinkNode, "return": sinkNode,
+	// raise never succeeds, so it only ever takes an incoming edge: a successor would be unreachable by construction.
+	"raise": sinkNode,
 	// function has no handle at all (blocked explicitly in validateEdge); comment is a pure annotation and is not wired either
 	"function": {}, "comment": {},
 }
@@ -184,13 +188,15 @@ const edgeRuleText = "**Handle shape**: source_handle = source + handle owner + 
 	"and only the default branch uses the node's own id. **Both handles are required and have no default**: a wrong position does not report \"cannot render\" — " +
 	"it silently fails to route at run time when following handles, so it is blocked hard here." +
 	"**Positions available per type** (incoming / outgoing): " +
-	"llm / code / http / mcp / rpc / assign / memory / result / progress / call / wait / fork / layout / knowledge → left|top / right|bottom; " +
+	"llm / code / http / mcp / rpc / assign / memory / result / progress / call / layout / knowledge → left|top / right|bottom; " +
 	"start / entry → none / left|right|bottom; " +
 	"loop / process / branch / intent → left|top|right / left|right|bottom; " +
 	"exit / break / continue / return → left|top|right|bottom / none; " +
 	"function / comment → cannot be connected (rejected as soon as either end is one of them). " +
 	"**Hard rules**: no self-loops; both nodes must share the same parent (children of different containers cannot be connected); at most one edge per node pair; " +
-	"one outlet (source_handle) allows one edge only; a node allows one incoming edge only (connecting the same inlet twice is an error; connecting a different inlet displaces the old incoming edge and returns replaced_edge); no cycles." +
+	"one outlet allows one edge only — an outlet is source<owner> **without** its position, so left / right / bottom of one node, and left / right of one branch child, are the same outlet " +
+	"(create_edge refuses a second edge there; update_edge moving an edge onto an occupied outlet removes the old edge and returns replaced_out_edge); " +
+	"a node allows one incoming edge only (connecting the same inlet twice is an error; connecting a different inlet displaces the old incoming edge and returns replaced_edge); no cycles." +
 	handleLayoutAdvice
 
 // flowEdge is one edge in its stored form (the frontend also writes only these five keys when saving).
@@ -213,8 +219,11 @@ type flowNodeMeta struct {
 		Y int `json:"y"`
 	} `json:"position"`
 	Data struct {
-		Label  string `json:"label"`
-		Config struct {
+		Label string `json:"label"`
+		// Concurrent is the scope membership flag: a direct child of a process / loop that the body dispatches instead
+		// of running inline.
+		Concurrent bool `json:"concurrent"`
+		Config     struct {
 			Children []struct {
 				ID string `json:"id"`
 			} `json:"children"`
@@ -243,6 +252,9 @@ type flowDoc struct {
 	nodeRaw []json.RawMessage
 	nodes   []flowNodeMeta
 	edges   []flowEdge
+	// idReserved holds ids handed out by nextID that are not in nodes / edges yet: one caller can allocate several at
+	// once (a container plus its entry, branch children inside a pending config, an inserted edge pair).
+	idReserved map[string]bool
 }
 
 func parseFlowDoc(raw []byte) (*flowDoc, error) {
@@ -332,15 +344,50 @@ func (d *flowDoc) removeNodeAt(i int) error {
 	return d.reloadNodes()
 }
 
-// newNodeID matches the canvas: a 5-digit string that avoids node ids / branch sub-branch ids / edge ids.
+// newNodeID matches the canvas: an increasing sequence written as a plain number, so a new node id is the largest id
+// already in the document plus one (nodes, branch sub-branch ids and edge ids share the one sequence).
 func (d *flowDoc) newNodeID() string {
-	for i := 0; i < 1000; i++ {
-		id := fmt.Sprintf("%05d", rand.IntN(100000))
-		if !d.idTaken(id) {
+	return d.nextID()
+}
+
+// nextID hands out the next free id of the shared sequence. Ids are reserved as they are handed out because a caller can
+// allocate several before writing any of them into the document.
+func (d *flowDoc) nextID() string {
+	if d.idReserved == nil {
+		d.idReserved = make(map[string]bool)
+	}
+	for next := d.highestID() + 1; ; next++ {
+		id := strconv.Itoa(next)
+		if !d.idTaken(id) && !d.idReserved[id] {
+			d.idReserved[id] = true
 			return id
 		}
 	}
-	return fmt.Sprintf("node-%d", len(d.nodes)+1)
+}
+
+// highestID is the largest numeric id in use: node ids, branch sub-branch ids, edge ids and the ids already handed out in
+// this call. Anything that is not a plain non-negative integer (the canvas's default start node is "1", older flows may
+// carry other shapes) takes no part in the sequence.
+func (d *flowDoc) highestID() int {
+	highest := 0
+	bump := func(id string) {
+		if n, err := strconv.Atoi(strings.TrimSpace(id)); err == nil && n > highest {
+			highest = n
+		}
+	}
+	for i := range d.nodes {
+		bump(d.nodes[i].ID)
+		for _, c := range d.nodes[i].Data.Config.Children {
+			bump(c.ID)
+		}
+	}
+	for _, e := range d.edges {
+		bump(e.ID)
+	}
+	for id := range d.idReserved {
+		bump(id)
+	}
+	return highest
 }
 
 func (d *flowDoc) node(id string) (*flowNodeMeta, bool) {
@@ -386,15 +433,9 @@ func (d *flowDoc) idTaken(id string) bool {
 	return d.edgeIndex(id) >= 0
 }
 
-// newEdgeID: the canvas generates 5-digit strings, so this stays consistent, drawing again on a collision.
+// newEdgeID: edge ids share the node sequence, exactly like the canvas.
 func (d *flowDoc) newEdgeID() string {
-	for i := 0; i < 1000; i++ {
-		id := fmt.Sprintf("%05d", rand.IntN(100000))
-		if !d.idTaken(id) {
-			return id
-		}
-	}
-	return fmt.Sprintf("edge-%d", len(d.edges)+1)
+	return d.nextID()
 }
 
 // splitHandle splits source<owner><pos> / target<owner><pos>: the position is fixed at the end, so strip the position first and
@@ -462,6 +503,10 @@ type edgeValidation struct {
 	// replaced is an old incoming edge of the target node on a "different inlet position": per the canvas semantics the new
 	// edge displaces it
 	replaced *flowEdge
+	// replacedOut is an old outgoing edge of the source node on another position of the same outlet. Only update_edge hits
+	// this: create_edge refuses a second edge, while moving an edge onto an occupied outlet displaces the old one - the same
+	// way a different inlet displaces an incoming edge.
+	replacedOut *flowEdge
 }
 
 // validateEdge validates one edge against the canvas rules; skipEdgeID is the edge itself, excluded on update.
@@ -539,14 +584,34 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 	}
 
 	// ---- one outlet takes exactly one edge ----
+	// An outlet is source<owner> without its position: onConnect's getHandleBase strips it, so left / right / bottom of one
+	// node - and left / right of one branch child - are the same outlet. The exact same handle twice is always an error.
+	// create_edge refuses a second edge on an occupied outlet; update_edge moves an edge onto it and displaces the old one,
+	// exactly like a different inlet displaces an incoming edge.
+	var replacedOut *flowEdge
 	for i := range d.edges {
 		old := d.edges[i]
-		if old.ID == skipEdgeID {
+		if old.ID == skipEdgeID || old.Source != e.Source {
 			continue
 		}
-		if old.Source == e.Source && old.SourceHandle == e.SourceHandle {
-			return nil, fmt.Errorf("outlet %s of node %q already has an edge (id=%s): one outlet takes exactly one edge", e.Source, e.SourceHandle, old.ID)
+		sameHandle := old.SourceHandle == e.SourceHandle
+		if !sameHandle {
+			oldOwner, _, errOld := splitHandle(old.SourceHandle, "source")
+			if errOld != nil || oldOwner != owner {
+				continue
+			}
 		}
+		if sameHandle || skipEdgeID == "" {
+			if owner != src.ID {
+				return nil, fmt.Errorf("child %q of %s node %q already routes to an edge (id=%s, %s): one child routes to exactly one next node, "+
+					"left and right of the same child are the same outlet", owner, src.Type, src.ID, old.ID, old.SourceHandle)
+			}
+			return nil, fmt.Errorf("outlet %s of node %q already has an edge (id=%s): one outlet takes exactly one edge "+
+				"(an outlet is source<owner> without its position, so left / right / bottom of the same node are one outlet); "+
+				"delete edge %s first, or rewire this one with update_edge", e.SourceHandle, e.Source, old.ID, old.ID)
+		}
+		oldCopy := old
+		replacedOut = &oldCopy
 	}
 
 	// ---- one node takes exactly one incoming edge ----
@@ -566,19 +631,23 @@ func (d *flowDoc) validateEdge(e flowEdge, skipEdgeID string) (*edgeValidation, 
 	}
 
 	// ---- no cycles (edges about to be removed do not take part) ----
-	replacedID := ""
+	removed := []string{skipEdgeID}
 	if replaced != nil {
-		replacedID = replaced.ID
+		removed = append(removed, replaced.ID)
 	}
-	if d.wouldCycle(e.Source, e.Target, skipEdgeID, replacedID) {
+	if replacedOut != nil {
+		removed = append(removed, replacedOut.ID)
+	}
+	if d.wouldCycle(e.Source, e.Target, removed...) {
 		return nil, fmt.Errorf("this creates a cycle (%q → %q can still reach back to %q): a flow graph must be a DAG; "+
 			"use a loop node for repetition instead of a back edge", e.Source, e.Target, e.Source)
 	}
-	return &edgeValidation{replaced: replaced}, nil
+	return &edgeValidation{replaced: replaced, replacedOut: replacedOut}, nil
 }
 
-// wouldCycle reports whether following outgoing edges from target can get back to source.
-func (d *flowDoc) wouldCycle(source, target, skipEdgeID, replacedID string) bool {
+// wouldCycle reports whether following outgoing edges from target can get back to source; removed holds the ids that are
+// about to be deleted and therefore do not take part.
+func (d *flowDoc) wouldCycle(source, target string, removed ...string) bool {
 	seen := make(map[string]bool, len(d.nodes))
 	var walk func(string) bool
 	walk = func(id string) bool {
@@ -591,7 +660,7 @@ func (d *flowDoc) wouldCycle(source, target, skipEdgeID, replacedID string) bool
 		seen[id] = true
 		for i := range d.edges {
 			e := d.edges[i]
-			if e.ID == skipEdgeID || (replacedID != "" && e.ID == replacedID) {
+			if containsStr(removed, e.ID) {
 				continue
 			}
 			if e.Source == id && walk(e.Target) {
@@ -639,10 +708,29 @@ func loadFlowDoc(ctx context.Context, c *Context, ref string) (*flowDoc, *FlowDe
 }
 
 // saveDiagram writes the whole diagram back (it touches the diagram column only, never the name / limits / checkpoints).
+//
+// A node that reads its own outputs is refused rather than warned about: config.inputs / config.args are resolved before
+// the node runs, so such a reference can never be satisfied - and the model has no other feedback channel for it (the
+// editor's red badge and the pre-save dialog are for humans, and validate_flow is a tool it may simply not call). Every
+// other finding is left alone: a diagram under construction legitimately has unconnected nodes, missing entry edges and
+// half-written configs, and refusing those would make the step-by-step node tools impossible to use.
+//
+// The refusal follows flowcheck's self_ref finding instead of re-deciding the rule: that finding already exempts a
+// while / do_while loop condition, whose inputs are re-resolved every round (the documented accumulator, which runs).
 func saveDiagram(ctx context.Context, c *Context, detail *FlowDetail, doc *flowDoc) (*FlowInfo, error) {
 	raw, err := doc.marshal()
 	if err != nil {
 		return nil, err
+	}
+	if findings, cerr := flowcheck.Diagram(raw, sandboxScriptLangs()); cerr == nil {
+		for _, f := range findings {
+			if f.Severity != flowcheck.SeverityError || f.Code != flowcheck.CodeSelfRef {
+				continue
+			}
+			return nil, fmt.Errorf(
+				"refused: %s on node %s reads that same node's own outputs or locals, which do not exist before the node runs; %s",
+				f.Path, f.NodeID, f.Hint)
+		}
 	}
 	return c.Flows.UpdateDiagram(ctx, detail.ID, detail.Name, raw)
 }
@@ -659,9 +747,17 @@ func saveFlowDoc(ctx context.Context, c *Context, detail *FlowDetail, doc *flowD
 		"edge":       edgeView(e),
 		"edge_count": len(doc.edges),
 	}
+	var notes []string
 	if v != nil && v.replaced != nil {
 		out["replaced_edge"] = edgeView(*v.replaced)
-		out["note"] = "the target node has a different inlet position: the old incoming edge was replaced (a node takes exactly one incoming edge)"
+		notes = append(notes, "the target node has a different inlet position: the old incoming edge was replaced (a node takes exactly one incoming edge)")
+	}
+	if v != nil && v.replacedOut != nil {
+		out["replaced_out_edge"] = edgeView(*v.replacedOut)
+		notes = append(notes, "the outlet is one outlet regardless of position: the old outgoing edge was replaced (one outlet takes exactly one edge)")
+	}
+	if len(notes) > 0 {
+		out["note"] = strings.Join(notes, "; ")
 	}
 	return out, nil
 }
@@ -841,6 +937,9 @@ func (t *updateEdgeTool) Execute(ctx context.Context, c *Context, args map[strin
 	}
 	if v.replaced != nil {
 		doc.removeEdge(v.replaced.ID)
+	}
+	if v.replacedOut != nil {
+		doc.removeEdge(v.replacedOut.ID)
 	}
 	// Indices shift after an edge is removed, so locate it again by id
 	doc.edges[doc.edgeIndex(edgeID)] = cur

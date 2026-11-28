@@ -38,9 +38,9 @@ import { api } from '../../api'
 
 const { t } = useI18n()
 
-// 与租户卡片 / 租户设置页同一套字段。
-// desc 是给人看的「这一项到底管什么」：七个名字里有三对近义（超时/执行/循环、记录/记忆），
-// 只给名字的话调之前必须先猜一次。
+// Same field set as the tenant card / tenant settings page.
+// desc says "what this number actually governs": three of the eight names are near-synonyms (timeout / executions / loop
+// iterations, run records / session memory), and a bare name forces the reader to guess before they touch it.
 const FIELDS = computed(() => [
   { key: 'max_timeout', label: t('platform.system.flowConfigs.max_timeout'), desc: t('platform.system.flowConfigs.max_timeoutDesc') },
   { key: 'max_recursion_depth', label: t('platform.system.flowConfigs.max_recursion_depth'), desc: t('platform.system.flowConfigs.max_recursion_depthDesc') },
@@ -48,7 +48,8 @@ const FIELDS = computed(() => [
   { key: 'max_exec_count', label: t('platform.system.flowConfigs.max_exec_count'), desc: t('platform.system.flowConfigs.max_exec_countDesc') },
   { key: 'max_loop_times', label: t('platform.system.flowConfigs.max_loop_times'), desc: t('platform.system.flowConfigs.max_loop_timesDesc') },
   { key: 'max_run_records', label: t('platform.system.flowConfigs.max_run_records'), desc: t('platform.system.flowConfigs.max_run_recordsDesc') },
-  { key: 'max_session_records', label: t('platform.system.flowConfigs.max_session_records'), desc: t('platform.system.flowConfigs.max_session_recordsDesc') }
+  { key: 'max_session_records', label: t('platform.system.flowConfigs.max_session_records'), desc: t('platform.system.flowConfigs.max_session_recordsDesc') },
+  { key: 'max_concurrency', label: t('platform.system.flowConfigs.max_concurrency'), desc: t('platform.system.flowConfigs.max_concurrencyDesc') }
 ])
 
 const loading = ref(false)

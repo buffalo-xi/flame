@@ -1,6 +1,7 @@
 package executors
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -55,6 +56,57 @@ func TestResultExecutorStreamsWhenAsked(t *testing.T) {
 	}
 	if got, _ := nr.OutputVars["output"].(string); got != "chunk" {
 		t.Errorf("output = %v, want the text regardless of streaming", nr.OutputVars["output"])
+	}
+}
+
+// Text a result node produced before an `exit` still reaches the caller: `exit` ends the walk, it does not roll back the
+// result the run has already accumulated. This is the answer to "I printed before exiting - does the caller still get
+// it?", and it has to stay true for the buffer (GetResult / ResultMsgs), not just for the stream.
+func TestExitKeepsResultProducedBeforeIt(t *testing.T) {
+	res := newExecNode("r1", "result", map[string]any{
+		"code": map[string]any{"lang": "template", "script": "the answer is 42"},
+	})
+	ex := newExecNode("x1", "exit", map[string]any{})
+	ctx := newContainerContext(t, []*flow.Node{res, ex})
+	res.OutEdges = []*flow.Edge{{ID: "e1", Source: "r1", Target: "x1"}}
+
+	err := execute(res, ctx, "1", 0)
+	if !errors.Is(err, SignalExit) {
+		t.Fatalf("execute = %v, want the exit signal", err)
+	}
+	if got := ctx.GetResult(); got != "the answer is 42" {
+		t.Errorf("Result = %q, want the text written before the exit", got)
+	}
+	if len(ctx.ResultMsgs) != 1 || ctx.ResultMsgs[0] != "the answer is 42" {
+		t.Errorf("ResultMsgs = %v, want the text kept for storage", ctx.ResultMsgs)
+	}
+}
+
+// The same rule for a streamed result: the exit stops the walk after the frame is on the channel, and the accumulated
+// result is what a non-streaming caller reads.
+func TestExitKeepsStreamedResultProducedBeforeIt(t *testing.T) {
+	res := newExecNode("r1", "result", map[string]any{
+		"code":   map[string]any{"lang": "template", "script": "chunk"},
+		"stream": true,
+	})
+	ex := newExecNode("x1", "exit", map[string]any{})
+	ctx := newContainerContext(t, []*flow.Node{res, ex})
+	ctx.ResultChan = make(chan string, 1)
+	res.OutEdges = []*flow.Edge{{ID: "e1", Source: "r1", Target: "x1"}}
+
+	if err := execute(res, ctx, "1", 0); !errors.Is(err, SignalExit) {
+		t.Fatalf("execute = %v, want the exit signal", err)
+	}
+	select {
+	case got := <-ctx.ResultChan:
+		if got != "chunk" {
+			t.Errorf("streamed %q, want chunk", got)
+		}
+	default:
+		t.Error("the frame written before the exit never reached the result channel")
+	}
+	if got := ctx.GetResult(); got != "chunk" {
+		t.Errorf("Result = %q, want the streamed text kept too", got)
 	}
 }
 

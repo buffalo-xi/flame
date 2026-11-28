@@ -797,7 +797,7 @@ watch(() => props.selectedNode, (node) => {
 .icon-start { background-color: #00704A; }
 .icon-branch { background-color: #00bcd4; }
 .icon-wait { background-color: #00bcd4; }
-.icon-code { background-color: #f56565; }
+.icon-code { background-color: #a0522d; }
 .icon-http { background-color: #409eff; }
 .icon-process { background-color: #00bcd4; }
 .icon-result { background-color: #67c23a; }

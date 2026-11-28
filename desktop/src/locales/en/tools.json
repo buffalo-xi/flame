@@ -172,11 +172,11 @@
       "agent": { "name": "Built-in · agent", "desc": "Agent tools: inspect and call other agents" },
       "skill": { "name": "Built-in · skill", "desc": "Skill tools: list and view the skills injected for you (read bodies on demand with read_skill or use_skill; use_skill also activates their tool dependencies)" },
       "skill-own": { "name": "Built-in · skill-own", "desc": "Private skills: create, update or delete your own skills (this writes your own capability surface; not granted by default)" },
-      "agent-admin": { "name": "Built-in · agent-admin", "desc": "Agent admin (supervisor only): create, update or delete agents and bind skills to them" },
+      "agent-admin": { "name": "Built-in · agent-admin", "desc": "Agent admin (supervisor only): create, update or delete agents, bind skills to them, and manage their MCP / RPC endpoints (create / delete / expose / retract)" },
       "skill-admin": { "name": "Built-in · skill-admin", "desc": "Skill admin (supervisor only): create, update or delete tenant-wide shared skills, and other agents' private skills" },
       "tool-grant": { "name": "Built-in · tool-grant", "desc": "Grant admin (supervisor only): grant or revoke an agent's tools, and agent-to-agent call relations" },
       "custom-tool": { "name": "Built-in · custom-tool", "desc": "Custom tool admin (supervisor only): create, update, delete or list this tenant's custom tools" },
-      "flow-admin": { "name": "Built-in · flow-admin", "desc": "Workflow admin (supervisor only): create, list, read, delete and test-run workflows, view run records, and expose flows as MCP / RPC endpoints" },
+      "flow-admin": { "name": "Built-in · flow-admin", "desc": "Workflow admin (supervisor only): create, list, read, delete and test-run workflows, view run records, and manage workflow endpoints (create / delete the MCP slot, expose / retract MCP and RPC)" },
       "super": { "name": "Built-in · super", "desc": "Supervisor only (legacy aggregate group, equivalent to the union of the five admin groups)" }
     },
     "preset": {

@@ -77,12 +77,14 @@
         "max_run_records": "Max run records",
         "max_run_recordsDesc": "How many run records to keep per flow; the oldest are trimmed beyond that",
         "max_session_records": "Max session memory",
-        "max_session_recordsDesc": "How many memory records to keep per session; the oldest are trimmed beyond that"
+        "max_session_recordsDesc": "How many memory records to keep per session; the oldest are trimmed beyond that",
+        "max_concurrency": "Max concurrency",
+        "max_concurrencyDesc": "Concurrent members one flow segment / loop scope may run at once; this one always has a ceiling - empty or -1 both fall back to the system value"
       },
       "agentConfigs": {
         "intro1": "Hard caps for every tenant: at runtime the smaller of the tenant value and the system value wins. Empty = use fallback.",
         "noNegativeOne": "This group has no -1",
-        "noNegativeOneTail": " — all six entries are safety valves; setting them to \"unlimited\" tears the guard rails down.",
+        "noNegativeOneTail": " — all seven entries are safety valves; setting them to \"unlimited\" tears the guard rails down.",
         "intro3": "Session count and session storage are not in this group: they belong to resource quotas, see \"Quotas\" (those two allow -1 and can be overridden per user).",
         "max_iterations": "Max iterations",
         "max_call_depth": "Max call depth",

@@ -73,11 +73,13 @@ func (e *FunctionExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proce
 			return err // propagate SignalExit upwards
 		}
 
-		// break/continue only make sense inside a loop; leaking into function means the child chain
-		// holds a break/continue node outside any loop
+		// break/continue only make sense inside a loop. Safety net: the node itself already refuses to fire when no loop can
+		// consume it (control.go checkSignalScope), so a signal arriving here means it bypassed that check - keep a
+		// classified error rather than a bare string.
 		if errors.Is(err, SignalBreak) || errors.Is(err, SignalContinue) {
 			return failf(nr, flow.ErrCodeConfig,
-				fmt.Sprintf("break/continue cannot appear outside a loop of the function(node %s) child chain", node.ID))
+				fmt.Sprintf("function node %s (%s) received a break / continue signal: a function is an isolation scope, so the loop has to be declared inside its body",
+					node.ID, node.Label()))
 		}
 
 		// 2. stdCtx cancelled (timeout / interruption): mark this node cancelled and unwind layer by layer

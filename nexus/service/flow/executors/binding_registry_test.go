@@ -214,7 +214,7 @@ func TestRegistry(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"code", "result", "progress", "branch", "loop", "fork", "wait", "assign", "exit"} {
+	for _, want := range []string{"code", "result", "progress", "branch", "loop", "process", "assign", "exit"} {
 		exec, ok := GetExecutor(want)
 		if !ok || exec == nil {
 			t.Errorf("the node type %q has no executor", want)

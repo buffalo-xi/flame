@@ -85,7 +85,8 @@
       "max_exec_count": { "label": "Max executions", "desc": "Cumulative node executions in a single run" },
       "max_loop_times": { "label": "Max loop iterations", "desc": "Iteration cap for loop nodes" },
       "max_run_records": { "label": "Max run records", "desc": "How many historical runs are kept per workflow" },
-      "max_session_records": { "label": "Max session memory", "desc": "How many context records are kept in a session" }
+      "max_session_records": { "label": "Max session memory", "desc": "How many context records are kept in a session" },
+      "max_concurrency": { "label": "Max concurrency", "desc": "Concurrent members one flow segment / loop scope may run at once; this one has no \"unlimited\" - empty or -1 both fall back to the system value" }
     },
     "agentFields": {
       "max_iterations": { "label": "Max iterations", "desc": "Max rounds of think → call tool → think in one conversation" },

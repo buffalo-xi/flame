@@ -2,6 +2,7 @@ package executors
 
 import (
 	"context"
+	"testing"
 
 	"flame/nexus/service/flow/core"
 	"flame/nexus/shared/flowconfig"
@@ -35,4 +36,25 @@ func newExecResult(node *flow.Node, ctx *flow.ExecContext) *flow.NodeResult {
 		}
 	}
 	return nr
+}
+
+// newContainerContext is the scaffolding a container node (function / process / loop) needs: a flow holding the child
+// chain, the node lookup, and the process bookkeeping the runner itself would have set up.
+func newContainerContext(t *testing.T, children []*flow.Node) *flow.ExecContext {
+	t.Helper()
+	ctx := newExecContext()
+	ctx.ExecutedProcessMap = flow.NewProcessExecMap()
+	ctx.ExecutedNodeMap = flow.NewNodeExecMap()
+	pm := flow.NewProcessManager()
+	if _, err := pm.NewProcess("", nil); err != nil {
+		t.Fatalf("NewProcess(root) = %v", err)
+	}
+	ctx.ProcessManager = pm
+
+	f := &flow.Flow{Nodes: children, NodeMap: map[string]*flow.Node{}}
+	for _, n := range children {
+		f.NodeMap[n.ID] = n
+	}
+	ctx.Flow = f
+	return ctx
 }

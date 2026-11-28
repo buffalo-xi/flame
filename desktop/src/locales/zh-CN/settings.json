@@ -85,7 +85,8 @@
       "max_exec_count": { "label": "最大执行次数", "desc": "单次运行中节点被执行的累计次数" },
       "max_loop_times": { "label": "最大循环次数", "desc": "循环节点的迭代次数上限" },
       "max_run_records": { "label": "最大运行记录数", "desc": "每个工作流保留的历史运行记录条数" },
-      "max_session_records": { "label": "最大会话记忆", "desc": "会话中保留的上下文记录条数" }
+      "max_session_records": { "label": "最大会话记忆", "desc": "会话中保留的上下文记录条数" },
+      "max_concurrency": { "label": "最大并发数", "desc": "一个流程段 / 循环作用域里同时运行的成员上限；本项没有「不限制」，留空或 -1 都回退到系统兜底值" }
     },
     "agentFields": {
       "max_iterations": { "label": "最大运行轮次（轮）", "desc": "一次对话里「思考 → 调工具 → 再思考」的最大轮数" },

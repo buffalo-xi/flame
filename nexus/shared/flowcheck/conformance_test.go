@@ -78,13 +78,12 @@ func TestEveryNodeTypeConformance(t *testing.T) {
 			}},
 			empty: []string{"warning:no_op"},
 		},
-		{typ: "memory", empty: nil},
 		{
-			typ:   "wait",
-			valid: map[string]any{"fork_node_id": "2"},
+			typ:   "raise",
+			valid: map[string]any{"raise": map[string]any{"code": "not_found", "message": "order not found"}},
 			empty: []string{"error:incomplete"},
 		},
-		{typ: "fork", empty: nil},
+		{typ: "memory", empty: nil},
 		{
 			typ:   "result",
 			valid: map[string]any{"code": map[string]any{"script": "x"}},

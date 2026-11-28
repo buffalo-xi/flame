@@ -95,8 +95,10 @@ func TestCreateNodeTopLevel(t *testing.T) {
 	m := out.(map[string]any)
 	node, _ := m["node"].(map[string]any)
 	id, _ := node["id"].(string)
-	if id == "" || len(id) != 5 {
-		t.Errorf("new node id = %q, want a 5-digit string (the same as the canvas)", id)
+	// The canvas hands out an increasing sequence of plain numbers and the backend continues it: 10001 is the highest id in
+	// the fixture (the existing edge), so the new node gets 10002.
+	if id != "10002" {
+		t.Errorf("new node id = %q, want the next id of the canvas sequence (10002)", id)
 	}
 	if _, ok := storedNodes(t, fk)[id]; !ok {
 		t.Error("the new node was not stored")
@@ -169,7 +171,7 @@ func TestCreateNodeRejectsIllegalContainer(t *testing.T) {
 func TestCreatableNodeTypesFixed(t *testing.T) {
 	want := []string{
 		"llm", "code", "http", "mcp", "rpc", "branch", "intent", "loop", "process", "function",
-		"call", "assign", "memory", "wait", "fork", "result", "progress", "break", "continue",
+		"call", "assign", "memory", "raise", "result", "progress", "break", "continue",
 		"return", "exit", "layout", "comment",
 	}
 	got := make([]string, 0, len(creatableNodeTypes))
@@ -508,8 +510,8 @@ func TestCreateFlowLaysFunctionBelowTheFlow(t *testing.T) {
 	}
 }
 
-// In create_flow, call.target / wait.fork_node_id also accept a label (the same rule as source_ref).
-func TestCreateFlowResolvesTargetAndForkIDByLabel(t *testing.T) {
+// In create_flow, call.target also accepts a label (the same rule as source_ref).
+func TestCreateFlowResolvesTargetByLabel(t *testing.T) {
 	fk := &fakeFlows{createdID: "flow-r"}
 	_, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
 		"name": "call-by-label", "description": "按 label 解析 target",

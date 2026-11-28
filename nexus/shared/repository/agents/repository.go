@@ -33,8 +33,9 @@ type Repository interface {
 	CreateAgent(authInfo *auth.AuthInfo, agent *models.Agent, creatorAgentID string) (string, error)
 	// UpdateAgent updates an agent.
 	UpdateAgent(authInfo *auth.AuthInfo, id string, agent *models.Agent) error
-	// DeleteAgent deletes an agent; its grants and private skill records are cleaned up in the same transaction
-	// (skills.agent_id has no foreign key, so a database-level cascade cannot be relied on).
+	// DeleteAgent deletes an agent; its grants, private skill records and protocol endpoints are cleaned up in the same
+	// transaction (skills.agent_id and svc_endpoints.target_id have no foreign key, so a database-level cascade cannot be
+	// relied on).
 	DeleteAgent(authInfo *auth.AuthInfo, id string) error
 	// UpdateStatus updates status only (1=active enabled | 2=disabled).
 	UpdateStatus(authInfo *auth.AuthInfo, id string, status int) error

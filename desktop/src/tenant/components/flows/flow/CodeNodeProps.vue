@@ -1074,7 +1074,7 @@ const saveInputVariables = () => saveConfig()
 }
 
 .input-variable-btn .icon-code {
-  background-color: #f56565;
+  background-color: #a0522d;
 }
 
 .input-variable-btn .icon-http {

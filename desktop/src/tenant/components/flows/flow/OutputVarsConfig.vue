@@ -18,8 +18,29 @@
       {{ t('flow.outputVars.httpBody.p3') }}
     </div>
 
+    <div v-if="builtinVariables.length > 0" class="binding-note">
+      {{ t('flow.outputVars.builtinNote') }}
+    </div>
+
     <div class="output-variables-cards">
-      <div v-if="Object.keys(sortedOutputVariables).length === 0" class="output-empty-state">
+      <div
+        v-for="v in builtinVariables"
+        :key="'builtin-' + v.name"
+        class="output-variable-row fixed-variable-row"
+      >
+        <div class="output-variable-header">
+          <span class="output-type-badge" :class="getOutputTypeClass(v.type)">
+            {{ getOutputTypeIcon(v.type) }}
+          </span>
+          <span class="fixed-output-var-lock" :title="t('flow.outputVars.builtinVariable')"><el-icon><Lock /></el-icon></span>
+          <span class="output-variable-name-readonly">{{ v.name }}</span>
+        </div>
+        <div class="output-variable-content">
+          <span class="output-description-readonly">{{ v.description || getOutputTypeLabel(v.type) }}</span>
+        </div>
+      </div>
+
+      <div v-if="builtinVariables.length === 0 && Object.keys(sortedOutputVariables).length === 0" class="output-empty-state">
         <p>{{ readonly ? (targetId ? t('flow.outputVars.emptyNoFunctionOutputs') : t('flow.outputVars.emptyNoTarget')) : t('flow.outputVars.emptyDefault') }}</p>
       </div>
 
@@ -130,6 +151,13 @@ const props = defineProps({
     type: Array,
     default: () => []
     // 格式：['mode', 'status', 'headers', ...]
+  },
+  // Variables the node writes itself and that are NOT config.outputs entries: [{ name, type, description }]. Displayed as
+  // locked rows and never saved into the config - a loop's iterations belongs here, because a declared output would be
+  // initialised to the type default and shadow the real value (NodeResult.GetVariable reads OutputVars first).
+  builtinVariables: {
+    type: Array,
+    default: () => []
   }
 })
 

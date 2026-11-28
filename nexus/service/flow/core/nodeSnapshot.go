@@ -41,6 +41,8 @@ type NodeSnapshot struct {
 	ErrStack            string          `json:"err_stack"`
 	RetryCount          int             `json:"retry_count"`
 	ErrorAction         string          `json:"error_action"`
+	PostError           string          `json:"post_error"`
+	HandlerError        string          `json:"handler_error"`
 	StartTime           *time.Time      `json:"start_time"`
 	EndTime             *time.Time      `json:"end_time"`
 	DurationMs          int64           `json:"duration_ms"`
@@ -91,6 +93,8 @@ func (nr *NodeResult) BuildSnapshot() *NodeSnapshot {
 		ErrStack:            nr.ErrStack,
 		RetryCount:          nr.RetryCount,
 		ErrorAction:         string(nr.ErrorAction),
+		PostError:           nr.PostError,
+		HandlerError:        nr.HandlerError,
 		StartTime:           st,
 		EndTime:             et,
 		DurationMs:          nr.DurationMs,

@@ -91,6 +91,8 @@ CREATE TABLE flow_node_records (
     err_stack text DEFAULT ''::text CONSTRAINT pipe_node_records_err_stack_not_null NOT NULL,
     retry_count integer DEFAULT 0 CONSTRAINT pipe_node_records_retry_count_not_null NOT NULL,
     error_action character varying(32) DEFAULT ''::character varying CONSTRAINT pipe_node_records_error_action_not_null NOT NULL,
+    post_error text DEFAULT ''::text CONSTRAINT pipe_node_records_post_error_not_null NOT NULL,
+    handler_error text DEFAULT ''::text CONSTRAINT pipe_node_records_handler_error_not_null NOT NULL,
     start_time timestamp with time zone,
     end_time timestamp with time zone,
     duration_ms bigint DEFAULT 0 CONSTRAINT pipe_node_records_duration_ms_not_null NOT NULL,

@@ -77,12 +77,14 @@
         "max_run_records": "最大运行记录数",
         "max_run_recordsDesc": "每个工作流保留多少条运行记录，超出后裁掉最旧的",
         "max_session_records": "最大会话记忆",
-        "max_session_recordsDesc": "每个会话保留多少条记忆记录，超出后裁掉最旧的"
+        "max_session_recordsDesc": "每个会话保留多少条记忆记录，超出后裁掉最旧的",
+        "max_concurrency": "最大并发数",
+        "max_concurrencyDesc": "一个流程段 / 循环作用域内同时运行的成员上限；本项始终有天花板，留空或 -1 都回退到系统兜底值"
       },
       "agentConfigs": {
         "intro1": "所有租户的硬顶：运行期取 min(租户值, 系统值)。留空 = 用兜底值。",
         "noNegativeOne": "本组配置没有 -1",
-        "noNegativeOneTail": "——六项都是安全阀，调成「不限制」等于把防线拆掉。",
+        "noNegativeOneTail": "——七项都是安全阀，调成「不限制」等于把防线拆掉。",
         "intro3": "会话数量与会话空间不在本组：它们属于资源配额，见「配额上限」（那两项允许 -1，且可按用户覆盖）。",
         "max_iterations": "最大运行轮次（轮）",
         "max_call_depth": "最大调用深度（层）",

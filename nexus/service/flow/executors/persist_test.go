@@ -170,6 +170,10 @@ func TestBuildNodeRecord(t *testing.T) {
 	nr.Finish(flow.StatusFailed, "", "")
 	nr.EndTime = nr.StartTime.Add(150 * time.Millisecond)
 	nr.DurationMs = 150
+	// Both fallbacks can fail on their own; the record has to keep them, or read_flow_run loses the only structured
+	// trace of why the cleanup did not happen.
+	nr.PostError = "cleanup failed"
+	nr.HandlerError = "handler exploded"
 
 	rec := buildNodeRecord(nr)
 	if rec.NodeID != "n1" || rec.NodeType != "code" || rec.ProcessID != "p1" {
@@ -180,6 +184,9 @@ func TestBuildNodeRecord(t *testing.T) {
 	}
 	if rec.ErrCode != flow.ErrCodeScript || rec.ErrMsg != "boom" {
 		t.Errorf("error = %q/%q, want script/boom", rec.ErrCode, rec.ErrMsg)
+	}
+	if rec.PostError != "cleanup failed" || rec.HandlerError != "handler exploded" {
+		t.Errorf("fallback errors = %q/%q, want both stored beside the main error", rec.PostError, rec.HandlerError)
 	}
 	if rec.RetryCount != 2 {
 		t.Errorf("RetryCount = %d, want 2", rec.RetryCount)

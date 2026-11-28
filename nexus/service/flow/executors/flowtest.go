@@ -96,6 +96,9 @@ func runFlowForTest(
 		DurationMs: time.Since(start).Milliseconds(),
 		Nodes:      collectNodeTraces(execCtx),
 	}
+	// An exit node is an intentional stop: the run still succeeds, so this summary is the only thing that tells "ran to the
+	// end" from "was cut short at step N" apart.
+	res.StopReason, res.StopNodeID = stopOfTraces(res.Nodes)
 	switch {
 	case ctx.Err() != nil:
 		// The tool call timed out (60s by default) or the caller cancelled: the flow was interrupted and the
@@ -146,10 +149,13 @@ func collectNodeTraces(execCtx *flow.ExecContext) []tools.FlowNodeTrace {
 			ErrCode:    nr.ErrCode,
 			ErrMsg:     nr.ErrMsg,
 			DurationMs: nr.DurationMs,
-			// A failing post script does not change the node's main status, but it is a failure reason too,
+			StartTime:  tools.FormatNodeTime(nr.StartTime),
+			EndTime:    tools.FormatNodeTime(nr.EndTime),
+			// A failing post / handler script does not change the node's main status, but it is a failure reason too,
 			// so it is always included regardless of status
-			PostError:  nr.PostError,
-			RetryCount: nr.RetryCount,
+			PostError:    nr.PostError,
+			HandlerError: nr.HandlerError,
+			RetryCount:   nr.RetryCount,
 		}
 		// Only non-successful nodes carry logs and a stack: a successful node's logs are mostly noise such
 		// as "executed successfully"
@@ -162,6 +168,20 @@ func collectNodeTraces(execCtx *flow.ExecContext) []tools.FlowNodeTrace {
 		out = append(out, tr)
 	}
 	return out
+}
+
+// stopOfTraces derives why the run ended early from the traces (ascending start time): the first successful exit node ended
+// it, so everything after it never ran. Empty values mean the flow walked its normal end.
+//
+// The same derivation as runStopSummary in service/agent (that one reads stored records, this one the live traces): both ends
+// must answer the same question the same way, so neither is allowed to invent a second rule.
+func stopOfTraces(nodes []tools.FlowNodeTrace) (reason, nodeID string) {
+	for _, n := range nodes {
+		if n.Type == "exit" && n.Status == string(flow.StatusSuccess) {
+			return "exit", n.NodeID
+		}
+	}
+	return "", ""
 }
 
 // firstFailureCode returns the error code of the earliest failing node: a flow has no error code field of

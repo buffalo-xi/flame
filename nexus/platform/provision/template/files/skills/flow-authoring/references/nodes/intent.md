@@ -34,7 +34,7 @@ Lets the model **pick one** of several outgoing edges (single choice, no thresho
 | `children[].description` | recommended | — | intent description, spliced into the classification prompt; when empty only the label is available |
 | `llm.system_prompt` | recommended | — | the classification prompt; `{{ .input.* }}` reads `inputs` |
 | `llm.gateway_model` | — | empty = tenant default model | |
-| `llm.params` | — | `{}` | `max_tokens` / `temperature` / `top_p` / `extra_params` |
+| `llm.params` | — | `{}` | `max_tokens` / `temperature` / `top_p` / `extra_params`. **Set `temperature` to `0`**: a classification has to be reproducible, and `validate_flow` warns `intent_temperature` when it is unset or above 0 |
 | `inputs` | recommended | — | used by the prompt; `input.messages` / `input.input` are the front end's two defaults |
 | `outputs` | — | filled in automatically | always `intent` / `index` |
 
@@ -49,7 +49,9 @@ when nothing matched.
 ## How outgoing edges are wired
 
 Same as `branch`: a matched branch uses `source<childId>left|right`, the default branch
-`source<nodeId>left|right|bottom`. No match and no default outgoing edge → the node succeeds and does nothing.
+`source<nodeId>left|right|bottom`. A **matched** candidate with no outgoing edge fails the node with a `config` error (the
+classification chose a path that does not exist); no match and no default outgoing edge keeps the node successful with nothing
+run — the outputs still say so: `intent` is `""` and `index` is `-1`.
 
 ## Building with `create_flow` (`branches`)
 
@@ -84,6 +86,22 @@ configured"). The tool validates `branches[].key` against `config.children[].id`
 - Candidates present in `children` but missing from `branches` only produce `warnings` (skipped when matched); creation is not
   blocked.
 
+## Reproducibility and candidate descriptions
+
+A classification is a model call, so two things decide whether the same sentence lands on the same branch every time:
+
+1. **`llm.params.temperature` must be `0`.** The default is the model's own (usually sampled), and a borderline sentence
+   ("when will my order arrive") then flips between branches across runs. Nothing downstream can compensate for that.
+2. **`children[].description` has to be mutually exclusive and carry the judgement, not just the action.** Write what the user
+   is asking for *including the state / progress questions it covers*, and make the candidates disjoint: `refund` =
+   "wants a refund or wants to complain", `refund progress` = "asks whether a refund has arrived or how far it has got".
+   Two candidates that overlap ("ask about an order" vs "ask about logistics") leave the choice to the model's mood.
+
+**A single intent node picks one branch only.** When one message can hold two intents ("refund me, and I'll ship the goods
+back"), the second one is dropped silently — `index` and `ExecutedBranches` name only the first. For genuinely multi-intent
+input, chain two intent nodes over the same input (each with its own disjoint candidates), or extract structured fields with an
+`llm` node and branch on them; do not expect one intent node to report both.
+
 ## Prompts and global variables
 
 `llm.system_prompt` follows the same rules as the `llm` node: global variables enter through `config.inputs` with
@@ -97,6 +115,10 @@ records.
 
 - `the intent node has no branches configured` — `config.children` is empty (`branches` does not fill it in).
 - Always taking the default branch — `children[].description` is too vague, or `system_prompt` gives no numbering or selection rule.
+- `intent_temperature` — `llm.params.temperature` is unset or above 0, so the same input can route differently between runs.
+- The same input routes differently across runs — same cause as above; set the temperature to 0 first, then make the
+  descriptions disjoint.
+- A second intent never fires — single choice: only one branch runs. Chain a second intent node or extract structured fields.
 - Failing to parse the classification — the model did not answer in JSON; the executor falls back to finding `{"index":n}`,
   a bare number, or the first `{...}` in the text.
 

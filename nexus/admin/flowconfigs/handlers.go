@@ -35,6 +35,7 @@ func toJSON(cfg *flowconfigs.FlowConfig) gin.H {
 		"max_loop_times":      nullable(cfg.MaxLoopTimes),
 		"max_run_records":     nullable(cfg.MaxRunRecords),
 		"max_session_records": nullable(cfg.MaxSessionRecords),
+		"max_concurrency":     nullable(cfg.MaxConcurrency),
 	}
 }
 
@@ -73,6 +74,7 @@ type updateRequest struct {
 	MaxLoopTimes      *int32 `json:"max_loop_times"`
 	MaxRunRecords     *int32 `json:"max_run_records"`
 	MaxSessionRecords *int32 `json:"max_session_records"`
+	MaxConcurrency    *int32 `json:"max_concurrency"`
 }
 
 // toNullInt32 turns *int32 into sql.NullInt32 (nil means unset).
@@ -133,6 +135,7 @@ func UpdateTenantflowconfigs(c *gin.Context) {
 		MaxLoopTimes:      toNullInt32(req.MaxLoopTimes),
 		MaxRunRecords:     toNullInt32(req.MaxRunRecords),
 		MaxSessionRecords: toNullInt32(req.MaxSessionRecords),
+		MaxConcurrency:    toNullInt32(req.MaxConcurrency),
 	}
 
 	// Check max_* against the system values.
@@ -148,6 +151,7 @@ func UpdateTenantflowconfigs(c *gin.Context) {
 		{"max_loop_times", cfg.MaxLoopTimes, sysZero.MaxLoopTimes},
 		{"max_run_records", cfg.MaxRunRecords, sysZero.MaxRunRecords},
 		{"max_session_records", cfg.MaxSessionRecords, sysZero.MaxSessionRecords},
+		{"max_concurrency", cfg.MaxConcurrency, sysZero.MaxConcurrency},
 	}
 	for _, chk := range checks {
 		if err := checkNotExceed(chk.field, chk.tenantVal, chk.sysVal); err != nil {

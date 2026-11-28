@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// Layout rule: the main chain is one horizontal row, each branch takes its own row below, and on a wrap the branch's first node takes
-// its incoming edge at the top.
+// Layout rule: the main chain is one horizontal row, and the branches of a branch / intent card open to the right of the card -
+// the first branch row on the card's own row (left inlet, straight out of the sub-branch's right outlet), the rest stacked
+// below it (top inlet). On a wrap the branch's first node takes its incoming edge at the top.
 // These are the baseline for "a graph the tool built is readable"; make them pass first when changing the layout.
 func TestLayoutDiagramMainChainAndBranches(t *testing.T) {
 	b := &diagramBuilder{}
@@ -50,25 +51,30 @@ func TestLayoutDiagramMainChainAndBranches(t *testing.T) {
 	ax, ay := pos(a1)
 	a2x, a2y := pos(a2)
 	dx, dy := pos(d1)
-	if ax <= bx {
-		t.Errorf("branch head x=%d does not clear the branch node x=%d", ax, bx)
+	if ax < bx+300+layoutColGap {
+		t.Errorf("the branch row should open to the right of the card: branch head x=%d, card x=%d", ax, bx)
 	}
-	if ay <= by {
-		t.Errorf("branch head y=%d is not below the branch node (y=%d)", ay, by)
+	if ay != by {
+		t.Errorf("the first branch row should share the card's row: head y=%d, card y=%d", ay, by)
 	}
 	if a2y != ay || a2x <= ax {
 		t.Errorf("nodes in one branch should continue to the right: a1=(%d,%d) a2=(%d,%d)", ax, ay, a2x, a2y)
 	}
-	if dy <= a2y {
-		t.Errorf("the second branch is not below the first: d1=(%d,%d) a2=(%d,%d)", dx, dy, a2x, a2y)
+	if dx != ax {
+		t.Errorf("branch rows should start at the same column: d1 x=%d, a1 x=%d", dx, ax)
+	}
+	if dy <= ay {
+		t.Errorf("the second branch is not below the first: d1=(%d,%d) a1=(%d,%d)", dx, dy, ax, ay)
 	}
 
+	want := map[string]string{a1: "left", d1: "top"}
 	for _, e := range b.edges {
-		if e.Target != a1 && e.Target != d1 {
+		inlet, ok := want[e.Target]
+		if !ok {
 			continue
 		}
-		if e.TargetHandle == nil || *e.TargetHandle != "target"+e.Target+"top" {
-			t.Errorf("a branch head's incoming edge should take the top, got = %v", e.TargetHandle)
+		if e.TargetHandle == nil || *e.TargetHandle != "target"+e.Target+inlet {
+			t.Errorf("branch head %s should enter via %s, got = %v", e.Target, inlet, e.TargetHandle)
 		}
 	}
 }
@@ -102,13 +108,91 @@ func TestLayoutDiagramWrapsLongChain(t *testing.T) {
 				rows++
 				lastY = y
 			}
-			if x := b.nodes[i].Position["x"]; x > layoutRowMaxWidth {
-				t.Errorf("node %s has x=%d, beyond the single-row width %d", id, x, layoutRowMaxWidth)
+			if x := b.nodes[i].Position["x"]; x > layoutMarginX+layoutRowMaxWidth {
+				t.Errorf("node %s has x=%d, beyond the single-row budget %d measured from the row start",
+					id, x, layoutRowMaxWidth)
 			}
 		}
 	}
 	if rows < 2 {
 		t.Errorf("12 wide nodes should wrap, got only %d row(s)", rows)
+	}
+}
+
+// A branch row begins at the branch card's right edge, but its width budget is measured from that start: a chain that would
+// not fit under an absolute cap still stays on one row instead of wrapping early.
+func TestLayoutDiagramBranchRowKeepsFullWidth(t *testing.T) {
+	b := &diagramBuilder{}
+	b.addStart()
+	br := b.addNode("branch", "分流", nil, 0)
+	b.addEdge("1", br, "")
+	prev, handle := br, "sourcec1right"
+	ids := make([]string, 0, 5)
+	for i := 0; i < 5; i++ {
+		id := b.addNode("code", "步骤长名字用来撑宽度", nil, 1)
+		b.addEdge(prev, id, handle)
+		prev, handle = id, ""
+		ids = append(ids, id)
+	}
+	b.layoutDiagram()
+
+	wantY := 0
+	for n, id := range ids {
+		for i := range b.nodes {
+			if b.nodes[i].ID != id {
+				continue
+			}
+			y := b.nodes[i].Position["y"]
+			if n == 0 {
+				wantY = y
+			} else if y != wantY {
+				t.Fatalf("the branch row wrapped even though its budget starts at the row start: %s y=%d, want %d", id, y, wantY)
+			}
+		}
+	}
+}
+
+// A branch chain may open its own fan: the nested rows push the outer fan's next row below them instead of overlapping it.
+func TestLayoutDiagramNestedBranchRowsDoNotOverlap(t *testing.T) {
+	b := &diagramBuilder{}
+	b.addStart()
+	outer := b.addNode("branch", "外层", nil, 0)
+	b.addEdge("1", outer, "")
+	inner := b.addNode("intent", "内层", nil, 1)
+	b.addEdge(outer, inner, "sourcec1right")
+	innerA := b.addNode("code", "内一", nil, 2)
+	b.addEdge(inner, innerA, "sourcec2right")
+	innerB := b.addNode("code", "内二", nil, 2)
+	b.addEdge(inner, innerB, "sourcec3right")
+	sibling := b.addNode("code", "外层二", nil, 1)
+	b.addEdge(outer, sibling, "sourcec4right")
+	b.layoutDiagram()
+
+	pos := func(id string) (int, int) {
+		for i := range b.nodes {
+			if b.nodes[i].ID == id {
+				return b.nodes[i].Position["x"], b.nodes[i].Position["y"]
+			}
+		}
+		t.Fatalf("node %s does not exist", id)
+		return 0, 0
+	}
+
+	_, iy := pos(inner)
+	ax, ay := pos(innerA)
+	bx, by := pos(innerB)
+	sx, sy := pos(sibling)
+	if ax != bx {
+		t.Errorf("the nested branch rows should start at one column: %d / %d", ax, bx)
+	}
+	if ay != iy || by <= ay {
+		t.Errorf("the nested fan should start on the inner card's row and stack downward: inner=%d a=%d b=%d", iy, ay, by)
+	}
+	if sy < by+32 {
+		t.Errorf("the outer fan's next row overlaps the nested one: sibling=(%d,%d) innerB=(%d,%d)", sx, sy, bx, by)
+	}
+	if sx >= ax {
+		t.Errorf("the outer fan's next row should start left of the nested fan: sibling x=%d, nested x=%d", sx, ax)
 	}
 }
 
@@ -327,277 +411,25 @@ func TestCreateFlowAllowsLayoutNode(t *testing.T) {
 	}
 }
 
-// A concurrent node gains a row with "concurrency control + dropdown", its width reaching 280 and height about 64 - the layout has to
-// leave that much room.
-func TestNodeSizeAccountsForConcurrency(t *testing.T) {
+// A node is a leaf whatever its config says: a config block the canvas does not render must not inflate the estimate
+// (an inflated box overlaps its neighbours).
+func TestNodeSizeIgnoresUnrenderedConfig(t *testing.T) {
 	plain := diagramNode{Type: "code", Data: map[string]any{"label": "代码"}}
 	if w, h := nodeSize(plain); w != 120 || h != 32 {
 		t.Errorf("a plain leaf = %dx%d, want 120x32", w, h)
 	}
-	withConc := diagramNode{Type: "code", Data: map[string]any{
+	withExtra := diagramNode{Type: "code", Data: map[string]any{
 		"label":  "代码",
-		"config": map[string]any{"concurrency": map[string]any{"mode": "mono"}},
+		"config": map[string]any{"unknown_block": map[string]any{"mode": "mono"}},
 	}}
-	if w, h := nodeSize(withConc); w != 280 || h != 64 {
-		t.Errorf("a concurrent leaf = %dx%d, want 280x64", w, h)
-	}
-	// An empty object counts as off (the frontend renders no concurrency row)
-	emptyConc := diagramNode{Type: "code", Data: map[string]any{
-		"label":  "代码",
-		"config": map[string]any{"concurrency": map[string]any{}},
-	}}
-	if w, h := nodeSize(emptyConc); w != 120 || h != 32 {
-		t.Errorf("an empty concurrency must not enlarge the node: %dx%d", w, h)
+	if w, h := nodeSize(withExtra); w != 120 || h != 32 {
+		t.Errorf("an unrendered config block must not enlarge the node: %dx%d, want 120x32", w, h)
 	}
 	if w, h := nodeSize(diagramNode{Type: "layout", Data: map[string]any{"label": "折行"}}); w != 60 || h != 32 {
 		t.Errorf("layout = %dx%d, want 60x32", w, h)
 	}
 }
 
-// Loop / process containers are serial by default: a config.concurrency the model copied from an example is stripped and echoed back.
-func TestCreateFlowStripsContainerConcurrency(t *testing.T) {
-	fk := &fakeFlows{createdID: "flow-cc"}
-	out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
-		"name": "cc-demo", "description": "d",
-		"steps": []any{
-			map[string]any{
-				"type": "loop", "label": "循环",
-				"config": map[string]any{
-					"loop":        map[string]any{"type": "count", "total_times": 2},
-					"concurrency": map[string]any{"mode": "mono"},
-				},
-				"children": []any{map[string]any{"type": "result", "config": map[string]any{}}},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("create_flow = %v", err)
-	}
-
-	var doc struct {
-		Nodes []struct {
-			ID   string `json:"id"`
-			Type string `json:"type"`
-			Data struct {
-				Config map[string]any `json:"config"`
-			} `json:"data"`
-		} `json:"nodes"`
-	}
-	if err := json.Unmarshal(fk.created.Diagram, &doc); err != nil {
-		t.Fatalf("failed to parse the diagram: %v", err)
-	}
-	for _, n := range doc.Nodes {
-		if n.Type != "loop" {
-			continue
-		}
-		if _, ok := n.Data.Config["concurrency"]; ok {
-			t.Errorf("a loop node's config must not carry concurrency: %v", n.Data.Config)
-		}
-	}
-	joined := strings.Join(warningsOf(out), "\n")
-	if !strings.Contains(joined, "config.concurrency ignored") {
-		t.Errorf("stripping concurrency should produce a warning, got = %v", joined)
-	}
-}
-
-// create_node follows the same rule: containers do not store concurrency.
-func TestCreateNodeStripsContainerConcurrency(t *testing.T) {
-	c, fk := edgeTestCtx(nodeTestDiagram)
-	out, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{
-		"flow": "demo", "type": "process", "label": "并发子流程",
-		"config": map[string]any{"concurrency": map[string]any{"mode": "mono"}},
-	})
-	if err != nil {
-		t.Fatalf("create_node = %v", err)
-	}
-	nodeID, _ := out.(map[string]any)["node"].(map[string]any)["id"].(string)
-	data, _ := storedNodes(t, fk)[nodeID]["data"].(map[string]any)
-	cfg, _ := data["config"].(map[string]any)
-	if _, ok := cfg["concurrency"]; ok {
-		t.Errorf("a process node's config must not carry concurrency: %v", cfg)
-	}
-	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "concurrency") {
-		t.Errorf("it should echo that concurrency was ignored: %v", warningsOf(out))
-	}
-}
-
-// Concurrency is off by default: without the concurrency argument, concurrency on leaf nodes is stripped and echoed back too.
-func TestCreateFlowConcurrencyDefaultOff(t *testing.T) {
-	fk := &fakeFlows{createdID: "flow-off"}
-	out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
-		"name": "off-demo", "description": "d",
-		"steps": []any{map[string]any{
-			"type": "code", "label": "并发代码",
-			"config": map[string]any{
-				"code":        map[string]any{"lang": "lua", "script": "return {}"},
-				"concurrency": map[string]any{"mode": "mono"},
-			},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("create_flow = %v", err)
-	}
-	if _, ok := createdConfig(t, fk, "code")["concurrency"]; ok {
-		t.Errorf("concurrency is off by default, config must not carry it: %v", createdConfig(t, fk, "code"))
-	}
-	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "concurrency is off by default") {
-		t.Errorf("stripping concurrency should echo that it is off by default: %v", warningsOf(out))
-	}
-}
-
-// An explicit mono: only single-node concurrency is kept, the fork-group shape is stripped and echoed back.
-func TestCreateFlowConcurrencyMonoKeepsOnlyMono(t *testing.T) {
-	fk := &fakeFlows{createdID: "flow-mono"}
-	out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
-		"name": "mono-demo", "description": "d", "concurrency": "mono",
-		"steps": []any{
-			map[string]any{
-				"type": "code", "label": "单体",
-				"config": map[string]any{
-					"code":        map[string]any{"lang": "lua", "script": "return {}"},
-					"concurrency": map[string]any{"mode": "mono"},
-				},
-			},
-			map[string]any{
-				"type": "http", "label": "组员",
-				"config": map[string]any{
-					"url":         "https://example.com",
-					"concurrency": map[string]any{"mode": "fork", "fork_node_id": "9"},
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("create_flow = %v", err)
-	}
-	if got := createdConfig(t, fk, "http")["concurrency"]; got != nil {
-		t.Errorf("in mono mode the fork shape should be stripped, got %v", got)
-	}
-	cc, _ := createdConfig(t, fk, "code")["concurrency"].(map[string]any)
-	if cc["mode"] != "mono" {
-		t.Errorf("in mono mode single-node concurrency should be kept, got %v", createdConfig(t, fk, "code"))
-	}
-	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "only single-node concurrency is on") {
-		t.Errorf("it should echo that only single-node concurrency is on: %v", warningsOf(out))
-	}
-}
-
-// An explicit group: only concurrency-group members are kept, the single-node shape is stripped and echoed back.
-func TestCreateFlowConcurrencyGroupKeepsOnlyFork(t *testing.T) {
-	fk := &fakeFlows{createdID: "flow-group"}
-	out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
-		"name": "group-demo", "description": "d", "concurrency": "group",
-		"steps": []any{
-			map[string]any{
-				"type": "code", "label": "单体",
-				"config": map[string]any{
-					"code":        map[string]any{"lang": "lua", "script": "return {}"},
-					"concurrency": map[string]any{"mode": "mono"},
-				},
-			},
-			map[string]any{
-				"type": "http", "label": "组员",
-				"config": map[string]any{
-					"url":         "https://example.com",
-					"concurrency": map[string]any{"mode": "fork", "fork_node_id": "9"},
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("create_flow = %v", err)
-	}
-	if got := createdConfig(t, fk, "code")["concurrency"]; got != nil {
-		t.Errorf("in group mode single-node concurrency should be stripped, got %v", got)
-	}
-	cc, _ := createdConfig(t, fk, "http")["concurrency"].(map[string]any)
-	if cc["mode"] != "fork" || cc["fork_node_id"] != "9" {
-		t.Errorf("in group mode concurrency-group members should be kept, got %v", createdConfig(t, fk, "http"))
-	}
-	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "a concurrency group is on") {
-		t.Errorf("it should echo that a concurrency group is on: %v", warningsOf(out))
-	}
-}
-
-// Existing flows are unaffected: when update_node is not given concurrency, the concurrency configuration already written stays as is.
-func TestUpdateNodeKeepsExistingConcurrency(t *testing.T) {
-	c, fk := edgeTestCtx(concurrencyNodeDiagram)
-	if _, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{
-		"flow": "demo", "node_id": "2", "label": "改个名",
-	}); err != nil {
-		t.Fatalf("update_node = %v", err)
-	}
-	cfg, _ := storedNodes(t, fk)["2"]["data"].(map[string]any)["config"].(map[string]any)
-	cc, _ := cfg["concurrency"].(map[string]any)
-	if cc["mode"] != "mono" {
-		t.Errorf("without a concurrency argument the existing concurrency config must not be touched: %v", cfg)
-	}
-}
-
-// An explicit off: the node's concurrency is stripped only when the caller asks for it to be turned off.
-func TestUpdateNodeConcurrencyOffStrips(t *testing.T) {
-	c, fk := edgeTestCtx(concurrencyNodeDiagram)
-	out, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{
-		"flow": "demo", "node_id": "2", "concurrency": "off",
-	})
-	if err != nil {
-		t.Fatalf("update_node = %v", err)
-	}
-	cfg, _ := storedNodes(t, fk)["2"]["data"].(map[string]any)["config"].(map[string]any)
-	if _, ok := cfg["concurrency"]; ok {
-		t.Errorf("concurrency=off should strip it: %v", cfg)
-	}
-	if !strings.Contains(strings.Join(warningsOf(out), "\n"), "concurrency is off by default") {
-		t.Errorf("it should echo why it was stripped: %v", warningsOf(out))
-	}
-}
-
-// concurrencyNodeDiagram is an existing diagram with single-node concurrency (the "leave existing data alone" case for update_node).
-const concurrencyNodeDiagram = `{
-  "nodes": [
-    {"id": "1", "type": "start", "data": {"label": "开始"}},
-    {"id": "2", "type": "code", "data": {"label": "并发代码", "config": {"code": {"lang": "lua", "script": "return {}"}, "concurrency": {"mode": "mono"}}}}
-  ],
-  "edges": [
-    {"id": "e1", "source": "1", "target": "2", "source_handle": "source1right", "target_handle": "target2left"}
-  ]
-}`
-
-// createdConfig returns the config of the first node of the given type in the diagram stored by create_flow.
-func createdConfig(t *testing.T, fk *fakeFlows, typ string) map[string]any {
-	t.Helper()
-	if fk.created == nil {
-		t.Fatal("Create was not called")
-	}
-	var doc struct {
-		Nodes []struct {
-			Type string `json:"type"`
-			Data struct {
-				Config map[string]any `json:"config"`
-			} `json:"data"`
-		} `json:"nodes"`
-	}
-	if err := json.Unmarshal(fk.created.Diagram, &doc); err != nil {
-		t.Fatalf("failed to parse the diagram: %v", err)
-	}
-	for _, n := range doc.Nodes {
-		if n.Type == typ {
-			return n.Data.Config
-		}
-	}
-	t.Fatalf("the diagram has no %s node", typ)
-	return nil
-}
-
-// warningsOf takes the warnings field out of a tool result.
-func warningsOf(out any) []string {
-	m, _ := out.(map[string]any)
-	raw, _ := m["warnings"]
-	list, _ := raw.([]string)
-	return list
-}
-
-// update_node can move a single node (the model uses it to fine-tune the automatic layout).
 func TestUpdateNodePosition(t *testing.T) {
 	c, fk := edgeTestCtx(nodeTestDiagram)
 	if _, err := (&updateNodeTool{}).Execute(context.Background(), c, map[string]any{

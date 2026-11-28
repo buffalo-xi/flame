@@ -433,3 +433,147 @@ func TestCreateEdgeSuggestsWhenHandlesMismatch(t *testing.T) {
 		t.Errorf("suggested_edge = %v, want source2right / target3left", sug)
 	}
 }
+
+// One outlet is source<owner> without its position (the canvas' getHandleBase), so a second edge on another position of the
+// same node is refused by create_edge - the canvas cannot draw it either.
+const loopOutletDiagram = `{
+  "nodes": [
+    {"id": "1", "type": "start", "data": {"label": "开始"}},
+    {"id": "2", "type": "loop", "data": {"label": "循环", "config": {"loop": {"type": "count", "total_times": 3}}}},
+    {"id": "3", "type": "entry", "parent_node": "2", "data": {"label": "入口"}},
+    {"id": "4", "type": "code", "data": {"label": "甲"}},
+    {"id": "5", "type": "code", "data": {"label": "乙"}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "1", "target": "2", "source_handle": "source1right", "target_handle": "target2left"},
+    {"id": "e2", "source": "2", "target": "4", "source_handle": "source2right", "target_handle": "target4left"},
+    {"id": "e3", "source": "4", "target": "5", "source_handle": "source4right", "target_handle": "target5left"}
+  ]
+}`
+
+// A branch child is its own outlet owner: left and right of one child are one outlet, another child is another outlet.
+const branchOwnerDiagram = `{
+  "nodes": [
+    {"id": "1", "type": "start", "data": {"label": "开始"}},
+    {"id": "2", "type": "branch", "data": {"label": "判断", "config": {"children": [{"id": "c1", "label": "是"}, {"id": "c2", "label": "否"}]}}},
+    {"id": "3", "type": "code", "data": {"label": "甲"}},
+    {"id": "4", "type": "code", "data": {"label": "乙"}},
+    {"id": "5", "type": "code", "data": {"label": "丙"}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "1", "target": "2", "source_handle": "source1right", "target_handle": "target2left"},
+    {"id": "e2", "source": "2", "target": "3", "source_handle": "sourcec1left", "target_handle": "target3left"},
+    {"id": "e3", "source": "2", "target": "4", "source_handle": "sourcec2right", "target_handle": "target4left"},
+    {"id": "e4", "source": "3", "target": "5", "source_handle": "source3right", "target_handle": "target5left"}
+  ]
+}`
+
+func TestCreateEdgeRefusesSecondOutgoingFromOneNode(t *testing.T) {
+	c, fk := edgeTestCtx(loopOutletDiagram)
+	_, err := (&createEdgeTool{}).Execute(context.Background(), c, map[string]any{
+		"flow": "demo", "source": "2", "target": "5",
+		"source_handle": "source2bottom", "target_handle": "target5left",
+	})
+	if err == nil || !strings.Contains(err.Error(), "one outlet takes exactly one edge") {
+		t.Fatalf("err = %v, want the second outgoing edge to be refused", err)
+	}
+	if len(fk.updatedDiagram) != 0 {
+		t.Error("nothing should be stored when the edge is refused")
+	}
+}
+
+// update_edge moves an edge: landing on another position of an occupied outlet displaces the old edge and says so.
+func TestUpdateEdgeDisplacesTheOldOutgoingEdge(t *testing.T) {
+	c, fk := edgeTestCtx(loopOutletDiagram)
+	out, err := (&updateEdgeTool{}).Execute(context.Background(), c, map[string]any{
+		"flow": "demo", "edge_id": "e3",
+		"source": "2", "source_handle": "source2bottom",
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	m := out.(map[string]any)
+	rep, ok := m["replaced_out_edge"].(map[string]any)
+	if !ok || edgeIDOf(rep) != "e2" {
+		t.Fatalf("replaced_out_edge = %v, want e2", m["replaced_out_edge"])
+	}
+	edges := storedEdges(t, fk)
+	if len(edges) != 2 {
+		t.Fatalf("stored edge count = %d, want 2 (e1 and the moved e3)", len(edges))
+	}
+	for _, e := range edges {
+		switch edgeIDOf(e) {
+		case "e2":
+			t.Error("the displaced edge e2 is still stored")
+		case "e3":
+			if e["source"] != "2" || e["source_handle"] != "source2bottom" {
+				t.Errorf("e3 was not moved: %+v", e)
+			}
+		}
+	}
+}
+
+// The very same handle twice stays a hard error: displacement only covers another position of the same outlet.
+func TestUpdateEdgeRefusesTheSameOutletTwice(t *testing.T) {
+	c, fk := edgeTestCtx(loopOutletDiagram)
+	_, err := (&updateEdgeTool{}).Execute(context.Background(), c, map[string]any{
+		"flow": "demo", "edge_id": "e3",
+		"source": "2", "source_handle": "source2right",
+	})
+	if err == nil || !strings.Contains(err.Error(), "one outlet takes exactly one edge") {
+		t.Fatalf("err = %v, want the same handle to stay refused", err)
+	}
+	if len(fk.updatedDiagram) != 0 {
+		t.Error("nothing should be stored when validation fails")
+	}
+}
+
+// A branch child behaves the same: moving an edge onto sourcec1 displaces the route the child already had.
+func TestUpdateEdgeDisplacesTheOldChildRoute(t *testing.T) {
+	c, fk := edgeTestCtx(branchOwnerDiagram)
+	out, err := (&updateEdgeTool{}).Execute(context.Background(), c, map[string]any{
+		"flow": "demo", "edge_id": "e4",
+		"source": "2", "source_handle": "sourcec1right",
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	m := out.(map[string]any)
+	if rep, ok := m["replaced_out_edge"].(map[string]any); !ok || edgeIDOf(rep) != "e2" {
+		t.Fatalf("replaced_out_edge = %v, want e2", m["replaced_out_edge"])
+	}
+	edges := storedEdges(t, fk)
+	if len(edges) != 3 {
+		t.Fatalf("stored edge count = %d, want 3", len(edges))
+	}
+	for _, e := range edges {
+		if edgeIDOf(e) == "e2" {
+			t.Error("the displaced child route e2 is still stored")
+		}
+	}
+}
+
+// Child ids are matched exactly: c1 and c11 are two outlets, so the sibling must stay wireable (the old prefix match refused it).
+func TestCreateEdgeAllowsSiblingChildWithPrefixID(t *testing.T) {
+	c, fk := edgeTestCtx(`{
+  "nodes": [
+    {"id": "1", "type": "start", "data": {"label": "开始"}},
+    {"id": "2", "type": "branch", "data": {"label": "判断", "config": {"children": [{"id": "c1", "label": "是"}, {"id": "c11", "label": "否"}]}}},
+    {"id": "3", "type": "code", "data": {"label": "甲"}},
+    {"id": "5", "type": "code", "data": {"label": "乙"}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "1", "target": "2", "source_handle": "source1right", "target_handle": "target2left"},
+    {"id": "e2", "source": "2", "target": "3", "source_handle": "sourcec1left", "target_handle": "target3left"}
+  ]
+}`)
+	if _, err := (&createEdgeTool{}).Execute(context.Background(), c, map[string]any{
+		"flow": "demo", "source": "2", "target": "5",
+		"source_handle": "sourcec11right", "target_handle": "target5left",
+	}); err != nil {
+		t.Fatalf("err = %v, want the sibling child to be wireable", err)
+	}
+	if edges := storedEdges(t, fk); len(edges) != 3 {
+		t.Fatalf("stored edge count = %d, want 3 (e1, e2 and the new child edge)", len(edges))
+	}
+}

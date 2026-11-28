@@ -34,6 +34,19 @@
           @blur="updateNodeNote"
         >{{ nodeNote }}</div>
       </div>
+      <!-- Scope membership: only meaningful for an executable direct child of a host (process / loop) on the body's entry
+           chain. Control nodes and annotations never carry it. -->
+      <div v-if="scopeParent && memberCapable" class="scope-member-wrapper">
+        <label class="scope-member-toggle">
+          <input
+            type="checkbox"
+            :checked="isConcurrentMember"
+            @change="toggleConcurrentMember"
+          />
+          <span>{{ t('flow.nodeProps.concurrentMember') }}</span>
+        </label>
+        <p class="scope-member-hint">{{ t('flow.nodeProps.concurrentMemberHint') }}</p>
+      </div>
       <div class="panel-content">
         <!-- 流式输出绑定编辑视图（覆盖整个 panel-content） -->
         <div v-if="bindingEditState" key="binding-edit" class="node-props-inner">
@@ -110,18 +123,6 @@
             :selected-node="selectedNode"
             @update-node-data="handleUpdateNodeData"
             @show-variable-select="handleShowVariableSelect"
-          />
-        </div>
-        <div v-else-if="selectedNode && selectedNode.type === 'fork'" key="node-fork" class="node-props-inner">
-          <ForkNodeProps
-            :selected-node="selectedNode"
-            @update-node-data="handleUpdateNodeData"
-          />
-        </div>
-        <div v-else-if="selectedNode && selectedNode.type === 'wait'" key="node-wait" class="node-props-inner">
-          <WaitNodeProps
-            :selected-node="selectedNode"
-            @update-node-data="handleUpdateNodeData"
           />
         </div>
         <div v-else-if="selectedNode && selectedNode.type === 'break'" key="node-break" class="node-props-inner">
@@ -218,6 +219,13 @@
             @show-variable-select="handleShowVariableSelect"
           />
         </div>
+        <div v-else-if="selectedNode && selectedNode.type === 'raise'" key="node-raise" class="node-props-inner">
+          <RaiseNodeProps
+            :selected-node="selectedNode"
+            @update-node-data="handleUpdateNodeData"
+            @show-variable-select="handleShowVariableSelect"
+          />
+        </div>
         <div v-else-if="selectedNode" key="node-default" class="node-props-inner">
           <div class="default-props">
             <div class="prop-group">
@@ -263,8 +271,6 @@ import LoopNodeProps from './LoopNodeProps.vue'
 import ProcessNodeProps from './ProcessNodeProps.vue'
 import LLMNodeProps from './LLMNodeProps.vue'
 import FunctionNodeProps from './FunctionNodeProps.vue'
-import ForkNodeProps from './ForkNodeProps.vue'
-import WaitNodeProps from './WaitNodeProps.vue'
 import CallNodeProps from './CallNodeProps.vue'
 import BreakNodeProps from './BreakNodeProps.vue'
 import ContinueNodeProps from './ContinueNodeProps.vue'
@@ -275,6 +281,7 @@ import IntentNodeProps from './IntentNodeProps.vue'
 import ProgressNodeProps from './ProgressNodeProps.vue'
 import ResultNodeProps from './ResultNodeProps.vue'
 import AssignNodeProps from './AssignNodeProps.vue'
+import RaiseNodeProps from './RaiseNodeProps.vue'
 import HttpNodeProps from './HttpNodeProps.vue'
 import McpNodeProps from './McpNodeProps.vue'
 import RpcNodeProps from './RpcNodeProps.vue'
@@ -282,6 +289,8 @@ import MemoryNodeProps from './MemoryNodeProps.vue'
 import VariableSelect from './VariableSelect.vue'
 import OutputBindingConfig from './OutputBindingConfig.vue'
 import { useEscClose } from '../../../composables/useEscClose'
+import { apiBase } from '@/tenant/config/base.js'
+import { getAuthHeader } from '@/tenant/utils/auth.js'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
@@ -332,6 +341,44 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'updateNode', 'updateNodeData', 'updateArguments', 'updateLimits'])
 
+// Scope membership lives in data.concurrent, not config: the canvas round-trips data and the backend reads the flag as
+// structure. It is only offered for a direct child of a host body, because anywhere else the run rejects it.
+const flowNodes = inject('FlowNodes', ref([]))
+const scopeParent = computed(() => {
+  const parentId = props.selectedNode?.parentNode
+  if (!parentId) return null
+  const parent = (flowNodes.value || []).find(n => n.id === parentId)
+  return parent && (parent.type === 'process' || parent.type === 'loop') ? parent : null
+})
+// Gates the "concurrent member" checkbox. The set comes from /admin/flow/node-capabilities, i.e. flowcheck's own
+// nonMemberTypes, so this panel cannot offer a flag the runner refuses; the reason each type is excluded lives there.
+// Until the request resolves the checkbox is simply absent: a beat of nothing beats a flag that may be rejected.
+const nonMemberTypes = ref(new Set())
+const memberCapable = computed(() => {
+  const type = props.selectedNode?.type
+  return !!type && !nonMemberTypes.value.has(type)
+})
+onMounted(async () => {
+  try {
+    const resp = await fetch(`${apiBase}/admin/flow/node-capabilities`, { headers: getAuthHeader() })
+    if (resp.ok) {
+      const res = await resp.json()
+      const data = res && res.data ? res.data : {}
+      nonMemberTypes.value = new Set(data.non_member_types || [])
+    }
+  } catch (e) {
+    console.error('Failed to load the non-member node types:', e)
+  }
+})
+const isConcurrentMember = computed(() => !!props.selectedNode?.data?.concurrent)
+const toggleConcurrentMember = (event) => {
+  if (!props.selectedNode) return
+  emit('updateNodeData', {
+    nodeId: props.selectedNode.id,
+    data: { concurrent: !!event.target.checked }
+  })
+}
+
 // 父级 v-if 挂载：挂上即开着。skipWhenEditable：正在行内改节点名 / 变量时，
 // ESC 归输入框（取消编辑），别把整个属性面板关掉
 useEscClose(true, () => emit('close'), { skipWhenEditable: true })
@@ -342,7 +389,7 @@ const isEditingLabel = ref(false)
 const labelInputRef = ref(null)
 // 属性面板最小宽度 = 初始宽度：再窄各节点属性表单就会挤成多行。
 // 初始宽度固定取下限，不再从 sessionStorage 恢复上次拖拽的宽度。
-const MIN_PANEL_WIDTH = 430
+const MIN_PANEL_WIDTH = 470
 const panelWidth = ref(MIN_PANEL_WIDTH)
 const isResizing = ref(false)
 
@@ -666,7 +713,7 @@ const handleUpdateLimits = (limitsData) => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-width: 430px;
+  min-width: 470px;
 }
 
 .panel-resizer {
@@ -737,7 +784,7 @@ const handleUpdateLimits = (limitsData) => {
 }
 
 .node-icon.icon-code {
-  background-color: #f56565;
+  background-color: #a0522d;
 }
 
 .node-icon.icon-http {
@@ -760,7 +807,7 @@ const handleUpdateLimits = (limitsData) => {
 }
 
 .node-icon.icon-exit {
-  background-color: #f56565;
+  background-color: #c62828;
 }
 
 
@@ -782,6 +829,10 @@ const handleUpdateLimits = (limitsData) => {
 
 .node-icon.icon-assign {
   background-color: #ff9800;
+}
+
+.node-icon.icon-raise {
+  background-color: #f56c6c;
 }
 
 .node-icon.icon-break {
@@ -900,6 +951,27 @@ const handleUpdateLimits = (limitsData) => {
   overflow-y: auto;
   padding-top: 0px;
   border-top: 1px solid #eee;
+}
+
+.scope-member-wrapper {
+  flex-shrink: 0;
+  padding: 6px 12px 8px;
+}
+
+.scope-member-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #333;
+  cursor: pointer;
+}
+
+.scope-member-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #999;
 }
 
 .node-props-inner {

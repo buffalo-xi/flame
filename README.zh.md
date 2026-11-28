@@ -198,6 +198,8 @@ MCP 买的是触达，rpc 买的是掌控，而「一个目标 × 一种协议 =
 - `nexus/docs/error-codes.md` — 业务错误码规范（UI 双语的前置条件）（[中文版](nexus/docs/error-codes.zh.md)）
 - `nexus/docs/node-audit.md` — 逐节点审计：每个节点类型查哪些维度、哪些已由测试或门禁保证、哪些还要继续审计
   （[中文版](nexus/docs/node-audit.zh.md)）
+- `nexus/docs/parallel-scope.md` — 并发重做方案：每个执行体一个并发作用域、取消 `fork` / `wait`，以及让成员失败无处可丢的规则
+  （[中文版](nexus/docs/parallel-scope.zh.md)）
 - `browserd/README.md` — 独立浏览器池：nexus 如何访问、如何构建与部署、哪三项配置必须对齐
   （[中文版](browserd/README.zh.md)）
 - `browserg/README.md` — 浏览器网关：粘性路由、租户上限，以及为什么它不并进 sandboxg

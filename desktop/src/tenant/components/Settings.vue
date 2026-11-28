@@ -261,7 +261,7 @@ const { users, loadUsers } = useUsers()
 // 字段名（key）与后端列名一致，标签/说明走语言包，所以这里是 computed，切语言时要重算。
 const FLOW_FIELD_KEYS = [
   'max_timeout', 'max_recursion_depth', 'max_node_count', 'max_exec_count',
-  'max_loop_times', 'max_run_records', 'max_session_records'
+  'max_loop_times', 'max_run_records', 'max_session_records', 'max_concurrency'
 ]
 const flowConfigFields = computed(() => FLOW_FIELD_KEYS.map((key) => ({
   key,

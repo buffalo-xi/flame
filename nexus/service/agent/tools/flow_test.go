@@ -148,8 +148,12 @@ func TestCreateFlowBuildsLinearDiagram(t *testing.T) {
 	if fk.created == nil {
 		t.Fatal("FlowsManager.Create was not called")
 	}
-	if got := strings.Join(fk.created.Endpoints, ","); got != "mcp" {
-		t.Errorf("endpoints = %q, want mcp", got)
+	// external_protocols no longer travels into the create: a fresh flow has no released version, so exposure inside the
+	// manager would be refused and roll the flow back. The requested protocols are echoed instead, and the slots are
+	// prepared by the endpoint tools (see TestCreateFlowDefersEndpointExposure).
+	res, _ := out.(map[string]any)
+	if got, _ := res["endpoints"].([]string); strings.Join(got, ",") != "mcp" {
+		t.Errorf("endpoints = %v, want the requested [mcp]", res["endpoints"])
 	}
 
 	var g struct {
@@ -336,6 +340,147 @@ func TestCreateFlowAllowsControlNodesWithWarnings(t *testing.T) {
 	}
 }
 
+// A return belongs to a function body: on the main chain it would end the whole flow instead of leaving a container, which
+// validate_flow reports as return_scope. Refused at the write, and the error says what to use instead.
+func TestCreateFlowRefusesTopLevelReturn(t *testing.T) {
+	fk := &fakeFlows{}
+	_, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
+		"name": "top-return", "description": "顶层 return 应被拒绝",
+		"steps": []any{
+			map[string]any{"type": "code", "label": "甲", "config": map[string]any{
+				"code": map[string]any{"lang": "lua", "script": "return {}"},
+			}},
+			map[string]any{"type": "return", "label": "提前结束"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must sit inside a function") {
+		t.Fatalf("err = %v, want it to refuse a return outside a function", err)
+	}
+	if !strings.Contains(err.Error(), "exit") {
+		t.Errorf("the error should point at exit for ending the whole flow: %v", err)
+	}
+	if fk.created != nil {
+		t.Error("nothing should be stored when validation fails")
+	}
+}
+
+// A control signal ends its chain: wiring the next step after it used to build a diagram that flowcheck reports as
+// no_outgoing ("a continue node has an outlet") - an error created by the tool and then blamed on the author. The builder
+// now refuses the shape and says what to do.
+func TestCreateFlowRefusesStepsAfterControlSignal(t *testing.T) {
+	code := func() map[string]any {
+		return map[string]any{"type": "code", "config": map[string]any{
+			"code": map[string]any{"lang": "lua", "script": "return {}"},
+		}}
+	}
+	loopWith := func(children ...any) map[string]any {
+		return map[string]any{"type": "loop", "config": map[string]any{
+			"loop": map[string]any{"type": "count", "total_times": 2},
+		}, "children": children}
+	}
+	fnWith := func(children ...any) map[string]any {
+		return map[string]any{"type": "function", "children": children}
+	}
+
+	cases := []struct {
+		name  string
+		steps []any
+	}{
+		{"exit", []any{map[string]any{"type": "exit"}, code()}},
+		{"break", []any{loopWith(map[string]any{"type": "break"}, code())}},
+		{"continue", []any{loopWith(map[string]any{"type": "continue"}, code())}},
+		{"return", []any{fnWith(map[string]any{"type": "return"}, code())}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fk := &fakeFlows{}
+			_, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
+				"name": "signal-then-step", "description": "控制信号后面还有步骤",
+				"steps": c.steps,
+			})
+			if err == nil || !strings.Contains(err.Error(), "ends this chain") {
+				t.Fatalf("err = %v, want it to refuse the steps after the %s", err, c.name)
+			}
+			if fk.created != nil {
+				t.Error("nothing should be stored when validation fails")
+			}
+		})
+	}
+}
+
+// The last step of a loop body may be a continue: that is the shape the signal is for, and it used to be turned into a
+// no_outgoing error by the builder itself.
+func TestCreateFlowAllowsContinueAsLastStepOfLoopBody(t *testing.T) {
+	fk := &fakeFlows{createdID: "flow-continue"}
+	_, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
+		"name": "loop-continue", "description": "循环体内跳过本轮",
+		"steps": []any{
+			map[string]any{"type": "loop", "label": "逐条", "config": map[string]any{
+				"loop": map[string]any{"type": "count", "total_times": 3},
+			}, "children": []any{
+				map[string]any{"type": "code", "config": map[string]any{
+					"code": map[string]any{"lang": "lua", "script": "return {}"},
+				}},
+				map[string]any{"type": "continue"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create_flow = %v", err)
+	}
+	if fk.created == nil {
+		t.Fatal("FlowsManager.Create was not called")
+	}
+}
+
+// Outside a loop the signal has no consumer, so the step is refused at the write instead of failing at run time.
+func TestCreateFlowRefusesBreakContinueWithoutLoop(t *testing.T) {
+	for _, typ := range []string{"break", "continue"} {
+		t.Run(typ, func(t *testing.T) {
+			fk := &fakeFlows{}
+			_, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
+				"name": "stray-" + typ, "description": "没有循环",
+				"steps": []any{map[string]any{"type": typ}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "no loop above it") {
+				t.Fatalf("err = %v, want it to refuse a %s with no loop", err, typ)
+			}
+			if fk.created != nil {
+				t.Error("nothing should be stored when validation fails")
+			}
+		})
+	}
+}
+
+// Inside a function body the same step is the one legal shape: it returns from the function, so it is created.
+func TestCreateFlowAllowsReturnInsideFunction(t *testing.T) {
+	fk := &fakeFlows{createdID: "flow-fn-return"}
+	_, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
+		"name": "fn-return", "description": "函数体内提前返回",
+		"steps": []any{
+			map[string]any{"type": "function", "label": "求和",
+				"config": map[string]any{"function": map[string]any{
+					"params":  map[string]any{"a": map[string]any{"type": "number"}},
+					"outputs": map[string]any{"total": map[string]any{"type": "number"}},
+				}},
+				"children": []any{
+					map[string]any{"type": "code", "label": "取值", "config": map[string]any{
+						"code":    map[string]any{"lang": "lua", "script": "return { v = 1 }"},
+						"outputs": map[string]any{"v": map[string]any{"type": "number"}},
+					}},
+					map[string]any{"type": "return", "label": "提前返回"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create_flow = %v", err)
+	}
+	if fk.created == nil {
+		t.Fatal("FlowsManager.Create was not called")
+	}
+}
+
 // A wrong language is invisible when saving and on the canvas, and only fails at run time with unsupported_lang, so creation has to
 // warn - the model writing js from memory is the most typical source (the "executable languages" in the system prompt include js,
 // but that belongs to the exec channel, not to what a code node may use).
@@ -444,6 +589,34 @@ func TestCreateFlowRejectsDuplicateName(t *testing.T) {
 	}
 	if fk.created != nil {
 		t.Error("nothing should be stored on a duplicate name")
+	}
+}
+
+// external_protocols on a brand-new workflow cannot be exposed (there is no released version yet): the create must succeed,
+// prepare the slots unexposed, and hand back release_required. Failing instead used to roll the whole flow back, so the
+// caller lost the work and got an error it could not act on.
+func TestCreateFlowDefersEndpointExposure(t *testing.T) {
+	fk := &fakeFlows{createdID: "flow-1"}
+	// The RPC slot comes with the flow; only MCP has to be added here.
+	eps := &fakeEndpointsAdmin{list: []EndpointState{{TargetType: "flow", Target: "weekly-report", Protocol: "rpc"}}}
+	out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk, EndpointAdmin: eps}, map[string]any{
+		"name":               "weekly-report",
+		"description":        "weekly",
+		"steps":              []any{map[string]any{"type": "llm"}},
+		"external_protocols": []any{"mcp"},
+	})
+	if err != nil {
+		t.Fatalf("create_flow = %v", err)
+	}
+	res, _ := out.(map[string]any)
+	if _, ok := res["release_required"]; !ok {
+		t.Fatalf("release_required missing: %v", res)
+	}
+	if fk.created == nil {
+		t.Fatal("the flow must still be created")
+	}
+	if eps.createdProtocol != "mcp" || eps.createdExposed {
+		t.Errorf("the mcp slot should be prepared unexposed: protocol=%q exposed=%v", eps.createdProtocol, eps.createdExposed)
 	}
 }
 
@@ -1123,6 +1296,69 @@ func TestCreateFlowWritesArguments(t *testing.T) {
 	}
 }
 
+// The declaration is what a caller sees, but what runs is config.inputs: a name the declaration does not have fails the node
+// at run time, and one left out of required fails it the moment a caller omits the value. Creation does not block on either,
+// so it has to say so.
+func TestCreateFlowWarnsOnArgumentMismatch(t *testing.T) {
+	steps := []any{map[string]any{
+		"type": "code",
+		"config": map[string]any{
+			"code": map[string]any{"lang": "lua", "script": "return input.question"},
+			"inputs": map[string]any{
+				"question": map[string]any{"type": "string", "source_type": "argument", "source_key": "question"},
+			},
+		},
+	}}
+	cases := []struct {
+		name      string
+		arguments map[string]any
+		want      string // "" = no warning about entry arguments
+	}{
+		{
+			name:      "not declared",
+			arguments: map[string]any{"properties": map[string]any{"other": map[string]any{"type": "string"}}, "required": []any{"other"}},
+			want:      "does not declare",
+		},
+		{
+			name:      "declared but not required",
+			arguments: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}}},
+			want:      "not in arguments.required",
+		},
+		{
+			name: "declared and required",
+			arguments: map[string]any{
+				"properties": map[string]any{"question": map[string]any{"type": "string"}},
+				"required":   []any{"question"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fk := &fakeFlows{createdID: "flow-args"}
+			out, err := (&createFlowTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
+				"name":        "argument-mismatch",
+				"description": "argument declaration check",
+				"steps":       steps,
+				"arguments":   tc.arguments,
+			})
+			if err != nil {
+				t.Fatalf("create_flow = %v", err)
+			}
+			warns, _ := out.(map[string]any)["warnings"].([]string)
+			joined := strings.Join(warns, "\n")
+			if tc.want == "" {
+				if strings.Contains(joined, "entry argument") {
+					t.Fatalf("warnings = %v, want none about entry arguments", warns)
+				}
+				return
+			}
+			if !strings.Contains(joined, tc.want) {
+				t.Fatalf("warnings = %v, want one containing %q", warns, tc.want)
+			}
+		})
+	}
+}
+
 // Entry arguments must be changeable in place: rebuilding via delete_flow + create_flow changes flows.id, and service-credential
 // allowlists are granted by target_id, so the old rows would silently stop working.
 func TestUpdateFlowArgumentsMerges(t *testing.T) {
@@ -1184,6 +1420,33 @@ func TestUpdateFlowArgumentsReplacesRequired(t *testing.T) {
 	}
 	if len(got.Required) != 1 || got.Required[0] != "days" {
 		t.Errorf("required = %v, want [days]", got.Required)
+	}
+}
+
+// Removing a parameter the diagram still reads is how a flow stops being callable; the edit is written, and the mismatch is
+// reported against the diagram the flow already has.
+func TestUpdateFlowArgumentsWarnsAboutDiagramMismatch(t *testing.T) {
+	fk := &fakeFlows{detail: &FlowDetail{
+		FlowInfo:  FlowInfo{ID: "f1", Name: "demo"},
+		Arguments: json.RawMessage(`{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}`),
+		Diagram: json.RawMessage(`{"nodes":[
+			{"id":"1","type":"start","data":{"label":"开始"}},
+			{"id":"2","type":"code","data":{"label":"答","config":{
+				"code":{"lang":"lua","script":"return input.question"},
+				"inputs":{"question":{"type":"string","source_type":"argument","source_key":"question"}}
+			}}}
+		],"edges":[{"id":"e1","source":"1","target":"2","source_handle":"source1right","target_handle":"target2left"}]}`),
+	}}
+	out, err := (&updateFlowArgumentsTool{}).Execute(context.Background(), &Context{Flows: fk}, map[string]any{
+		"flow":   "demo",
+		"remove": []any{"question"},
+	})
+	if err != nil {
+		t.Fatalf("update_flow_arguments = %v", err)
+	}
+	warns, _ := out.(map[string]any)["warnings"].([]string)
+	if !strings.Contains(strings.Join(warns, "\n"), "does not declare") {
+		t.Fatalf("warnings = %v, want one saying the diagram still reads the removed parameter", warns)
 	}
 }
 

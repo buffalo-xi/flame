@@ -4,7 +4,7 @@
     <div v-if="fullScreenMode" class="full-screen-form">
       <div ref="headerRef" class="full-screen-header" :class="'header--' + headerSize">
         <div class="header-actions">
-          <el-button size="small" @click="handleBack">
+          <el-button size="small" @click="handleBackGuarded">
             <el-icon><ArrowLeft /></el-icon>{{ t('flow.list.backToList') }}
           </el-button>
         </div>
@@ -14,9 +14,11 @@
             <span v-if="!isEditingName" class="header-name"
                   :title="instanceProps.name || (currentWFId ? t('flow.list.editFlow') : t('flow.list.newFlow'))"
                   @click="startEditName">{{ instanceProps.name || (currentWFId ? t('flow.list.editFlow') : t('flow.list.newFlow')) }}</span>
+            <!-- ESC 在这里只取消改名（.stop 拦住页面级 ESC，否则会退出编辑器） -->
             <el-input v-else v-model="editName" size="small" class="header-name-input"
                       maxlength="64" :placeholder="t('flow.list.namePlaceholder')"
-                      @blur="saveEditName" @keyup.enter="saveEditName" ref="nameInputRef" />
+                      @blur="saveEditName" @keyup.enter="saveEditName"
+                      @keydown.esc.stop="cancelEditName" ref="nameInputRef" />
           </div>
           <div class="header-desc-wrapper">
             <span class="header-desc"
@@ -70,7 +72,6 @@
           v-model:instanceProps="instanceProps"
           :findings="nodeFindings"
           @refreshList="fetchflows"
-          @cancel="handleBack"
           @dirty-change="isDirty = $event"
           @graph-change="scheduleFindings"
         />
@@ -211,7 +212,17 @@
       <div class="wf-instances-content">
         <div v-if="isLoading" class="loading">{{ t('flow.list.loading') }}</div>
         <div v-else-if="filteredflows.length === 0" class="no-data">
-          {{ emptyText }}
+          <!-- Empty state has two shapes: the tenant has no flow at all (intro + one next step), or a filter /
+               search matched nothing (one line of text). -->
+          <EmptyGuide v-if="tenantHasNoFlows" class="flow-guide"
+                      :title="t('flow.list.emptyTitle')"
+                      :lead="t('flow.list.emptyTipWhat')"
+                      :steps="[t('flow.list.emptyTipChat'), t('flow.list.emptyTipManual')]">
+            <template #action>
+              <el-button size="small" type="primary" plain @click="addFlow">{{ t('flow.list.emptyCreateFlow') }}</el-button>
+            </template>
+          </EmptyGuide>
+          <template v-else>{{ emptyText }}</template>
         </div>
         <div v-else class="wf-instances-list">
           <!-- 悬停提示：鼠标进入整张卡片即显示。
@@ -380,6 +391,7 @@ import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import { exportEntity } from '../utils/assetTransfer.js'
 import AssetImportDialog from './AssetImportDialog.vue'
+import EmptyGuide from './EmptyGuide.vue'
 import { useHeaderCompact } from '../utils/useHeaderCompact.js'
 import {
   statusMeta, titleClass, NAME_RE,
@@ -389,6 +401,7 @@ import Flow from './flows/Flow.vue'
 import FlowEndpointsPanel from './flows/FlowEndpointsPanel.vue'
 import HelpButton from '../../help/HelpButton.vue'
 import { formatError } from '../../locales'
+import { useEscClose } from '../composables/useEscClose'
 import { formatDateTime } from '@/utils/datetime.js'
 
 const { t, te } = useI18n()
@@ -465,6 +478,9 @@ const emptyText = computed(() => {
   }
   return t('flow.list.emptyNone')
 })
+// The tenant has no flow at all — different from "this filter / search matched nothing": only then does the empty
+// state explain what a workflow is and offer the create entry.
+const tenantHasNoFlows = computed(() => flowsList.value.length === 0 && !searchQuery.value)
 // 加载状态
 const isLoading = ref(false)
 
@@ -953,7 +969,14 @@ const startEditName = () => {
 
 // 保存名字编辑
 const saveEditName = () => {
+  // A cancel has already cleared the flag: keep the untouched name even if a blur still fires
+  if (!isEditingName.value) return
   instanceProps.value.name = editName.value.trim() || (currentWFId.value ? t('flow.list.editFlow') : t('flow.list.newFlow'))
+  isEditingName.value = false
+}
+
+// ESC 取消改名：与「保存」相反，改了一半的名字直接丢弃
+const cancelEditName = () => {
   isEditingName.value = false
 }
 
@@ -1142,6 +1165,42 @@ const handleBack = () => {
   // 编辑器里可能新建 / 收回过端点，卡片上的端点与状态要整表刷新才准
   fetchflows()
 }
+
+// Leaving the editor: ESC and the back button share this. Ask first when the canvas has unsaved edits —
+// the key is easy to hit by accident, and silently dropping the draft costs more than one extra click.
+const handleBackGuarded = async () => {
+  if (isDirty.value) {
+    try {
+      await ElMessageBox.confirm(
+        t('common.leaveUnsavedConfirm'),
+        t('common.leaveUnsavedTitle'),
+        { type: 'warning', confirmButtonText: t('common.leave'), cancelButtonText: t('common.cancel') }
+      )
+    } catch {
+      return
+    }
+  }
+  handleBack()
+}
+
+// The pages sit inside <keep-alive>: switching to another page only deactivates this one, so its ESC
+// entries have to step aside or a press somewhere else would pop this editor's leave prompt.
+const pageActive = ref(true)
+onActivated(() => { pageActive.value = true })
+onDeactivated(() => { pageActive.value = false })
+
+// ESC walks out one layer at a time: every panel / menu above registers its own stack entry, so this
+// entry only answers once they are all closed.
+// - skipWhenEditable: while renaming in the header, ESC belongs to the input;
+// - enabled: only while this page is the one on screen, and only when the description / pre-save-check
+//   el-dialogs are closed (useEscClose also steps aside while any el-overlay is open).
+useEscClose(() => fullScreenMode.value && pageActive.value, handleBackGuarded, {
+  skipWhenEditable: true,
+  enabled: () => !descDialogVisible.value && !checkDialogVisible.value
+})
+
+// The version panel is hand-drawn (no el-drawer, so no built-in ESC): give it the same way out
+useEscClose(() => versionPanelVisible.value && pageActive.value, () => { versionPanelVisible.value = false })
 
 // 端点面板状态
 const exposeDrawerVisible = ref(false)
@@ -2160,6 +2219,10 @@ onActivated(() => {
   background-color: transparent;
   padding: 0px;
   overflow-y: auto;
+  /* Column flex so the empty state can take the leftover height and sit in the middle of the pane; the card grid
+     keeps its own height (flex-shrink: 0 below) and this container still does the scrolling. */
+  display: flex;
+  flex-direction: column;
 }
 
 .loading, .no-data {
@@ -2169,12 +2232,30 @@ onActivated(() => {
   font-size: 14px;
 }
 
+/* Empty state sits in the middle of the pane, not just under the header: a block pinned to the top reads like a
+   stray paragraph on a wide screen. Same shape as Running / Endpoints (title + one line of purpose + one step). */
+.no-data {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The shared guide is a flex item inside the centered pane: cap its width so the cards do not stretch across a
+   1200px content area. */
+.flow-guide {
+  max-width: 620px;
+}
+
 /* 工作流实例列表：与技能卡片同口径（200 这一档能让 1200px 内容区排下 5 列） */
 .wf-instances-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 14px;
   align-content: start;
+  /* The pane is a flex column now; the grid must keep its content height and let the pane scroll instead */
+  flex-shrink: 0;
 }
 
 .wf-instance-card {

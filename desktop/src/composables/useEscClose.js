@@ -30,6 +30,19 @@ const isEditable = (el) => {
   return el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
 }
 
+// Element Plus answers ESC for its own overlays (el-dialog / el-drawer / ElMessageBox) with a listener
+// on document - the same target and phase as this one, so both fire for a single press and
+// stopPropagation from either side cannot stop the other. Without this check one press closes the
+// dialog *and* the layer underneath: opening a detail dialog on the endpoint page would also leave the
+// flow editor (kept alive behind it) and pop "unsaved changes".
+const hasVisibleOverlay = () => {
+  for (const el of document.querySelectorAll('.el-overlay')) {
+    // getClientRects() is empty for a v-show'd (display: none) overlay; the element itself stays mounted
+    if (el.getClientRects().length) return true
+  }
+  return false
+}
+
 // Bubble-phase listener: element-level @keydown.esc handlers and el-select's own ESC handling run
 // first, and if they stopPropagation (el-select does) this handler never sees the event.
 const onKeydown = (e) => {
@@ -42,6 +55,8 @@ const onKeydown = (e) => {
   // With an ElMessageBox on top ("unsaved changes, close anyway?") ESC belongs to it: otherwise it
   // closes, the catch returns, and we pop the confirmation again — every press adds one more.
   if (document.querySelector('.el-message-box')) return
+  // A modal that has not answered yet owns the key: it closes, everything below stays as it was
+  if (hasVisibleOverlay()) return
   // While typing, ESC belongs to the input (cancel the inline edit) instead of the whole panel
   if (top.skipWhenEditable && isEditable(e.target)) return
   top.close(e)

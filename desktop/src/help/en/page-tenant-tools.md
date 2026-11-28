@@ -50,6 +50,9 @@ release a version.
 Note: "try" only runs **saved** code, so the button is greyed out while the form or a file has unsaved
 changes; "allow network access" additionally needs the egress capability opened by the platform.
 
+On the keyboard: ESC in the directory editor leaves for the tool list, and while the configuration sidebar
+is open ESC closes the sidebar first; either way, unsaved configuration or files are confirmed first.
+
 ## Do not mix up the two directions
 
 - **Remote connections**: we call out and use someone else's tools.

@@ -12,6 +12,7 @@ type FlowConfig struct {
 	MaxLoopTimes      sql.NullInt32
 	MaxRunRecords     sql.NullInt32
 	MaxSessionRecords sql.NullInt32
+	MaxConcurrency    sql.NullInt32
 }
 
 // Repository is the flow_configs storage interface.

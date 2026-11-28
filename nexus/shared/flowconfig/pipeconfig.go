@@ -18,6 +18,7 @@ type FlowLimits struct {
 	MaxLoopTimes      int
 	MaxRunRecords     int
 	MaxSessionRecords int
+	MaxConcurrency    int
 }
 
 // fallback holds the hard-coded default limits (the system-level default while flow_configs is not configured).
@@ -25,20 +26,29 @@ type FlowLimits struct {
 // falls back).
 //
 // The numbers are the "no one configured this tenant" values, not the smallest allowed ones: a tenant must be able to run
-// an ordinary workflow out of the box. max_loop_times is deliberately close to max_exec_count rather than orders of
-// magnitude above it - a loop body that calls a tool makes every iteration expensive, and max_exec_count is the counter
-// that actually stops the run, so a 10000-iteration default only reads generous.
+// an ordinary workflow out of the box. The run counters match the system row in zz_limit_defaults.sql (3000 / 3000) - a
+// fallback an order of magnitude lower makes an unconfigured environment behave differently from a configured one, and the
+// difference only shows up as a mysterious "exceeded max exec count". max_loop_times is pinned to max_exec_count: every
+// iteration records a node execution, so a larger loop ceiling could never be reached and would only look generous.
 // defaultMaxRecursionDepth is shared by the fallback struct and DepthLimit's last-resort guard, so the two cannot drift.
 const defaultMaxRecursionDepth = 20
 
+// defaultMaxConcurrency is shared by the fallback struct and ConcurrencyLimit's last-resort guard.
+//
+// Why a default at all: an unbounded scope is not a feature, it is a way to turn one bad diagram into sandbox "busy"
+// failures, provider 429s and a DB connection-pool stampede. The ceiling is a queue, not a refusal - members beyond it
+// wait for a slot - so a finite number costs nothing in normal use and bounds the pathological case.
+const defaultMaxConcurrency = 16
+
 var fallback = FlowLimits{
-	MaxTimeout:        300,  // 5 minutes covers a synchronous call; longer runs belong to an async entry point
+	MaxTimeout:        300,                      // 5 minutes covers a synchronous call; longer runs belong to an async entry point
 	MaxRecursionDepth: defaultMaxRecursionDepth, // call nesting; a recursive function needs this, an orchestration chain rarely passes 3
-	MaxNodeCount:      100,  // graph size, not run cost: affects saving / editing, so it can stay loose
-	MaxExecCount:      200,  // the only counter that stops a run mid-flight (loops unroll into it)
-	MaxLoopTimes:      1000, // one order of magnitude above max_exec_count, not two
-	MaxRunRecords:     100,  // run history per flow, the same order as the agent side
-	MaxSessionRecords: 50,   // session memory per session; the reader also trims by a 256 KB byte budget
+	MaxNodeCount:      100,                      // graph size, not run cost: affects saving / editing, so it can stay loose
+	MaxExecCount:      3000,                     // the only counter that stops a run mid-flight (loops unroll into it)
+	MaxLoopTimes:      3000,                     // pinned to max_exec_count: an iteration records an execution, so a higher ceiling is unreachable
+	MaxRunRecords:     100,                      // run history per flow, the same order as the agent side
+	MaxSessionRecords: 50,                       // session memory per session; the reader also trims by a 256 KB byte budget
+	MaxConcurrency:    defaultMaxConcurrency,    // per-scope ceiling; a queue, not a refusal
 }
 
 // row maps one flow_configs row, with NULL expressed through sql.NullInt32.
@@ -50,6 +60,7 @@ type row struct {
 	MaxLoopTimes      sql.NullInt32
 	MaxRunRecords     sql.NullInt32
 	MaxSessionRecords sql.NullInt32
+	MaxConcurrency    sql.NullInt32
 }
 
 // tableName returns the schema-qualified name of flow_configs.
@@ -119,12 +130,12 @@ func positiveOr(v, def int) int {
 
 func loadRow(tenantID string) (*row, error) {
 	q := `SELECT max_timeout, max_recursion_depth, max_node_count, max_exec_count,
-		max_loop_times, max_run_records, max_session_records FROM ` + tableName() + ` WHERE tenant_id = $1`
+		max_loop_times, max_run_records, max_session_records, max_concurrency FROM ` + tableName() + ` WHERE tenant_id = $1`
 
 	var r row
 	err := db.DB.QueryRow(q, tenantID).Scan(
 		&r.MaxTimeout, &r.MaxRecursionDepth, &r.MaxNodeCount, &r.MaxExecCount,
-		&r.MaxLoopTimes, &r.MaxRunRecords, &r.MaxSessionRecords,
+		&r.MaxLoopTimes, &r.MaxRunRecords, &r.MaxSessionRecords, &r.MaxConcurrency,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -190,6 +201,10 @@ func merge(tenant, sys *row) FlowLimits {
 			pick(field(tenant, "MaxSessionRecords"), field(sys, "MaxSessionRecords"), fallback.MaxSessionRecords),
 			pick(sql.NullInt32{}, field(sys, "MaxSessionRecords"), fallback.MaxSessionRecords),
 		),
+		MaxConcurrency: clampMax(
+			pick(field(tenant, "MaxConcurrency"), field(sys, "MaxConcurrency"), fallback.MaxConcurrency),
+			pick(sql.NullInt32{}, field(sys, "MaxConcurrency"), fallback.MaxConcurrency),
+		),
 	}
 	return l
 }
@@ -214,6 +229,24 @@ func field(r *row, name string) sql.NullInt32 {
 		return r.MaxRunRecords
 	case "MaxSessionRecords":
 		return r.MaxSessionRecords
+	case "MaxConcurrency":
+		return r.MaxConcurrency
 	}
 	return sql.NullInt32{}
+}
+
+// ConcurrencyLimit returns the effective per-scope ceiling on concurrent members (always positive).
+//
+// The configuration says -1 means "unlimited", but that is deliberately not honoured here: this number is the only
+// per-scope brake between a badly shaped diagram and the sandbox pool / provider rate limits, so a misconfiguration must
+// not be able to switch it off. A non-positive value falls back to the built-in default, and an anomalous default still
+// becomes defaultMaxConcurrency - never an unbounded scope.
+func (l FlowLimits) ConcurrencyLimit() int {
+	if l.MaxConcurrency > 0 {
+		return l.MaxConcurrency
+	}
+	if fallback.MaxConcurrency > 0 {
+		return fallback.MaxConcurrency
+	}
+	return defaultMaxConcurrency
 }

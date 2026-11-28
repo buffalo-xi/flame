@@ -1,9 +1,9 @@
 <template>
   <div class="exit-node" :class="{ 'selected': isSelected }" ref="nodeRef" @click="handleNodeClick">
     <div class="node-header">
-      <div class="icon-wrapper icon-exit"><el-icon><CircleClose /></el-icon></div>
+      <div class="icon-wrapper icon-exit"><el-icon><SwitchButton /></el-icon></div>
       <div class="node-label">{{ data.label || t('flow.node.defaultLabel.exit') }}</div>
-      <NodeFindingsBadge :id="id" />
+      <NodeBadges :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -26,10 +26,10 @@
 
 <script setup>
 import { ref, watch, inject } from 'vue'
-import { CircleClose, MoreFilled, Delete } from '@element-plus/icons-vue'
+import { SwitchButton, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { Handle } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
-import NodeFindingsBadge from './NodeFindingsBadge.vue'
+import NodeBadges from './NodeBadges.vue'
 
 const { t } = useI18n()
 
@@ -145,7 +145,7 @@ const deleteNode = () => {
   margin-right: 4px;
 }
 
-.icon-exit { background-color: #f56565; }
+.icon-exit { background-color: #c62828; }
 
 .icon-exit .el-icon {
   font-size: 16px;

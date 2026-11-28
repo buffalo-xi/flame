@@ -65,6 +65,8 @@ type nodeDetail struct {
 	ErrStack            string          `json:"err_stack"`
 	RetryCount          int             `json:"retry_count"`
 	ErrorAction         string          `json:"error_action"`
+	PostError           string          `json:"post_error"`
+	HandlerError        string          `json:"handler_error"`
 	StartTime           *xsql.Time      `json:"start_time"`
 	EndTime             *xsql.Time      `json:"end_time"`
 	DurationMs          int64           `json:"duration_ms"`
@@ -129,6 +131,8 @@ func toNodeDetail(n *models.FlowNodeRecord) *nodeDetail {
 		ErrStack:            n.ErrStack,
 		RetryCount:          n.RetryCount,
 		ErrorAction:         n.ErrorAction,
+		PostError:           n.PostError,
+		HandlerError:        n.HandlerError,
 		StartTime:           n.StartTime,
 		EndTime:             n.EndTime,
 		DurationMs:          n.DurationMs,

@@ -78,6 +78,27 @@ func TestLoopExecutorCount(t *testing.T) {
 	}
 }
 
+// An explicit total_times of 0 (or a negative value) runs no round at all: it must not fall back to the system ceiling,
+// which would turn "do not run" into ten thousand executions.
+func TestLoopExecutorCountZeroRunsNothing(t *testing.T) {
+	for _, totalTimes := range []int{0, -3} {
+		body := newExecNode("c1", "assign", map[string]any{})
+		body.ParentNode = "2"
+		ctx := newLoopScaffold(t, body)
+		node := newExecNode("2", "loop", map[string]any{
+			"loop": map[string]any{"type": "count", "total_times": totalTimes},
+		})
+		nr := newExecResult(node, ctx)
+		if err := (&LoopExecutor{}).Execute(node, ctx, "1", nr); err != nil {
+			t.Fatalf("total_times=%d: Execute = %v (code %q)", totalTimes, err, nr.ErrCode)
+		}
+		if nr.Status != flow.StatusSuccess || nr.LoopResult.Iterations != 0 {
+			t.Errorf("total_times=%d: status = %v, iterations = %d, want success with no round",
+				totalTimes, nr.Status, nr.LoopResult.Iterations)
+		}
+	}
+}
+
 // break ends the loop on the round it fires, and the loop itself still succeeds.
 func TestLoopExecutorBreakStopsTheLoop(t *testing.T) {
 	body := &flow.Node{ID: "b1", Type: "break", ParentNode: "2", Data: &flow.NodeData{}}
@@ -110,6 +131,35 @@ func TestLoopExecutorContinueKeepsGoing(t *testing.T) {
 	}
 	if nr.LoopResult.Iterations != 3 {
 		t.Errorf("iterations = %d, want 3: continue must not end the loop", nr.LoopResult.Iterations)
+	}
+}
+
+// A member that carries an `exit` out of its own body ends the run from inside a loop round: the loop succeeds, the signal
+// goes upwards, and the remaining rounds never start.
+func TestLoopMemberExitEndsRun(t *testing.T) {
+	registerProbe(t)
+	inner := newExecNode("p2", "process", map[string]any{})
+	inner.ParentNode = "2"
+	inner.Data.Concurrent = true
+	innerExit := newExecNode("x1", "exit", map[string]any{})
+	innerEntry := entryTo("p2", innerExit)
+	slow := memberNode("m2", "2", map[string]any{"delay_ms": 300})
+	ctx := newLoopScaffold(t, inner, slow)
+	nestBody(ctx, innerEntry, innerExit)
+	node := newExecNode("2", "loop", map[string]any{
+		"loop": map[string]any{"type": "count", "total_times": 3},
+	})
+	nr := newExecResult(node, ctx)
+
+	err := (&LoopExecutor{}).Execute(node, ctx, "1", nr)
+	if !errors.Is(err, SignalExit) {
+		t.Fatalf("Execute = %v, want the exit signal", err)
+	}
+	if nr.Status != flow.StatusSuccess {
+		t.Errorf("status = %q, want success", nr.Status)
+	}
+	if nr.LoopResult == nil || len(nr.LoopResult.Parallel) == 0 || nr.LoopResult.Parallel[0].ExitedBy != "p2" {
+		t.Errorf("parallel snapshots = %+v, want the round marked exited_by p2", nr.LoopResult)
 	}
 }
 
@@ -279,6 +329,29 @@ func TestLoopExecutorWhile(t *testing.T) {
 	}
 }
 
+// The "condition not met" log must name the rounds that actually ran: a while whose very first check is false has run
+// none, so "after 1 round(s)" would contradict the iteration count right next to it.
+func TestLoopExecutorWhileLogsZeroRounds(t *testing.T) {
+	body := newExecNode("c1", "assign", map[string]any{})
+	body.ParentNode = "2"
+	ctx := newLoopScaffold(t, body)
+	node := newExecNode("2", "loop", map[string]any{
+		"loop": map[string]any{
+			"type":      "while",
+			"lang":      "template",
+			"condition": "false",
+			"max_times": 3,
+		},
+	})
+	nr := newExecResult(node, ctx)
+	if err := (&LoopExecutor{}).Execute(node, ctx, "1", nr); err != nil {
+		t.Fatalf("Execute = %v (code %q)", err, nr.ErrCode)
+	}
+	if !strings.Contains(strings.Join(nr.RunLogs, "\n"), "after 0 round(s)") {
+		t.Errorf("logs = %v, want them to report 0 rounds", nr.RunLogs)
+	}
+}
+
 // do_while checks last, so the body runs at least once even when the condition is false from the start.
 func TestLoopExecutorDoWhileRunsAtLeastOnce(t *testing.T) {
 	body := newExecNode("c1", "assign", map[string]any{})
@@ -298,6 +371,55 @@ func TestLoopExecutorDoWhileRunsAtLeastOnce(t *testing.T) {
 	}
 	if nr.LoopResult.Iterations != 1 {
 		t.Errorf("iterations = %d, want 1", nr.LoopResult.Iterations)
+	}
+}
+
+// A continue ends the round, not the exit test: the condition must still be evaluated on a round the body cut short.
+// Skipping it made a do_while run to max_times whenever the body always continued, and the run still reported success.
+func TestLoopExecutorDoWhileContinueStillChecksCondition(t *testing.T) {
+	body := newExecNode("k1", "continue", map[string]any{})
+	body.ParentNode = "2"
+	ctx := newLoopScaffold(t, body)
+	node := newExecNode("2", "loop", map[string]any{
+		"loop": map[string]any{
+			"type":      "do_while",
+			"lang":      "template",
+			"condition": "false",
+			"max_times": 5,
+		},
+	})
+	nr := newExecResult(node, ctx)
+	if err := (&LoopExecutor{}).Execute(node, ctx, "1", nr); err != nil {
+		t.Fatalf("Execute = %v (code %q)", err, nr.ErrCode)
+	}
+	if nr.LoopResult.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1: continue must not skip the condition check", nr.LoopResult.Iterations)
+	}
+	if nr.Status != flow.StatusSuccess {
+		t.Errorf("status = %v, want success", nr.Status)
+	}
+}
+
+// The other half of the same rule: a condition that stays true still runs to the ceiling, so catching the bug above did
+// not turn continue into break.
+func TestLoopExecutorDoWhileContinueRunsToCeiling(t *testing.T) {
+	body := newExecNode("k1", "continue", map[string]any{})
+	body.ParentNode = "2"
+	ctx := newLoopScaffold(t, body)
+	node := newExecNode("2", "loop", map[string]any{
+		"loop": map[string]any{
+			"type":      "do_while",
+			"lang":      "template",
+			"condition": "true",
+			"max_times": 3,
+		},
+	})
+	nr := newExecResult(node, ctx)
+	if err := (&LoopExecutor{}).Execute(node, ctx, "1", nr); err != nil {
+		t.Fatalf("Execute = %v (code %q)", err, nr.ErrCode)
+	}
+	if nr.LoopResult.Iterations != 3 {
+		t.Errorf("iterations = %d, want 3: a true condition keeps the loop going", nr.LoopResult.Iterations)
 	}
 }
 
@@ -372,7 +494,7 @@ func TestParseCountInt(t *testing.T) {
 			if tc.present {
 				lc["n"] = tc.raw
 			}
-			got, err := parseCountInt(lc, "n")
+			got, set, err := parseCountInt(lc, "n")
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("parseCountInt(%#v) = %d, want an error", tc.raw, got)
@@ -386,17 +508,21 @@ func TestParseCountInt(t *testing.T) {
 			if err != nil || got != tc.want {
 				t.Errorf("parseCountInt(%#v) = %d, %v, want %d", tc.raw, got, err, tc.want)
 			}
+			// set distinguishes "unset, take the system ceiling" from an explicit 0, which is a real value.
+			if wantSet := tc.present && tc.raw != nil; set != wantSet {
+				t.Errorf("parseCountInt(%#v) set = %v, want %v", tc.raw, set, wantSet)
+			}
 		})
 	}
 }
 
 func TestResolveMaxTimes(t *testing.T) {
-	ctx := newExecContext() // Limits = the built-in fallback (max_loop_times 1000)
+	ctx := newExecContext() // Limits = the built-in fallback (max_loop_times 3000)
 	cases := []struct{ in, want int }{
-		{0, 1000},
-		{-5, 1000},
+		{0, 3000},
+		{-5, 3000},
 		{5, 5},
-		{5000, 1000},
+		{5000, 3000},
 	}
 	for _, tc := range cases {
 		if got := resolveMaxTimes(ctx, tc.in); got != tc.want {

@@ -5,13 +5,26 @@
       "tabTool": "工具",
       "groupCommon": "常用",
       "groupLogic": "逻辑",
-      "groupOther": "其他"
+      "groupOther": "其他",
+      "searchTools": "搜索工具",
+      "groupEndpoints": "本地端点",
+      "groupMcp": "MCP 连接",
+      "groupRpc": "RPC 连接",
+      "emptyMcp": "还没有 MCP 连接",
+      "emptyRpc": "还没有 RPC 连接",
+      "loadingTools": "加载中…",
+      "noTools": "这个连接没有工具",
+      "emptyCatalog": "还没有可调用的工具：先在「设置 → 工具」里添加连接，或把流程暴露为端点",
+      "searchEmpty": "没有匹配的工具",
+      "targetFlow": "流程",
+      "targetAgent": "智能体"
     },
     "nodeType": {
       "llm": "LLM",
       "memory": "记忆",
       "code": "代码",
       "assign": "赋值",
+      "raise": "主动报错",
       "http": "HTTP 请求",
       "mcp": "MCP",
       "rpc": "RPC",
@@ -23,10 +36,8 @@
       "continue": "跳过",
       "return": "返回",
       "exit": "终止",
-      "process": "嵌入流程",
+      "process": "流程段",
       "function": "函数",
-      "fork": "并发组",
-      "wait": "并发同步",
       "call": "调用",
       "loop": "循环",
       "layout": "布局",
@@ -47,6 +58,18 @@
       "handlerScriptDefault": "-- 在这里编写响应处理脚本\n{'return { content = input.content }'}",
       "tabConfig": "配置",
       "tabResult": "执行结果",
+      "concurrentMember": "在父节点中并发执行",
+      "concurrentMemberHint": "勾选后由所属 process / loop 派发，body 结束时统一收口；成员失败会直接让运行失败。成员之间不能互相读取结果。",
+      "scopeSection": "并发作用域",
+      "maxConcurrency": "并发上限",
+      "scopeUnlimited": "不限（按系统上限 {max} 排队）",
+      "scopeTimeout": "超时（秒）",
+      "scopeNoTimeout": "不设超时",
+      "joinMode": "汇合方式",
+      "joinCollect": "collect（等全部成员）",
+      "joinDrain": "drain（失败后不再启动新成员）",
+      "joinAbort": "abort（并取消运行中的成员）",
+      "scopeHint": "上限开关关掉时不设作者上限，实际仍按系统上限（{max}）排队——超出上限的成员会等空位，不会失败；只有勾选「在父节点中并发执行」的直接子节点会成为成员。超时到点会取消仍在运行的成员，body 自身那条链不打断。",
       "noteTitle": "节点说明",
       "notice": "注意：",
       "loopOnly": "必须位于一个循环节点内部",
@@ -54,7 +77,8 @@
       "exit": {
         "p1": "终止节点用于立即退出整个工作流的执行。",
         "p2": "当工作流执行到该节点时，将直接终止整个流程，不再执行后续节点。",
-        "p3": "该节点在函数节点内部也可以执行，但一定要注意跟返回节点的区别。"
+        "p3": "该节点在函数节点内部也可以执行，但一定要注意跟返回节点的区别。",
+        "p4": "写在成员自己的 body 里也一样生效：整条流程立刻结束，外层作用域里还在跑的成员会被取消（记为已取消，不算失败）。它自己不是并发成员——控制流只待在链上。"
       },
       "return": {
         "p1": "返回节点用于退出当前函数。",
@@ -68,17 +92,6 @@
       "continue": {
         "p1": "跳过节点",
         "p2": "当流程执行到此节点时，将跳过当前迭代的剩余步骤，直接进入循环的下一轮迭代。"
-      },
-      "fork": {
-        "maxConcurrency": "最大并发数",
-        "positiveInt": "正整数",
-        "unlimited": "不限制"
-      },
-      "wait": {
-        "syncTitle": "并发组同步",
-        "selectGroup": "选择并发组:",
-        "selectPlaceholder": "请选择",
-        "hint": "选择要等待的 并发组 节点"
       }
     },
     "common": {
@@ -207,6 +220,13 @@
       "noLimits": "暂无限额",
       "limitMax": "上限 {max}"
     },
+    "raiseNode": {
+      "code": "错误码",
+      "codeHint": "节点失败时抛出的错误码。不提供 config / internal / cancel：前两个不会触发 on_error，第三个表示用户主动中断。",
+      "message": "错误信息",
+      "messagePlaceholder": "例如：订单不存在",
+      "messageHint": "只能引用「输入变量」里声明的变量：主动报错节点不写 local，也没有输出变量。"
+    },
     "assignNode": {
       "listTitle": "赋值列表",
       "empty": "暂无赋值，点击 + 添加",
@@ -246,6 +266,27 @@
         "p3": "工具返回 is_error（业务错误）时节点仍为成功，错误文本在 ",
         "p4": " 变量里。"
       }
+    },
+    "toolDetail": {
+      "open": "查看工具详情",
+      "openEndpoint": "查看端点详情",
+      "empty": "未选择工具",
+      "connection": "所属连接",
+      "exposure": "对外状态",
+      "exposed": "已对外开放",
+      "retracted": "尚未对外开放",
+      "noDescription": "该工具没有提供描述",
+      "params": "入参",
+      "noParams": "该工具没有声明入参",
+      "colName": "参数",
+      "colType": "类型",
+      "colRequired": "必填",
+      "colDescription": "说明",
+      "enum": "可选值",
+      "yes": "是",
+      "no": "否",
+      "rawSchema": "入参 schema",
+      "close": "关闭"
     },
     "llmNode": {
       "responseMode": "响应模式",
@@ -480,6 +521,7 @@
       "varError": "调用错误信息",
       "loopVarIndex": "循环下标",
       "loopVarItem": "循环对象",
+      "loopVarIterations": "实际轮数",
       "intentPrompt": "你是意图分类器，请根据对话历史和用户输入判断用户意图。\n\n对话历史：\n{'{{json .input.messages}}'}\n\n用户输入：\n{'{{.input.input}}'}",
       "returnOnlyInFunction": "返回节点只能创建在函数节点内部"
     },
@@ -535,7 +577,12 @@
       "deleteTip": "删除",
       "emptySearch": "没有找到匹配的工作流",
       "emptyNone": "暂无工作流",
-      "emptyDeprecated": "暂无废弃的工作流"
+      "emptyDeprecated": "暂无废弃的工作流",
+      "emptyTitle": "还没有工作流",
+      "emptyTipWhat": "工作流把一串节点连成能按同样步骤重复跑的链：节点可以是大模型、代码、HTTP、MCP / RPC 工具调用或调用别的智能体；分支、循环、并发则把步骤编排成结构。它还能按名字被别的流程调用，也能对外暴露成 MCP / RPC 端点，让平台外部的东西调进来。",
+      "emptyTipChat": "最省事的做法是让 main 智能体来搭：用日常的话说清要做什么、数据从哪来、最后想要什么结果，比如「读昨天的订单，按地区算总额，再整理成一段话输出」。它会自己挑节点、连好线，再试跑一次给你看。中途问你细节就照实答，不满意直接说「第二步改成按省份统计」。整个画布都不用碰，几句话就能得到一个能跑的工作流。",
+      "emptyTipManual": "想自己一步步控制，就点下面的「创建工作流」，从空白画布开始：放节点、连线、试运行，满意后再发布正式版本。",
+      "emptyCreateFlow": "创建工作流"
     },
     "canvas": {
       "addNode": "添加节点",
@@ -666,15 +713,36 @@
         "container_entry": "容器缺少唯一的入口节点：运行时会「成功但什么都不跑」",
         "branch_edge": "分支条件没有对应的出边，命中后无处可去",
         "branch_condition": "分支子节点没有条件脚本：运行时会跳过它，这条路径永远不会走到",
+        "condition_no_return": "条件脚本没有返回值：lua 里裸表达式是语法错误（节点必失败），js / python 里条件永远不成立",
+        "condition_input_ref": "条件脚本读取了 input.X，但节点没有声明这个变量：运行期是 nil，比较会直接让节点失败",
+        "input_source": "输入变量没有可解析的来源（source_type / source_key / source_ref 缺失或不合法），运行期整批解析失败，节点跑不起来",
+        "argument_undeclared": "节点读取了入口参数，但流程的 arguments 没有声明它：运行期报 var path not found，节点直接失败",
+        "argument_optional": "入口参数已声明但不在 required 里：调用方可以省略它，省略时节点会运行失败",
+        "intent_temperature": "意图节点按采样温度分类（未设置或大于 0）：同一句输入可能每次走到不同分支，建议把 llm.params.temperature 设为 0",
         "child_id": "分支子节点没有 id，连线无法路由到它",
         "call_target": "调用的目标不是本流程里的函数节点",
         "call_args": "调用的参数和函数的 params 对不上：多传参数或少传必填参数，运行都会失败",
-        "wait_fork": "等待节点没有指向一个 fork 节点",
+        "concurrent_member_parent": "给节点勾了「在父节点中并发执行」，但父级不是 process / loop：只有容器 body 才是并发作用域，运行期会以 config 错误拒绝",
+        "concurrent_member_not_on_chain": "给节点勾了「在父节点中并发执行」，但它不在 body 的主链上（branch 子链、悬空子节点）：作用域永远不会派发它",
+        "concurrent_member_type": "控制类 / 输出类 / 瞬时节点被勾成了并发成员：入口、break / continue / return / exit 只在链上表达控制流，注释与布局节点不执行，result / progress 的输出按调用顺序记在本次运行上，assign / memory 不会等任何东西 —— 请取消勾选（exit 写在成员体内照样结束整个运行）",
+        "parallel_visibility": "读了一个还没写完的变量（同一 body 的成员之间，或链上节点读成员）：成员的结果只能在宿主汇合后从宿主 outputs 读",
+        "concurrent_member_write": "成员写了 flow 变量或别的节点的变量：并发写没有同步，后写覆盖；成员只能写自己和宿主的 outputs",
+        "parallel_output_conflict": "同一个宿主 output 有多个写入者且其中至少一个是成员：汇合时只有一个值能留下，其余静默丢失",
+        "parallel_degenerate": "这个作用域不可能并行（只有一个成员，或 max_concurrency 为 1）：即使跑通也不会并发",
+        "parallel_fanout": "并发作用域嵌套过深或限额叠加：三层及以上嵌套，或多层 max_concurrency 相乘超过 8 —— 同时在飞的节点数在画布上看不出来，失败还要逐层回退",
+        "parallel_members_queued": "这个作用域的成员数超过租户的最大并发数：超出的成员排队等空位，不会同时跑 —— 运行仍会成功，只是比画布看起来慢",
         "dangling_ref": "引用了不存在的节点：运行时拿到的是空值",
+        "self_ref": "节点在自己的输入里读自己的输出或局部变量：输入在节点执行前解析，取到的永远是空值",
         "function_ref": "从函数体外引用了函数节点：运行期取不到值，读结果请走 call 节点",
         "function_edge": "有连线碰到函数节点：函数只能由 call 进入，接进主链会以空参数执行",
         "nested_function": "函数节点嵌在别的容器里：函数必须放在顶层，否则无法被调用",
         "target_var": "写回的目标变量在容器里没有声明：运行时直接报变量未定义",
+        "ignored_inputs": "该节点类型不读 inputs：这段配置在运行期完全不起作用，保存时会被移除",
+        "return_scope": "return 只允许出现在 function 体内：放在 process / loop 里会结束整条流程，而不是这个容器",
+        "branch_outlet": "分支节点的每个子分支只能连一条出边（左右位置是同一个出口），handle 必须指向节点自身或已声明的子节点",
+        "multi_incoming": "节点只能有一条入边：多余的入边在运行时不会被走到",
+        "no_incoming": "start / entry 由运行器进入，不能有入边",
+        "no_outgoing": "该节点是终点节点，没有出口：这条出边永远不会被走到",
         "source_key": "来源节点没有这个输出变量：运行时拿到的是空值",
         "loop_source": "遍历的数据源没有在入参里声明",
         "unreachable": "节点没有入边，不会被执行",
@@ -683,6 +751,8 @@
         "on_error_code": "错误码不存在：运行时不会有这个码，这条规则永远不会命中",
         "on_error_code_unused": "该节点不会产生这个错误码，这条规则永远不会命中",
         "on_error_post": "该节点不支持收尾处理 post，运行时会丢弃",
+        "on_error_shadowed": "skip 在 handler 之前匹配：同样的错误码或消息会被 skip 先接走，这段 handler 永远不会执行",
+        "skipped_output_read": "这段配了跳过（skip）却没有兜底值，而下游有节点在读它的 outputs：跳过时下游拿到的是空值（\"\" / 0 / false），和「真的返回了空」无法区分。加 post.set_outputs 写一个标记（如 ok = false），或者干脆让它失败",
         "unknown": "配置有问题"
       }
     },
@@ -820,6 +890,8 @@
       "emptyNoTarget": "请先选择目标函数",
       "emptyDefault": "暂无输出变量",
       "fixedVariable": "固定变量",
+      "builtinVariable": "运行期写入的变量",
+      "builtinNote": "带锁的变量由运行期写入，不需要在这里配置。",
       "bindingTitle": "流式外发绑定"
     },
     "binding": {
@@ -887,15 +959,7 @@
         "unset": "取消断点"
       },
       "commentPlaceholder": "输入注释内容...",
-      "forkGroup": "并发组:",
       "notSelected": "未选择",
-      "concurrency": {
-        "title": "并发控制",
-        "enable": "启用并发",
-        "disable": "取消并发",
-        "mono": "单体并发",
-        "forkGroup": "并发组"
-      },
       "branch": {
         "defaultBranch": "默认分支",
         "deleteChild": "删除分支",
@@ -926,6 +990,8 @@
         "output": "输出",
         "logs": "日志",
         "error": "错误",
+        "handlerError": "处理器错误",
+        "postError": "收尾错误",
         "unassigned": "（未赋值）",
         "statusMap": {
           "success": "成功",
@@ -944,20 +1010,17 @@
         "start": "开始",
         "entry": "入口",
         "assign": "赋值",
+        "raise": "主动报错",
         "break": "断点",
         "continue": "跳过",
         "exit": "终止",
-        "fork": "分叉",
         "knowledge": "知识",
         "memory": "记忆",
         "progress": "进度输出",
         "result": "结果输出",
         "return": "返回",
-        "wait": "等待",
         "comment": "注释",
-        "forkGroup": "并发组",
-        "waitJoin": "并发同步",
-        "process": "嵌入流程",
+        "process": "流程段",
         "breakOut": "跳出",
         "loop": "循环",
         "code": "代码",

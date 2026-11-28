@@ -622,7 +622,7 @@ watch(() => props.selectedNode, (node) => {
 .input-variable-btn .icon-start { background-color: #00704A; }
 .input-variable-btn .icon-branch { background-color: #00bcd4; }
 .input-variable-btn .icon-wait { background-color: #00bcd4; }
-.input-variable-btn .icon-code { background-color: #f56565; }
+.input-variable-btn .icon-code { background-color: #a0522d; }
 .input-variable-btn .icon-http { background-color: #409eff; }
 .input-variable-btn .icon-process { background-color: #00bcd4; }
 .input-variable-btn .icon-result { background-color: #67c23a; }

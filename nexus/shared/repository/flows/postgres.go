@@ -581,7 +581,29 @@ func (r *PostgresRepository) UpdateFlowArguments(authInfo *auth.AuthInfo, id str
 	return tx.Commit()
 }
 
+// ErrHasExposedEndpoint means the workflow still has an endpoint that is exposed to the outside, so it cannot be
+// deleted.
+//
+// An exposed endpoint is a public entrance that callers outside the tenant may be using right now: deleting the flow
+// would make that service disappear without anyone deciding so. The prerequisite is an explicit retract (endpoint
+// domain), which keeps the endpoint record and only clears exposed. The names are carried so the answer can say which
+// entrance is in the way instead of a generic failure.
+type ErrHasExposedEndpoint struct {
+	Names []string
+}
+
+func (e *ErrHasExposedEndpoint) Error() string {
+	if len(e.Names) == 0 {
+		return "the workflow still has an exposed endpoint; retract it first, then delete"
+	}
+	return "the workflow still has exposed endpoints (" + strings.Join(e.Names, ", ") + "); retract them first, then delete"
+}
+
 // DeleteFlow deletes a workflow instance.
+//
+// The derived endpoints are cascaded in the same transaction; a still-exposed one refuses the whole delete
+// (ErrHasExposedEndpoint). Callers must not delete the endpoints beforehand: that would bypass the guard and destroy
+// them even when the row delete is then refused (a released version, for one).
 func (r *PostgresRepository) DeleteFlow(authInfo *auth.AuthInfo, id string) error {
 	// Open the transaction
 	tx, err := db.DB.Begin()
@@ -606,16 +628,32 @@ func (r *PostgresRepository) DeleteFlow(authInfo *auth.AuthInfo, id string) erro
 	// tenant and must not vanish with the flow. A not-exposed endpoint (including the RPC endpoint added automatically
 	// at creation) is derived data of the entity itself and goes with the flow — otherwise, once the automatic creation
 	// exists, every flow would be undeletable for "having an endpoint".
-	var exposedCount int
-	err = tx.QueryRow(`SELECT COUNT(*) FROM `+authInfo.Schema+`.svc_endpoints WHERE target_id = $1 AND target_type = 'flow' AND exposed`, id).Scan(&exposedCount)
+	exposedRows, err := tx.Query(`SELECT name FROM `+authInfo.Schema+`.svc_endpoints
+		WHERE target_id = $1 AND target_type = 'flow' AND exposed ORDER BY name`, id)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-
-	if exposedCount > 0 {
+	var exposedNames []string
+	for exposedRows.Next() {
+		var name string
+		if scanErr := exposedRows.Scan(&name); scanErr != nil {
+			exposedRows.Close()
+			tx.Rollback()
+			return scanErr
+		}
+		exposedNames = append(exposedNames, name)
+	}
+	iterErr := exposedRows.Err()
+	exposedRows.Close()
+	if iterErr != nil {
 		tx.Rollback()
-		return fmt.Errorf("this workflow still has an exposed endpoint; retract it first, then delete")
+		return iterErr
+	}
+
+	if len(exposedNames) > 0 {
+		tx.Rollback()
+		return &ErrHasExposedEndpoint{Names: exposedNames}
 	}
 
 	// Cascade the derived endpoints away (same semantics as DeleteByTarget, in the same transaction)
@@ -642,10 +680,10 @@ func (r *PostgresRepository) DeleteFlow(authInfo *auth.AuthInfo, id string) erro
 		return sql.ErrNoRows
 	}
 
-	// The run history goes with the flow. flow_run_records / flow_node_records carry no foreign key to flows (unlike
-	// agent_run_records, which cascades from agents), so without this the rows outlive the flow: unreachable from its own
-	// pages, yet still listed by the cross-flow history under a flow_id that no longer resolves. Done in the same
-	// transaction as the row, so a failure leaves the flow in place instead of half-cleaned; node records first, since
+	// The derived data goes with the flow. flow_run_records / flow_node_records / flow_breakpoints carry no foreign key to
+	// flows (unlike agent_run_records, which cascades from agents), so without this the rows outlive the flow: unreachable
+	// from its own pages, yet still listed by the cross-flow history under a flow_id that no longer resolves. Done in the
+	// same transaction as the row, so a failure leaves the flow in place instead of half-cleaned; node records first, since
 	// they only join on run_id.
 	if _, err := tx.Exec(`
 		DELETE FROM `+authInfo.Schema+`.flow_node_records
@@ -654,6 +692,12 @@ func (r *PostgresRepository) DeleteFlow(authInfo *auth.AuthInfo, id string) erro
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM `+authInfo.Schema+`.flow_run_records WHERE flow_id = $1`, id); err != nil {
+		tx.Rollback()
+		return err
+	}
+	// Breakpoints are per-flow editor state and carry no foreign key either; recreating a flow under the same id is not
+	// possible, so a leftover row is pure garbage that the debugger would match on a dead flow.
+	if _, err := tx.Exec(`DELETE FROM `+authInfo.Schema+`.flow_breakpoints WHERE flow_id = $1`, id); err != nil {
 		tx.Rollback()
 		return err
 	}

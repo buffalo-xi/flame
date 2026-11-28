@@ -22,7 +22,10 @@
     "copy": "复制",
     "copied": "已复制",
     "copyFailed": "复制失败，请手动选中文本",
-    "listJoiner": "、"
+    "listJoiner": "、",
+    "leaveUnsavedTitle": "有未保存的修改",
+    "leaveUnsavedConfirm": "离开后未保存的修改会丢失，确定返回列表吗？",
+    "leave": "离开"
   },
   "login": {
     "title": "Flame Desk",

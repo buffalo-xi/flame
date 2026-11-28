@@ -35,6 +35,40 @@ func TestDepthLimitNeverReturnsUnlimited(t *testing.T) {
 	}
 }
 
+// The per-scope concurrency ceiling follows the same rule as the depth gate: it is the brake between a badly shaped
+// diagram and the sandbox / provider limits, so "unlimited" must not switch it off.
+func TestConcurrencyLimit(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured int
+		want       int
+	}{
+		{"a normal value is used as is", 4, 4},
+		{"1 is a legitimate ceiling", 1, 1},
+		{"-1 falls back", -1, fallback.MaxConcurrency},
+		{"0 falls back", 0, fallback.MaxConcurrency},
+	}
+	for _, tc := range cases {
+		l := FlowLimits{MaxConcurrency: tc.configured}
+		if got := l.ConcurrencyLimit(); got != tc.want {
+			t.Errorf("%s: limit = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A misconfigured default still yields the guard value, never 0 or -1: an unbounded scope is the failure mode this
+// number exists to prevent.
+func TestConcurrencyLimitNeverReturnsUnbounded(t *testing.T) {
+	saved := fallback.MaxConcurrency
+	fallback.MaxConcurrency = -1
+	defer func() { fallback.MaxConcurrency = saved }()
+
+	l := FlowLimits{MaxConcurrency: -1}
+	if got := l.ConcurrencyLimit(); got != defaultMaxConcurrency {
+		t.Fatalf("limit = %d, want the guard value %d", got, defaultMaxConcurrency)
+	}
+}
+
 // Retention is always a positive count: downstream, 0 means "store nothing" and a non-positive session count means
 // "no memory", so -1 ("unlimited" in the configuration) must never reach them.
 func TestRetentionLimits(t *testing.T) {

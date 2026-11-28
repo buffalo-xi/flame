@@ -50,18 +50,18 @@ export function createNodeBuilders({
   // 节点 label 全图唯一：第二次拖入「代码」、第二个容器的「入口」都要自动改名
   const labelTaken = (label) => nodes.value.some(n => (n.data?.label || '').trim() === label)
 
-  const build = (nodeType, x, y, parent) => {
+  const build = (nodeType, x, y, parent, preset) => {
     let newNode
     let childNode
     switch (nodeType) {
       case 'branch':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.branch'),
             config: {
               children: [
-                { id: generateUniqueId(5), label: t('flow.node.branch.childName', { n: 1 }), condition: '', exclusive: true },
+                { id: generateUniqueId(), label: t('flow.node.branch.childName', { n: 1 }), condition: '', exclusive: true },
               ]
             }
           },
@@ -71,7 +71,7 @@ export function createNodeBuilders({
         break
       case 'intent':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.intent'),
             config: {
@@ -81,7 +81,7 @@ export function createNodeBuilders({
               },
               llm: { gateway_model: '', system_prompt: t('flow.nodeFactory.intentPrompt'), params: {} },
               children: [
-                { id: generateUniqueId(5), label: t('flow.node.intent.childName', { n: 1 }), description: '' },
+                { id: generateUniqueId(), label: t('flow.node.intent.childName', { n: 1 }), description: '' },
               ],
               outputs: { intent: { type: 'string' }, index: { type: 'number' } }
             }
@@ -92,15 +92,18 @@ export function createNodeBuilders({
         break
       case 'process':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.process'),
+            // A visible starting number instead of an invisible "no limit": 8 leaves room for the ordinary fan-out and is
+            // far below the tenant ceiling, and the author can clear it or raise it in the properties panel.
+            config: { parallel: { max_concurrency: 8 } }
           },
           position: { x, y },
           type: 'process'
         }
         childNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           parentNode: newNode.id,
           data: {
             label: t('flow.node.defaultLabel.entry'),
@@ -113,29 +116,9 @@ export function createNodeBuilders({
           type: 'entry'
         }
         break
-      case 'fork':
-        newNode = {
-          id: generateUniqueId(5),
-          data: {
-            label: t('flow.node.defaultLabel.forkGroup'),
-          },
-          position: { x, y },
-          type: 'fork'
-        }
-        break
-      case 'wait':
-        newNode = {
-          id: generateUniqueId(5),
-          data: {
-            label: t('flow.node.defaultLabel.waitJoin'),
-          },
-          position: { x, y },
-          type: 'wait'
-        }
-        break
       case 'call':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.call'),
           },
@@ -145,7 +128,7 @@ export function createNodeBuilders({
         break
       case 'memory':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.memory'),
             config: {
@@ -160,7 +143,7 @@ export function createNodeBuilders({
         break
       case 'assign':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.assign'),
             config: {
@@ -174,9 +157,23 @@ export function createNodeBuilders({
           type: 'assign'
         }
         break
+      case 'raise':
+        newNode = {
+          id: generateUniqueId(),
+          data: {
+            label: t('flow.node.defaultLabel.raise'),
+            config: {
+              inputs: {},
+              raise: { code: 'other', message: '' }
+            }
+          },
+          position: { x, y },
+          type: 'raise'
+        }
+        break
       case 'loop':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.loop'),
             config: {
@@ -188,7 +185,7 @@ export function createNodeBuilders({
           type: 'loop'
         }
         childNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           parentNode: newNode.id,
           data: {
             label: t('flow.node.defaultLabel.entry'),
@@ -203,7 +200,7 @@ export function createNodeBuilders({
         break
       case 'break':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.breakOut'),
           },
@@ -213,7 +210,7 @@ export function createNodeBuilders({
         break
       case 'continue':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.continue'),
           },
@@ -223,7 +220,7 @@ export function createNodeBuilders({
         break
       case 'return':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.return'),
           },
@@ -233,7 +230,7 @@ export function createNodeBuilders({
         break
       case 'exit':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.exit'),
           },
@@ -243,7 +240,7 @@ export function createNodeBuilders({
         break
       case 'http':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.http'),
             config: {
@@ -256,7 +253,7 @@ export function createNodeBuilders({
         break
       case 'mcp':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: 'MCP',
             config: {
@@ -269,7 +266,7 @@ export function createNodeBuilders({
         break
       case 'rpc':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: 'RPC',
             config: {
@@ -282,7 +279,7 @@ export function createNodeBuilders({
         break
       case 'code':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.code'),
           },
@@ -292,7 +289,7 @@ export function createNodeBuilders({
         break
       case 'layout':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.fallbackLabel.layout'),
           },
@@ -302,7 +299,7 @@ export function createNodeBuilders({
         break
       case 'comment':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.comment'),
           },
@@ -312,7 +309,7 @@ export function createNodeBuilders({
         break
       case 'result':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.result'),
           },
@@ -322,7 +319,7 @@ export function createNodeBuilders({
         break
       case 'progress':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.progress'),
           },
@@ -332,7 +329,7 @@ export function createNodeBuilders({
         break
       case 'llm':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: 'LLM',
           },
@@ -342,7 +339,7 @@ export function createNodeBuilders({
         break   
       case 'function':
         newNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           data: {
             label: t('flow.node.defaultLabel.function'),
           },
@@ -350,7 +347,7 @@ export function createNodeBuilders({
           type: 'function'
         }
         childNode = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           parentNode: newNode.id,
           data: {
             label: t('flow.node.defaultLabel.entry'),
@@ -367,6 +364,8 @@ export function createNodeBuilders({
         return
     }
     if (!newNode) return
+    // 工具目录里点进来的条目：把连接 / 端点预填进 config，作者只需补参数
+    if (preset) newNode.data.config = { ...(newNode.data.config || {}), ...preset }
     // label 要唯一：模板里的默认名（代码 / 入口 / 结果输出…）撞名时自动加 3 位后缀。
     // 注意 config.children 里的「分支 1 / 意图 1」不是节点 label，不参与唯一性。
     newNode.data.label = uniqueLabel(newNode.data.label, labelTaken)
@@ -389,22 +388,22 @@ export function createNodeBuilders({
   }
 
   // 顶层创建：return 只能在函数节点内部用
-  const createNode = (nodeType, x, y) => {
+  const createNode = (nodeType, x, y, preset) => {
     if (nodeType === 'return') {
       ElMessage.warning(t('flow.nodeFactory.returnOnlyInFunction'))
       return null
     }
-    return build(nodeType, x, y, null)
+    return build(nodeType, x, y, null, preset)
   }
 
   // 容器内创建子节点：函数节点只能建在顶层
-  const createChildNode = (parentNode, nodeType, x, y) => {
+  const createChildNode = (parentNode, nodeType, x, y, preset) => {
     if (nodeType === 'return' && !hasAncestorOfType(parentNode, 'function')) {
       ElMessage.warning(t('flow.nodeFactory.returnOnlyInFunction'))
       return null
     }
     if (nodeType === 'function') return
-    return build(nodeType, x, y, parentNode)
+    return build(nodeType, x, y, parentNode, preset)
   }
 
   return { createChildNode, createNode }

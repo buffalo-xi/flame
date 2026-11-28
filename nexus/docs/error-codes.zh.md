@@ -57,7 +57,7 @@
 | `tenant` | `tenant.not_found`、`tenant.schema_taken` | `schema_taken` 对应 409 |
 | `endpoint` | `endpoint.not_found`、`endpoint.not_exposed`、`endpoint.not_released` | 端点域用 expose/retract 用词；`not_released` = 目标没有正式发布过版本，管理接口拒绝对外开放（超级智能体除外：它始终按草稿运行） |
 | `asset` | `asset.not_found`、`asset.not_available`、`asset.storage_unavailable`、`asset.build_conflict`（`params.build`、`data.existing`） | `not_available` = 存在但未对本租户开放 |
-| `flow` | `flow.not_released`、`flow.deprecated`、`flow.node_limit_exceeded`（`params.count`、`params.limit`） | 与 `models.StatusDeprecated`「废弃」同词，界面也叫废弃。`node_limit_exceeded` = 图里的节点数超过租户配额（`flow_configs.max_node_count`），在保存与资产导入时校验 |
+| `flow` | `flow.not_released`、`flow.deprecated`、`flow.node_limit_exceeded`（`params.count`、`params.limit`）、`flow.endpoint_exposed`（`params.names`） | 与 `models.StatusDeprecated`「废弃」同词，界面也叫废弃。`node_limit_exceeded` = 图里的节点数超过租户配额（`flow_configs.max_node_count`），在保存与资产导入时校验。`endpoint_exposed` = 端点仍处于「对外开放」时拒绝删除（这是外部调用方可能正在用的入口）：请先「收回对外」；未对外开放的端点是流程的派生数据，随流程一起级联删除 |
 | `agent` | `agent.call_depth_exceeded`、`agent.not_found` | |
 | `skill` | `skill.not_found`、`skill.not_invocable`、`skill.invalid_command` | `not_invocable` = 技能存在但没开放为用户命令（`user_invocable` 未开）；`invalid_command` = `command_dispatch` 与 `command_tool` 不配套（只接受空值与 `tool`，选 `tool` 必须填目标工具） |
 | `tool` | `tool.not_found`、`tool.contract_readonly` | 自定义工具（`customtools`）；`contract_readonly` 覆盖 TOOL.json 的建 / 改 / 删 / 上传 |

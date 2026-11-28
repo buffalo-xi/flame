@@ -135,6 +135,20 @@ func EnsureAbsent(ctx context.Context, st storage.Storage, dir string) error {
 	return nil
 }
 
+// PruneEmptyEntityDir removes versions/<kind>/<name> once its last version directory is gone.
+//
+// Best effort on purpose: the version row is already deleted when this runs, so a failure here must not turn a completed
+// delete into an error - the leftover is an empty directory, which breaks nothing (EnsureAbsent looks at .../v<n>, and the
+// next release number comes from the database). A backend without directories (S3) does not implement the capability and is
+// skipped: there is nothing to remove there.
+func PruneEmptyEntityDir(ctx context.Context, st storage.Storage, dir string) {
+	r, ok := st.(storage.EmptyDirRemover)
+	if !ok {
+		return
+	}
+	_ = r.RemoveEmptyDir(ctx, dir)
+}
+
 // PutEntry writes one piece of content into the manifest: an entry with the same path has its size / sha256 updated, otherwise one is
 // appended.
 //

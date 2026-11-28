@@ -424,6 +424,10 @@ const upstreamNodesWithVariables = computed(() => {
       const filteredOutputs = Object.values(outputs).filter(output => filterByType(getVariableType(output)))
       if (filteredOutputs.length > 0) return true
     }
+
+    // A loop always offers iterations (the runtime resolves it, the run record stores it), so a loop with no configured
+    // outputs still has one readable name to show.
+    if (node.type === 'loop' && (props.filterType === 'all' || filterByType('number'))) return true
     
     if (ancestorNodeIds.value.has(nodeId)) {
       const config = node.data?.config || {}
@@ -512,6 +516,17 @@ const getFilteredNodeVariables = (node) => {
       if (filterByType(loop.type)) {
         filtered[key] = { ...loop, variableSource: 'loop' }
       }
+    }
+  }
+
+  // A loop's iterations is a readable result variable: the runtime resolves it and the run record stores it. Offered for
+  // every loop the picker lists (upstream or enclosing), not only for the enclosing one - reading the final count after the
+  // loop is the common case, and a loop declares no output that would otherwise surface the name.
+  if (node.type === 'loop' && filterByType('number')) {
+    filtered.iterations = {
+      type: 'number',
+      variableSource: 'loop',
+      description: t('flow.nodeFactory.loopVarIterations')
     }
   }
   
@@ -867,7 +882,7 @@ const selectVariable = (type, data) => {
 }
 
 .node-icon.icon-code {
-  background-color: #f56565;
+  background-color: #a0522d;
 }
 
 .node-icon.icon-http {
@@ -880,6 +895,10 @@ const selectVariable = (type, data) => {
 
 .node-icon.icon-end {
   background-color: #dc2626;
+}
+
+.node-icon.icon-exit {
+  background-color: #c62828;
 }
 
 .node-icon.icon-result {
@@ -908,6 +927,10 @@ const selectVariable = (type, data) => {
 
 .node-icon.icon-assign {
   background-color: #ff9800;
+}
+
+.node-icon.icon-raise {
+  background-color: #f56c6c;
 }
 
 .node-icon.icon-break {

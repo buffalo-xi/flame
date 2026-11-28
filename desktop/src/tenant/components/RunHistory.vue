@@ -179,6 +179,9 @@
         <div class="rh-dt-row"><span>{{ $t('history.colStatus') }}</span>
           <el-tag size="small" :type="statusType(detail.run.status)" effect="plain">{{ statusText(detail.run.status) }}</el-tag>
         </div>
+        <div v-if="stopInfo" class="rh-dt-row"><span>{{ $t('history.stopReason') }}</span>
+          <b>{{ $t('history.stopExit', { node: stopInfo }) }}</b>
+        </div>
         <div class="rh-dt-row"><span>{{ $t('history.colEntry') }}</span><b>{{ runTypeLabel(detail.run.run_type) }}</b></div>
         <div class="rh-dt-row"><span>{{ $t('history.startEnd') }}</span>
           <b>{{ fmtTime(detail.run.started_at) }} → {{ detail.run.finished_at ? fmtTime(detail.run.finished_at) : '—' }}</b>
@@ -292,6 +295,14 @@ const offset = ref(0)
 
 const detailVisible = ref(false)
 const detail = ref(null)
+
+// Why a run stopped early: nothing extra is stored for it - a successful exit node in the record is the evidence, the same
+// rule read_flow_run uses for stop_reason.
+const stopInfo = computed(() => {
+  const nodes = detail.value?.nodes || []
+  const hit = nodes.find(n => n.node_type === 'exit' && n.status === 'success')
+  return hit ? hit.node_id : ''
+})
 
 // Anchors the detail panel: it takes this list's top, height and right edge, the way the agent settings
 // window takes the editor's (see HistoryDetailPanel.vue).

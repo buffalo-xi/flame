@@ -4,7 +4,7 @@
     <div v-if="fullScreenMode" ref="editorAreaRef" class="full-screen-form">
       <div ref="headerRef" class="full-screen-header" :class="'header--' + headerSize">
         <div class="header-actions">
-          <el-button size="small" @click="handleBack">
+          <el-button size="small" @click="handleBackGuarded">
             <el-icon><ArrowLeft /></el-icon>{{ $t('agent.back') }}
           </el-button>
         </div>
@@ -22,9 +22,11 @@
                     @click="startEditName">
                 {{ editForm.name || $t(editingId ? 'agent.editTitle' : 'agent.createTitle') }}
               </span>
+              <!-- ESC 在这里只取消改名（.stop 拦住页面级 ESC，否则会退出编辑器） -->
               <el-input v-else v-model="editName" size="small" class="header-name-input"
                         maxlength="64" :placeholder="$t('agent.namePlaceholder')"
-                        @blur="saveEditName" @keyup.enter="saveEditName" ref="nameInputRef" />
+                        @blur="saveEditName" @keyup.enter="saveEditName"
+                        @keydown.esc.stop="cancelEditName" ref="nameInputRef" />
             </template>
           </div>
           <div class="header-desc-wrapper" :class="{ locked: lockDesc, saving: renaming }">
@@ -137,6 +139,7 @@ import AgentSettingsPanel from './agents/AgentSettingsPanel.vue'
 import AgentEndpointsPanel from './agents/AgentEndpointsPanel.vue'
 import AssetImportDialog from './AssetImportDialog.vue'
 import VersionEntry from './versions/VersionEntry.vue'
+import { useEscClose } from '../composables/useEscClose'
 import adminApi from '../config/admin.js'
 import { getToken } from '../utils/auth.js'
 import { exportEntity } from '../utils/assetTransfer.js'
@@ -391,9 +394,6 @@ const openEditEditor = async (instance) => {
 }
 
 const handleBack = () => {
-  if (fileState.value.hasDirty) {
-    ElMessage.warning({ message: t('agent.unsavedFiles'), duration: 2000, offset: 20 })
-  }
   fullScreenMode.value = false
   editingId.value = ''
   editingProtected.value = false
@@ -403,6 +403,39 @@ const handleBack = () => {
   // 编辑器里可能新建 / 收回过端点，卡片上的端点与状态要整表刷新才准
   fetchAgents()
 }
+
+// Leaving the editor: ESC and the back button share this. Unsaved files are asked about, not just warned
+// about — a warning followed by a silent exit still drops the edits.
+const handleBackGuarded = async () => {
+  if (fileState.value.hasDirty) {
+    try {
+      await ElMessageBox.confirm(
+        t('common.leaveUnsavedConfirm'),
+        t('common.leaveUnsavedTitle'),
+        { type: 'warning', confirmButtonText: t('common.leave'), cancelButtonText: t('common.cancel') }
+      )
+    } catch {
+      return
+    }
+  }
+  handleBack()
+}
+
+// The pages sit inside <keep-alive>: switching to another page only deactivates this one, so its ESC
+// entries have to step aside or a press somewhere else would pop this editor's leave prompt.
+const pageActive = ref(true)
+onActivated(() => { pageActive.value = true })
+onDeactivated(() => { pageActive.value = false })
+
+// ESC walks out one layer at a time: the settings panel / grant sidebar register their own entries,
+// so this one only answers once they are closed.
+// - skipWhenEditable: while renaming in the header, ESC belongs to the input;
+// - enabled: only while this page is the one on screen, and only when the description / asset import
+//   dialogs are closed (useEscClose also steps aside while any el-overlay is open).
+useEscClose(() => fullScreenMode.value && pageActive.value, handleBackGuarded, {
+  skipWhenEditable: true,
+  enabled: () => !descDialogVisible.value && !importVisible.value
+})
 
 // ============ 版本（vN / 未发布 / 有改动） ============
 // 发布或载入之后：整份定义可能被替换（载入 = 版本写回草稿），必须重挂载文件树 + 重读详情
@@ -488,6 +521,11 @@ const startEditName = () => {
   isEditingName.value = true
   nextTick(() => nameInputRef.value?.focus())
 }
+// ESC 取消改名：改了一半的名字直接丢弃（saveEditName 开头的 isEditingName 判断会拦住随后的 blur）
+const cancelEditName = () => {
+  isEditingName.value = false
+}
+
 // 名称内联编辑：失焦/回车即保存（后端同步迁移工作区目录 + 更新数据库 name）
 const saveEditName = async () => {
   if (!isEditingName.value) return

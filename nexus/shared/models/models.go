@@ -156,12 +156,12 @@ type Agent struct {
 	// It is a **definition** column, not free-form config: it is frozen into agent_versions on release, travels with an
 	// asset pack, and is what the runtime reads when the caller pins no language. It is the machine-readable half of
 	// "what language this agent speaks" — the wording and the exceptions stay in AGENT.md, which still wins.
-	DefaultLanguage string `json:"default_language"`
-	CreatedBy     xsql.UUID   `json:"created_by"`
-	UpdatedBy     xsql.UUID   `json:"updated_by"`
-	UpdatedByName xsql.String `json:"updated_by_name"` // the editor's name (joined from users at query time, not a DB column)
-	CreatedAt     xsql.Time   `json:"created_at"`
-	UpdatedAt     xsql.Time   `json:"updated_at"`
+	DefaultLanguage string      `json:"default_language"`
+	CreatedBy       xsql.UUID   `json:"created_by"`
+	UpdatedBy       xsql.UUID   `json:"updated_by"`
+	UpdatedByName   xsql.String `json:"updated_by_name"` // the editor's name (joined from users at query time, not a DB column)
+	CreatedAt       xsql.Time   `json:"created_at"`
+	UpdatedAt       xsql.Time   `json:"updated_at"`
 }
 
 // Lifecycle state values (shared by the status column of agents / flows / skills; the column type is int2).
@@ -508,27 +508,27 @@ type EndpointProtocol struct {
 
 // Flow is a workflow definition (stored in the flows table).
 type Flow struct {
-	ID                string             `json:"id"`
-	Name              string             `json:"name"`
-	Diagram           xsql.JSONB         `json:"diagram"`
-	Description       xsql.String        `json:"description"`
-	CreatedAt         xsql.Time          `json:"created_at"`
-	UpdatedAt         xsql.Time          `json:"updated_at"`
-	CreatedBy         xsql.UUID          `json:"created_by"`      // the creator's user id (uuid)
-	UpdatedBy         xsql.UUID          `json:"updated_by"`      // the editor's user id (uuid)
-	CreatedByName     xsql.String        `json:"created_by_name"` // the creator's name (joined from users at query time, not a DB column)
-	UpdatedByName     xsql.String        `json:"updated_by_name"` // the editor's name (joined from users at query time, not a DB column)
-	Arguments         xsql.JSONB         `json:"arguments"`
-	Outputs           xsql.JSONB         `json:"outputs"`
-	EnvVars           xsql.JSONB         `json:"env_vars"`
-	FlowVars          xsql.JSONB         `json:"flow_vars"`
-	Timeout           xsql.Int           `json:"timeout"`
-	MaxExecCount      xsql.Int           `json:"max_exec_count"`
-	StoreRuns         bool               `json:"store_runs"`     // false: keep no run records at all
-	SessionMemory     bool               `json:"session_memory"` // false: a stateless workflow (no session memory)
-	Status            xsql.Int           `json:"status"`      // 1: normal, 3: deprecated (workflows have no locked state, see StatusNormal/StatusDeprecated)
-	Endpoints         []EndpointProtocol `json:"endpoints"`   // endpoint protocols + exposed state (a jsonb column)
-	Breakpoints       []string           `json:"breakpoints"` // breakpoint node_id list (not a DB column; a save replaces flow_breakpoints wholesale)
+	ID            string             `json:"id"`
+	Name          string             `json:"name"`
+	Diagram       xsql.JSONB         `json:"diagram"`
+	Description   xsql.String        `json:"description"`
+	CreatedAt     xsql.Time          `json:"created_at"`
+	UpdatedAt     xsql.Time          `json:"updated_at"`
+	CreatedBy     xsql.UUID          `json:"created_by"`      // the creator's user id (uuid)
+	UpdatedBy     xsql.UUID          `json:"updated_by"`      // the editor's user id (uuid)
+	CreatedByName xsql.String        `json:"created_by_name"` // the creator's name (joined from users at query time, not a DB column)
+	UpdatedByName xsql.String        `json:"updated_by_name"` // the editor's name (joined from users at query time, not a DB column)
+	Arguments     xsql.JSONB         `json:"arguments"`
+	Outputs       xsql.JSONB         `json:"outputs"`
+	EnvVars       xsql.JSONB         `json:"env_vars"`
+	FlowVars      xsql.JSONB         `json:"flow_vars"`
+	Timeout       xsql.Int           `json:"timeout"`
+	MaxExecCount  xsql.Int           `json:"max_exec_count"`
+	StoreRuns     bool               `json:"store_runs"`     // false: keep no run records at all
+	SessionMemory bool               `json:"session_memory"` // false: a stateless workflow (no session memory)
+	Status        xsql.Int           `json:"status"`         // 1: normal, 3: deprecated (workflows have no locked state, see StatusNormal/StatusDeprecated)
+	Endpoints     []EndpointProtocol `json:"endpoints"`      // endpoint protocols + exposed state (a jsonb column)
+	Breakpoints   []string           `json:"breakpoints"`    // breakpoint node_id list (not a DB column; a save replaces flow_breakpoints wholesale)
 
 	// Version state (not a DB column; computed at query time):
 	//   CurrentVersion = 0 -> never released (production calls are unavailable; only the debugger works)
@@ -580,12 +580,12 @@ type FlowRunRecord struct {
 type AgentRunRecord struct {
 	// ID is the run identity, not just a row key: one row is one run, and session_records.run_id carries the same
 	// value. There is deliberately no second run_id column - the two copies could drift, and did.
-	ID        string     `json:"id"`
-	AgentID   string     `json:"agent_id"`
-	SessionID string     `json:"session_id"` // empty = a stateless run (no session)
-	UserID    string     `json:"user_id"`    // who called it; empty when the caller has no identity
-	RunType    string     `json:"run_type"` // call / rpc / mcp / agent / flow
-	Status     string     `json:"status"`   // ok / stopped / failed (the SessionStatus* values)
+	ID         string     `json:"id"`
+	AgentID    string     `json:"agent_id"`
+	SessionID  string     `json:"session_id"` // empty = a stateless run (no session)
+	UserID     string     `json:"user_id"`    // who called it; empty when the caller has no identity
+	RunType    string     `json:"run_type"`   // call / rpc / mcp / agent / flow
+	Status     string     `json:"status"`     // ok / stopped / failed (the SessionStatus* values)
 	ErrMsg     string     `json:"err_msg"`
 	DurationMs int64      `json:"duration_ms"`
 	StartedAt  xsql.Time  `json:"started_at"`
@@ -702,33 +702,37 @@ type SvcAuthBinding struct {
 
 // FlowNodeRecord is a workflow node run record (the flow_node_records table).
 type FlowNodeRecord struct {
-	ID                  string     `json:"id"`
-	RunID               string     `json:"run_id"`
-	NodeID              string     `json:"node_id"`
-	ProcessID           string     `json:"process_id"`
-	NodeType            string     `json:"node_type"`
-	Status              string     `json:"status"`
-	InputVars           []byte     `json:"input_vars"` // jsonb
-	InputVarsTruncated  bool       `json:"input_vars_truncated"`
-	InputVarsSize       int        `json:"input_vars_size"`
-	OutputVars          []byte     `json:"output_vars"` // jsonb
-	OutputVarsTruncated bool       `json:"output_vars_truncated"`
-	OutputVarsSize      int        `json:"output_vars_size"`
-	LocalVars           []byte     `json:"local_vars"` // jsonb
-	LocalVarsTruncated  bool       `json:"local_vars_truncated"`
-	LocalVarsSize       int        `json:"local_vars_size"`
-	RunLogs             []byte     `json:"run_logs"` // jsonb
-	RunLogsTruncated    bool       `json:"run_logs_truncated"`
-	RunLogsLines        int        `json:"run_logs_lines"`
-	ErrCode             string     `json:"err_code"`
-	ErrMsg              string     `json:"err_msg"`
-	ErrStack            string     `json:"err_stack"`
-	RetryCount          int        `json:"retry_count"`
-	ErrorAction         string     `json:"error_action"`
-	StartTime           *xsql.Time `json:"start_time"`
-	EndTime             *xsql.Time `json:"end_time"`
-	DurationMs          int64      `json:"duration_ms"`
-	Extra               []byte     `json:"extra"` // jsonb, run results specific to the node type
+	ID                  string `json:"id"`
+	RunID               string `json:"run_id"`
+	NodeID              string `json:"node_id"`
+	ProcessID           string `json:"process_id"`
+	NodeType            string `json:"node_type"`
+	Status              string `json:"status"`
+	InputVars           []byte `json:"input_vars"` // jsonb
+	InputVarsTruncated  bool   `json:"input_vars_truncated"`
+	InputVarsSize       int    `json:"input_vars_size"`
+	OutputVars          []byte `json:"output_vars"` // jsonb
+	OutputVarsTruncated bool   `json:"output_vars_truncated"`
+	OutputVarsSize      int    `json:"output_vars_size"`
+	LocalVars           []byte `json:"local_vars"` // jsonb
+	LocalVarsTruncated  bool   `json:"local_vars_truncated"`
+	LocalVarsSize       int    `json:"local_vars_size"`
+	RunLogs             []byte `json:"run_logs"` // jsonb
+	RunLogsTruncated    bool   `json:"run_logs_truncated"`
+	RunLogsLines        int    `json:"run_logs_lines"`
+	ErrCode             string `json:"err_code"`
+	ErrMsg              string `json:"err_msg"`
+	ErrStack            string `json:"err_stack"`
+	RetryCount          int    `json:"retry_count"`
+	ErrorAction         string `json:"error_action"`
+	// PostError / HandlerError are the on_error fallback failures: neither changes the node's own status or code, so
+	// they live beside ErrMsg instead of inside it.
+	PostError    string     `json:"post_error"`
+	HandlerError string     `json:"handler_error"`
+	StartTime    *xsql.Time `json:"start_time"`
+	EndTime      *xsql.Time `json:"end_time"`
+	DurationMs   int64      `json:"duration_ms"`
+	Extra        []byte     `json:"extra"` // jsonb, run results specific to the node type
 }
 
 // McpConnection is an MCP client connection configuration.

@@ -5,6 +5,7 @@ import (
 
 	"flame/nexus/service/flow/executors"
 	"flame/nexus/shared/auth"
+	"flame/nexus/shared/flowcheck"
 	"flame/nexus/shared/flowconfig"
 	"flame/nexus/shared/sandboxinfo"
 	"flame/tools/xhttp"
@@ -14,6 +15,10 @@ import (
 
 func GetNodeCapabilities(c *gin.Context) {
 	caps := executors.GetNodeCapabilities()
+	// A rule table rather than a node type, next to all_error_codes and raisable_codes: the editor gates its
+	// "concurrent member" checkbox on this list instead of keeping its own copy, which drifted from the runner as soon
+	// as a node type was added.
+	caps["non_member_types"] = flowcheck.NonMemberTypes()
 	xhttp.OkJSON(c, "Success", caps, "")
 }
 
@@ -76,6 +81,9 @@ func GetWorkflowLimits(c *gin.Context) {
 		limits["max_loop_times"] = l.MaxLoopTimes
 		limits["max_run_records"] = l.MaxRunRecords
 		limits["max_session_records"] = l.MaxSessionRecords
+		// The resolved ceiling, never -1: the editor uses it to bound the per-scope concurrency input, and the runtime
+		// does not honour "unlimited" for this field (see flowconfig.ConcurrencyLimit).
+		limits["max_concurrency"] = l.ConcurrencyLimit()
 	}
 	xhttp.OkJSON(c, "Success", limits, "")
 }

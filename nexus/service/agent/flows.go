@@ -18,7 +18,6 @@ import (
 	agents "flame/nexus/shared/repository/agents"
 	flowruns "flame/nexus/shared/repository/flowruns"
 	flows "flame/nexus/shared/repository/flows"
-	svcendpoints "flame/nexus/shared/repository/svcendpoints"
 	"flame/nexus/shared/versions"
 	"flame/tools/xsql"
 
@@ -33,7 +32,6 @@ type flowsManager struct {
 	schema string
 	userID string
 	repo   flows.Repository
-	eps    svcendpoints.SvcEndpointRepository
 	// agents is only used for the pre-check "a workflow name must not collide with an agent": the two entities share one namespace, and an
 	// endpoint name is always equal to the entity name, so without this check creation would collide inside svc_endpoints.
 	agents agents.Repository
@@ -45,7 +43,6 @@ func NewFlowsManager(schema, userID string) tools.FlowsManager {
 		schema: schema,
 		userID: userID,
 		repo:   flows.NewPostgresRepository(),
-		eps:    svcendpoints.NewPostgresRepository(),
 		agents: agents.NewRepository(),
 	}
 }
@@ -78,7 +75,8 @@ func (m *flowsManager) Exists(ctx context.Context, name string) (bool, error) {
 // memory. The counts behind them are tenant quotas, not per-flow values.
 const defaultFlowTimeout = 300 // seconds
 
-// Create creates a workflow; when Endpoints is non-empty it also exposes those protocols as endpoints.
+// Create creates a workflow (definition only: endpoint slots and their exposure are the endpoint tools' job, because a
+// workflow created here has no released version yet and exposure requires one).
 func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, error) {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
@@ -117,13 +115,13 @@ func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, 
 	}
 
 	inst := &models.Flow{
-		Name:              name,
-		Diagram:           xsql.JSONB{Data: in.Diagram},
-		Description:       xsql.String(description),
-		Timeout:           defaultFlowTimeout,
-		MaxExecCount:      -1,
-		StoreRuns:         true,
-		SessionMemory:     true,
+		Name:          name,
+		Diagram:       xsql.JSONB{Data: in.Diagram},
+		Description:   xsql.String(description),
+		Timeout:       defaultFlowTimeout,
+		MaxExecCount:  -1,
+		StoreRuns:     true,
+		SessionMemory: true,
 	}
 	if len(in.Arguments) > 0 {
 		// Entry argument declaration: once exposed, the endpoint's input_schema is taken from this column
@@ -134,61 +132,9 @@ func (m *flowsManager) Create(ctx context.Context, in tools.FlowInput) (string, 
 	if err != nil {
 		return "", err
 	}
-
-	if err := m.expose(id, in.Endpoints); err != nil {
-		// Roll back the definition just created when the endpoints could not be exposed: leaving a half-built flow that the user believes has
-		// endpoints is far harder to triage than a plain error. Endpoints are deleted first: the fresh one may already be exposed, and
-		// DeleteFlow would refuse.
-		_ = m.eps.DeleteByTarget(m.auth(), "flow", id)
-		_ = m.repo.DeleteFlow(m.auth(), id)
-		return "", err
-	}
 	return id, nil
 }
 
-// expose opens these protocols to the outside (written to svc_endpoints).
-//
-// Creating the flow already added an unexposed RPC endpoint (CreateManagedRPC), so this is "make sure it exists and flip the switch": a direct
-// Create would hit the (target, protocol) unique constraint.
-//
-// It does not write flows.endpoints: that column is a derived mirror of svc_endpoints, rewritten as a whole by the repository's syncEndpoints
-// after every add / delete - writing it directly would be overwritten, looking exposed while having no entry point at all.
-func (m *flowsManager) expose(flowID string, protocols []string) error {
-	if len(protocols) == 0 {
-		return nil
-	}
-	existing, err := m.eps.ListAll(m.auth(), &svcendpoints.ListSvcEndpointsRequest{
-		TargetType: "flow",
-		TargetID:   flowID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to query flow endpoints: %w", err)
-	}
-	endpointIDs := make(map[string]string, len(existing))
-	for i := range existing {
-		endpointIDs[existing[i].Protocol] = existing[i].ID
-	}
-
-	for _, p := range protocols {
-		if id, ok := endpointIDs[p]; ok {
-			// The auto-added RPC endpoint is in this class: only flip the switch, never recreate
-			if err := m.eps.UpdateExposed(m.auth(), id, true); err != nil {
-				return fmt.Errorf("failed to expose the %s endpoint: %w", p, err)
-			}
-			continue
-		}
-		ep := &models.SvcEndpoint{
-			TargetType: "flow",
-			TargetID:   flowID,
-			Protocol:   p,
-			Exposed:    xsql.Bool(true),
-		}
-		if _, err := m.eps.Create(m.auth(), ep); err != nil {
-			return fmt.Errorf("failed to create the %s endpoint: %w", p, err)
-		}
-	}
-	return nil
-}
 
 // List lists every workflow of this tenant. Limit=-1 is the repository's "take everything" convention; the tool layer truncates for display.
 func (m *flowsManager) List(ctx context.Context) ([]tools.FlowInfo, error) {
@@ -338,6 +284,7 @@ func (m *flowsManager) GetRun(ctx context.Context, runID string) (*tools.FlowRun
 		return nil, nil
 	}
 
+	stopReason, stopNodeID := runStopSummary(nodes)
 	out := &tools.FlowRunDetail{
 		FlowID:     run.FlowID,
 		RunID:      run.ID,
@@ -345,6 +292,8 @@ func (m *flowsManager) GetRun(ctx context.Context, runID string) (*tools.FlowRun
 		RunType:    run.RunType,
 		ErrMsg:     run.ErrMsg,
 		Result:     run.Result,
+		StopReason: stopReason,
+		StopNodeID: stopNodeID,
 		DurationMs: run.DurationMs,
 		StartedAt:  formatRunTime(run.StartedAt),
 		RunArgs:    decodeRunVar(run.RunArgs),
@@ -361,26 +310,51 @@ func (m *flowsManager) GetRun(ctx context.Context, runID string) (*tools.FlowRun
 	return out, nil
 }
 
+// runStopSummary derives why a run ended early from its node records (fetched in ascending start time): the first successful
+// exit node ended the run, so everything after it never ran. Empty values mean the flow walked its normal end.
+//
+// The records are the evidence itself, so nothing extra is stored and no migration is needed: status stays "success" in both
+// cases (an exit is an intentional stop, not a failure), which is exactly why this summary exists.
+func runStopSummary(nodes []*models.FlowNodeRecord) (reason, nodeID string) {
+	for _, n := range nodes {
+		if n == nil || n.NodeType != "exit" || n.Status != "success" {
+			continue
+		}
+		return "exit", n.NodeID
+	}
+	return "", ""
+}
+
 // toFlowRunNode converts a stored node record into the tool response body.
 func toFlowRunNode(n *models.FlowNodeRecord) tools.FlowRunNode {
-	return tools.FlowRunNode{
-		NodeID:      n.NodeID,
-		Type:        n.NodeType,
-		Status:      n.Status,
-		ErrCode:     n.ErrCode,
-		ErrMsg:      n.ErrMsg,
-		ErrStack:    n.ErrStack,
-		RetryCount:  n.RetryCount,
-		ErrorAction: n.ErrorAction,
-		DurationMs:  n.DurationMs,
-		InputVars:   decodeRunVar(n.InputVars),
-		OutputVars:  decodeRunVar(n.OutputVars),
-		LocalVars:   decodeRunVar(n.LocalVars),
-		Extra:       decodeRunVar(n.Extra),
-		Logs:        decodeRunLogs(n.RunLogs),
+	out := tools.FlowRunNode{
+		NodeID:       n.NodeID,
+		Type:         n.NodeType,
+		Status:       n.Status,
+		ErrCode:      n.ErrCode,
+		ErrMsg:       n.ErrMsg,
+		ErrStack:     n.ErrStack,
+		RetryCount:   n.RetryCount,
+		ErrorAction:  n.ErrorAction,
+		PostError:    n.PostError,
+		HandlerError: n.HandlerError,
+		DurationMs:   n.DurationMs,
+		InputVars:    decodeRunVar(n.InputVars),
+		OutputVars:   decodeRunVar(n.OutputVars),
+		LocalVars:    decodeRunVar(n.LocalVars),
+		Extra:        decodeRunVar(n.Extra),
+		Logs:         decodeRunLogs(n.RunLogs),
 		// Truncation already happened at write time: tell the caller "the value is not complete", so nobody asserts the data is only this
 		Truncated: n.InputVarsTruncated || n.OutputVarsTruncated || n.LocalVarsTruncated || n.RunLogsTruncated,
 	}
+	// The window is what makes "did these two members run at the same time" answerable from the record alone.
+	if n.StartTime != nil {
+		out.StartTime = tools.FormatNodeTime(time.Time(*n.StartTime))
+	}
+	if n.EndTime != nil {
+		out.EndTime = tools.FormatNodeTime(time.Time(*n.EndTime))
+	}
+	return out
 }
 
 // decodeRunVar decodes jsonb into a directly readable object; bad data is handed back as a string, so at least nothing is lost.

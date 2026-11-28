@@ -688,7 +688,10 @@ type Context struct {
 	// The same convention as Agents / Skills: the tenant schema and the current identity live inside the implementation, so
 	// the tool layer cannot pass them in.
 	Flows     FlowsManager
-	Relations AgentRelationsManager // agent call grant read/write (for allow/revoke_agent_call; may be nil)
+	// EndpointAdmin is endpoint administration for agents and flows (for create/delete/expose/retract_*_endpoint;
+	// may be nil). Same convention as Flows: the schema and the current user live inside the implementation.
+	EndpointAdmin EndpointsAdmin
+	Relations     AgentRelationsManager // agent call grant read/write (for allow/revoke_agent_call; may be nil)
 	Caller    AgentCaller           // calls other agents (for call_agent; nil = calling is unsupported)
 	Plugins   PluginRunner          // on-disk plugin runner (nil = use the process-level one; if neither exists, plugin tools are unavailable)
 	// Externals runs external connection tools (mcp__<connection>__<tool> / rpc__<connection>__<tool>).

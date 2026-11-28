@@ -322,7 +322,7 @@ const saveConfig = () => {
 const saveInputVariables = () => saveConfig()
 
 const generateBranchId = () => {
-  return random.generateUniqueId(5, FlowNodes.value, FlowEdges.value)
+  return random.generateUniqueId(FlowNodes.value, FlowEdges.value)
 }
 
 const handleAddBranch = () => {
@@ -906,7 +906,7 @@ const handleTimeoutEnabledChange = () => {
 .input-variable-btn .icon-start { background-color: #00704A; }
 .input-variable-btn .icon-branch { background-color: #00bcd4; }
 .input-variable-btn .icon-wait { background-color: #00bcd4; }
-.input-variable-btn .icon-code { background-color: #f56565; }
+.input-variable-btn .icon-code { background-color: #a0522d; }
 .input-variable-btn .icon-http { background-color: #409eff; }
 .input-variable-btn .icon-process { background-color: #00bcd4; }
 .input-variable-btn .icon-result { background-color: #67c23a; }

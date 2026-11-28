@@ -25,5 +25,12 @@ CREATE TABLE IF NOT EXISTS platform.flow_configs (
     max_loop_times      int NULL,                  -- loop node iteration cap
     max_run_records     int NULL,                  -- run history kept per flow
     max_session_records int NULL,                  -- session memories kept per session
+    max_concurrency     int NULL,                  -- concurrent members one scope may run at once
     updated_at          timestamptz NOT NULL DEFAULT now()
 );
+
+-- Older stores already have the table, and CREATE TABLE IF NOT EXISTS never adds a column to it, so the concurrency
+-- ceiling is also declared here as an idempotent ALTER. It is a ceiling, not a default: a scope runs min(author value,
+-- this value), and an absent author value resolves to this value rather than to "unbounded".
+ALTER TABLE platform.flow_configs
+    ADD COLUMN IF NOT EXISTS max_concurrency int NULL;

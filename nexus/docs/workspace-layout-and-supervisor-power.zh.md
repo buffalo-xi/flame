@@ -173,12 +173,12 @@ tenants/{schema}/workspace/{agent}/
 | `builtin:shell` | `shell` | ✅ | 常驻会话，schema 仅 3 参数 |
 | `builtin:agent` | `list_agents`、`read_agent`、`call_agent` | ✅ | 只读 + 协作 |
 | `builtin:skill` | `list_skills`、`read_skill`、`use_skill` | ✅ | 看 / 用技能：`read_skill` 给正文 + `tool_deps`（不激活），`use_skill` 才激活依赖 |
-| `builtin:agent-admin` | 建 / 改 / 删 agent + `bind_skill` / `unbind_skill`（5） | ✅ | **超级智能体的自举能力** |
+| `builtin:agent-admin` | 建 / 改 / 删 agent + `bind_skill` / `unbind_skill` + `*_agent_endpoint`（9） | ✅ | **超级智能体的自举能力**；端点工具负责建 / 删槽位与切换 `exposed` |
 | `builtin:skill-own` | `*_own_skill`（3） | ❌ | 跟随 `skill-authoring` |
 | `builtin:skill-admin` | `*_shared_skill` + `*_agent_skill`（6） | ❌ | 跟随 `skill-authoring` / `agent-authoring` |
 | `builtin:tool-grant` | `grant/revoke_agent_tool`、`allow/revoke_agent_call`、`search_tools`（5） | ❌ | 跟随 `agent-authoring` |
 | `builtin:custom-tool` | `*_custom_tool`（4） | ❌ | 跟随 `custom-tool-authoring` |
-| `builtin:flow-admin` | `create/list/read/delete_flow`（4） | ❌ | 跟随 `flow-authoring` |
+| `builtin:flow-admin` | `create/list/read/delete_flow` + 节点 / 连线工具 + `*_flow_endpoint`（20） | ❌ | 跟随 `flow-authoring`；端点工具只管 MCP 槽位，RPC 槽位随流程托管 |
 | `builtin:browser` | `browser`（1） | ❌ | 不跟随任何技能（见下） |
 
 **为什么是组而不是逐个工具**：组是原子的 —— 误删一个 = 少一整类，面板上一眼能看出来；

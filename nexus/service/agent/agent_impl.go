@@ -261,6 +261,7 @@ func newAgentImpl(instance *models.Agent, schema string, arguments map[string]an
 		ToolGrants:           NewToolGrantManager(schema, instance.ID, instance.Name, userID, instance.IsSupervisor, mode),
 		ToolCatalog:          newToolCatalogManager(schema, instance.Name, instance.IsSupervisor),
 		Flows:                NewFlowsManager(schema, userID),
+		EndpointAdmin:        NewEndpointsAdmin(schema, userID),
 		Relations:            NewAgentRelationsManager(schema, instance.ID, instance.Name, userID, instance.IsSupervisor),
 		Caller:               NewAgentCaller(schema, a.pushEvent, a.limits.MaxCallDepth),
 		Externals:            &externalToolRunner{},

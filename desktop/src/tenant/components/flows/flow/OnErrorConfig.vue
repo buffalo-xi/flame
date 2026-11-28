@@ -341,6 +341,10 @@ onMounted(async () => {
       const data = res && res.data ? res.data : {}
       globalErrorCodes.value = data.all_error_codes || []
       delete data.all_error_codes
+      // Not node types: these two are rule tables owned by their own consumers (the raise picker, the concurrency
+      // checkbox), and leaving them here would only invite a lookup against a type that does not exist.
+      delete data.raisable_codes
+      delete data.non_member_types
       nodeCapabilities.value = data
     }
   } catch (e) {

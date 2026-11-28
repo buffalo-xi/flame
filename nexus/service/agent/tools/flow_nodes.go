@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"flame/nexus/shared/flowcheck"
 )
 
 // ===== Node tools (create_node / insert_node / update_node / delete_node) =====
@@ -29,10 +31,14 @@ import (
 // palette dropped its entry point long ago, keeping only rendering for existing diagrams; letting the tool create it would mass
 // -produce dead nodes that "report no executor registered as soon as they are wired in". A knowledge node in an existing
 // diagram can still be read / updated / deleted / wired (nodeHandleRules keeps it).
+//
+// fork and wait are excluded for the same reason: they were the fork / mono model, and both the node types and their executors
+// are gone. A body (process / loop) dispatches its data.concurrent members and joins at its end, so a diagram that still
+// carries a fork or wait node fails at run time with no executor registered.
 var creatableNodeTypes = map[string]bool{
 	"llm": true, "code": true, "http": true, "mcp": true, "rpc": true,
 	"branch": true, "intent": true, "loop": true, "process": true, "function": true,
-	"call": true, "assign": true, "memory": true, "wait": true, "fork": true,
+	"call": true, "assign": true, "memory": true, "raise": true,
 	"result": true, "progress": true, "break": true, "continue": true, "return": true,
 	"exit": true, "layout": true, "comment": true,
 }
@@ -56,10 +62,15 @@ func childExtent() map[string]any {
 	return map[string]any{"range": "parent", "padding": []int{37, 5, 5, 5}}
 }
 
-func buildNodeJSON(id, typ, label string, cfg map[string]any, parentID string, pos map[string]int) (json.RawMessage, error) {
+func buildNodeJSON(id, typ, label string, cfg map[string]any, parentID string, pos map[string]int, concurrent bool) (json.RawMessage, error) {
 	data := map[string]any{"label": label}
 	if len(cfg) > 0 {
 		data["config"] = cfg
+	}
+	if concurrent {
+		// A structure attribute, not a config key: update_node replaces config wholesale and the canvas only
+		// round-trips data, so the flag lives where neither can lose it.
+		data["concurrent"] = true
 	}
 	n := nodeJSON{ID: id, Type: typ, Position: pos, Data: data}
 	if parentID != "" {
@@ -67,6 +78,34 @@ func buildNodeJSON(id, typ, label string, cfg map[string]any, parentID string, p
 		n.Extent = childExtent()
 	}
 	return json.Marshal(n)
+}
+
+// applyLoopVars fills config.loop_vars from the loop mode when the caller declared none: the four modes publish different
+// variables, so one shared default would name variables a mode never sets.
+//
+//   - count: index (0-based round), total (planned rounds)
+//   - each:  index, item (current element), total (array length)
+//   - while / do_while: index only (the round being tested / just run)
+func applyLoopVars(cfg map[string]any) {
+	if cfg == nil {
+		return
+	}
+	if _, ok := cfg["loop_vars"]; ok {
+		return
+	}
+	mode := ""
+	if lc, ok := cfg["loop"].(map[string]any); ok {
+		mode, _ = lc["type"].(string)
+	}
+	vars := map[string]any{"index": map[string]any{"type": "number", "description": "0-based round number"}}
+	switch mode {
+	case "count":
+		vars["total"] = map[string]any{"type": "number", "description": "Planned rounds (total_times)"}
+	case "each":
+		vars["item"] = map[string]any{"type": "any", "description": "Current element"}
+		vars["total"] = map[string]any{"type": "number", "description": "Array length"}
+	}
+	cfg["loop_vars"] = vars
 }
 
 func defaultNodeLabel(typ string) string {
@@ -88,19 +127,17 @@ func defaultNodeLabel(typ string) string {
 	case "loop":
 		return "Loop"
 	case "process":
-		return "Embedded flow"
+		return "Flow segment"
 	case "function":
 		return "Function"
 	case "call":
 		return "Call"
 	case "assign":
 		return "Assign"
+	case "raise":
+		return "Raise error"
 	case "memory":
 		return "Memory"
-	case "wait":
-		return "Wait"
-	case "fork":
-		return "Fork"
 	case "result":
 		return "Result"
 	case "progress":
@@ -150,10 +187,18 @@ func defaultNodeConfig(typ string, newID func() string) map[string]any {
 		}
 	case "assign":
 		return map[string]any{"inputs": map[string]any{}, "outputs": map[string]any{}, "targets": map[string]any{}, "assignments": []any{}}
-	case "loop":
+	case "raise":
+		// "other" as the default code: a picker with no value looks broken, and the completeness check reports the empty
+		// message, which is the part the author has to write anyway.
 		return map[string]any{
-			"loop":      map[string]any{"type": "count", "total_times": 10},
-			"loop_vars": map[string]any{"index": map[string]any{"type": "number", "description": "Loop index"}},
+			"inputs": map[string]any{},
+			"raise":  map[string]any{"code": "other", "message": ""},
+		}
+	case "loop":
+		// loop_vars are filled per mode by applyLoopVars: the four modes publish different variables, so one shared default
+		// would name the variables a mode never sets.
+		return map[string]any{
+			"loop": map[string]any{"type": "count", "total_times": 10},
 		}
 	case "branch":
 		return map[string]any{"children": []any{
@@ -233,6 +278,29 @@ func (d *flowDoc) ancestorIs(id, typ string) bool {
 		cur = p.ID
 	}
 	return false
+}
+
+// loopScope reports whether a break / continue placed under parentID can reach a loop: "loop" (a loop above it; process /
+// branch / fork are transparent), "function" (a function boundary comes first, and it is isolation), or "" at the top level.
+//
+// Kept in step with the two other places that answer the same question: control.go signalScope (the run time) and
+// flowcheck's control_scope (the static check). Three copies of one rule is one too many; the errors name the same shape.
+func (d *flowDoc) loopScope(parentID string) string {
+	cur := parentID
+	for i := 0; i < 32 && cur != ""; i++ {
+		n, ok := d.node(cur)
+		if !ok {
+			return ""
+		}
+		switch n.Type {
+		case "loop":
+			return "loop"
+		case "function":
+			return "function"
+		}
+		cur = n.ParentNode
+	}
+	return ""
 }
 
 // positionFor computes a placement for a new node that does not overlap existing ones, with the same rule as create_flow's
@@ -366,9 +434,6 @@ func (d *flowDoc) referencesTo(targets map[string]bool) []string {
 		if ref, _ := cfg["target"].(string); ref != "" && targets[ref] {
 			refs = append(refs, fmt.Sprintf("node %s (%s) config.target (call target)", n.ID, n.Type))
 		}
-		if ref, _ := cfg["fork_node_id"].(string); ref != "" && targets[ref] {
-			refs = append(refs, fmt.Sprintf("node %s (%s) config.fork_node_id (concurrency group)", n.ID, n.Type))
-		}
 	}
 	return refs
 }
@@ -422,7 +487,7 @@ func creatableTypeList() string {
 	names := make([]string, 0, len(creatableNodeTypes))
 	for _, t := range []string{
 		"llm", "code", "http", "mcp", "rpc", "branch", "intent", "loop", "process", "function",
-		"call", "assign", "memory", "wait", "fork", "result", "progress", "break", "continue",
+		"call", "assign", "memory", "raise", "result", "progress", "break", "continue",
 		"return", "exit", "layout", "comment",
 	} {
 		if creatableNodeTypes[t] {
@@ -435,7 +500,7 @@ func creatableTypeList() string {
 // buildNodeForTool is the shared pre-check and creation step of the node tools (including the entry a container brings
 // automatically).
 // It returns the new node id, the new container's entry id, an entry added to the parent container, and warnings.
-func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[string]any, concurrency string) (id, entryID, parentEntryID string, warnings []string, err error) {
+func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[string]any, member bool) (id, entryID, parentEntryID string, warnings []string, err error) {
 	if typ == "" {
 		return "", "", "", nil, errors.New("type must not be empty")
 	}
@@ -459,8 +524,40 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	if typ == "function" && parentID != "" {
 		return "", "", "", nil, errors.New("a function node can only be created at the top level: call nodes invoke it through config.target and it takes no edges")
 	}
+	// Membership is a property of a host body: a node outside process / loop has no scope to dispatch it, and the runtime
+	// rejects the flag with a config error. Refused at the write, like every other structural rule here.
+	if member {
+		parentType := ""
+		if parentID != "" {
+			if p, ok := doc.node(parentID); ok {
+				parentType = p.Type
+			}
+		}
+		if parentType != "process" && parentType != "loop" {
+			return "", "", "", nil, fmt.Errorf(
+				"concurrent=true needs parent_node to be a process or loop: only a container body is a concurrency scope (parent %q)", parentID)
+		}
+		if typ == "function" {
+			return "", "", "", nil, errors.New("a function node cannot be a concurrent member: it is invoked by a call, not by the body's chain")
+		}
+		if !flowcheck.CanBeConcurrentMember(typ) {
+			return "", "", "", nil, fmt.Errorf(
+				"a %s node cannot be a concurrent member: control flow stays on the body's chain, output keeps its place on it, and a step that never waits gains nothing from a slot", typ)
+		}
+	}
 	if typ == "return" && !doc.isOrInside(parentID, "function") {
 		return "", "", "", nil, errors.New("a return node can only be created inside a function container (a direct child or deeper)")
+	}
+	// break / continue need a loop above them: the node itself fails at run time otherwise (control.go checkSignalScope), and
+	// flowcheck reports control_scope - so the write boundary refuses it instead of storing a broken step.
+	if typ == "break" || typ == "continue" {
+		switch doc.loopScope(parentID) {
+		case "loop":
+		case "function":
+			return "", "", "", nil, fmt.Errorf("a %s node cannot live inside a function body: a function is an isolation scope, so declare the loop inside that function", typ)
+		default:
+			return "", "", "", nil, fmt.Errorf("a %s node can only be created inside a loop: with none above it the run fails with a config error", typ)
+		}
 	}
 
 	cfg := defaultNodeConfig(typ, doc.newNodeID)
@@ -470,9 +567,13 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	for k, v := range userCfg {
 		cfg[k] = v
 	}
-	// Concurrency is off by default: the same rule as create_flow, concurrency is handled by the policy the caller declares, and
-	// without a declaration it is stripped and echoed back; containers never carry the key.
-	if w := applyConcurrencyPolicy(cfg, typ, concurrency, "new node"); w != "" {
+	// A loop publishes a different set of variables per mode: filling them here is what makes the condition script in a while
+	// / do_while node able to read anything at all.
+	if typ == "loop" {
+		applyLoopVars(cfg)
+	}
+	// The types that read no inputs (process, function, call, …) get the block dropped instead of stored.
+	if w := applyInputsPolicy(cfg, typ, "new node"); w != "" {
 		warnings = append(warnings, w)
 	}
 	// branch / intent children may be supplied by the caller; when they are, every entry must end up with an id.
@@ -485,7 +586,7 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 		if owner := doc.labelOwner(label); owner != "" {
 			return "", "", "", nil, fmt.Errorf(
 				"label %q is already used by node %s: node labels must be unique across the flow"+
-					" (source_ref / call.target / fork_node_id can all be written as labels, and a duplicate points at the wrong node); pick another one, or leave it empty so the tool adds a suffix",
+					" (source_ref / call.target can both be written as labels, and a duplicate points at the wrong node); pick another one, or leave it empty so the tool adds a suffix",
 				label, owner)
 		}
 	} else {
@@ -505,7 +606,7 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	if typ == "function" && parentID == "" {
 		pos = doc.positionBelowFlow()
 	}
-	raw, err := buildNodeJSON(id, typ, label, cfg, parentID, pos)
+	raw, err := buildNodeJSON(id, typ, label, cfg, parentID, pos, member)
 	if err != nil {
 		return "", "", "", nil, err
 	}
@@ -517,7 +618,7 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 	// success straight away).
 	if parentID != "" && !doc.hasEntryOf(parentID) {
 		pid := doc.newNodeID()
-		praw, err := buildNodeJSON(pid, "entry", doc.uniqueLabel("Entry"), nil, parentID, map[string]int{"x": childBaseX, "y": childBaseY})
+		praw, err := buildNodeJSON(pid, "entry", doc.uniqueLabel("Entry"), nil, parentID, map[string]int{"x": childBaseX, "y": childBaseY}, false)
 		if err != nil {
 			return "", "", "", nil, err
 		}
@@ -530,7 +631,7 @@ func buildNodeForTool(doc *flowDoc, typ, label, parentID string, userCfg map[str
 
 	if containerTypes[typ] {
 		entryID = doc.newNodeID()
-		eraw, err := buildNodeJSON(entryID, "entry", doc.uniqueLabel("Entry"), nil, id, map[string]int{"x": childBaseX, "y": childBaseY})
+		eraw, err := buildNodeJSON(entryID, "entry", doc.uniqueLabel("Entry"), nil, id, map[string]int{"x": childBaseX, "y": childBaseY}, false)
 		if err != nil {
 			return "", "", "", nil, err
 		}
@@ -553,8 +654,8 @@ func (d *flowDoc) hasEntryOf(parentID string) bool {
 
 // labelOwner returns the id of the node currently using that label ("" = unused).
 //
-// label is the writable form of source_ref / call.target / fork_node_id, and a duplicate would make those references point at
-// the wrong node, so labels must be unique across the whole flow graph.
+// label is the writable form of source_ref / call.target, and a duplicate would make those references point at the wrong node,
+// so labels must be unique across the whole flow graph.
 func (d *flowDoc) labelOwner(label string) string {
 	label = strings.TrimSpace(label)
 	if label == "" {
@@ -569,8 +670,7 @@ func (d *flowDoc) labelOwner(label string) string {
 }
 
 // resolveRefsInConfig rewrites node references written as a label into node ids, for the config of one node:
-// config.inputs.*.source_ref, config.targets.*.source_ref, config.args.*.source_ref, config.target and
-// config.fork_node_id.
+// config.inputs.*.source_ref, config.targets.*.source_ref, config.args.*.source_ref and config.target.
 //
 // create_flow resolves a whole diagram at once (diagramBuilder.resolveSourceRefs / resolveNodeLabels); create_node,
 // insert_node and update_node write a single config and resolve it here - otherwise a label passes creation and the run
@@ -614,10 +714,8 @@ func (d *flowDoc) resolveRefsInConfig(cfg map[string]any) {
 			}
 		}
 	}
-	for _, key := range []string{"target", "fork_node_id"} {
-		if ref, ok := cfg[key].(string); ok {
-			cfg[key] = rewrite(ref)
-		}
+	if ref, ok := cfg["target"].(string); ok {
+		cfg["target"] = rewrite(ref)
 	}
 }
 
@@ -674,8 +772,10 @@ func (t *createNodeTool) Meta() ToolMeta {
 			"branch / intent automatically carry one config.children entry (the executor finds outgoing edges via children[].id). " +
 			"Pass a container id as parent_node to create a child node; only loop / process / function can hold children, " +
 			"function can only be created at the top level, and return can only be created inside a function. " +
-			"**Concurrency is off by default**: config.concurrency is stripped and reported in a warning; only when the user explicitly asks for concurrency, " +
-			"declare it with the concurrency parameter (mono / group). " +
+			"**Concurrency is wired through concurrent=true** (parent_node must be a process or loop): the node becomes a scope member, " +
+			"dispatched by the body and joined when it ends, and the limit / join / timeout live in that host's config.parallel. " +
+			"Only steps that can wait can be members: entry / break / continue / return / exit, comment / layout, result / progress and assign / memory are refused. " +
+			"A type that reads no config.inputs (process / function / call / memory / control signals) has that block removed, also with a warning. " +
 			"The result returns node / entry / handles (the in/out handle positions available for that type) / warnings.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -688,7 +788,7 @@ func (t *createNodeTool) Meta() ToolMeta {
 					"type":        "string",
 					"description": "Optional: container node id (loop / process / function). Omit to create at the top level",
 				},
-				"concurrency": concurrencyParamSchema,
+				"concurrent": concurrentParamSchema,
 			},
 			"required": []any{"flow", "type"},
 		},
@@ -706,12 +806,8 @@ func (t *createNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	}
 	typ := strings.ToLower(strings.TrimSpace(argString(args, "type")))
 	parentID := strings.TrimSpace(argString(args, "parent_node"))
-	concurrency, err := parseConcurrencyPolicy(args)
-	if err != nil {
-		return nil, err
-	}
 	id, entryID, parentEntryID, warnings, err := buildNodeForTool(
-		doc, typ, strings.TrimSpace(argString(args, "label")), parentID, userCfg, concurrency,
+		doc, typ, strings.TrimSpace(argString(args, "label")), parentID, userCfg, argBool(args, "concurrent"),
 	)
 	if err != nil {
 		return nil, err
@@ -750,8 +846,16 @@ func edgeHint(id, typ string) string {
 		return "sub-branches use source<children[].id>right, the default branch uses source" + id + "right"
 	}
 	rule := nodeHandleRules[typ]
-	if len(rule.in) == 0 || len(rule.out) == 0 {
-		return "this type has no incoming or no outgoing handle and cannot be wired (function is invoked by call)"
+	// "No incoming" and "no outgoing" are different facts and lead to different next steps: a terminal node is wired as
+	// the end of the chain, while a node with no inlet is its start. One shared sentence told the caller to give up on
+	// every control node, which is wrong for exit / break / continue / return / raise.
+	switch {
+	case len(rule.in) == 0 && len(rule.out) == 0:
+		return "this type takes no edges (a function is invoked by call, a comment is not wired)"
+	case len(rule.out) == 0:
+		return "this is a terminal node: it ends the chain and has no outgoing handle; wire it as the last node with target_handle=target" + id + rule.in[0]
+	case len(rule.in) == 0:
+		return "this is an entry node: it has no incoming handle; wire it as the start of the chain with source_handle=source" + id + rule.out[0]
 	}
 	return "source_handle=source" + id + rule.out[0] + ", target_handle=target<target id>" + rule.in[0]
 }
@@ -767,17 +871,19 @@ func (t *insertNodeTool) Meta() ToolMeta {
 		Description: "Insert a node in the middle of an **existing edge**: delete the old edge and wire A→new→B automatically (atomic — it never leaves a half-wired graph). " +
 			"The new node lands under the same parent as that edge (it cannot cross containers). " +
 			"Only types that take both an incoming and an outgoing edge can be inserted (function / exit / break and the like cannot). " +
-			"**Concurrency is off by default**: config.concurrency is stripped and reported in a warning; only when the user explicitly asks for concurrency, declare it with the concurrency parameter. " +
+			"**Concurrency comes from the scope model**: declare concurrent=true when the node sits inside a process / loop body; " +
+			"the limit / join / timeout belong to that host's config.parallel. " +
+			"A type that reads no config.inputs (process / function / call / memory / control signals) has that block removed, also with a warning. " +
 			"The result returns node, the two edges, handles and warnings.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"flow":        map[string]any{"type": "string", "description": flowRefHint},
-				"edge_id":     map[string]any{"type": "string", "description": "Id of the edge being split (diagram.edges[].id from read_flow)"},
-				"type":        map[string]any{"type": "string", "description": "Type of the new node: " + creatableTypeList()},
-				"label":       map[string]any{"type": "string", "description": "Node title; defaults to the type's default name"},
-				"config":      map[string]any{"type": "object", "description": "Node config; defaults to that type's template"},
-				"concurrency": concurrencyParamSchema,
+				"flow":       map[string]any{"type": "string", "description": flowRefHint},
+				"edge_id":    map[string]any{"type": "string", "description": "Id of the edge being split (diagram.edges[].id from read_flow)"},
+				"type":       map[string]any{"type": "string", "description": "Type of the new node: " + creatableTypeList()},
+				"label":      map[string]any{"type": "string", "description": "Node title; defaults to the type's default name"},
+				"config":     map[string]any{"type": "object", "description": "Node config; defaults to that type's template"},
+				"concurrent": concurrentParamSchema,
 			},
 			"required": []any{"flow", "edge_id", "type"},
 		},
@@ -816,12 +922,8 @@ func (t *insertNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 			return nil, err
 		}
 	}
-	concurrency, err := parseConcurrencyPolicy(args)
-	if err != nil {
-		return nil, err
-	}
 	nodeID, entryID, parentEntryID, warnings, err := buildNodeForTool(
-		doc, typ, strings.TrimSpace(argString(args, "label")), src.ParentNode, userCfg, concurrency,
+		doc, typ, strings.TrimSpace(argString(args, "label")), src.ParentNode, userCfg, argBool(args, "concurrent"),
 	)
 	if err != nil {
 		return nil, err
@@ -904,6 +1006,135 @@ func pickHandle(allowed, prefer []string) string {
 	return ""
 }
 
+// nodeLabelOf reads data.label from a raw node.
+func nodeLabelOf(raw json.RawMessage) string {
+	var n struct {
+		Data struct {
+			Label string `json:"label"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(raw, &n)
+	return strings.TrimSpace(n.Data.Label)
+}
+
+// concurrencyBlocks summarises every host body in a diagram: the host, the members it dispatches, its limit and its join
+// mode. The walk follows the entry chain and stops where the runner stops (a node outside the host, a branch / intent, or
+// a fork in the edges), so a block never claims a member the run would not dispatch.
+func concurrencyBlocks(d *flowDoc) []map[string]any {
+	type scopeNode struct {
+		ID         string `json:"id"`
+		Type       string `json:"type"`
+		ParentNode string `json:"parent_node"`
+		Data       struct {
+			Concurrent bool `json:"concurrent"`
+			Config     struct {
+				Parallel struct {
+					MaxConcurrency int    `json:"max_concurrency"`
+					Join           string `json:"join"`
+				} `json:"parallel"`
+			} `json:"config"`
+		} `json:"data"`
+	}
+	nodes := make([]scopeNode, 0, len(d.nodeRaw))
+	for _, raw := range d.nodeRaw {
+		var n scopeNode
+		if err := json.Unmarshal(raw, &n); err != nil || n.ID == "" {
+			continue
+		}
+		nodes = append(nodes, n)
+	}
+	byID := make(map[string]*scopeNode, len(nodes))
+	children := make(map[string][]string, len(nodes))
+	for i := range nodes {
+		n := &nodes[i]
+		byID[n.ID] = n
+		if n.ParentNode != "" {
+			children[n.ParentNode] = append(children[n.ParentNode], n.ID)
+		}
+	}
+	next := make(map[string]string, len(d.edges))
+	multi := make(map[string]bool, len(d.edges))
+	for _, e := range d.edges {
+		if _, seen := next[e.Source]; seen {
+			multi[e.Source] = true
+		}
+		next[e.Source] = e.Target
+	}
+
+	var out []map[string]any
+	for i := range nodes {
+		host := &nodes[i]
+		if host.Type != "process" && host.Type != "loop" {
+			continue
+		}
+		child := make(map[string]bool, len(children[host.ID]))
+		cur := ""
+		for _, c := range children[host.ID] {
+			child[c] = true
+			if byID[c] != nil && byID[c].Type == "entry" {
+				cur = next[c]
+			}
+		}
+		members := []string{}
+		seen := make(map[string]bool)
+		for cur != "" && child[cur] && !seen[cur] {
+			seen[cur] = true
+			n := byID[cur]
+			if n == nil {
+				break
+			}
+			if n.Data.Concurrent {
+				members = append(members, n.ID)
+			}
+			if multi[cur] || n.Type == "branch" || n.Type == "intent" {
+				break
+			}
+			cur = next[cur]
+		}
+		join := host.Data.Config.Parallel.Join
+		if join == "" {
+			join = "collect"
+		}
+		out = append(out, map[string]any{
+			"host":            host.ID,
+			"members":         members,
+			"max_concurrency": host.Data.Config.Parallel.MaxConcurrency,
+			"join":            join,
+		})
+	}
+	return out
+}
+
+// checkSelfInputReference refuses a config.inputs / config.args entry that reads the node being written: its own outputs
+// and locals are empty until it runs, so the reference can never resolve. saveDiagram rejects the finished diagram too, but
+// failing here names the entry while the model still has the patch in hand. Matching is by id or exact label - the two
+// forms a source_ref accepts; anything this helper cannot resolve is left to saveDiagram.
+func checkSelfInputReference(nodeID, label string, cfg map[string]any) error {
+	for _, block := range []string{"inputs", "args"} {
+		entries, _ := cfg[block].(map[string]any)
+		for name, raw := range entries {
+			m, _ := raw.(map[string]any)
+			if m == nil {
+				continue
+			}
+			if st, _ := m["source_type"].(string); st != "node" {
+				continue
+			}
+			ref, _ := m["source_ref"].(string)
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			if ref == nodeID || (label != "" && ref == label) {
+				return fmt.Errorf(
+					"%s.%s reads this node's own outputs/locals (%q): they do not exist until the node runs, so the value can never be resolved; read an upstream node or the container's output instead",
+					block, name, ref)
+			}
+		}
+	}
+	return nil
+}
+
 // ===== update_node =====
 
 type updateNodeTool struct{}
@@ -915,9 +1146,14 @@ func (t *updateNodeTool) Meta() ToolMeta {
 		Description: "Change one node: label / config / parent_node (move it into a container or back to the top level) / position (canvas coordinates). " +
 			"config is a **wholesale replacement** while config_patch is a **top-level merge** (only the keys you mention change; a null value deletes that key) — pick one of the two. " +
 			"When parent_node changes, edges that span the old and new container are deleted and listed in removed_edges (cross-parent edges are invalid and the canvas rejects them too), " +
-			"so remember to rewire with create_edge after moving a node into a container. position is the canvas-absolute coordinate for top-level nodes and the parent-relative coordinate for nodes inside a container. " +
-			"**Existing concurrency config is left alone by default** (existing flows stay as they are): only an explicit concurrency argument rewrites this node's " +
-			"config.concurrency (off = strip it, mono / group = switch to that shape). " +
+			"so remember to rewire with create_edge after moving a node into a container. The node keeps its id, and without an explicit position it is placed at a free spot inside the new container. " +
+			"A return node cannot be moved out of a function (it would end the whole flow). position is the canvas-absolute coordinate for top-level nodes and the parent-relative coordinate for nodes inside a container. " +
+			"concurrent (a boolean) sets data.concurrent - a scope membership: **omitted = leave it exactly as it is**, " +
+			"true marks the node as a member of its parent's process / loop body, false clears the flag. " +
+			"Concurrency is set in two places: concurrent=true sets the member flag on the node, and the limit / join / timeout " +
+			"are the host's config.parallel. " +
+			"Only steps that can wait can be members: entry / break / continue / return / exit, comment / layout, result / progress and assign / memory are refused. " +
+			"A type that reads no config.inputs (process / function / call / memory / control signals) has that block removed from the written config, with a warning. " +
 			"The result returns node / config / removed_edges; changing config also re-checks it and returns warnings (a missing required key, an unsupported on_error rule) — a wrong shape is refused before anything is written.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -939,12 +1175,11 @@ func (t *updateNodeTool) Meta() ToolMeta {
 				"config":       map[string]any{"type": "object", "description": "Optional: replace data.config wholesale (mutually exclusive with config_patch)"},
 				"config_patch": map[string]any{"type": "object", "description": "Optional: merge into data.config at the top level; give a key the value null to delete it"},
 				"parent_node":  map[string]any{"type": "string", "description": "Optional: move the node into this container (loop / process / function); pass an empty string to move it back to the top level"},
-				"concurrency": map[string]any{
-					"type": "string",
-					"enum": []any{"off", "mono", "group"},
-					"description": "Optional: rewrite this node's concurrency shape; **omitted = leave the existing config.concurrency exactly as it is** " +
-						"(existing flows stay unchanged). Pass it only when the user explicitly asks for concurrency or to turn it off: " +
-						"off strips concurrency, mono switches to single-node concurrency, group switches to a concurrency group (needs fork_node_id)",
+				"concurrent": map[string]any{
+					"type": "boolean",
+					"description": "Optional: set data.concurrent, the scope membership flag; **omitted = leave it exactly as it is**. " +
+						"true makes this node a member of its parent's process / loop body (dispatched by the body, joined at its end); " +
+						"false clears the flag",
 				},
 			},
 			"required": []any{"flow", "node_id"},
@@ -989,7 +1224,7 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		if owner := doc.labelOwner(label); owner != "" && owner != nodeID {
 			return nil, fmt.Errorf(
 				"label %q is already used by node %s: node labels must be unique across the flow"+
-					" (source_ref / call.target / fork_node_id can all be written as labels, and a duplicate points at the wrong node)",
+					" (source_ref / call.target can both be written as labels, and a duplicate points at the wrong node)",
 				label, owner)
 		}
 	}
@@ -999,15 +1234,11 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	if posErr != nil {
 		return nil, posErr
 	}
-	// Concurrency leaves existing data alone by default: without a concurrency argument the node's existing config.concurrency
-	// is not touched at all.
-	_, hasConcurrencyArg := args["concurrency"]
-	concurrencyPolicy, err := parseConcurrencyPolicy(args)
-	if err != nil {
-		return nil, err
-	}
-	if !moved && label == "" && !hasReplace && !hasPatch && !hasPos && !hasConcurrencyArg {
-		return nil, errors.New("nothing to change: give at least one of label / config / config_patch / parent_node / position / concurrency")
+	// Scope membership leaves existing data alone by default: without a concurrent argument data.concurrent is untouched.
+	_, hasConcurrentArg := args["concurrent"]
+	setConcurrent := argBool(args, "concurrent")
+	if !moved && label == "" && !hasReplace && !hasPatch && !hasPos && !hasConcurrentArg {
+		return nil, errors.New("nothing to change: give at least one of label / config / config_patch / parent_node / position / concurrent")
 	}
 	if moved {
 		if newParent != "" {
@@ -1031,12 +1262,46 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		if cur.Type == "entry" {
 			return nil, errors.New("entry is the entry node of a container and follows it: move the whole container instead")
 		}
+		// A return belongs to a function body: outside one it would end the whole flow instead of the container, which is the
+		// shape validate_flow reports as return_scope. Refused here so the rule holds at the write, not only in the check.
+		if cur.Type == "return" && !doc.isOrInside(newParent, "function") {
+			return nil, errors.New("a return node can only live inside a function: moving it out would end the whole flow instead of the container")
+		}
+		// break / continue need a loop the signal can reach. A function boundary is isolation, so moving one into a function
+		// body (or to the top level) would turn a working step into a config failure at run time (control_scope).
+		if (cur.Type == "break" || cur.Type == "continue") && doc.loopScope(newParent) != "loop" {
+			return nil, fmt.Errorf("a %s node can only live inside a loop: with none above it the run fails with a config error", cur.Type)
+		}
 	}
 
-	// concurrency was passed explicitly: compute the target config first (wholesale replacement / merge / just this key),
-	// rewrite concurrency per the policy, then write it back uniformly as a "wholesale replacement".
-	var concurrencyWarnings []string
-	if hasConcurrencyArg {
+	// Turning the flag on needs a host parent: outside a process / loop body the runtime rejects the member with a config
+	// error, so the write boundary refuses it instead of storing a diagram that cannot run.
+	if hasConcurrentArg && setConcurrent {
+		parentID := cur.ParentNode
+		if moved {
+			parentID = newParent
+		}
+		parentType := ""
+		if parentID != "" {
+			if p, ok := doc.node(parentID); ok {
+				parentType = p.Type
+			}
+		}
+		if parentType != "process" && parentType != "loop" {
+			return nil, fmt.Errorf(
+				"concurrent=true needs the node to sit inside a process or loop body: only a container body is a concurrency scope (parent %q)", parentID)
+		}
+		if cur.Type == "function" {
+			return nil, errors.New("a function node cannot be a concurrent member: it is invoked by a call, not by the body's chain")
+		}
+		if !flowcheck.CanBeConcurrentMember(cur.Type) {
+			return nil, fmt.Errorf(
+				"a %s node cannot be a concurrent member: control flow stays on the body's chain, output keeps its place on it, and a step that never waits gains nothing from a slot", cur.Type)
+		}
+	}
+
+	var inputsWarnings []string
+	if hasReplace || hasPatch {
 		var cfg map[string]any
 		switch {
 		case hasReplace:
@@ -1053,13 +1318,17 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		default:
 			cfg = nodeConfigOf(doc.nodeRaw[idx])
 		}
-		if w := applyConcurrencyPolicy(cfg, cur.Type, concurrencyPolicy, "node "+nodeID); w != "" {
-			concurrencyWarnings = append(concurrencyWarnings, w)
-		}
 		replaceCfg, hasReplace, hasPatch = cfg, true, false
 	}
 
 	newRaw, err := patchNodeJSON(doc.nodeRaw[idx], func(node, data map[string]json.RawMessage) error {
+		if hasConcurrentArg {
+			if setConcurrent {
+				data["concurrent"] = json.RawMessage("true")
+			} else {
+				delete(data, "concurrent")
+			}
+		}
 		if label != "" {
 			b, err := json.Marshal(label)
 			if err != nil {
@@ -1069,6 +1338,9 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		}
 		if hasReplace {
 			doc.resolveRefsInConfig(replaceCfg)
+			if w := applyInputsPolicy(replaceCfg, cur.Type, "node "+nodeID); w != "" {
+				inputsWarnings = append(inputsWarnings, w)
+			}
 			b, err := json.Marshal(replaceCfg)
 			if err != nil {
 				return err
@@ -1085,6 +1357,9 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 				merged[k] = v
 			}
 			doc.resolveRefsInConfig(merged)
+			if w := applyInputsPolicy(merged, cur.Type, "node "+nodeID); w != "" {
+				inputsWarnings = append(inputsWarnings, w)
+			}
 			b, err := json.Marshal(merged)
 			if err != nil {
 				return err
@@ -1132,8 +1407,12 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	// key is only a warning, because finishing the config on the canvas is allowed.
 	var configWarnings []string
 	if hasReplace || hasPatch {
-		ws, err := validateStepConfig(cur.Type, nodeConfigOf(newRaw))
+		newCfg := nodeConfigOf(newRaw)
+		ws, err := validateStepConfig(cur.Type, newCfg)
 		if err != nil {
+			return nil, err
+		}
+		if err := checkSelfInputReference(nodeID, nodeLabelOf(newRaw), newCfg); err != nil {
 			return nil, err
 		}
 		configWarnings = ws
@@ -1172,6 +1451,9 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	if moved {
 		out["parent_node"] = newParent
 		out["note"] = "edges crossing containers were removed: a cross-parent edge is invalid, so re-create it inside the new container with create_edge"
+		if len(removed) > 0 {
+			out["next_step"] = "re-wire the removed edges inside the new container with create_edge (the node id did not change)"
+		}
 	}
 	if len(removed) > 0 {
 		views := make([]any, 0, len(removed))
@@ -1180,7 +1462,7 @@ func (t *updateNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 		}
 		out["removed_edges"] = views
 	}
-	if warnings := append(concurrencyWarnings, configWarnings...); len(warnings) > 0 {
+	if warnings := append(inputsWarnings, configWarnings...); len(warnings) > 0 {
 		out["warnings"] = warnings
 	}
 	return out, nil
@@ -1195,7 +1477,7 @@ func (t *deleteNodeTool) Meta() ToolMeta {
 		Name:     "delete_node",
 		Category: CategoryFlowAdmin,
 		Description: "Delete a node together with all of its edges; a container is deleted along with its entire subtree (entry included). " +
-			"It is **refused** while other nodes still reference it, and the referrers are listed (config.inputs.*.source_ref / config.target / config.fork_node_id) — " +
+			"It is **refused** while other nodes still reference it, and the referrers are listed (config.inputs.*.source_ref / config.target) — " +
 			"those references do not disappear with the node, so deleting it would fail at run time. start / entry cannot be deleted on their own. " +
 			"The result returns deleted_nodes and removed_edges (use them to rebuild if you deleted the wrong thing).",
 		Parameters: map[string]any{
@@ -1286,7 +1568,7 @@ func (t *deleteNodeTool) Execute(ctx context.Context, c *Context, args map[strin
 	return out, nil
 }
 
-// resolveNodeLabels replaces values written as labels in config.target (call) / config.fork_node_id (wait) with node ids.
+// resolveNodeLabels replaces values written as labels in config.target (a call's target) with node ids.
 // The same rule as resolveSourceRefs: id first, and only a value matching no node id is replaced by label.
 func (b *diagramBuilder) resolveNodeLabels() {
 	byLabel := make(map[string]string, len(b.nodes))
@@ -1311,10 +1593,8 @@ func (b *diagramBuilder) resolveNodeLabels() {
 	}
 	for _, n := range b.nodes {
 		cfg := objectOf(n.Data["config"])
-		for _, key := range []string{"target", "fork_node_id"} {
-			if v, ok := cfg[key]; ok {
-				cfg[key] = resolve(v)
-			}
+		if v, ok := cfg["target"]; ok {
+			cfg["target"] = resolve(v)
 		}
 	}
 }

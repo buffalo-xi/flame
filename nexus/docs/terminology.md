@@ -75,7 +75,13 @@ else (the version row, the version directory, the draft, the endpoints and the g
   because a delete must not be the thing that takes a service down;
 - **a deprecated entity is deletable** (agents / skills used to require switching back to Active first, which put the
   entity back in service just to remove it); deprecating is already the explicit stop step, so what still blocks a
-  delete is a release, not the status.
+  delete is a release, not the status;
+- **a delete takes the entity's derived data with it**: for a workflow that is its endpoints, its version history
+  (`flow_versions`, `ON DELETE CASCADE`), its run records and its breakpoints (`flow_run_records` /
+  `flow_node_records` / `flow_breakpoints`, deleted explicitly in the same transaction because they carry no foreign
+  key). Once the flow row is gone those rows are unreachable from any page, and a history page keyed on a dead
+  `flow_id` is worse than no history. Keeping the old runs while the flow survives is the run history page's
+  clean-up, not a delete.
 
 ### Entity versions (agents / skills / custom tools)
 
@@ -155,14 +161,40 @@ Same root, different scope: `<scope>_vars`. All three are called "… variables"
 **Do not use**: `tenant_variables` (the scope is already expressed by the schema), `shared_vars` (`share` means cross-tenant
 distribution, it would collide), `vars` as a table name (it does not align with the `env_vars` / `flow_vars` root).
 
-## 6. Scope of application
+## 6. Concurrency scope (process / loop)
+
+One concurrent scope per body; there is no `fork` / `wait` node, the join is implicit. Full model: `parallel-scope.md`.
+
+| Concept | UI | Code | Database |
+|---|---|---|---|
+| Host that owns a scope | the "Concurrency scope" block on `process` / `loop` (max concurrency / timeout / join mode) | `config.parallel`, `ParallelConfig` | node `config.parallel` |
+| Body it runs | — | the chain starting at the host's `entry` | the same `config` |
+| One execution of that body | — | `BodyScope` (a `loop` creates one per iteration) | — |
+| Member of the scope | the "Run concurrently in the parent body" tick on the node | `data.concurrent`, `NodeData.Concurrent`, the `concurrent` argument of `create_node` / `insert_node` / `update_node` | node `data.concurrent` |
+| Collecting the members | "Join mode" (collect / drain / abort) | `ParallelResult`, `ProcessResult.Parallel` | `config.parallel.join` |
+
+`concurrent` and `parallel` are **not** interchangeable: `concurrent` is the member flag on the node itself, `parallel` is the
+host's block and run record. The validation codes split the same way (`concurrent_*` checks the flag, `parallel_*` the scope).
+Prose — UI copy, help topics, this document — says "concurrency".
+
+A member is an **executable** direct child on the body's entry chain: the `entry`, the control signals
+(`break` / `continue` / `return` / `exit`), the annotation nodes (`comment` / `layout`), the output nodes
+(`result` / `progress`) and the instant nodes (`assign` / `memory`) cannot be members; `process` and `loop` are hosts *and*
+can be members themselves. Reads are static, not best-effort: a member never reads a sibling member, and no chain node of the
+same body reads a member — its result is readable only after the join, through the host's outputs (`parallel_visibility`,
+error); a member may write only its own variables and its host's outputs (`concurrent_member_write`, error).
+
+**Do not use**: `fork` / `wait` / `mono` (removed); `parallel` for the member flag or `concurrent` for the host block;
+`group` / `thread` / `task` for a scope.
+
+## 7. Scope of application
 
 - New copy, APIs and tables take their words from the table above;
 - if an existing identifier conflicts with the table, the table wins; change it together with a migration script;
 - state values (`'listed'` and friends) are part of DB CHECK constraints; changing one requires updating
   `nexus/platform/sql/shared_assets.sql`, the migration scripts and both the frontend and the backend.
 
-## 7. Comment and diagnostic wording
+## 8. Comment and diagnostic wording
 
 Comments, internal error strings, `msg` diagnostics and log lines are **English** (2026-11 decision). User-facing copy is
 **not** written here at all: it comes from the `error` code plus the frontend locale bundles, so the same backend sentence

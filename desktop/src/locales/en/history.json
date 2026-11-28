@@ -31,6 +31,8 @@
     "detailTitle": "Run detail",
     "runId": "Run ID",
     "startEnd": "Started / Finished",
+    "stopReason": "Stop reason",
+    "stopExit": "Ended early at exit node ({node})",
     "nodesTitle": "Nodes ({count})",
     "shortcutLast1h": "Last hour",
     "shortcutLast24h": "Last 24 hours",

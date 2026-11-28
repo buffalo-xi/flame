@@ -288,6 +288,8 @@ func buildNodeRecord(nr *flow.NodeResult) *models.FlowNodeRecord {
 		ErrStack:            nr.ErrStack,
 		RetryCount:          nr.RetryCount,
 		ErrorAction:         string(nr.ErrorAction),
+		PostError:           nr.PostError,
+		HandlerError:        nr.HandlerError,
 		StartTime:           st,
 		EndTime:             et,
 		DurationMs:          nr.DurationMs,

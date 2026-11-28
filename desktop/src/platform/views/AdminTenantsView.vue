@@ -683,7 +683,8 @@ const FLOW_FIELDS = computed(() => [
   { key: 'max_exec_count', label: t('platform.system.flowConfigs.max_exec_count') },
   { key: 'max_loop_times', label: t('platform.system.flowConfigs.max_loop_times') },
   { key: 'max_run_records', label: t('platform.system.flowConfigs.max_run_records') },
-  { key: 'max_session_records', label: t('platform.system.flowConfigs.max_session_records') }
+  { key: 'max_session_records', label: t('platform.system.flowConfigs.max_session_records') },
+  { key: 'max_concurrency', label: t('platform.system.flowConfigs.max_concurrency') }
 ])
 const flowLoading = ref(false)
 const flowSaving = ref(false)

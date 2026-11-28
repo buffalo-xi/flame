@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -65,34 +64,34 @@ func AllErrorCodes() []string {
 }
 
 type NodeResult struct {
-	ID          string         `json:"id"`
-	NodeID      string         `json:"node_id"` // the id of the flow node
-	ProcessID   string         `json:"process_id"`
-	Ctx         *ExecContext   `json:"-"`
-	Status      NodeStatus     `json:"status"`
-	InputVars   map[string]any `json:"input_vars"`
-	OutputVars  map[string]any `json:"output_vars"`
-	LocalVars   map[string]any `json:"local_vars"`
-	RunLogs     []string       `json:"run_logs"`
-	StartTime   time.Time      `json:"start_time"`
-	EndTime     time.Time      `json:"end_time"`
-	DurationMs  int64          `json:"duration_ms"`
-	ErrCode     string         `json:"err_code"`
-	ErrMsg      string         `json:"err_msg"`
-	ErrStack    string         `json:"err_stack"`
-	RetryCount  int            `json:"retry_count"`
-	ErrorAction ErrorAction    `json:"error_action"`
-	PostError   string         `json:"post_error"` // post-processing script error (does not affect the node status)
+	ID           string         `json:"id"`
+	NodeID       string         `json:"node_id"` // the id of the flow node
+	ProcessID    string         `json:"process_id"`
+	Ctx          *ExecContext   `json:"-"`
+	Status       NodeStatus     `json:"status"`
+	InputVars    map[string]any `json:"input_vars"`
+	OutputVars   map[string]any `json:"output_vars"`
+	LocalVars    map[string]any `json:"local_vars"`
+	RunLogs      []string       `json:"run_logs"`
+	StartTime    time.Time      `json:"start_time"`
+	EndTime      time.Time      `json:"end_time"`
+	DurationMs   int64          `json:"duration_ms"`
+	ErrCode      string         `json:"err_code"`
+	ErrMsg       string         `json:"err_msg"`
+	ErrStack     string         `json:"err_stack"`
+	RetryCount   int            `json:"retry_count"`
+	ErrorAction  ErrorAction    `json:"error_action"`
+	PostError    string         `json:"post_error"`    // post-processing script error (does not affect the node status)
+	HandlerError string         `json:"handler_error"` // on_error handler script error (the node still fails with its original code)
 
 	NodeType NodeType `json:"node_type"`
 
 	// Per-node-type results, holding the data of the corresponding node type.
-	LoopResult     *LoopResult                 `json:"loop_result"`
-	ProcessResult  *ProcessResult              `json:"process_result"`
-	FunctionResult *FunctionResult             `json:"function_result"`
-	CodeResult     *CodeResult                 `json:"code_result"`
-	ForkResult     *ForkResult                 `json:"fork_result"`
-	WaitResult     *WaitResult                 `json:"wait_result"`
+	LoopResult     *LoopResult     `json:"loop_result"`
+	ProcessResult  *ProcessResult  `json:"process_result"`
+	FunctionResult *FunctionResult `json:"function_result"`
+	CodeResult     *CodeResult     `json:"code_result"`
+
 	BranchResult   *BranchResult               `json:"branch_result"`
 	HttpResult     *HttpResult                 `json:"http_result"`
 	OutputBindings map[string][]*OutputBinding `json:"-"` // streaming bindings of the output variables
@@ -232,8 +231,6 @@ const (
 	NodeTypeCall     NodeType = "call"
 	NodeTypeAssign   NodeType = "assign"
 	NodeTypeMemory   NodeType = "memory"
-	NodeTypeWait     NodeType = "wait"
-	NodeTypeFork     NodeType = "fork"
 	NodeTypeResult   NodeType = "result"
 	NodeTypeProgress NodeType = "progress"
 	NodeTypeBreak    NodeType = "break"
@@ -250,208 +247,31 @@ type LoopResult struct {
 	LoopConfig map[string]interface{} `json:"loop"` // loop node config (including type)
 	LoopVars   map[string]interface{} `json:"loop_vars"`
 	Iterations int                    `json:"iterations"` // number of iterations actually executed
-	mu         sync.RWMutex
+	// Parallel holds one scope snapshot per iteration, in iteration order. A loop creates a fresh scope every round, so
+	// the snapshots never mix; keeping them apart is what makes "which round overlapped which" answerable.
+	Parallel []*ParallelResult `json:"parallel,omitempty"`
+	mu       sync.RWMutex
 }
+
+// AppendParallel records one iteration's scope snapshot.
+func (lr *LoopResult) AppendParallel(p *ParallelResult) {
+	if lr == nil || p == nil {
+		return
+	}
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	lr.Parallel = append(lr.Parallel, p)
+}
+
 type ProcessResult struct {
-	mu sync.RWMutex
+	// Parallel is the scope snapshot: which nodes this body dispatched, when each one ran, and how it ended.
+	Parallel *ParallelResult `json:"parallel,omitempty"`
+	mu       sync.RWMutex
 }
 
 type FunctionResult struct {
 	ParamVars map[string]any `json:"param_vars"`
 	mu        sync.RWMutex
-}
-
-// ForkState is the group state of a ForkResult.
-type ForkState int
-
-// Group states of a ForkResult.
-const (
-	ForkStateActive    ForkState = iota // normal, further Add calls are allowed
-	ForkStateWaiting                    // waiting, Add is rejected
-	ForkStateDone                       // finished (every task Done), Add/Wait are rejected
-	ForkStateAbandoned                  // waiting abandoned (timeout); tasks may still run, Add/Wait are rejected
-)
-
-type ForkResult struct {
-	MaxConcurrency int `json:"max_concurrency"`
-	mu             sync.Mutex
-	wg             sync.WaitGroup
-	sem            chan struct{} // concurrency semaphore; nil when MaxConcurrency <= 0 (unlimited)
-	count          int           // number of tasks added so far
-	state          ForkState     // ForkStateActive / ForkStateWaiting / ForkStateDone / ForkStateAbandoned
-	members        []ForkMember  // added members (processID + nodeID), used by wait to scan statuses
-}
-
-// ForkMember identifies one concurrent branch added to a fork group, used by wait to scan node statuses.
-type ForkMember struct {
-	ProcessID string
-	NodeID    string
-}
-
-// NewForkResult creates a ForkResult; maxConcurrency <= 0 means unlimited.
-func NewForkResult(maxConcurrency int) *ForkResult {
-	fr := &ForkResult{MaxConcurrency: maxConcurrency}
-	if maxConcurrency > 0 {
-		fr.sem = make(chan struct{}, maxConcurrency)
-	}
-	return fr
-}
-
-// Add adds delta tasks; once in the wait/done state it refuses to add (a design error).
-// With MaxConcurrency configured, acquiring the semaphore blocks until a slot frees up (that is the
-// concurrency limit: one slot is handed over when one task exits); a cancelled ctx rolls back the
-// acquired slots and the counters.
-// member is the identity added by this call (processID + nodeID), used by wait to scan statuses; it
-// is ignored when delta > 1.
-func (fr *ForkResult) Add(delta int, ctx context.Context, member ForkMember) error {
-	fr.mu.Lock()
-	if fr.state >= ForkStateWaiting {
-		fr.mu.Unlock()
-		return fmt.Errorf("cannot add: waitgroup is already in wait/done state")
-	}
-	fr.count += delta
-	fr.wg.Add(delta)
-	if delta == 1 {
-		fr.members = append(fr.members, member)
-	}
-	fr.mu.Unlock()
-
-	// Semaphore throttling (blocking outside the lock, so the lock is not held for long).
-	if fr.sem != nil {
-		for i := 0; i < delta; i++ {
-			select {
-			case fr.sem <- struct{}{}:
-			case <-ctx.Done():
-				// ctx cancelled: roll back the acquired semaphore slots and the wg/count bookkeeping.
-				for j := 0; j < i; j++ {
-					<-fr.sem
-				}
-				fr.mu.Lock()
-				fr.count -= delta
-				if delta == 1 {
-					// Roll back the member record (drop the one appended last).
-					if len(fr.members) > 0 {
-						fr.members = fr.members[:len(fr.members)-1]
-					}
-				}
-				fr.mu.Unlock()
-				fr.wg.Add(-delta)
-				return ctx.Err()
-			}
-		}
-	}
-	return nil
-}
-
-// Members returns a snapshot of the member list (used by wait to scan node statuses).
-func (fr *ForkResult) Members() []ForkMember {
-	fr.mu.Lock()
-	defer fr.mu.Unlock()
-	result := make([]ForkMember, len(fr.members))
-	copy(result, fr.members)
-	return result
-}
-
-// Done marks one task finished and releases its semaphore slot (handing it to the next task).
-func (fr *ForkResult) Done() {
-	if fr.sem != nil {
-		<-fr.sem
-	}
-	fr.wg.Done()
-}
-
-// Wait switches to the waiting state and waits for every added task to finish (no timeout).
-// It returns true on normal completion and false on an invalid state (Wait was already called).
-func (fr *ForkResult) Wait() (bool, error) {
-	return fr.waitInternal(context.Background(), -1)
-}
-
-// WaitTimeout switches to the waiting state and waits for every added task to finish.
-// Returns (completed, err):
-//   - completed: true on normal completion, false on timeout or invalid state;
-//   - err: non-nil on an invalid state.
-//
-// timeoutSeconds <= 0 means no timeout.
-func (fr *ForkResult) WaitTimeout(timeoutSeconds int) (bool, error) {
-	return fr.waitInternal(context.Background(), timeoutSeconds)
-}
-
-// WaitTimeoutCtx is WaitTimeout plus a ctx: it returns immediately on cancellation or timeout, with
-// err = ctx.Err(). Node-level waits must use this one — otherwise a wait node keeps hanging until the
-// concurrent branches finish on their own after the user stopped the flow.
-func (fr *ForkResult) WaitTimeoutCtx(ctx context.Context, timeoutSeconds int) (bool, error) {
-	return fr.waitInternal(ctx, timeoutSeconds)
-}
-
-// waitInternal returns (completed bool, err error):
-//   - completed: true on normal completion, false on timeout or cancellation;
-//   - err: set on an invalid state or when ctx is cancelled.
-func (fr *ForkResult) waitInternal(ctx context.Context, timeoutSeconds int) (bool, error) {
-	fr.mu.Lock()
-	if fr.state != ForkStateActive {
-		fr.mu.Unlock()
-		return false, fmt.Errorf("cannot wait: already in wait/done state")
-	}
-	fr.state = ForkStateWaiting
-	fr.mu.Unlock()
-
-	done := make(chan struct{})
-	go func() {
-		fr.wg.Wait()
-		close(done)
-	}()
-
-	var timeoutCh <-chan time.Time
-	if timeoutSeconds > 0 {
-		timer := time.NewTimer(time.Duration(timeoutSeconds) * time.Second)
-		defer timer.Stop()
-		timeoutCh = timer.C
-	}
-
-	completed := true
-	select {
-	case <-done:
-	case <-timeoutCh:
-		completed = false
-	case <-ctx.Done():
-		// Cancellation is not a timeout: the wait is abandoned the same way and marked Abandoned;
-		// the background tasks still call Done() and settle their counters, nobody collects results.
-		fr.mu.Lock()
-		fr.state = ForkStateAbandoned
-		fr.mu.Unlock()
-		return false, ctx.Err()
-	}
-
-	fr.mu.Lock()
-	if completed {
-		fr.state = ForkStateDone
-	} else {
-		// Timeout abandoned the wait: the background tasks may still run, so mark it Abandoned.
-		// Their Done() calls still decrement the wg counter, but no wait collects the results anymore.
-		fr.state = ForkStateAbandoned
-	}
-	fr.mu.Unlock()
-
-	return completed, nil
-}
-
-// State returns the current state.
-func (fr *ForkResult) State() ForkState {
-	fr.mu.Lock()
-	defer fr.mu.Unlock()
-	return fr.state
-}
-
-// IsAbandoned reports whether the wait was abandoned by a timeout (tasks may still be running).
-func (fr *ForkResult) IsAbandoned() bool {
-	fr.mu.Lock()
-	defer fr.mu.Unlock()
-	return fr.state == ForkStateAbandoned
-}
-
-type WaitResult struct {
-	ForkNodeID string `json:"fork_node_id"`
-	mu         sync.RWMutex
 }
 
 type BranchResult struct {
@@ -561,16 +381,6 @@ func (nr *NodeResult) GetVariable(path string) (interface{}, error) {
 			return nil, fmt.Errorf("node type is process but ProcessResult is nil")
 		}
 		return nr.ProcessResult.GetVariable(path)
-	case NodeTypeFork:
-		if nr.ForkResult == nil {
-			return nil, fmt.Errorf("node type is fork but ForkResult is nil")
-		}
-		return nr.ForkResult.GetVariable(path)
-	case NodeTypeWait:
-		if nr.WaitResult == nil {
-			return nil, fmt.Errorf("node type is wait but WaitResult is nil")
-		}
-		return nr.WaitResult.GetVariable(path)
 	case NodeTypeFunction:
 		if nr.FunctionResult == nil {
 			return nil, fmt.Errorf("node type is function but FunctionResult is nil")
@@ -595,6 +405,13 @@ func (lr *LoopResult) GetVariable(path string) (interface{}, error) {
 		}
 	}
 
+	// iterations is the round count the run record already stores (nodeSnapshot's extra), and it is the only exact count for
+	// the two shapes loop vars cannot express: a loop that ran no round at all, and one that break / exit cut short. A loop
+	// var the author named "iterations" wins (checked above) - that name is theirs, this one is the reserved fallback.
+	if path == "iterations" {
+		return lr.Iterations, nil
+	}
+
 	return nil, fmt.Errorf("var path %s not found in loop", path)
 }
 
@@ -604,22 +421,6 @@ func (pr *ProcessResult) GetVariable(path string) (interface{}, error) {
 	}
 
 	return nil, fmt.Errorf("var path %s not found in process", path)
-}
-
-func (fr *ForkResult) GetVariable(path string) (interface{}, error) {
-	if fr == nil {
-		return nil, errors.New("forkResult is nil")
-	}
-
-	return nil, fmt.Errorf("var path %s not found in fork", path)
-}
-
-func (wr *WaitResult) GetVariable(path string) (interface{}, error) {
-	if wr == nil {
-		return nil, errors.New("waitResult is nil")
-	}
-
-	return nil, fmt.Errorf("var path %s not found in wait", path)
 }
 
 func (fr *FunctionResult) GetVariable(path string) (interface{}, error) {

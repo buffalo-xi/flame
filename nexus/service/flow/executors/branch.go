@@ -57,10 +57,12 @@ func (e *BranchExecutor) Execute(node *flow.Node, ctx *flow.ExecContext,
 	if inputsConfig, ok := config["inputs"].(map[string]interface{}); ok {
 		vars, err := ctx.GetVariables(inputsConfig, processID)
 		if err != nil {
-			nr.AddLogf("failed to read the input variables: %v", err)
-		} else {
-			inputVars = vars
+			// One unresolvable row fails the whole batch. Carrying on with an empty map turns the real cause ("variable
+			// source is not selected" / "unsupported source type" / "node result not found") into a condition error on
+			// line 1 ("attempt to perform arithmetic on a nil value"); every other executor fails here.
+			return failf(nr, flow.ErrCodeConfig, "failed to read the input variables: "+err.Error())
 		}
+		inputVars = vars
 	}
 	nr.SetInputVars(inputVars)
 
@@ -133,8 +135,11 @@ func (e *BranchExecutor) executeBranch(node *flow.Node, ctx *flow.ExecContext,
 
 	targetEdge := findBranchEdge(node, edgeKey)
 	if targetEdge == nil {
-		nr.AddLogf("branch %s has no outgoing edge, skipped", label)
-		return nil
+		// Reached only for a *matched* child: both callers check the default edge before calling. A child whose condition
+		// matched but that has no outgoing edge cannot run, and skipping it quietly would report success having done nothing -
+		// the static check already calls this shape an error (branch_edge), so the run agrees with it.
+		return failf(nr, flow.ErrCodeConfig, fmt.Sprintf(
+			"branch %s matched but has no outgoing edge (source%s), so there is nothing to run", label, edgeKey))
 	}
 
 	targetNode := GetNodeByID(ctx.Flow, targetEdge.Target)
@@ -255,15 +260,34 @@ func evaluateBranchCondition(ctx *flow.ExecContext, nr *flow.NodeResult, branch 
 	return isConditionTrue(result), nil
 }
 
-// findBranchEdge prefix-matches source_handle, tolerating the right/left/bottom directions
+// findBranchEdge returns the outgoing edge of one sub-branch (when branchID is a child id) or of the default branch (when it
+// is the node's own id). The owner is resolved exactly, not by prefix: with children "cA" and "cA2", a prefix match sent cA
+// down cA2's chain whenever cA2's edge happened to come first in OutEdges.
 func findBranchEdge(node *flow.Node, branchID string) *flow.Edge {
-	prefix := "source" + branchID
 	for _, edge := range node.OutEdges {
-		if strings.HasPrefix(edge.SourceHandle, prefix) {
+		if owner, ok := handleOwner(edge.SourceHandle); ok && owner == branchID {
 			return edge
 		}
 	}
 	return nil
+}
+
+// handleOwner resolves the id a source_handle names: the handle is source<id><left|right|top|bottom>, so exactly one position
+// suffix is stripped and the rest is the owner - the same rule flowcheck (handleOwner there) and the authoring tools
+// (splitHandle) apply, otherwise the check and the run disagree about which outlet an edge belongs to.
+//
+// A handle without any position suffix keeps the whole remainder as the owner, so a hand-written diagram still resolves.
+func handleOwner(handle string) (string, bool) {
+	body, ok := strings.CutPrefix(handle, "source")
+	if !ok || body == "" {
+		return "", false
+	}
+	for _, pos := range []string{"left", "right", "top", "bottom"} {
+		if owner, cut := strings.CutSuffix(body, pos); cut && owner != "" {
+			return owner, true
+		}
+	}
+	return body, true
 }
 
 // isConditionTrue reports whether the condition script returned true

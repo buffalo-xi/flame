@@ -13,7 +13,7 @@
     <div v-else class="full-screen-form">
       <div ref="headerRef" class="full-screen-header" :class="'header--' + headerSize">
         <div class="header-actions">
-          <el-button size="small" @click="handleBack">
+          <el-button size="small" @click="handleBackGuarded">
             <el-icon><ArrowLeft /></el-icon>{{ $t('skill.back') }}
           </el-button>
         </div>
@@ -32,9 +32,11 @@
                     @click="startEditName">
                 {{ form.name }}
               </span>
+              <!-- ESC 在这里只取消改名（.stop 拦住页面级 ESC，否则会退出编辑器） -->
               <el-input v-else v-model="editName" size="small" class="header-name-input" maxlength="64"
                         :placeholder="$t('skill.namePlaceholder')"
-                        @blur="saveEditName" @keyup.enter="saveEditName" ref="nameInputRef" />
+                        @blur="saveEditName" @keyup.enter="saveEditName"
+                        @keydown.esc.stop="cancelEditName" ref="nameInputRef" />
             </template>
             <el-input v-else v-model="form.name" size="small" class="header-name-input" maxlength="64"
                       :placeholder="$t('skill.namePlaceholder')" ref="nameInputRef" />
@@ -114,7 +116,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, onDeactivated, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // 图标走全局注册（main.js），模板只用到 ArrowLeft / Collection / MoreFilled
@@ -129,6 +131,7 @@ import { exportEntity } from '../utils/assetTransfer.js'
 import { useHeaderCompact } from '../utils/useHeaderCompact.js'
 import { currentLocale } from '../../locales'
 import { formatError } from '../../locales'
+import { useEscClose } from '../composables/useEscClose'
 
 // 脚本侧文案（标签、toast、确认框）走 t()
 const { t } = useI18n()
@@ -375,7 +378,45 @@ const handleBack = () => {
   fetchSkills()
 }
 
+// Leaving the editor: ESC and the back button share this. Unsaved file edits are asked about before
+// they are dropped.
+const handleBackGuarded = async () => {
+  if (fileState.value.hasDirty) {
+    try {
+      await ElMessageBox.confirm(
+        t('common.leaveUnsavedConfirm'),
+        t('common.leaveUnsavedTitle'),
+        { type: 'warning', confirmButtonText: t('common.leave'), cancelButtonText: t('common.cancel') }
+      )
+    } catch {
+      return
+    }
+  }
+  handleBack()
+}
+
+// The pages sit inside <keep-alive>: switching to another page only deactivates this one, so its ESC
+// entries have to step aside or a press somewhere else would pop this editor's leave prompt.
+const pageActive = ref(true)
+onActivated(() => { pageActive.value = true })
+onDeactivated(() => { pageActive.value = false })
+
+// ESC walks out one layer at a time: the settings panel registers its own entry, so this one only
+// answers once it is closed.
+// - skipWhenEditable: while renaming in the header, ESC belongs to the input;
+// - enabled: only while this page is the one on screen, and only when the description / asset import
+//   dialogs are closed (useEscClose also steps aside while any el-overlay is open).
+useEscClose(() => fullScreen.value && pageActive.value, handleBackGuarded, {
+  skipWhenEditable: true,
+  enabled: () => !descDialogVisible.value && !importVisible.value
+})
+
 // ============ 头部：名称 / 描述 / 设置 ============
+// ESC 取消改名：改了一半的名字直接丢弃（saveEditName 开头的 isEditingName 判断会拦住随后的 blur）
+const cancelEditName = () => {
+  isEditingName.value = false
+}
+
 // 改名：点击名称进编辑态；保存走后端 PUT（name = 新名，后端会校验重名并迁移内容目录）
 const startEditName = () => {
   if (blockIfReadonly()) return

@@ -336,8 +336,9 @@ func (r *PostgresRepository) UpdateAgent(authInfo *auth.AuthInfo, id string, age
 // DeleteAgent deletes an agent.
 // Everything is cleaned up inside one transaction: agent_skill_bindings (agent_id has no foreign key), the private skill
 // records (skills.agent_id has no foreign key either; the skills' own dependents go with ON DELETE CASCADE), the
-// agent_relations in both directions, and finally the agents row — a failure anywhere rolls the whole thing back, so it
-// never leaves the self-unhealable state of "the agent is still there, its skill records are gone".
+// agent_relations in both directions, the protocol endpoints (svc_endpoints.target_id is a polymorphic column with no
+// foreign key), and finally the agents row — a failure anywhere rolls the whole thing back, so it never leaves the
+// self-unhealable state of "the agent is still there, its skill records are gone".
 func (r *PostgresRepository) DeleteAgent(authInfo *auth.AuthInfo, id string) error {
 	// Open the transaction
 	tx, err := db.DB.Begin()
@@ -380,6 +381,15 @@ func (r *PostgresRepository) DeleteAgent(authInfo *auth.AuthInfo, id string) err
 	// Clean up this agent's call grants (both directions: as caller or as callee)
 	if _, err := tx.Exec(`DELETE FROM `+authInfo.Schema+`.agent_relations
 		WHERE caller_id = $1 OR callee_id = $1`, id); err != nil {
+		return err
+	}
+
+	// The agent's protocol endpoints go with it, for the same reason the skill records do: svc_endpoints.target_id is a
+	// polymorphic column (agent / flow) with no foreign key, so only the application can cascade. Left behind, they would
+	// keep the names reserved (svc_endpoints_unique_1 on name + protocol, so recreating an agent with the same name would
+	// hit the constraint) and keep an exposed entrance answering for an agent that no longer exists.
+	if _, err := tx.Exec(`DELETE FROM `+authInfo.Schema+`.svc_endpoints
+		WHERE target_id = $1 AND target_type = 'agent'`, id); err != nil {
 		return err
 	}
 

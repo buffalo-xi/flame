@@ -6,7 +6,7 @@
       <Handle type="target" position="right" :id="'target' + id + 'right'" class="custom-handle custom-handle-right custom-handle-target" />
       <div class="icon-wrapper icon-start"><el-icon><Connection /></el-icon></div>
       <div class="node-label">{{ data.label || t('flow.node.defaultLabel.branch') }}</div>
-      <NodeFindingsBadge :id="id" />
+      <NodeBadges :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -90,7 +90,7 @@ import { Connection, MoreFilled, Plus, Delete } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
 import random from '@/tenant/utils/random'
 import { useI18n } from 'vue-i18n'
-import NodeFindingsBadge from './NodeFindingsBadge.vue'
+import NodeBadges from './NodeBadges.vue'
 
 const { t } = useI18n()
 

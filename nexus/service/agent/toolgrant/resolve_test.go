@@ -1,6 +1,7 @@
 package toolgrant
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -240,13 +241,21 @@ func TestResolveTruncationNamesDroppedTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve = %v, want nil", err)
 	}
-	// 1 required + 16 flow-admin tools, cut to 5 -> 12 dropped
 	if len(res.FinalTools) != 5 {
 		t.Fatalf("FinalTools = %d, want 5 (the cap)", len(res.FinalTools))
 	}
+	// 1 required + every flow-admin tool, cut to the cap. The count is derived from the registry rather than hardcoded:
+	// a new flow-admin tool changes it, and a stale literal would only make this test fail for the wrong reason.
+	flowAdmin := 0
+	for _, tool := range tools.List() {
+		if tool.Meta().Category == tools.CategoryFlowAdmin {
+			flowAdmin++
+		}
+	}
+	dropped := 1 + flowAdmin - 5
 	joined := strings.Join(res.Warnings, "\n")
-	if !strings.Contains(joined, "dropped 12") {
-		t.Errorf("warnings = %q, want the dropped count", joined)
+	if !strings.Contains(joined, fmt.Sprintf("dropped %d", dropped)) {
+		t.Errorf("warnings = %q, want dropped %d", joined, dropped)
 	}
 	if !strings.Contains(joined, "builtin:validate_flow") {
 		t.Errorf("warnings = %q, want the dropped refs named", joined)

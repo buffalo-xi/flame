@@ -201,7 +201,7 @@ skill installed into another tenant only needs the variables changed there.
 Four things to watch:
 
 - **only `SKILL.md` is expanded**: scripts in `scripts/`, and files in `references/` / `templates/`, land verbatim, and nobody
-  replaces `${global_vars.X}` there — if a script needs an environment value, let it read an environment variable, or have the
+  replaces `${global_vars.<variable name>}` there — if a script needs an environment value, let it read an environment variable, or have the
   caller pass it in through `args`;
 - referencing a variable that does not exist, or **referencing a `secret` variable**, fails outright when the body is read and
   names the variable — it is not a warning; never put secrets into the body: the body enters the model context and run records;

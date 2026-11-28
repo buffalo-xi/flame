@@ -315,8 +315,9 @@ func (m *agentManager) Delete(ctx context.Context, name string) error {
 	if err := ensureAgentDeletable(inst); err != nil {
 		return err
 	}
-	// Data removal: private skill rows, grant relations and the agents row are handled by the repository in one transaction
-	// (skills.agent_id has no foreign key, so the cascade can only be guaranteed by the application).
+	// Data removal: private skill rows, grant relations, protocol endpoints and the agents row are handled by the
+	// repository in one transaction (skills.agent_id and svc_endpoints.target_id have no foreign key, so the cascade can
+	// only be guaranteed by the application).
 	if err := m.repo.DeleteAgent(m.auth(), inst.ID); err != nil {
 		// A released version means the agent is live: the repository refuses, and the model must not try to work around
 		// it - taking a service offline is the user's call (unrelease in the version panel), never a side effect of a

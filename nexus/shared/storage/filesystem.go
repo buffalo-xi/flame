@@ -114,6 +114,24 @@ func (f *FilesystemStorage) DeletePrefix(_ context.Context, dir string) error {
 	return err
 }
 
+// RemoveEmptyDir removes a directory only when it is empty; a non-empty or missing directory is not an error.
+//
+// os.Remove is the primitive that is inherently race-free here: rmdir fails while the directory still has entries instead of
+// recursing into them, so a version directory released in the meantime survives.
+func (f *FilesystemStorage) RemoveEmptyDir(_ context.Context, dir string) error {
+	full := f.fullPath(dir)
+	err := os.Remove(full)
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	// Linux and Windows disagree on the error code for "directory not empty"; check the contents instead of matching the
+	// code, because "still has entries" is the expected outcome, not a failure.
+	if left, lerr := os.ReadDir(full); lerr == nil && len(left) > 0 {
+		return nil
+	}
+	return err
+}
+
 // Rename renames / moves a file or a directory (returns nil when the source is missing).
 // os.Rename works for both and is atomic within one filesystem — there is no S3-style intermediate state of "copied, not
 // yet deleted".

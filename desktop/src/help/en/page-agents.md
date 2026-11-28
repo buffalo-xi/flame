@@ -6,16 +6,27 @@ Filter by status (all / active / deprecated, with counts), search by name and de
 New agent on the right. There is also a "system" toggle that only decides whether the built-in protected
 agents (such as main) are shown; it changes no data.
 
+When the list shows no agent of your own — only main, or nothing at all with the system toggle off — a guide
+appears below: what an agent is, how to have main build one in chat, and how to assemble one by hand. It stays
+out of the way while you are searching.
+
 A card shows name, status, version (`v3` / "unreleased"), endpoint protocol tag, description and who last
 updated it. Hovering reveals five actions: restore, deprecate, endpoints, export as an asset package,
 delete. **A delete needs nothing released**: with v3 live it is refused until you unrelease in the version
-panel; a deprecated agent can be deleted directly (deprecation is already the stop step).
+panel; a deprecated agent can be deleted directly (deprecation is already the stop step). **A delete takes its
+endpoints with it**, so they need no separate cleanup in the endpoint drawer.
 
 ## The editor is a directory of files
 
 Clicking a card opens a full-screen editor: a directory tree on the left, a tabbed text editor on the
 right. `AGENT.md` at the root is the agent's definition — it opens automatically and **can be edited but
 not deleted**. The `skills/` directory is read-only and maintained from the Skills screen.
+
+## ESC and leaving
+
+ESC walks out one layer at a time: the tool-grant sidebar and the version drawer first, then the settings panel; only when none is open does it leave the editor for the list. While renaming in the header, ESC cancels just that rename.
+
+Leaving with unsaved files asks first — the header Save only writes the file you have open, so anything unsaved is gone once you leave.
 
 ## Two tabs in the settings panel
 

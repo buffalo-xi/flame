@@ -70,6 +70,15 @@ type SeekableStorage interface {
 	OpenSeekCloser(ctx context.Context, path string) (io.ReadSeekCloser, error)
 }
 
+// EmptyDirRemover is an optional capability: remove a directory only when it is empty (a missing directory is not an error).
+//
+// It exists for one call site - "the last version is gone, so versions/<kind>/<name> is empty" - which cannot be written as
+// List-then-DeletePrefix: between the two calls a concurrent release can create v<n+1>, and the recursive delete would sweep
+// it away. The implementation decides emptiness itself, in one step. S3 has no directories and does not implement this.
+type EmptyDirRemover interface {
+	RemoveEmptyDir(ctx context.Context, dir string) error
+}
+
 // New creates the implementation for a driver.
 //
 // cfg.RootDir is the root of local / nfs; the s3 driver ignores it and uses cfg.S3.Bucket + cfg.S3.Prefix instead (both

@@ -753,8 +753,9 @@ func DeleteAgent(c *gin.Context) {
 	// endpoints), so the reverse rule - "switch it back to Active, then delete" - would put it back online just to
 	// remove it. What still blocks a delete is a released version (handled by the repository): unrelease first.
 
-	// Delete the rows: the private skill records, the grant links and the agents row are handled in one
-	// repository transaction (skills.agent_id has no foreign key, so DB-level cascading cannot be relied on).
+	// Delete the rows: the private skill records, the grant links, the protocol endpoints and the agents row are handled
+	// in one repository transaction (skills.agent_id and svc_endpoints.target_id have no foreign key, so DB-level
+	// cascading cannot be relied on).
 	if err := repo.DeleteAgent(ai, id); err != nil {
 		if err == sql.ErrNoRows {
 			xhttp.ErrCode(c, "agent.not_found", nil, "Agent instance not found", "")

@@ -31,6 +31,8 @@
     "detailTitle": "运行详情",
     "runId": "运行 ID",
     "startEnd": "开始 / 结束",
+    "stopReason": "结束原因",
+    "stopExit": "被 exit 节点（{node}）提前结束",
     "nodesTitle": "节点（{count}）",
     "shortcutLast1h": "最近 1 小时",
     "shortcutLast24h": "最近 24 小时",

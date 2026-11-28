@@ -64,9 +64,13 @@
             </div>
             <div class="config-row">
               <label class="config-label">{{ t('flow.mcpNode.tool') }}</label>
-              <el-select v-model="toolName" class="config-select" size="small" :placeholder="t('flow.mcpNode.toolPlaceholder')" filterable @change="saveMcpConfig">
+              <el-select v-model="toolName" class="config-select" size="small" :placeholder="t('flow.mcpNode.toolPlaceholder')" filterable>
                 <el-option v-for="t in tools" :key="t.name" :label="t.name" :value="t.name" />
               </el-select>
+              <button class="config-info-btn" :disabled="!selectedTool"
+                :title="t('flow.toolDetail.open')" @click="toolInfoVisible = true">
+                <el-icon><Help /></el-icon>
+              </button>
             </div>
             <div class="config-row">
               <label class="config-label">{{ t('flow.mcpNode.subscribeProgress') }}</label>
@@ -78,8 +82,8 @@
             </div>
             <div class="config-row config-row-col">
               <label class="config-label">{{ t('flow.mcpNode.argsLabel') }}</label>
-              <textarea :value="argumentsText" class="arguments-editor" placeholder='{"city": "{{.input.city}}"}' rows="5"
-                @blur="handleArgumentsChange($event.target.value)" spellcheck="false"></textarea>
+              <textarea v-model="argumentsText" class="arguments-editor" placeholder='{"city": "{{.input.city}}"}' rows="5"
+                @blur="saveMcpConfig()" spellcheck="false"></textarea>
             </div>
           </div>
         </div>
@@ -131,20 +135,24 @@
         <NodeLastRun :selected-node="selectedNode" />
       </div>
     </div>
+
+    <ToolDetailDialog v-model="toolInfoVisible" :subject="selectedTool" :meta="selectedToolMeta" />
   </div>
 </template>
 
 <script setup>
-import { ref, watch, computed, inject, onMounted } from 'vue'
+import { ref, watch, computed, inject, onMounted, nextTick } from 'vue'
 import NodeLastRun from './NodeLastRun.vue'
 import { Plus, Delete, Help, Link, MagicStick, Lightning, Promotion, RefreshRight, CircleClose, ChatLineSquare, Collection, User, Operation, Coin, Minus, Upload, CircleCheck, ScaleToOriginal, Monitor, Mouse, RefreshLeft, ChromeFilled, Notification, Tools } from '@element-plus/icons-vue'
 import OutputVarsConfig from './OutputVarsConfig.vue'
+import ToolDetailDialog from './ToolDetailDialog.vue'
 import OnErrorConfig from './OnErrorConfig.vue'
 import apiConfig from '../../../config/api.js'
 import { getToken } from '../../../utils/auth.js'
 import { resolveSourceIcon } from './nodeSourceIcons.js'
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js'
 import { MCP_OUTPUTS } from '../nodeFactory.js'
+import { sampleArguments } from './toolSample.js'
 import { useInputVariables } from './inputVariables.js'
 import { useHandlerConfig } from './handlerConfig.js'
 import { useI18n } from 'vue-i18n'
@@ -249,9 +257,20 @@ const fetchConnections = async () => {
   }
 }
 
+// tools.value belongs to which connection: the same connection is never refetched.
+// Flow.vue replaces selectedNode on every save, so the loading watcher re-runs on each edit; when it
+// refetched unconditionally and cleared the list first, the tool dropdown was empty until the
+// response arrived - and a tool switch landing in that window produced no sample at all.
+const toolsConnId = ref('')
+
 const fetchTools = async (connId) => {
+  if (!connId) {
+    tools.value = []
+    toolsConnId.value = ''
+    return
+  }
+  if (toolsConnId.value === connId) return
   tools.value = []
-  if (!connId) return
   try {
     const token = getToken()
     const response = await fetch(apiConfig.admin.mcpConnections.tools(connId), {
@@ -262,20 +281,48 @@ const fetchTools = async (connId) => {
     const data = await response.json()
     const items = data?.data?.items || data?.data || []
     tools.value = Array.isArray(items) ? items : []
+    toolsConnId.value = connId
   } catch (e) {
+    // Keep the previous list: an empty dropdown is worse than a stale one.
     console.error(t('flow.message.toolsFailed') + ':', e)
   }
 }
 
 const handleConnectionChange = () => {
+  // The new connection has its own tools; a name carried over from the old one cannot be resolved,
+  // so no sample would ever be produced for it again.
+  toolName.value = ''
   fetchTools(connectionId.value)
   saveMcpConfig()
 }
 
-const handleArgumentsChange = (value) => {
-  argumentsText.value = value
+const toolKey = (tool) => tool?.name || tool?.tool_name || ''
+
+// Switching the tool always rewrites the arguments: the old text describes the old interface, so
+// keeping it is worse than losing it. A tool that declares no arguments yields an empty skeleton,
+// which reads as "nothing to fill in" better than a blank box.
+const applySample = (sample) => {
+  argumentsText.value = sample || '{}'
   saveMcpConfig()
 }
+
+const loadingNode = ref(false)
+
+// Rebuild the sample when the tool changes. watch rather than the select's @change: the event and
+// the v-model write are not ordered, so reading the ref there could still see the previous tool.
+watch(toolName, (next) => {
+  if (loadingNode.value) return
+  applySample(sampleArguments(tools.value.find(t => toolKey(t) === next)))
+})
+
+// Tool details: the full contract of the selected tool, read without leaving the panel.
+const toolInfoVisible = ref(false)
+const selectedTool = computed(() => tools.value.find(it => toolKey(it) === toolName.value) || null)
+const selectedToolMeta = computed(() => {
+  const conn = connections.value.find(it => it.id === connectionId.value)
+  return conn ? [{ label: t('flow.toolDetail.connection'), value: conn.display_name || conn.name || '' }] : []
+})
+
 
 // ── 保存 ──
 const saveMcpConfig = () => {
@@ -309,6 +356,9 @@ const getSourceIcon = (sourceType, sourceRef) =>
 // ── watch 加载已有数据 ──
 watch(() => props.selectedNode, (node) => {
   if (node && node.data) {
+    // Restoring a node must not look like "the author switched tools", otherwise opening the panel
+    // would write a sample back into the node.
+    loadingNode.value = true
     const cfg = node.data.config || {}
 
     const inputs = cfg.inputs || {}
@@ -331,6 +381,7 @@ watch(() => props.selectedNode, (node) => {
     if (connectionId.value) {
       fetchTools(connectionId.value)
     }
+    nextTick(() => { loadingNode.value = false })
   }
 }, { immediate: true })
 
@@ -444,6 +495,15 @@ onMounted(() => {
 .config-select { flex: 1; min-width: 0; }
 .config-select :deep(.el-select__wrapper) { background: #eee; box-shadow: none; border-radius: 4px; }
 .config-select :deep(.el-input__wrapper) { background: #eee; box-shadow: none; border-radius: 4px; }
+/* Tool details sit next to the tool it describes; disabled until a tool is chosen. */
+.config-info-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; flex-shrink: 0;
+  border: 0; border-radius: 4px; background: #eee; color: #1890ff;
+  font-size: 14px; cursor: pointer; transition: background-color 0.2s, color 0.2s;
+}
+.config-info-btn:hover:not(:disabled) { background: #e6f7ff; }
+.config-info-btn:disabled { color: #c0c4cc; cursor: not-allowed; }
 .arguments-editor {
   width: 100%;
   padding: 8px 10px;
@@ -533,7 +593,7 @@ onMounted(() => {
 .icon-start { background-color: #00704A; }
 .icon-branch { background-color: #00bcd4; }
 .icon-wait { background-color: #00bcd4; }
-.icon-code { background-color: #f56565; }
+.icon-code { background-color: #a0522d; }
 .icon-http { background-color: #409eff; }
 .icon-process { background-color: #00bcd4; }
 .icon-result { background-color: #67c23a; }

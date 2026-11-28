@@ -71,6 +71,10 @@
               <span class="icon-wrapper icon-intent"><el-icon><Aim /></el-icon></span>
               <span class="node-label">{{ nodeLabel('intent') }}</span>
             </div>
+            <div class="node-card" @click="handleNodeClick('raise')">
+              <span class="icon-wrapper icon-raise"><el-icon><WarnTriangleFilled /></el-icon></span>
+              <span class="node-label">{{ nodeLabel('raise') }}</span>
+            </div>
             <div class="node-card" @click="handleNodeClick('break')">
               <span class="icon-wrapper icon-break"><el-icon><Minus /></el-icon></span>
               <span class="node-label">{{ nodeLabel('break') }}</span>
@@ -84,7 +88,7 @@
               <span class="node-label">{{ nodeLabel('return') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('exit')">
-              <span class="icon-wrapper icon-exit"><el-icon><CircleClose /></el-icon></span>
+              <span class="icon-wrapper icon-exit"><el-icon><SwitchButton /></el-icon></span>
               <span class="node-label">{{ nodeLabel('exit') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('process')">
@@ -94,14 +98,6 @@
             <div class="node-card" @click="handleNodeClick('function')">
               <span class="icon-wrapper icon-function"><el-icon><ScaleToOriginal /></el-icon></span>
               <span class="node-label">{{ nodeLabel('function') }}</span>
-            </div>
-            <div class="node-card" @click="handleNodeClick('fork')">
-              <span class="icon-wrapper icon-fork"><el-icon><Monitor /></el-icon></span>
-              <span class="node-label">{{ nodeLabel('fork') }}</span>
-            </div>
-            <div class="node-card" @click="handleNodeClick('wait')">
-              <span class="icon-wrapper icon-wait"><el-icon><Link /></el-icon></span>
-              <span class="node-label">{{ nodeLabel('wait') }}</span>
             </div>
             <div class="node-card" @click="handleNodeClick('call')">
               <span class="icon-wrapper icon-call"><el-icon><Mouse /></el-icon></span>
@@ -128,16 +124,69 @@
         </div>
       </div>
       <div v-show="activeTab === 'tool'" class="panel-section">
+        <el-input v-model="search" size="small" clearable class="tool-search"
+                  :placeholder="t('flow.nodePanel.searchTools')" />
+        <div v-if="catalogLoading" class="tool-empty">{{ t('flow.nodePanel.loadingTools') }}</div>
+        <template v-else>
+          <div v-if="visibleEndpoints.length" class="node-group">
+            <div class="group-title">{{ t('flow.nodePanel.groupEndpoints') }}</div>
+            <div class="tool-list">
+              <div v-for="ep in visibleEndpoints" :key="ep.id" class="tool-card" @click="pickEndpoint(ep)">
+                <el-icon class="tool-icon"><Link /></el-icon>
+                <div class="tool-text">
+                  <div class="tool-name">{{ ep.name }}</div>
+                  <div class="tool-desc">{{ ep.description || '' }}</div>
+                </div>
+                <span v-if="endpointKind(ep)" class="tool-kind">{{ endpointKind(ep) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-for="group in connections" :key="group.kind" class="node-group">
+            <div class="group-title">{{ t(group.titleKey) }}</div>
+            <div v-if="!group.items.length" class="tool-empty">{{ t(group.emptyKey) }}</div>
+            <div v-else class="tool-list">
+              <div v-for="conn in group.items" :key="conn.id" class="conn-block">
+                <div class="conn-head" @click="toggleConnection(group.kind, conn)">
+                  <el-icon class="conn-caret" :class="{ open: conn.expanded }"><CaretRight /></el-icon>
+                  <span class="conn-name">{{ conn.name }}</span>
+                  <span v-if="conn.loaded && conn.tools.length" class="conn-count">{{ conn.tools.length }}</span>
+                </div>
+                <div v-if="conn.expanded" class="conn-tools">
+                  <div v-if="conn.loading" class="tool-empty">{{ t('flow.nodePanel.loadingTools') }}</div>
+                  <template v-else>
+                    <div v-if="!conn.tools.length" class="tool-empty">{{ t('flow.nodePanel.noTools') }}</div>
+                    <div v-for="tool in conn.tools" :key="toolName(tool)" class="tool-card"
+                         @click="pickTool(group.kind, conn, tool)">
+                      <el-icon class="tool-icon"><Tools /></el-icon>
+                      <div class="tool-text">
+                        <div class="tool-name">{{ toolName(tool) }}</div>
+                        <div class="tool-desc">{{ toolDescription(tool) }}</div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!hasCatalog" class="tool-empty">{{ t('flow.nodePanel.emptyCatalog') }}</div>
+          <div v-else-if="query && !visibleEndpoints.length && !connections.some(g => g.items.length)"
+               class="tool-empty">{{ t('flow.nodePanel.searchEmpty') }}</div>
+        </template>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChatLineSquare, Clock, Promotion, RefreshRight, Connection, Link, Help, MagicStick, Lightning, CircleClose, Minus, Upload, CircleCheck, ScaleToOriginal, Monitor, Mouse, Coin, RefreshLeft, Tools, Aim } from '@element-plus/icons-vue'
+import { ChatLineSquare, Clock, Promotion, RefreshRight, Connection, Help, MagicStick, Lightning, SwitchButton, CircleClose, Minus, Upload, CircleCheck, ScaleToOriginal, Mouse, Coin, RefreshLeft, Tools, Aim, CaretRight, Link, WarnTriangleFilled } from '@element-plus/icons-vue'
 import { useEscClose } from '../../../composables/useEscClose'
+import apiConfig from '../../../config/api.js'
+import { getAuthHeader } from '../../../utils/auth.js'
+import { sampleArguments } from './toolSample.js'
 
 const { t } = useI18n()
 
@@ -152,6 +201,11 @@ const props = defineProps({
   left: {
     type: String,
     default: '60px'
+  },
+  // 当前流程 id：本地端点目录必须排除「指向自己」的那一条，否则建出来的节点一定跑不通
+  flowId: {
+    type: String,
+    default: ''
   }
 })
 
@@ -170,6 +224,141 @@ const panelStyle = {
 
 const handleNodeClick = (nodeType) => {
   emit('node-select', nodeType)
+}
+
+// ── 工具目录 ──
+// 三组的数据来源与预填字段各不相同：本地端点写 rpc.endpoint（存端点名，改名同步），RPC / MCP 连接写
+// connection_id + tool_name。连接里的工具清单在展开时才拉，避免一打开面板就是 N+1 次请求。
+const catalogLoaded = ref(false)
+const catalogLoading = ref(false)
+const search = ref('')
+const endpoints = ref([])
+const mcpConnections = ref([])
+const rpcConnections = ref([])
+
+const request = async (url, { method = 'GET', body } = {}) => {
+  const headers = { ...getAuthHeader() }
+  if (body) headers['Content-Type'] = 'application/json'
+  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
+  const payload = await res.json().catch(() => ({}))
+  if (!res.ok || (typeof payload.code === 'number' && payload.code !== 200)) {
+    throw new Error(payload?.msg || payload?.message || `HTTP ${res.status}`)
+  }
+  // 列表接口的空结果回的是 data: null，非空时 data 可能是数组、也可能包成 {items: [...]}。这里只接受数组：
+  // 直接 `data ?? payload` 在 data 为 null 时会把整个信封对象当成列表，v-for 于是按值迭代出带图标没内容的行。
+  const data = payload?.data
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.items)) return data.items
+  return []
+}
+
+const decorate = (items) => (Array.isArray(items) ? items : []).map(c => ({
+  id: c.id,
+  name: c.name || c.id,
+  tools: [],
+  loaded: false,
+  loading: false,
+  expanded: false
+}))
+
+const loadCatalog = async () => {
+  if (catalogLoading.value) return
+  catalogLoading.value = true
+  try {
+    const [eps, mcps, rpcs] = await Promise.all([
+      request(apiConfig.admin.svcEndpoints.base, {
+        method: 'POST',
+        body: { page: 1, limit: 200, protocol: 'rpc', sort_by: ['name'], sort_order: ['asc'] }
+      }),
+      request(apiConfig.admin.mcpConnections.base, {
+        method: 'POST',
+        body: { page: 1, limit: -1, sort_by: ['name'], sort_order: ['asc'] }
+      }),
+      request(apiConfig.admin.rpcConnections.base, {
+        method: 'POST',
+        body: { page: 1, limit: -1, sort_by: ['name'], sort_order: ['asc'] }
+      })
+    ])
+    endpoints.value = (Array.isArray(eps) ? eps : []).filter(ep =>
+      !(props.flowId && ep.target_type === 'flow' && String(ep.target_id) === String(props.flowId)))
+    mcpConnections.value = decorate(mcps)
+    rpcConnections.value = decorate(rpcs)
+    catalogLoaded.value = true
+  } catch (e) {
+    console.error('load tool catalog failed:', e)
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+// 目录只在真正切到「工具」tab 时加载，只逛节点 tab 的人不会为它付请求；面板关掉后清标记，
+// 下次打开重新拉一次，免得刚在「设置 → 工具」里加完连接回来还是旧清单
+watch([() => props.visible, activeTab], ([visible, tab]) => {
+  if (!visible) {
+    catalogLoaded.value = false
+    return
+  }
+  if (tab === 'tool' && !catalogLoaded.value) loadCatalog()
+})
+
+const toolName = (tool) => tool?.name || tool?.tool_name || tool?.id || ''
+const toolDescription = (tool) => tool?.description || ''
+
+const toggleConnection = async (kind, conn) => {
+  conn.expanded = !conn.expanded
+  if (!conn.expanded || conn.loaded || conn.loading) return
+  conn.loading = true
+  try {
+    const api = kind === 'mcp' ? apiConfig.admin.mcpConnections : apiConfig.admin.rpcConnections
+    conn.tools = (await request(api.tools(conn.id))) || []
+    conn.loaded = true
+  } catch (e) {
+    console.error('load connection tools failed:', e)
+    conn.tools = []
+  } finally {
+    conn.loading = false
+  }
+}
+
+const query = computed(() => search.value.trim().toLowerCase())
+const hit = (...values) => !query.value || values.some(v => String(v || '').toLowerCase().includes(query.value))
+
+const visibleEndpoints = computed(() => endpoints.value.filter(ep => hit(ep.name, ep.description)))
+
+const visibleByKind = (kind) => {
+  const list = kind === 'mcp' ? mcpConnections.value : rpcConnections.value
+  return list.filter(c => hit(c.name) || c.tools.some(tool => hit(toolName(tool), toolDescription(tool))))
+}
+
+const connections = computed(() => [
+  { kind: 'mcp', titleKey: 'flow.nodePanel.groupMcp', emptyKey: 'flow.nodePanel.emptyMcp', items: visibleByKind('mcp') },
+  { kind: 'rpc', titleKey: 'flow.nodePanel.groupRpc', emptyKey: 'flow.nodePanel.emptyRpc', items: visibleByKind('rpc') }
+])
+
+const hasCatalog = computed(() => !!(endpoints.value.length || mcpConnections.value.length || rpcConnections.value.length))
+
+const endpointKind = (ep) => {
+  if (ep.target_type === 'flow') return t('flow.nodePanel.targetFlow')
+  if (ep.target_type === 'agent') return t('flow.nodePanel.targetAgent')
+  return ''
+}
+
+const emitPick = (nodeType, preset) => emit('node-select', nodeType, preset)
+
+// 预填的是属性面板写的那几个字段本身，所以建出来就是「已选好连接和工具、参数有样本」的节点
+const pickEndpoint = (ep) => emitPick('rpc', {
+  rpc: { target_type: 'endpoint', endpoint: ep.name, arguments: sampleArguments(ep) }
+})
+
+const pickTool = (kind, conn, tool) => {
+  const args = sampleArguments(tool)
+  if (kind === 'mcp') {
+    emitPick('mcp', { mcp: { connection_id: conn.id, tool_name: toolName(tool), arguments: args } })
+  } else {
+    emitPick('rpc', {
+      rpc: { target_type: 'connection', connection_id: conn.id, tool_name: toolName(tool), arguments: args }
+    })
+  }
 }
 </script>
 
@@ -240,6 +429,134 @@ const handleNodeClick = (nodeType) => {
   padding-left: 3px;
 }
 
+/* ── 工具 tab：条目是「列表行」，不是节点 tab 那张图标网格 ── */
+.tool-search {
+  margin-bottom: 2px;
+}
+
+.tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.tool-card:hover {
+  background-color: #e6f0f8;
+}
+
+.tool-icon {
+  flex: none;
+  font-size: 14px;
+  color: #909399;
+}
+
+.tool-card:hover .tool-icon {
+  color: #1890ff;
+}
+
+.tool-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-name {
+  font-size: 12px;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-card:hover .tool-name {
+  color: #1890ff;
+}
+
+.tool-desc {
+  font-size: 11px;
+  color: #aaa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-kind {
+  flex: none;
+  padding: 0 4px;
+  font-size: 10px;
+  color: #909399;
+  background-color: #f2f3f5;
+  border-radius: 4px;
+}
+
+.tool-empty {
+  padding: 4px 3px;
+  font-size: 11px;
+  color: #bbb;
+}
+
+.conn-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.conn-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.conn-head:hover {
+  background-color: #f5f7fa;
+}
+
+.conn-caret {
+  flex: none;
+  font-size: 12px;
+  color: #909399;
+  transition: transform 0.2s;
+}
+
+.conn-caret.open {
+  transform: rotate(90deg);
+}
+
+.conn-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conn-count {
+  flex: none;
+  font-size: 10px;
+  color: #909399;
+}
+
+.conn-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 12px;
+}
+
 .group-items {
   display: grid !important;
   grid-template-columns: repeat(5, 1fr) !important;
@@ -303,19 +620,18 @@ const handleNodeClick = (nodeType) => {
 .icon-agent { color: #ffffff; background-color: #f56c6c; }
 .icon-branch { color: #ffffff; background-color: #00bcd4; }
 .icon-intent { color: #ffffff; background-color: #9c27b0; }
-.icon-wait { color: #ffffff; background-color: #00bcd4; }
 .icon-break { color: #ffffff; background-color: #ff9800; }
 .icon-continue { color: #ffffff; background-color: #4caf50; }
 .icon-return { color: #ffffff; background-color: #9c27b0; }
-.icon-exit { color: #ffffff; background-color: #f56565; }
+.icon-exit { color: #ffffff; background-color: #c62828; }
 .icon-process { color: #ffffff; background-color: #00bcd4; }
 .icon-function { color: #ffffff; background-color: #667eea; }
-.icon-fork { color: #ffffff; background-color: #4bc0c0; }
 .icon-call { color: #ffffff; background-color: #ffc107; }
 .icon-assign { color: #ffffff; background-color: #ff9800; }
+.icon-raise { color: #ffffff; background-color: #f56c6c; }
 .icon-loop { color: #ffffff; background-color: #7b1fa2; }
 .icon-subflow { color: #ffffff; background-color: #667eea; }
-.icon-code { color: #ffffff; background-color: #f56565; }
+.icon-code { color: #ffffff; background-color: #a0522d; }
 .icon-http { color: #ffffff; background-color: #409eff; }
 .icon-mcp { color: #ffffff; background-color: #e6a23c; }
 .icon-rpc { color: #ffffff; background-color: #1890ff; }

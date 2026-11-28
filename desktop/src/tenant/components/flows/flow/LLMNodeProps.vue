@@ -550,7 +550,7 @@ const onExtraParamsEnabledChange = () => {
 .input-variable-btn .input-node-icon { width: 16px; height: 16px; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #ffffff; flex-shrink: 0; }
 .input-variable-btn .icon-source-flow, .input-variable-btn .icon-source-env, .input-variable-btn .icon-source-argument { font-size: 14px; color: #1890ff; flex-shrink: 0; }
 .input-variable-btn .icon-llm { background-color: #409eff; }
-.input-variable-btn .icon-code { background-color: #f56565; }
+.input-variable-btn .icon-code { background-color: #a0522d; }
 .input-variable-btn .icon-http { background-color: #409eff; }
 /* 其余节点图标配色：class 由 nodeIcons.js 给出 */
 .input-variable-btn .icon-default { background-color: #6b7280; }

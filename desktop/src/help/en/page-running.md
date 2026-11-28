@@ -21,7 +21,9 @@ Filter by flow, initiator, session id, status (succeeded/failed/cancelled) and t
 page, with "load more" appending.
 
 The detail drawer shows: run id, flow, user, session, status, entry, start/end, duration, error, and a node
-table (node, status, duration, error). **No inputs/outputs, and no re-run** — node variables and logs live
+table (node, status, duration, error). A run stopped by an `exit` node still counts as succeeded, so the
+drawer adds a "stop reason" row naming that node (the node table also shows it) — that is the only way to
+tell "ran to the end" from "cut short". **No inputs/outputs, and no re-run** — node variables and logs live
 in the flow editor's run panel. Export to CSV and conditional bulk cleanup are available.
 
 ## Two 24-hour traps

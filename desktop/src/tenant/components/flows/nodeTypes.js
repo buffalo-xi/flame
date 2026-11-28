@@ -3,7 +3,6 @@ import StartNode from './flow/StartNode.vue'
 import BranchNode from './flow/BranchNode.vue'
 import IntentNode from './flow/IntentNode.vue'
 import ProcessNode from './flow/ProcessNode.vue'
-import WaitNode from './flow/WaitNode.vue'
 import EntryNode from './flow/EntryNode.vue'
 import CodeNode from './flow/CodeNode.vue'
 import HttpNode from './flow/HttpNode.vue'
@@ -19,9 +18,9 @@ import ContinueNode from './flow/ContinueNode.vue'
 import ReturnNode from './flow/ReturnNode.vue'
 import ExitNode from './flow/ExitNode.vue'
 import FunctionNode from './flow/FunctionNode.vue'
-import ForkNode from './flow/ForkNode.vue'
 import CallNode from './flow/CallNode.vue'
 import AssignNode from './flow/AssignNode.vue'
+import RaiseNode from './flow/RaiseNode.vue'
 import LoopNode from './flow/LoopNode.vue'
 import MemoryNode from './flow/MemoryNode.vue'
 import CommentNode from './flow/CommentNode.vue'
@@ -81,30 +80,11 @@ export function createNodeTypes({
     },
     getNodeById: getNodeById
   }),
-  fork: (props) => h(ForkNode, {
-    ...props,
-    'onUpdate:label': (newLabel) => updateNodeLabel(props.id, newLabel),
-    'onHandleClick': (nodeId, handleId, event) => {
-      handleNodeHandleClick(nodeId, handleId, event)
-    },
-    'onDelete': (nodeId) => deleteNode(nodeId),
-    getNodeById: getNodeById
-  }),
   entry: (props) => h(EntryNode, {
     ...props,
     'onHandleClick': (nodeId, handleId, event) => {
       handleNodeHandleClick(nodeId, handleId, event)
     },
-    getNodeById: getNodeById
-  }),
-  wait: (props) => h(WaitNode, {
-    ...props,
-    'onUpdate:label': (newLabel) => updateNodeLabel(props.id, newLabel),
-    'onUpdate:edges': (nodeId, newHandle) => updateEdges(nodeId, newHandle),
-    'onHandleClick': (nodeId, handleId, event) => {
-      handleNodeHandleClick(nodeId, handleId, event)
-    },
-    'onDelete': (nodeId) => deleteNode(nodeId),
     getNodeById: getNodeById
   }),
   call: (props) => h(CallNode, {
@@ -118,6 +98,16 @@ export function createNodeTypes({
     getNodeById: getNodeById
   }),
   assign: (props) => h(AssignNode, {
+    ...props,
+    'onUpdate:label': (newLabel) => updateNodeLabel(props.id, newLabel),
+    'onHandleClick': (nodeId, handleId, event) => {
+      handleNodeHandleClick(nodeId, handleId, event)
+    },
+    'onDelete': (nodeId) => deleteNode(nodeId),
+    getNodeById: getNodeById
+  }),
+  // No onUpdate:edges: raise is a sink, so it never contributes a new outgoing handle.
+  raise: (props) => h(RaiseNode, {
     ...props,
     'onUpdate:label': (newLabel) => updateNodeLabel(props.id, newLabel),
     'onHandleClick': (nodeId, handleId, event) => {

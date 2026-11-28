@@ -49,6 +49,54 @@ func TestBranchExecutorSkipsBranchWithoutCondition(t *testing.T) {
 	}
 }
 
+// An input row the runner cannot resolve fails the whole batch, and the branch must say so: it used to log and continue
+// with an empty input map, so the condition then reported "attempt to perform arithmetic on a nil value" on line 1 and the
+// real cause (a row without source_type) never reached the operator.
+func TestBranchExecutorFailsWhenInputsCannotBeResolved(t *testing.T) {
+	node := newExecNode("2", "branch", map[string]any{
+		"branch": map[string]any{"lang": "template"},
+		"inputs": map[string]any{"score": map[string]any{"type": "number"}},
+		"children": []any{
+			map[string]any{"id": "b1", "label": "high", "condition": "return input.score > 90"},
+		},
+	})
+	ctx := newExecContext()
+	nr := newExecResult(node, ctx)
+	err := (&BranchExecutor{}).Execute(node, ctx, "1", nr)
+	if err == nil {
+		t.Fatal("Execute must fail when an input row cannot be resolved")
+	}
+	if nr.ErrCode != flow.ErrCodeConfig {
+		t.Errorf("ErrCode = %q, want config", nr.ErrCode)
+	}
+	if !strings.Contains(err.Error(), "failed to read the input variables") {
+		t.Errorf("err = %v, want the input resolution failure", err)
+	}
+}
+
+// A matched child with no outgoing edge cannot run: it used to log one line and let the node report success, which reads as
+// "the branch did nothing" instead of "the config is wrong".
+func TestBranchExecutorFailsWhenMatchedChildHasNoEdge(t *testing.T) {
+	node := newExecNode("2", "branch", map[string]any{
+		"branch": map[string]any{"lang": "template"},
+		"children": []any{
+			map[string]any{"id": "b1", "label": "hit", "condition": "true"},
+		},
+	})
+	ctx := newExecContext()
+	nr := newExecResult(node, ctx)
+	err := (&BranchExecutor{}).Execute(node, ctx, "1", nr)
+	if err == nil {
+		t.Fatal("Execute must fail when the matched child has no outgoing edge")
+	}
+	if nr.ErrCode != flow.ErrCodeConfig {
+		t.Errorf("ErrCode = %q, want config", nr.ErrCode)
+	}
+	if !strings.Contains(err.Error(), "matched but has no outgoing edge") {
+		t.Errorf("err = %v, want it to name the missing edge", err)
+	}
+}
+
 func TestBranchExecutorMissingConfigFails(t *testing.T) {
 	node := newExecNode("2", "branch", nil)
 	ctx := newExecContext()
@@ -227,11 +275,11 @@ func TestIsConditionTrue(t *testing.T) {
 	}
 }
 
-// Edges carry a direction suffix ("sourceb1right"), so the lookup prefix-matches on "source"+branchID.
+// Edges carry a direction suffix ("sourceb1right"), so the lookup strips exactly that suffix and compares the owner.
 func TestFindBranchEdge(t *testing.T) {
 	node := newExecNode("2", "branch", nil)
 	node.OutEdges = []*flow.Edge{
-		{ID: "e1", Target: "n1", SourceHandle: "sourceb10right"},
+		{ID: "e1", Target: "n1", SourceHandle: "sourceb1right"},
 		{ID: "e2", Target: "n2", SourceHandle: "source2bottom"},
 	}
 	if got := findBranchEdge(node, "b1"); got == nil || got.Target != "n1" {
@@ -242,5 +290,21 @@ func TestFindBranchEdge(t *testing.T) {
 	}
 	if got := findBranchEdge(node, "nope"); got != nil {
 		t.Errorf("findBranchEdge(nope) = %v, want nil", got)
+	}
+}
+
+// A child id that is a prefix of another must not claim the longer one's edge: sourcecA2left belongs to cA2, and with cA2's
+// edge listed first a prefix match sent cA down cA2's chain.
+func TestFindBranchEdgeDoesNotPrefixMatch(t *testing.T) {
+	node := newExecNode("2", "branch", nil)
+	node.OutEdges = []*flow.Edge{
+		{ID: "e1", Target: "long", SourceHandle: "sourcecA2left"},
+		{ID: "e2", Target: "short", SourceHandle: "sourcecAleft"},
+	}
+	if got := findBranchEdge(node, "cA"); got == nil || got.Target != "short" {
+		t.Errorf("findBranchEdge(cA) = %v, want the edge to short", got)
+	}
+	if got := findBranchEdge(node, "cA2"); got == nil || got.Target != "long" {
+		t.Errorf("findBranchEdge(cA2) = %v, want the edge to long", got)
 	}
 }

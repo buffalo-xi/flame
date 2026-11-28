@@ -34,8 +34,11 @@ func (e *LoopExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 		nr.LoopResult.LoopVars = flow.InitLoopVars(loopVars)
 	}
 
-	// Resolve inputs uniformly (top level of the config) into NodeResult.InputVars
-	if inputsCfg, ok := node.Data.Config["inputs"].(map[string]interface{}); ok {
+	// Resolve inputs uniformly (top level of the config) into NodeResult.InputVars. count / each keep this snapshot for
+	// the whole loop (an iterated array must not change under its own iteration); while / do_while re-resolve it before
+	// every condition - see evaluateCondition.
+	inputsCfg, _ := node.Data.Config["inputs"].(map[string]interface{})
+	if inputsCfg != nil {
 		inputVars, err := ctx.GetVariables(inputsCfg, processID)
 		if err != nil {
 			return failf(nr, flow.ErrCodeConfig, err.Error())
@@ -53,9 +56,16 @@ func (e *LoopExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 
 	switch loopType {
 	case "count":
-		totalTimes, terr := parseCountInt(lc, "total_times")
+		totalTimes, set, terr := parseCountInt(lc, "total_times")
 		if terr != nil {
 			return failf(nr, flow.ErrCodeConfig, terr.Error())
+		}
+		if set && totalTimes <= 0 {
+			// An explicit 0 means "no round": falling back to the system ceiling would turn "do not run" into ten
+			// thousand executions. Only a missing key keeps the documented system-ceiling default.
+			nr.AddLogf("total_times is %d, the loop runs no round", totalTimes)
+			nr.Finish(flow.StatusSuccess, "", "")
+			return nil
 		}
 		return e.executeLoopCount(node, ctx, processID, nr, totalTimes)
 
@@ -78,7 +88,13 @@ func (e *LoopExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, processID
 func (e *LoopExecutor) Capabilities() NodeCapabilities {
 	return NodeCapabilities{
 		ErrorCodes: []string{},
-		Actions:    []flow.ErrorAction{},
+		// skip / handler, no retry: the same trade-off as process - a retried body would repeat every member's side effects.
+		Actions: []flow.ErrorAction{flow.ErrorActionSkip, flow.ErrorActionHandler},
+		// iterations is the readable round count (NodeResult.GetVariable resolves it); a loop declares no other output, so
+		// this is the one name a downstream step can take from the loop node itself.
+		FixedOutputs: []string{"iterations"},
+		// post: the same as process - a skipped loop can leave a marker (ok = false) that a handler cannot write.
+		HasPost: true,
 	}
 }
 
@@ -95,9 +111,12 @@ func (e *LoopExecutor) executeLoopCount(node *flow.Node, ctx *flow.ExecContext,
 		}
 
 		nr.LoopResult.IncIteration()
+		// count publishes index (0-based round) and total (how many rounds are planned): "round 3 of 10" needs both, and a
+		// single number cannot express it.
 		nr.LoopResult.SetLoopVar("index", i)
+		nr.LoopResult.SetLoopVar("total", totalTimes)
 
-		err := runIteration(node, ctx, processID)
+		err := runIteration(node, ctx, processID, nr)
 		if err != nil {
 			stop, retErr := handleIterationError(ctx, nr, i, err)
 			if retErr != nil {
@@ -152,8 +171,9 @@ func (e *LoopExecutor) executeLoopEach(node *flow.Node, ctx *flow.ExecContext,
 		nr.LoopResult.IncIteration()
 		nr.LoopResult.SetLoopVar("index", i)
 		nr.LoopResult.SetLoopVar("item", item)
+		nr.LoopResult.SetLoopVar("total", len(items))
 
-		err := runIteration(node, ctx, processID)
+		err := runIteration(node, ctx, processID, nr)
 		if err != nil {
 			stop, retErr := handleIterationError(ctx, nr, i, err)
 			if retErr != nil {
@@ -173,7 +193,8 @@ func (e *LoopExecutor) executeLoopEach(node *flow.Node, ctx *flow.ExecContext,
 func (e *LoopExecutor) executeLoopWhile(node *flow.Node, ctx *flow.ExecContext,
 	processID string, nr *flow.NodeResult, lc map[string]interface{}) error {
 
-	maxTimes, terr := parseCountInt(lc, "max_times")
+	inputsCfg, _ := node.Data.Config["inputs"].(map[string]interface{})
+	maxTimes, _, terr := parseCountInt(lc, "max_times")
 	if terr != nil {
 		return failf(nr, flow.ErrCodeConfig, terr.Error())
 	}
@@ -185,20 +206,23 @@ func (e *LoopExecutor) executeLoopWhile(node *flow.Node, ctx *flow.ExecContext,
 			return err
 		}
 
-		// Check the condition first
+		// Check the condition first. index is written before the check, because the condition is the only reader of a loop
+		// variable in this mode: "index < 4" must mean "four more rounds", so it sees the round about to run.
+		nr.LoopResult.SetLoopVar("index", i)
 
-		ok, errScript := evaluateCondition(ctx, nr, lc)
+		ok, errScript := evaluateCondition(ctx, nr, lc, inputsCfg, processID)
 		if errScript != nil {
 			nr.Finish(flow.StatusFailed, flow.ErrCodeScript, "failed to run the condition script: "+errScript.Error())
 			return errScript
 		}
 		if !ok {
-			nr.AddLogf("condition not met, loop finished after %d round(s)", i+1)
+			// i rounds have run by now: this check happens before round i, so the count is i, not i+1.
+			nr.AddLogf("condition not met, loop finished after %d round(s)", i)
 			break
 		}
 
 		nr.LoopResult.IncIteration()
-		err := runIteration(node, ctx, processID)
+		err := runIteration(node, ctx, processID, nr)
 		if err != nil {
 			stop, retErr := handleIterationError(ctx, nr, i, err)
 			if retErr != nil {
@@ -218,7 +242,8 @@ func (e *LoopExecutor) executeLoopWhile(node *flow.Node, ctx *flow.ExecContext,
 func (e *LoopExecutor) executeLoopDoWhile(node *flow.Node, ctx *flow.ExecContext,
 	processID string, nr *flow.NodeResult, lc map[string]interface{}) error {
 
-	maxTimes, terr := parseCountInt(lc, "max_times")
+	inputsCfg, _ := node.Data.Config["inputs"].(map[string]interface{})
+	maxTimes, _, terr := parseCountInt(lc, "max_times")
 	if terr != nil {
 		return failf(nr, flow.ErrCodeConfig, terr.Error())
 	}
@@ -230,9 +255,11 @@ func (e *LoopExecutor) executeLoopDoWhile(node *flow.Node, ctx *flow.ExecContext
 			return err
 		}
 
-		// Run first (at least one round)
+		// Run first (at least one round). index is the round being run, and the condition afterwards sees that same number,
+		// so "index < 2" on a do_while yields three rounds (0, 1, 2) - the at-least-one semantics of this mode.
+		nr.LoopResult.SetLoopVar("index", i)
 		nr.LoopResult.IncIteration()
-		err := runIteration(node, ctx, processID)
+		err := runIteration(node, ctx, processID, nr)
 		if err != nil {
 			stop, retErr := handleIterationError(ctx, nr, i, err)
 			if retErr != nil {
@@ -241,11 +268,13 @@ func (e *LoopExecutor) executeLoopDoWhile(node *flow.Node, ctx *flow.ExecContext
 			if stop {
 				break
 			}
-			continue
+			// Only a continue gets here, and it must fall through to the check below: the signal ends this round, not the
+			// exit test. Skipping it would let the loop run to max_times and still report success - "continue" would read
+			// as "ignore the condition".
 		}
 
 		// Then check the condition
-		ok, errScript := evaluateCondition(ctx, nr, lc)
+		ok, errScript := evaluateCondition(ctx, nr, lc, inputsCfg, processID)
 		if errScript != nil {
 			nr.Finish(flow.StatusFailed, flow.ErrCodeScript, "failed to run the condition script: "+errScript.Error())
 			return errScript
@@ -293,8 +322,9 @@ func handleIterationError(ctx *flow.ExecContext, nr *flow.NodeResult, i int, err
 	return true, failIteration(nr, i, err)
 }
 
-// runIteration runs one iteration: create a child process and execute the child node chain
-func runIteration(node *flow.Node, ctx *flow.ExecContext, processID string) error {
+// runIteration runs one iteration: create a child process, execute the child node chain under that iteration's scope, and
+// join it. A loop body is a scope owner, so a `concurrent` member inside it is dispatched and collected per round.
+func runIteration(node *flow.Node, ctx *flow.ExecContext, processID string, nr *flow.NodeResult) error {
 	childPID, err := ctx.ProcessManager.NewProcess(processID, nil)
 	if err != nil {
 		return newExecError(flow.ErrCodeInternal, "create iteration process: "+err.Error())
@@ -308,12 +338,67 @@ func runIteration(node *flow.Node, ctx *flow.ExecContext, processID string) erro
 			fmt.Sprintf("loop node %s: body entry node not found", node.ID))
 	}
 
-	return execute(entryNode, ctx, childPID, 0)
+	scope, bodyErr := runBody(node, ctx, childPID, entryNode)
+	joinErr := finishLoopBody(nr, scope)
+	if joinErr != nil && errors.Is(joinErr, SignalExit) {
+		// Same precedence as a process host: a member's exit ends the run, even if the chain or a sibling failed in the
+		// same instant. handleIterationError turns it into "loop succeeded, signal upwards".
+		return joinErr
+	}
+	if bodyErr != nil {
+		// The chain's own failure wins over a member failure, the same precedence a process host applies.
+		return bodyErr
+	}
+	return joinErr
 }
 
-// evaluateCondition evaluates a while/do_while condition script
+// conditionInputs assembles what a while / do_while condition script can read.
+//
+// config.inputs is re-resolved on every call instead of reading the startup snapshot: a condition such as "total < 3"
+// reads a value the body writes back into the loop's outputs, and a frozen snapshot would never move (the loop would
+// either stop before the first round or run to max_times). The snapshot itself is left alone, so the run record still
+// shows what was handed in when the node started.
+//
+// Merge order, later wins: resolved inputs -> loop vars -> the loop's own outputs / locals (a body writes them through
+// targets, so a condition can read a name it never declared). Outputs before loop vars matches NodeResult.GetVariable, so
+// "input.index" means the same thing in a condition and inside the body.
+func conditionInputs(ctx *flow.ExecContext, nr *flow.NodeResult,
+	inputsCfg map[string]interface{}, processID string) (map[string]interface{}, error) {
+
+	inputs := make(map[string]interface{})
+	if inputsCfg != nil {
+		resolved, err := ctx.GetVariables(inputsCfg, processID)
+		if err != nil {
+			return nil, newExecError(flow.ErrCodeConfig, err.Error())
+		}
+		for k, v := range resolved {
+			inputs[k] = v
+		}
+	} else if src := nr.GetInputVars(); src != nil {
+		for k, v := range src {
+			inputs[k] = v
+		}
+	}
+
+	if nr.LoopResult != nil && nr.LoopResult.LoopVars != nil {
+		for k, v := range nr.LoopResult.LoopVars {
+			inputs[k] = v
+		}
+	}
+	for k, v := range nr.OutputVars {
+		inputs[k] = v
+	}
+	for k, v := range nr.LocalVars {
+		inputs[k] = v
+	}
+	return inputs, nil
+}
+
+// evaluateCondition evaluates a while/do_while condition script. What it can read is assembled by conditionInputs,
+// which re-resolves config.inputs on every round.
 func evaluateCondition(ctx *flow.ExecContext,
-	nr *flow.NodeResult, lc map[string]interface{}) (bool, error) {
+	nr *flow.NodeResult, lc map[string]interface{},
+	inputsCfg map[string]interface{}, processID string) (bool, error) {
 
 	lang, _ := lc["lang"].(string)
 	if lang == "" {
@@ -324,20 +409,9 @@ func evaluateCondition(ctx *flow.ExecContext,
 	timeout := ctx.ResolveScriptTimeout(lang, parseTimeoutConfig(lc["timeout"]))
 	condition, _ := lc["condition"].(string)
 
-	// inputs were already resolved into NodeResult.InputVars in Execute (copied so the originals are not
-	// polluted)
-	inputs := make(map[string]interface{})
-	if src := nr.GetInputVars(); src != nil {
-		for k, v := range src {
-			inputs[k] = v
-		}
-	}
-
-	// Inject the loop variables into the input (the condition script can read input.index / input.item)
-	if nr.LoopResult != nil && nr.LoopResult.LoopVars != nil {
-		for k, v := range nr.LoopResult.LoopVars {
-			inputs[k] = v
-		}
+	inputs, err := conditionInputs(ctx, nr, inputsCfg, processID)
+	if err != nil {
+		return false, err
 	}
 
 	result, err := ExecuteScript(ctx.StdCtx, lang, condition, inputs, nr, timeout)
@@ -354,26 +428,27 @@ func evaluateCondition(ctx *flow.ExecContext,
 }
 
 // parseCountInt parses an integer field of the loop config (count's total_times, while / do_while's
-// max_times).
+// max_times) and reports whether the field was set at all.
 //
-// A missing key returns 0, which resolveMaxTimes treats as "take the system ceiling" (the documented
-// semantics). But a **value that is not a number** must be an error: silently treating it as 0 means
-// "the user thought they set 5 rounds, it actually ran the system ceiling of 10000" — one mistyped value
+// The two facts must not be conflated: an absent key means "take the system ceiling" (the documented
+// semantics), while an explicit 0 is a real value - a count loop with total_times 0 runs no round.
+// And a **value that is not a number** must be an error: silently treating it as 0 means "the user
+// thought they set 5 rounds, it actually ran the system ceiling of 10000" — one mistyped value
 // amplified into ten thousand executions, far more expensive than a plain failure.
-func parseCountInt(lc map[string]interface{}, key string) (int, error) {
+func parseCountInt(lc map[string]interface{}, key string) (n int, set bool, err error) {
 	raw, ok := lc[key]
 	if !ok || raw == nil {
-		return 0, nil
+		return 0, false, nil
 	}
 	switch v := raw.(type) {
 	case float64:
-		return int(v), nil
+		return int(v), true, nil
 	case int:
-		return v, nil
+		return v, true, nil
 	case int64:
-		return int(v), nil
+		return int(v), true, nil
 	default:
-		return 0, newExecError(flow.ErrCodeConfig,
+		return 0, false, newExecError(flow.ErrCodeConfig,
 			fmt.Sprintf("loop config %s must be a number, got %T", key, raw))
 	}
 }
@@ -395,7 +470,7 @@ func failIteration(nr *flow.NodeResult, iteration int, err error) error {
 	if errors.As(err, &ee) {
 		code = ee.Code
 	}
-	return failf(nr, code, fmt.Sprintf("iteration %d failed: %v", iteration, err))
+	return failf(nr, code, fmt.Sprintf("iteration %d failed: %s", iteration, nodeMessage(err)))
 }
 
 func toSlice(v interface{}) []interface{} {

@@ -11,11 +11,19 @@ whitelist, and it turns red when a whitelist has nobody in it. Hovering reveals:
 export, delete. **A delete needs nothing released**: with v3 live it is refused until you unrelease in the
 version panel; a deprecated skill (and a private one, whose version follows its agent) can be deleted directly.
 
+When the list shows no skill of your own — only the system built-ins, or nothing at all with the system toggle off —
+a guide appears below: what a skill is, how to have the main agent write one in chat, and how to create one by hand.
+It stays out of the way while you are searching.
+
 ## The content directory and the editor
 
 Creating a skill generates a `SKILL.md` skeleton on the backend and opens it. The left side is a
 breadcrumb directory (new folder/file, upload, multi-select delete, refresh); the right side is a tabbed
 editor.
+
+## ESC and leaving
+
+ESC walks out one layer at a time: the settings panel first, then the editor back to the list. While renaming in the header, ESC cancels just that rename. Leaving with unsaved files asks first, and the back button does the same.
 
 There is no fixed subdirectory layout; `references/` for documents and `scripts/` for scripts is the usual
 shape. Every file opens as plain text, and only `.md` files get an edit / rendered-preview switch.

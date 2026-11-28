@@ -27,6 +27,7 @@
     <NodePanel
       :visible="showNodePanel"
       :left="nodePanelLeft"
+      :flow-id="props.instanceProps?.id"
       @node-select="handleNodeSelectFromPanel"
       @close="showNodePanel = false"
     />
@@ -211,6 +212,13 @@ const parseDiagram = (diagram) => {
       node.parentNode = node.parent_node
     }
     delete node.parent_node
+    // A child is pinned inside its host on the canvas. `extent` is a Vue Flow rendering hint, not part of the diagram
+    // contract: the node panel sets it, but tools, asset packs and the e2e fixtures only write parent_node, so a child
+    // from those sources could be dragged out of its host - and the next save would persist that, because the serialiser
+    // writes only what the node carries. Deriving it here keeps every source equally constrained.
+    if (node.parentNode && !node.extent) {
+      node.extent = { range: 'parent', padding: [37, 5, 5, 5] }
+    }
   })
   edgesCopy.forEach(edge => {
     if (edge.source_handle !== undefined && edge.sourceHandle === undefined) {
@@ -329,7 +337,9 @@ const systemLimits = ref({
   max_node_count: 1000,
   max_exec_count: 20000,
   max_run_records: 100,
-  max_session_records: 50
+  max_session_records: 50,
+  // Mirrors the server fallback: the editor bounds the per-scope concurrency input with it before the real value arrives.
+  max_concurrency: 16
 })
 provide('systemLimits', systemLimits)
 
@@ -341,6 +351,8 @@ const selectedEdge = ref(null)
 // 添加节点相关状态
 const isAddingNode = ref(false)
 const currentNodeType = ref(null)
+// 工具 tab 点进来时带着预填配置，等用户点画布落位时再用一次
+const currentNodePreset = ref(null)
 const isFromHandle = ref(false)
 
 const selectedHandleNodeId = ref(null)
@@ -391,8 +403,8 @@ provide('flowArguments', flowArguments)
 
 const nodesMap = ref(createNodesMap(nodes.value))
 
-function generateUniqueId(digits) {
-  return random.generateUniqueId(digits, nodes.value, edges.value)
+function generateUniqueId() {
+  return random.generateUniqueId(nodes.value, edges.value)
 }
 
 function createNodesMap(nodesArray) {
@@ -731,7 +743,7 @@ const onConnect = (params) => {
   // console.log('onConnect - before push edge, nodes:', JSON.stringify(nodes.value, null, 2))
   
   newEdges.push({
-    id: generateUniqueId(5),
+    id: generateUniqueId(),
     source: sourceId,
     target: targetId,
     sourceHandle,
@@ -922,6 +934,16 @@ const hasAncestorOfType = (nodeId, targetType) => {
 // 节点创建（模板数据 + 挂载）：实现见 flow/nodeFactory.js，这里只注入运行时依赖
 const { createChildNode, createNode } = createNodeBuilders({ generateUniqueId, hasAncestorOfType, nodes, updateNodes, ElMessage })
 
+// 从工具目录建出来的节点：建好立刻选中并打开属性面板，作者接着把样本里的参数换成真实取值
+const openNodeProps = (node) => {
+  if (!node) return
+  selectedNode.value = { ...node, selected: true }
+  const newNodes = nodes.value.map(n => ({ ...n, selected: String(n.id) === String(node.id) }))
+  updateNodes(newNodes)
+  setNodes(newNodes)
+  showPropsPanel.value = true
+}
+
 // 处理画布点击事件
 const handleCanvasClick = (event) => {
   
@@ -954,9 +976,11 @@ const handleCanvasClick = (event) => {
               // 如果相对高度小于50，使用50
               const adjustedY = relativeY < 55 ? 55 : relativeY
               console.log('pointer relative to the group node - X:', relativeX, 'Y:', adjustedY, '(raw Y:', relativeY, ')')
-              createChildNode(node.id, currentNodeType.value, relativeX, adjustedY)              
+              const created = createChildNode(node.id, currentNodeType.value, relativeX, adjustedY, currentNodePreset.value)
+              if (created && currentNodePreset.value) openNodeProps(created)
               isAddingNode.value = false
               currentNodeType.value = null
+              currentNodePreset.value = null
               return
             }
             // 检查节点是否有 parentNode
@@ -975,11 +999,13 @@ const handleCanvasClick = (event) => {
                   // 如果相对高度小于50，使用50
                   const adjustedY = relativeY < 55 ? 55 : relativeY                  
                   console.log('pointer relative to the parent node - X:', relativeX, 'Y:', adjustedY, '(raw Y:', relativeY, ')')
-                  createChildNode(parentNode.id, currentNodeType.value, relativeX, adjustedY)                                
+                  const created = createChildNode(parentNode.id, currentNodeType.value, relativeX, adjustedY, currentNodePreset.value)
+                  if (created && currentNodePreset.value) openNodeProps(created)
                 }
               }
               isAddingNode.value = false
               currentNodeType.value = null
+              currentNodePreset.value = null
               return
             }
           }
@@ -991,11 +1017,13 @@ const handleCanvasClick = (event) => {
       const y = (event.clientY - rect.top - viewport.y) / viewport.zoom
       
       // 创建新节点
-      createNode(currentNodeType.value, x, y)
+      const created = createNode(currentNodeType.value, x, y, currentNodePreset.value)
+      if (created && currentNodePreset.value) openNodeProps(created)
     }    
     // 重置添加状态
     isAddingNode.value = false
     currentNodeType.value = null
+    currentNodePreset.value = null
   }
 }
 
@@ -1035,18 +1063,19 @@ const handleNodeHandleClick = (nodeId, handleId, event) => {
 }
 
 // 处理从 NodePanel 选择节点的事件
-const handleNodeSelectFromPanel = (nodeType) => {
+// preset：工具 tab 点进来时带的预填配置（连接 / 端点 / 工具名），节点 tab 不带
+const handleNodeSelectFromPanel = (nodeType, preset) => {
   // 如果是从 handle 点击打开面板的情况
   if (isFromHandle.value) {
-    addNode(nodeType, 'handle')
+    addNode(nodeType, 'handle', preset)
   } else {
     // 如果是从工具栏打开面板的情况
-    addNode(nodeType, 'toolbar')
+    addNode(nodeType, 'toolbar', preset)
   }
 }
 
 // 添加新节点
-const addNode = (nodeType, source = 'toolbar') => {
+const addNode = (nodeType, source = 'toolbar', preset = null) => {
   // The node count is a tenant-level quota, enforced at save time as well: blocking it here keeps the user from drawing
   // a diagram the server would refuse. Canvas comments are annotations and take no part.
   if (nodeType !== 'comment') {
@@ -1087,7 +1116,7 @@ const addNode = (nodeType, source = 'toolbar') => {
         y = sourceNode.position.y      
         if(x<100) x=100
       }
-      newNode = createChildNode(sourceNode.parentNode, nodeType, x, y)
+      newNode = createChildNode(sourceNode.parentNode, nodeType, x, y, preset)
     }else{
       if (selectedHandleId.value?.includes('bottom')) {
         x = sourceNode.position.x+100
@@ -1101,7 +1130,7 @@ const addNode = (nodeType, source = 'toolbar') => {
         x = sourceNode.position.x - 200
         y = sourceNode.position.y      
       }
-      newNode = createNode(nodeType, x, y)
+      newNode = createNode(nodeType, x, y, preset)
     }     
     // 如果 newNode 为空，返回
     if (newNode && nodeType !== 'function' && nodeType !== 'comment') {
@@ -1109,7 +1138,7 @@ const addNode = (nodeType, source = 'toolbar') => {
       // 创建连接边
       if (selectedHandleId.value?.includes('left')) {
         newEdge = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           source: selectedHandleNodeId.value,
           target: newNode.id,
           sourceHandle: selectedHandleId.value,
@@ -1117,7 +1146,7 @@ const addNode = (nodeType, source = 'toolbar') => {
         }   
       }else if (selectedHandleId.value?.includes('right')) {
         newEdge = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           source: selectedHandleNodeId.value,
           target: newNode.id,
           sourceHandle: selectedHandleId.value,
@@ -1125,7 +1154,7 @@ const addNode = (nodeType, source = 'toolbar') => {
         }
       }else{
         newEdge = {
-          id: generateUniqueId(5),
+          id: generateUniqueId(),
           source: selectedHandleNodeId.value,
           target: newNode.id,
           sourceHandle: selectedHandleId.value,
@@ -1157,6 +1186,9 @@ const addNode = (nodeType, source = 'toolbar') => {
       
     }
        
+    // 工具目录点进来的节点：建好就选中并把属性面板打开（节点 tab 进来的保持原行为，不动用户当前选中的东西）
+    if (newNode && preset) openNodeProps(newNode)
+
     // 重置选中状态
     selectedHandleNodeId.value = null
     selectedHandleId.value = null
@@ -1168,6 +1200,7 @@ const addNode = (nodeType, source = 'toolbar') => {
     // 如果是点击工具栏出现的选择窗口，设置添加状态，等鼠标点击画布时把节点增加到鼠标点击位置
     isAddingNode.value = true
     currentNodeType.value = nodeType
+    currentNodePreset.value = preset
     showNodePanel.value = false
   }
 }
@@ -1409,7 +1442,10 @@ const REPLACE_CONFIG_KEYS = new Set([
   // 错误处理
   'on_error',
   // 各类节点的行为块（面板每次 emit 都写全）
-  'llm', 'rpc', 'mcp', 'code', 'http', 'branch'
+  'llm', 'rpc', 'mcp', 'code', 'http', 'branch',
+  // 宿主的并发作用域：只有并发面板写它，且 max_concurrency 关掉时整个键都要消失 —— 只增不删的深合并会让
+  // 「关掉上限」被旧值顶回来
+  'parallel'
 ])
 
 // 深度合并 config（plain object 递归，数组直接覆盖）。

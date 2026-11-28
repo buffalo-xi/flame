@@ -228,6 +228,8 @@ hold both at once. See [`nexus/docs/design-highlights.md`](nexus/docs/design-hig
   ([中文](nexus/docs/error-codes.zh.md))
 - `nexus/docs/node-audit.md` — the per-node audit: which dimensions each node type is checked on, what a test or gate
   already enforces, and what is still to audit ([中文](nexus/docs/node-audit.zh.md))
+- `nexus/docs/parallel-scope.md` — the concurrency redesign: one concurrent scope per body, `fork` / `wait` removed, and the
+  rules that make a member's failure impossible to lose ([中文](nexus/docs/parallel-scope.zh.md))
 - `browserd/README.md` — the standalone browser pool: how nexus reaches it, how to build and deploy it, and the three
   settings that must line up ([中文](browserd/README.zh.md))
 - `browserg/README.md` — the browser gateway: sticky routing, the per-tenant cap, and why it is not part of sandboxg

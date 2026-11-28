@@ -530,6 +530,9 @@ func DeleteSkillVersion(c *gin.Context) {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
 	}
+	// The last version is gone, so versions/skills/<name> is empty now: drop it too, otherwise a fully deleted history leaves
+	// a path that still looks like an entity. Best effort - the row is already committed.
+	versions.PruneEmptyEntityDir(ctx, st, paths.VersionEntityKey(info.Schema, paths.VersionSkills, s.Name))
 	xhttp.OkJSON(c, "Success", gin.H{"version": target}, "")
 }
 

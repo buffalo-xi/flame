@@ -41,19 +41,19 @@ func TestCreateNodeBareTypeWarnings(t *testing.T) {
 		{typ: "function"},
 		{typ: "call", want: []string{"config.target"}},
 		{typ: "assign", want: []string{"config.assignments"}},
+		// The default code is filled in, the message is the part the author has to write.
+		{typ: "raise", want: []string{"raise.message"}},
 		{typ: "memory"},
-		{typ: "wait", want: []string{"fork_node_id"}},
-		{typ: "fork"},
 		{typ: "result", want: []string{"config.code"}},
 		{typ: "progress", want: []string{"config.code"}},
-		{typ: "break"},
-		{typ: "continue"},
 		{typ: "exit"},
 		{typ: "layout"},
 		{typ: "comment"},
 	}
 
-	seen := map[string]bool{"return": true} // created inside a function, see the next test
+	// The three signal nodes that only exist inside a container: return needs a function, break / continue need a loop.
+	// Their bare-creation rows live in the next two tests, where the container is created first.
+	seen := map[string]bool{"return": true, "break": true, "continue": true}
 	for _, tc := range cases {
 		seen[tc.typ] = true
 		t.Run(tc.typ, func(t *testing.T) {
@@ -117,5 +117,42 @@ func TestCreateNodeBareReturnInsideFunction(t *testing.T) {
 	}
 	if warns := warningStrings(t, out); len(warns) != 0 {
 		t.Fatalf("a return node has nothing to configure, got %v", warns)
+	}
+}
+
+// A break / continue node is only legal inside a loop: outside one its signal has no consumer, so the node itself fails at run
+// time (control.go checkSignalScope). The write boundary refuses it up front instead of storing a step that can only fail.
+func TestCreateNodeBareBreakContinueInsideLoop(t *testing.T) {
+	for _, typ := range []string{"break", "continue"} {
+		t.Run(typ, func(t *testing.T) {
+			c, _ := edgeTestCtx(edgeTestDiagram)
+			if _, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{
+				"flow": "demo", "type": typ,
+			}); err == nil || !strings.Contains(err.Error(), "inside a loop") {
+				t.Fatalf("a bare %s at the top level must be refused, got %v", typ, err)
+			}
+
+			loopOut, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{
+				"flow": "demo", "type": "loop",
+			})
+			if err != nil {
+				t.Fatalf("create loop = %v", err)
+			}
+			node, _ := loopOut.(map[string]any)["node"].(map[string]any)
+			loopID, _ := node["id"].(string)
+			if loopID == "" {
+				t.Fatalf("the loop node has no id: %v", loopOut)
+			}
+
+			out, err := (&createNodeTool{}).Execute(context.Background(), c, map[string]any{
+				"flow": "demo", "type": typ, "parent_node": loopID,
+			})
+			if err != nil {
+				t.Fatalf("create %s inside a loop = %v", typ, err)
+			}
+			if warns := warningStrings(t, out); len(warns) != 0 {
+				t.Fatalf("a %s node has nothing to configure, got %v", typ, warns)
+			}
+		})
 	}
 }

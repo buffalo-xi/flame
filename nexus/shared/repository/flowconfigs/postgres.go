@@ -21,7 +21,7 @@ func tableName() string {
 }
 
 // columns are the selected columns (tenant_id excluded).
-const columns = "max_timeout, max_recursion_depth, max_node_count, max_exec_count, max_loop_times, max_run_records, max_session_records"
+const columns = "max_timeout, max_recursion_depth, max_node_count, max_exec_count, max_loop_times, max_run_records, max_session_records, max_concurrency"
 
 // Get returns the configuration row of a tenant, or nil when there is none.
 func (r *PostgresRepository) Get(tenantID string) (*FlowConfig, error) {
@@ -32,6 +32,7 @@ func (r *PostgresRepository) Get(tenantID string) (*FlowConfig, error) {
 	).Scan(
 		&cfg.MaxTimeout, &cfg.MaxRecursionDepth, &cfg.MaxNodeCount,
 		&cfg.MaxExecCount, &cfg.MaxLoopTimes, &cfg.MaxRunRecords, &cfg.MaxSessionRecords,
+		&cfg.MaxConcurrency,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -48,8 +49,8 @@ func (r *PostgresRepository) Upsert(cfg *FlowConfig) error {
 	_, err := db.DB.Exec(
 		`INSERT INTO `+tableName()+` (
 			tenant_id, max_timeout, max_recursion_depth, max_node_count,
-			max_exec_count, max_loop_times, max_run_records, max_session_records, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+			max_exec_count, max_loop_times, max_run_records, max_session_records, max_concurrency, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			max_timeout = EXCLUDED.max_timeout,
 			max_recursion_depth = EXCLUDED.max_recursion_depth,
@@ -58,9 +59,10 @@ func (r *PostgresRepository) Upsert(cfg *FlowConfig) error {
 			max_loop_times = EXCLUDED.max_loop_times,
 			max_run_records = EXCLUDED.max_run_records,
 			max_session_records = EXCLUDED.max_session_records,
+			max_concurrency = EXCLUDED.max_concurrency,
 			updated_at = NOW()`,
 		cfg.TenantID, cfg.MaxTimeout, cfg.MaxRecursionDepth, cfg.MaxNodeCount,
-		cfg.MaxExecCount, cfg.MaxLoopTimes, cfg.MaxRunRecords, cfg.MaxSessionRecords,
+		cfg.MaxExecCount, cfg.MaxLoopTimes, cfg.MaxRunRecords, cfg.MaxSessionRecords, cfg.MaxConcurrency,
 	)
 	return err
 }

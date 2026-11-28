@@ -19,6 +19,11 @@
 
     <div class="tab-content">
       <div v-if="activeTab === 'settings'" class="settings-panel">
+        <ConcurrencyScopeConfig
+          :selected-node="selectedNode"
+          @update-node-data="(data) => emit('update-node-data', data)"
+        />
+
         <OutputVarsConfig
           :selected-node="selectedNode"
           :existing-names="existingOutputNames"
@@ -111,6 +116,7 @@ import { Plus, Delete } from '@element-plus/icons-vue';
 import { getDataTypeIcon, getDataTypeIconClass } from './dataTypeBadge.js';
 import OnErrorConfig from './OnErrorConfig.vue';
 import OutputVarsConfig from './OutputVarsConfig.vue';
+import ConcurrencyScopeConfig from './ConcurrencyScopeConfig.vue';
 import { useEscClose } from '../../../composables/useEscClose';
 
 const { t } = useI18n()

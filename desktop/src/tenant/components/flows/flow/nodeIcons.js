@@ -8,9 +8,9 @@
 // class 只负责配色，复用各面板 <style> 里已有的 .icon-* 规则；没有独立规则的类型
 // 借一个色相最近的类（见行尾注释），否则「类名没有对应颜色」会让图标变成透明方块。
 import {
-  Aim, ChatLineSquare, CircleCheck, CircleClose, Clock, Coin, Collection, Connection,
-  Grid, Help, Lightning, Link, MagicStick, Minus, Monitor, Mouse, Promotion, RefreshLeft,
-  RefreshRight, ScaleToOriginal, Timer, Tools, Upload
+  Aim, ChatLineSquare, CircleCheck, Clock, Coin, Collection, Connection,
+  Grid, Help, Lightning, MagicStick, Minus, Monitor, Mouse, Promotion, RefreshLeft,
+  RefreshRight, ScaleToOriginal, SwitchButton, Timer, Tools, Upload, WarnTriangleFilled
 } from '@element-plus/icons-vue'
 
 const COMPONENTS = {
@@ -23,15 +23,15 @@ const COMPONENTS = {
   intent: Aim,
   process: Help,
   function: ScaleToOriginal,
-  wait: Link,
   call: Mouse,
   assign: Coin,
+  raise: WarnTriangleFilled,   // failure, not control flow: a warning sign
   loop: RefreshLeft,
   memory: Clock,
   break: Minus,
   continue: Upload,
   return: CircleCheck,
-  exit: CircleClose,
+  exit: SwitchButton,
   code: MagicStick,
   http: Lightning,
   mcp: Tools,
@@ -52,15 +52,15 @@ const CLASSES = {
   intent: 'icon-return',      // 无 icon-intent：return 同为紫色 #9c27b0
   process: 'icon-process',
   function: 'icon-function',
-  wait: 'icon-wait',
   call: 'icon-call',
   assign: 'icon-assign',
+  raise: 'icon-raise',        // failure red #f56c6c: lighter than exit (#c62828), which is a deliberate stop
   loop: 'icon-loop',
   memory: 'icon-loop',        // 无 icon-memory：借同为紫色的 loop
   break: 'icon-break',
   continue: 'icon-continue',
   return: 'icon-return',
-  exit: 'icon-code',          // 无 icon-exit：exit 与 code 同为红色 #f56565
+  exit: 'icon-exit',          // 电源符号 + 深红 #c62828，与 code 的魔棒 / 赭石分开
   code: 'icon-code',
   http: 'icon-http',
   mcp: 'icon-progress',       // 无 icon-mcp：progress #eea236 ≈ mcp #e6a23c

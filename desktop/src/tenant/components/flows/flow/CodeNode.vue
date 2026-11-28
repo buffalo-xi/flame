@@ -1,10 +1,10 @@
 <template>
-  <div class="code-node" :class="{ 'selected': isSelected, 'has-concurrency': concurrencyEnabled, 'has-breakpoint': bpActive }" ref="nodeRef" @click="handleNodeClick">
+  <div class="code-node" :class="{ 'selected': isSelected, 'has-breakpoint': bpActive }" ref="nodeRef" @click="handleNodeClick">
     <span v-if="bpActive" class="bp-dot"></span>
     <div class="node-header">
       <div class="icon-wrapper icon-code"><el-icon><MagicStick /></el-icon></div>
       <div class="node-label">{{ data.label || t('flow.node.defaultLabel.code') }}</div>
-      <NodeFindingsBadge :id="id" />
+      <NodeBadges :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper" @click.stop @mousedown.stop @pointerdown.stop><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -17,41 +17,9 @@
               <el-icon><Flag /></el-icon>
               <span>{{ bpActive ? t('flow.node.breakpoint.unset') : t('flow.node.breakpoint.set') }}</span>
             </el-dropdown-item>
-            <el-dropdown-item @click="toggleConcurrency">
-              <el-icon><component :is="concurrencyEnabled ? 'Close' : 'CircleCheck'" /></el-icon>
-              <span>{{ concurrencyEnabled ? t('flow.node.concurrency.disable') : t('flow.node.concurrency.enable') }}</span>
-            </el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-    </div>
-    <div
-      class="concurrency-row"
-      :class="{ 'always-show': concurrencyEnabled }"
-      @click.stop
-      @mousedown.stop
-      @pointerdown.stop
-    >
-      <span class="concurrency-label">{{ t('flow.node.concurrency.title') }}</span>
-      <el-select v-model="concurrencyGroup" class="concurrency-select" :disabled="!concurrencyEnabled">
-        <el-option :label="t('flow.node.concurrency.mono')" value="mono" />
-        <el-option-group v-if="forkNodes.length" :label="t('flow.node.concurrency.forkGroup')">
-          <el-option
-            v-for="node in forkNodes"
-            :key="node.id"
-            :label="node.data?.label || node.id"
-            :value="node.id"
-          />
-        </el-option-group>
-      </el-select>
-      <button
-        v-if="concurrencyEnabled"
-        class="concurrency-cancel-btn"
-        :title="t('flow.node.concurrency.disable')"
-        @click="clearConcurrency"
-      >
-        ✕
-      </button>
     </div>
     <Handle type="target" position="left" :id="'target' + id + 'left'" class="custom-handle custom-handle-left custom-handle-target" />
     <Handle type="target" position="top" :id="'target' + id + 'top'" class="custom-handle custom-handle-top custom-handle-target" />
@@ -62,11 +30,10 @@
 
 <script setup>
 import { ref, computed, watch, inject } from 'vue'
-import { MagicStick, MoreFilled, Delete, Close, CircleCheck, Flag } from '@element-plus/icons-vue'
+import { MagicStick, MoreFilled, Delete, Flag } from '@element-plus/icons-vue'
 import { Handle } from '@vue-flow/core'
-import { readConcurrencyGroup, buildConcurrencyConfig } from './concurrencyConfig.js'
 import { useI18n } from 'vue-i18n'
-import NodeFindingsBadge from './NodeFindingsBadge.vue'
+import NodeBadges from './NodeBadges.vue'
 
 const { t } = useI18n()
 
@@ -87,94 +54,16 @@ const props = defineProps({
 
 const emit = defineEmits(['handleClick', 'delete', 'updateData'])
 const injectedSelectedNode = inject('selectedNode', null)
-const FlowNodes = inject('FlowNodes', ref([]))
-const FlowEdges = inject('FlowEdges', ref([]))
 const flowDebug = inject('flowDebug', null)
 const bpActive = computed(() => !!flowDebug && flowDebug.isBreakpoint(props.id))
 const nodeRef = ref(null)
 const isSelected = ref(false)
-const concurrencyEnabled = ref(readConcurrencyGroup(props.data.config) !== 'none')
-const concurrencyGroup = ref(readConcurrencyGroup(props.data.config))
-
-// 沿入边向上查找可用的 fork 节点（排除已被其他 wait 节点占用的）
-const forkNodes = computed(() => {
-  const allNodes = FlowNodes.value
-  const edges = FlowEdges.value
-  const currentId = props.id
-  const nodeMap = new Map(allNodes.map(n => [n.id, n]))
-
-  const foundForks = []
-  const foundWaits = []
-  const visited = new Set()
-  visited.add(currentId)
-
-  const queue = [currentId]
-
-  while (queue.length > 0) {
-    const nodeId = queue.shift()
-    const incomingEdges = edges.filter(e => String(e.target) === String(nodeId))
-
-    if (incomingEdges.length === 0) {
-      const node = nodeMap.get(nodeId)
-      if (node?.parentNode && !visited.has(node.parentNode)) {
-        visited.add(node.parentNode)
-        const parentNode = nodeMap.get(node.parentNode)
-        if (parentNode) {
-          queue.push(parentNode.id)
-        }
-      }
-      continue
-    }
-
-    for (const edge of incomingEdges) {
-      const sourceId = edge.source
-      if (visited.has(sourceId)) continue
-      visited.add(sourceId)
-
-      const sourceNode = nodeMap.get(sourceId)
-      if (!sourceNode) continue
-
-      if (sourceNode.type === 'fork') {
-        foundForks.push(sourceNode)
-      } else if (sourceNode.type === 'wait') {
-        foundWaits.push(sourceNode)
-      }
-      queue.push(sourceId)
-    }
-  }
-
-  const usedForkIDs = new Set()
-  for (const n of foundWaits) {
-    const forkID = n.data?.config?.fork_node_id
-    if (forkID) usedForkIDs.add(String(forkID))
-  }
-
-  return foundForks.filter(n => !usedForkIDs.has(String(n.id)))
-})
 
 if (injectedSelectedNode) {
   watch(() => injectedSelectedNode.value, (newSelectedNode) => {
     isSelected.value = newSelectedNode?.id === props.id
   }, { immediate: true, deep: true })
 }
-
-watch(concurrencyEnabled, (enabled) => {
-  if (enabled) {
-    if (!concurrencyGroup.value || concurrencyGroup.value === 'none') {
-      concurrencyGroup.value = 'mono'
-    }
-    emit('updateData', { nodeId: props.id, data: { config: { concurrency: buildConcurrencyConfig(concurrencyGroup.value) } } })
-  } else {
-    concurrencyGroup.value = 'none'
-    emit('updateData', { nodeId: props.id, data: { config: { concurrency: undefined } } })
-  }
-})
-
-watch(concurrencyGroup, (newValue) => {
-  if (newValue && newValue !== 'none') {
-    emit('updateData', { nodeId: props.id, data: { config: { concurrency: buildConcurrencyConfig(newValue) } } })
-  }
-})
 
 const handleNodeClick = (event) => {
   const handleElement = event.target.closest('.custom-handle')
@@ -185,14 +74,6 @@ const handleNodeClick = (event) => {
       emit('handleClick', props.id, handleId, event)
     }
   }
-}
-
-const toggleConcurrency = () => {
-  concurrencyEnabled.value = !concurrencyEnabled.value
-}
-
-const clearConcurrency = () => {
-  concurrencyEnabled.value = false
 }
 
 const deleteNode = () => {
@@ -277,7 +158,7 @@ const toggleBreakpoint = () => {
   margin-right: 4px;
 }
 
-.icon-code { background-color: #f56565; }
+.icon-code { background-color: #a0522d; }
 
 .icon-code .el-icon {
   font-size: 16px;
@@ -351,107 +232,4 @@ const toggleBreakpoint = () => {
   display: none;
 }
 
-.concurrency-row {
-  display: none;
-  flex-direction: row;
-  align-items: center;
-  gap: 2px;
-  margin-top: 0px;
-  padding-top: 0px;
-  padding-bottom: 0px;
-  padding-left: 3px;
-  border-top: 1px solid #eee;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.concurrency-row.always-show {
-  display: flex;
-}
-
-.code-node.has-concurrency {
-  height: auto !important;
-  flex-direction: column !important;
-  align-items: stretch !important;
-  padding: 4px 8px;
-}
-
-.code-node.has-concurrency .concurrency-row {
-  width: 100%;
-  min-width: 120px;
-  margin-top: 2px;
-}
-
-.concurrency-label {
-  font-size: 10px;
-  color: #666;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.concurrency-cancel-btn {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  border: 1px solid #ddd;
-  border-radius: 3px;
-  background: #fff;
-  color: #999;
-  font-size: 10px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: all 0.2s;
-}
-.concurrency-cancel-btn:hover {
-  border-color: #f56565;
-  color: #f56565;
-  background: #fff5f5;
-}
-
-.concurrency-select {
-  flex: 1;
-  font-size: 10px;
-  padding: 0px 0px;
-  min-width: 60px;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  margin-top: 3px;
-}
-
-.concurrency-select :deep(.el-select__wrapper) {
-  font-size: 10px;
-  width: 100%;
-  min-width: 120px;
-  padding: 0px 12px;
-  border: none !important;
-  box-shadow: none !important;
-  display: flex;
-  align-items: center;
-  line-height: 14px;
-}
-
-.concurrency-select :deep(.el-select__trigger) {
-  white-space: nowrap;
-  padding: 0px 0px;
-  display: flex;
-  align-items: center;
-  line-height: 14px;
-}
-
-.concurrency-select :deep(.el-select__input) {
-  font-size: 10px;
-  width: 100%;
-  min-width: 60px;
-  line-height: 14px;
-  height: 14px;
-}
-
-.concurrency-select :deep(.el-select__tags) {
-  width: 100%;
-  min-width: 60px;
-}
 </style>

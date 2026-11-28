@@ -387,7 +387,18 @@ defineExpose({ open })
   word-break: break-all;
   max-height: 260px;
   overflow: auto;
+  scrollbar-gutter: stable;
+  /* Bar space stays reserved, the thumb is painted only while the pointer is over the example
+     (same rule as .et-pre / Chat.vue) */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
+
+.ug-pre::-webkit-scrollbar { width: 6px; height: 6px; }
+.ug-pre::-webkit-scrollbar-track { background: transparent; }
+.ug-pre::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
+.ug-pre:hover { scrollbar-color: #c1c1c1 transparent; }
+.ug-pre:hover::-webkit-scrollbar-thumb { background: #c1c1c1; }
 
 .ug-alert {
   margin-top: 4px;

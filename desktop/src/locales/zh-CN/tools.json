@@ -172,11 +172,11 @@
       "agent": { "name": "内置-agent", "desc": "智能体类：查看 / 调用其它 agent" },
       "skill": { "name": "内置-skill", "desc": "技能类：列出 / 查看注入给你的 skill（正文用 read_skill 或 use_skill 按需读；use_skill 会激活其工具依赖）" },
       "skill-own": { "name": "内置-skill-own", "desc": "私有技能：创建 / 修改 / 删除**自己的** skill（写的是自己的能力面，默认不授）" },
-      "agent-admin": { "name": "内置-agent-admin", "desc": "智能体管理（仅超级智能体）：创建 / 修改 / 删除 agent，以及给它绑定技能" },
+      "agent-admin": { "name": "内置-agent-admin", "desc": "智能体管理（仅超级智能体）：创建 / 修改 / 删除 agent，给它绑定技能，以及管理它的 mcp / rpc 端点（新建 / 删除 / 对外开放 / 收回对外）" },
       "skill-admin": { "name": "内置-skill-admin", "desc": "技能管理（仅超级智能体）：创建 / 修改 / 删除**共享（租户级）** skill，以及为他 agent 创建 / 改 / 删**私有** skill" },
       "tool-grant": { "name": "内置-tool-grant", "desc": "授权管理（仅超级智能体）：授予 / 收回 agent 的工具，以及 agent 之间的调用关系" },
       "custom-tool": { "name": "内置-custom-tool", "desc": "自定义工具管理（仅超级智能体）：创建 / 修改 / 删除 / 列出本租户的自定义工具" },
-      "flow-admin": { "name": "内置-flow-admin", "desc": "工作流管理（仅超级智能体）：创建 / 列出 / 读取 / 删除 / 试运行工作流、查运行记录，并可把流程对外开放成 mcp / rpc 端点" },
+      "flow-admin": { "name": "内置-flow-admin", "desc": "工作流管理（仅超级智能体）：创建 / 列出 / 读取 / 删除 / 试运行工作流、查运行记录，并管理流程端点（新建 / 删除 MCP 端点，对外开放 / 收回 mcp 与 rpc）" },
       "super": { "name": "内置-super", "desc": "超级智能体专属（过渡聚合组，等价于五个管理组的并集）" }
     },
     "preset": {

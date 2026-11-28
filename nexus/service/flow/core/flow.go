@@ -38,6 +38,10 @@ func (n *Node) Label() string {
 type NodeData struct {
 	Label  string                 `json:"label"`
 	Config map[string]interface{} `json:"config"`
+	// Concurrent marks a direct child of a host (process / loop) as a scope member: the walk dispatches it and keeps
+	// going along its outgoing edge, and the body's end joins it. It is a structure attribute, not a config key,
+	// because update_node replaces config wholesale and the canvas round-trips data unchanged.
+	Concurrent bool `json:"concurrent,omitempty"`
 }
 
 type Position struct {

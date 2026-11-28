@@ -24,6 +24,7 @@ type rowDTO struct {
 	MaxLoopTimes      *int32 `json:"max_loop_times"`
 	MaxRunRecords     *int32 `json:"max_run_records"`
 	MaxSessionRecords *int32 `json:"max_session_records"`
+	MaxConcurrency    *int32 `json:"max_concurrency"`
 }
 
 // loadRowCached reads one row: a Redis hit returns directly; a miss (or Redis being unusable) goes back to the DB and
@@ -106,6 +107,7 @@ func (r *row) toDTO() *rowDTO {
 		MaxLoopTimes:      nullToPtr(r.MaxLoopTimes),
 		MaxRunRecords:     nullToPtr(r.MaxRunRecords),
 		MaxSessionRecords: nullToPtr(r.MaxSessionRecords),
+		MaxConcurrency:    nullToPtr(r.MaxConcurrency),
 	}
 }
 
@@ -121,6 +123,7 @@ func (d *rowDTO) toRow() *row {
 		MaxLoopTimes:      ptrToNull(d.MaxLoopTimes),
 		MaxRunRecords:     ptrToNull(d.MaxRunRecords),
 		MaxSessionRecords: ptrToNull(d.MaxSessionRecords),
+		MaxConcurrency:    ptrToNull(d.MaxConcurrency),
 	}
 }
 

@@ -253,7 +253,8 @@
       "duplicate_label": "节点名称不能重复：{names}。名称可用于 source_ref / call.target 引用，重名会指错节点，请改名后再保存",
       "node_limit_exceeded": "流程图有 {count} 个节点，超过当前租户的节点数上限（{limit}）。请拆分成多个流程，或联系管理员调整配额；注释节点不计入。",
       "description_required": "工作流描述不能为空",
-      "has_release": "v{version} 仍在线上，删除会立刻停掉正式调用。请先在版本面板「取消发布」，再删除。"
+      "has_release": "v{version} 仍在线上，删除会立刻停掉正式调用。请先在版本面板「取消发布」，再删除。",
+      "endpoint_exposed": "该工作流仍有对外开放的端点（{names}），删除会立刻让外部调用方调不到。请先「收回对外」，再删除。"
     },
     "agentconfig": {
       "invalid_value": "{field} 必须是不小于 1 的整数（本组四项配置不支持 -1 表示不限）",

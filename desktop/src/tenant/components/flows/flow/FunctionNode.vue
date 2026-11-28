@@ -3,7 +3,7 @@
     <div class="node-header">
       <div class="icon-wrapper icon-function"><el-icon><ScaleToOriginal /></el-icon></div>
       <div class="node-label">{{ data.label || t('flow.node.defaultLabel.function') }}</div>
-      <NodeFindingsBadge :id="id" />
+      <NodeBadges :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper"><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -33,7 +33,7 @@ import { ref, computed, onMounted, watch, inject } from 'vue'
 import { ScaleToOriginal, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
-import NodeFindingsBadge from './NodeFindingsBadge.vue'
+import NodeBadges from './NodeBadges.vue'
 
 const { t } = useI18n()
 

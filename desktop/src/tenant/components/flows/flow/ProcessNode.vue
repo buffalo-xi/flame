@@ -6,7 +6,7 @@
       <Handle type="target" position="right" :id="'target' + id + 'right'" class="custom-handle custom-handle-right custom-handle-target" />
       <div class="icon-wrapper icon-process"><el-icon><Help /></el-icon></div>
       <div class="node-label" ref="labelRef">{{ data.label || t('flow.node.fallbackLabel.process') }}</div>
-      <NodeFindingsBadge :id="id" />
+      <NodeBadges :id="id" />
       <el-dropdown trigger="hover" placement="right">
         <span class="more-icon-wrapper" @click.stop @mousedown.stop @pointerdown.stop><el-icon class="more-icon"><MoreFilled /></el-icon></span>
         <template #dropdown>
@@ -16,39 +16,9 @@
               <span>{{ t('flow.node.action.delete') }}</span>
             </el-dropdown-item>
             <BreakpointMenuItem :id="id" />
-            <el-dropdown-item @click="toggleConcurrency">
-              <el-icon><component :is="concurrencyEnabled ? 'Close' : 'CircleCheck'" /></el-icon>
-              <span>{{ concurrencyEnabled ? t('flow.node.concurrency.disable') : t('flow.node.concurrency.enable') }}</span>
-            </el-dropdown-item>            
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-      <div
-        class="concurrency-controls"
-        v-if="concurrencyEnabled"
-        @click.stop
-        @mousedown.stop
-        @pointerdown.stop
-      >
-        <el-select v-model="concurrencyGroup" class="concurrency-select" :disabled="!concurrencyEnabled">
-          <el-option :label="t('flow.node.concurrency.mono')" value="mono" />
-          <el-option-group v-if="forkNodes.length" :label="t('flow.node.concurrency.forkGroup')">
-            <el-option
-              v-for="node in forkNodes"
-              :key="node.id"
-              :label="node.data?.label || node.id"
-              :value="node.id"
-            />
-          </el-option-group>
-        </el-select>
-        <button
-          class="concurrency-cancel-btn"
-          :title="t('flow.node.concurrency.disable')"
-          @click="clearConcurrency"
-        >
-          ✕
-        </button>
-      </div>
     </div>
 
     <div class="node-content" ref="contentRef">
@@ -65,12 +35,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, inject } from 'vue'
-import { Help, MoreFilled, Delete, Close, CircleCheck } from '@element-plus/icons-vue'
+import { ref, onMounted, watch, inject } from 'vue'
+import { Help, MoreFilled, Delete } from '@element-plus/icons-vue'
 import { Handle, useVueFlow } from '@vue-flow/core'
-import { readConcurrencyGroup, buildConcurrencyConfig } from './concurrencyConfig.js'
 import { useI18n } from 'vue-i18n'
-import NodeFindingsBadge from './NodeFindingsBadge.vue'
+import NodeBadges from './NodeBadges.vue'
 
 const { t } = useI18n()
 
@@ -97,95 +66,15 @@ const labelRef = ref(null)
 
 const injectedSelectedNode = inject('selectedNode', null)
 const groupNodeTypes = inject('groupNodeTypes', new Set(['process', 'loop', 'function']))
-const FlowNodes = inject('FlowNodes', ref([]))
-const FlowEdges = inject('FlowEdges', ref([]))
-
 const { updateNodeInternals, nodes, getViewport } = useVueFlow()
 
 const isSelected = ref(false)
-const concurrencyEnabled = ref(readConcurrencyGroup(props.data.config) !== 'none')
-const concurrencyGroup = ref(readConcurrencyGroup(props.data.config))
-
-// 沿入边向上查找可用的 fork 节点（排除已被其他 wait 节点占用的）
-const forkNodes = computed(() => {
-  const allNodes = FlowNodes.value
-  const edges = FlowEdges.value
-  const currentId = props.id
-  const nodeMap = new Map(allNodes.map(n => [n.id, n]))
-
-  const foundForks = []
-  const foundWaits = []
-  const visited = new Set()
-  visited.add(currentId)
-
-  const queue = [currentId]
-
-  while (queue.length > 0) {
-    const nodeId = queue.shift()
-    const incomingEdges = edges.filter(e => String(e.target) === String(nodeId))
-
-    if (incomingEdges.length === 0) {
-      const node = nodeMap.get(nodeId)
-      if (node?.parentNode && !visited.has(node.parentNode)) {
-        visited.add(node.parentNode)
-        const parentNode = nodeMap.get(node.parentNode)
-        if (parentNode) {
-          queue.push(parentNode.id)
-        }
-      }
-      continue
-    }
-
-    for (const edge of incomingEdges) {
-      const sourceId = edge.source
-      if (visited.has(sourceId)) continue
-      visited.add(sourceId)
-
-      const sourceNode = nodeMap.get(sourceId)
-      if (!sourceNode) continue
-
-      if (sourceNode.type === 'fork') {
-        foundForks.push(sourceNode)
-      } else if (sourceNode.type === 'wait') {
-        foundWaits.push(sourceNode)
-      }
-      queue.push(sourceId)
-    }
-  }
-
-  // 收集已被查找到的其他 wait 节点占用的 forkID
-  const usedForkIDs = new Set()
-  for (const n of foundWaits) {
-    const forkID = n.data?.config?.fork_node_id
-    if (forkID) usedForkIDs.add(String(forkID))
-  }
-
-  return foundForks.filter(n => !usedForkIDs.has(String(n.id)))
-})
 
 if (injectedSelectedNode) {
   watch(() => injectedSelectedNode.value, (newSelectedNode) => {
     isSelected.value = newSelectedNode?.id === props.id
   }, { immediate: true, deep: true })
 }
-
-watch(concurrencyEnabled, (enabled) => {
-  if (enabled) {
-    if (!concurrencyGroup.value || concurrencyGroup.value === 'none') {
-      concurrencyGroup.value = 'mono'
-    }
-    emit('updateData', { nodeId: props.id, data: { config: { concurrency: buildConcurrencyConfig(concurrencyGroup.value) } } })
-  } else {
-    concurrencyGroup.value = 'none'
-    emit('updateData', { nodeId: props.id, data: { config: { concurrency: undefined } } })
-  }
-})
-
-watch(concurrencyGroup, (newValue) => {
-  if (newValue && newValue !== 'none') {
-    emit('updateData', { nodeId: props.id, data: { config: { concurrency: buildConcurrencyConfig(newValue) } } })
-  }
-})
 
 const handleNodeClick = (event) => {
   const handleElement = event.target.closest('.custom-handle')
@@ -196,14 +85,6 @@ const handleNodeClick = (event) => {
       emit('handleClick', props.id, handleId, event)
     }
   }
-}
-
-const toggleConcurrency = () => {
-  concurrencyEnabled.value = !concurrencyEnabled.value
-}
-
-const clearConcurrency = () => {
-  concurrencyEnabled.value = false
 }
 
 const deleteNode = () => {
@@ -217,15 +98,8 @@ const getHeaderMinWidth = () => {
   const gap = 8
   const paddingTotal = 12 * 2
   
-  let minWidth = iconWidth + labelWidth + moreBtnWidth + gap * 2 + paddingTotal
-  
-  if (concurrencyEnabled.value) {
-    const selectMinWidth = 120
-    const cancelBtnWidth = 18
-    const concurrencyMarginLeft = 10
-    minWidth += selectMinWidth + cancelBtnWidth + gap * 2 + concurrencyMarginLeft
-  }
-  
+  const minWidth = iconWidth + labelWidth + moreBtnWidth + gap * 2 + paddingTotal
+
   return minWidth
 }
 
@@ -409,25 +283,6 @@ const nextTick = (fn) => {
 watch(() => props.data?._needsResize, () => {
   nextTick(() => {
     adjustSizeToFitChildren()
-  })
-})
-
-watch(concurrencyEnabled, () => {
-  nextTick(() => {
-    const headerMinWidth = getHeaderMinWidth()
-    if (nodeRef.value) {
-      const currentWidth = parseInt(nodeRef.value.style.width) || nodeRef.value.offsetWidth
-      if (currentWidth < headerMinWidth) {
-        nodeRef.value.style.width = headerMinWidth + 'px'
-        nodeRef.value.style.minWidth = headerMinWidth + 'px'
-        if (props.data) {
-          if (!props.data.config) props.data.config = {}
-          if (!props.data.config.size) props.data.config.size = {}
-          props.data.config.size.width = headerMinWidth + 'px'
-        }
-        updateNodeInternals(props.id)
-      }
-    }
   })
 })
 
@@ -725,82 +580,4 @@ watch(
   transform: translate(-50%, -50%);
 }
 
-:deep(.concurrency-controls) {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 4px;
-  margin-left: 10px;
-  margin-right: 4px;
-  height: 20px;
-}
-
-:deep(.concurrency-cancel-btn) {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  border: 1px solid #ddd;
-  border-radius: 3px;
-  background: #fff;
-  color: #999;
-  font-size: 10px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: all 0.2s;
-}
-:deep(.concurrency-cancel-btn:hover) {
-  border-color: #f56565;
-  color: #f56565;
-  background: #fff5f5;
-}
-
-:deep(.concurrency-select) {
-  flex: 0 0 auto;
-  font-size: 10px;
-  min-width: 80px;
-  width: auto;
-  height: 20px;
-}
-
-:deep(.concurrency-select .el-select__wrapper) {
-  font-size: 10px;
-  width: auto;
-  min-width: 120px;
-  border: none !important;
-  box-shadow: none !important;
-  height: 20px;
-  min-height: 20px;
-}
-
-:deep(.concurrency-select .el-select__trigger) {
-  padding: 0px 8px;
-  white-space: nowrap;
-  height: 20px;
-}
-
-:deep(.concurrency-select .el-divider) {
-  margin: 4px 0 !important;
-  padding: 0 !important;
-}
-
-:deep(.concurrency-select .el-option-group) {
-  padding: 0 !important;
-}
-
-:deep(.concurrency-select .el-option-group__label) {
-  padding: 4px 12px 2px !important;
-  font-size: 10px !important;
-  height: auto !important;
-  line-height: 14px !important;
-  border-bottom: 1px solid #eee !important;
-  color: #999 !important;
-  font-weight: 500 !important;
-}
-
-:deep(.concurrency-select .el-option-group__list) {
-  padding: 0 !important;
-}
 </style>

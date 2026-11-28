@@ -1,3 +1,31 @@
+// Node and edge ids share one increasing sequence, matching the backend tools: a new id is the largest numeric id in the
+// document plus one, written as a plain number ("2", "3", "1002" - no padding). Ids handed out in this batch but not yet
+// in `nodes` / `edges` (one build() allocates a container plus its entry; branch sub-branch ids come the same way) are
+// kept in a reservation set keyed by the nodes array, so a batch cannot hand out the same id twice before updateNodes()
+// replaces the array.
+const reservedIds = new WeakMap()
+
+// Only plain non-negative integers take part in the sequence: older flows carry random ids and the default start node is
+// "1", so anything else is simply ignored.
+const highestSeq = (nodes, edges, reserved) => {
+  let highest = 0
+  const bump = (id) => {
+    if (typeof id !== 'string') return
+    const trimmed = id.trim()
+    if (!/^\d+$/.test(trimmed)) return
+    const n = Number(trimmed)
+    if (n > highest) highest = n
+  }
+  nodes.forEach(node => {
+    bump(node?.id)
+    const children = node?.data?.config?.children || []
+    children.forEach(child => bump(child?.id))
+  })
+  edges.forEach(edge => bump(edge?.id))
+  reserved.forEach(bump)
+  return highest
+}
+
 const random = {
   randomInt(min, max) {
     if (min === undefined) {
@@ -43,21 +71,15 @@ const random = {
     return `${prefix}${timestamp}${randomPart}`
   },
 
-  generateUniqueId(digits, nodes, edges) {
-    while (true) {
-      let id = this.randomNumberString(digits)
-      // 校验节点自身ID + 节点内嵌的分支ID
-      const nodeExists = nodes.some(node => {
-        if (node.id === id) return true
-        const children = node.data?.config?.children || []
-        return children.some(child => child.id === id)
-      })
-      // 校验边ID
-      const edgeExists = edges.some(edge => edge.id === id)
-      if (!nodeExists && !edgeExists) {
-        return id
-      }
+  generateUniqueId(nodes = [], edges = []) {
+    let reserved = reservedIds.get(nodes)
+    if (!reserved) {
+      reserved = new Set()
+      reservedIds.set(nodes, reserved)
     }
+    const id = String(highestSeq(nodes, edges, reserved) + 1)
+    reserved.add(id)
+    return id
   }
 }
 

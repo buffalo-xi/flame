@@ -27,7 +27,9 @@ Arguments: `flow`, `type`, `label?`, `config?`, `parent_node?`.
 
 - Without `config` the **type's default template is used** (the same one the front end's "New node" writes: `http` comes with
   outputs, `assign` with empty `inputs/outputs/targets/assignments`, `loop` with `loop` + `loop_vars`, `branch`/`intent`
-  automatically with one `children` entry). If you supply it, it is used as-is and missing keys are not filled in.
+  automatically with one `children` entry). If you supply it, it is used as-is and missing keys are not filled in — the one
+  exception is `config.inputs` on a type that reads no `inputs` (`process` / `function` / `call` / `memory` / control
+  signals): it is removed with a warning.
 - `parent_node` may only be the id of a `loop` / `process` / `function`. Passing it builds the node inside that container
   (coordinates are relative to the parent, with `extent` constraining it inside the parent).
 - **Containers get an `entry` automatically**; if the parent container had none, one is added along the way (returning
@@ -62,18 +64,29 @@ Arguments: `flow`, `type`, `label?`, `config?`, `parent_node?`.
 - **`config_patch` deletes only a top-level key.** `{"args": {"c": null}}` does not remove `c` from `args` — the nested object
   is merged, `c` survives as null, and the run then reports `unknown arg "c"`. To drop something inside a nested object, pass
   that whole object (`{"args": {"a": {...}, "b": {...}}}`), or replace `config` wholesale.
-- **Node references accept a label or an id**, in all five places that hold one: `config.inputs.*.source_ref`,
-  `config.targets.*.source_ref`, `config.args.*.source_ref`, `config.target` and `config.wait.fork_node_id`. A value that
+- **Node references accept a label or an id**, in all four places that hold one: `config.inputs.*.source_ref`,
+  `config.targets.*.source_ref`, `config.args.*.source_ref` and `config.target`. A value that
   matches no node id is rewritten to the label's node; an ambiguous label is left alone. Ids are still safer: read them back
   with `read_flow` once the graph has branches or containers.
+- **A node never references itself**, with one exception: a `while` / `do_while` loop's `config.inputs` is re-resolved
+  before every condition check, so its condition may read the loop's own `outputs` / `locals` / `loop_vars` — that is how an
+  accumulator is written (`references/nodes/loop.md` has the pattern). Everywhere else — any non-loop node, and `count` /
+  `each`, which snapshot their inputs once before the first round — `config.inputs.*` / `config.args.*` is resolved before
+  the node runs, so its own `outputs` / `locals` are still empty and the run fails with `failed to get variable …: var path …
+  not found`. Read an upstream node instead; for a value that has to change between rounds use a flow variable, or write into
+  the enclosing container's `outputs` / `locals` (`targets`). `validate_flow` reports `self_ref` for those cases, and the
+  same scan covers `args` for `dangling_ref` / `function_ref`.
 - `position` is canvas coordinates: absolute for top-level nodes, **relative to the parent container** for nodes inside one.
   Use it to fine-tune when automatic layout looks off, following the same rules as "Layout" in `SKILL.md`: `x`/`y` are
   multiples of 20, the main chain shares one `y` with an `x` step of 200 between adjacent leaves (380 after `branch` /
-  containers), branches go below-right of the branch node (rows ≥ 72 apart), and nothing overlaps an existing node.
-  The returned `node.position` is the coordinate as stored.
+  containers), branches go to the right of the branch node — the first one on the node's own row, the rest below it (rows ≥
+  72 apart) — and nothing overlaps an existing node. The returned `node.position` is the coordinate as stored.
 - When changing `parent_node`: **edges crossing between the old and new container are deleted** (cross-`parent_node` edges were
   never valid), returned in `removed_edges`; reconnect them inside the new container with `create_edge`.
-- A node cannot be moved into its own subtree; `function` cannot be moved into a container; `start` / `entry` cannot be moved.
+- A node cannot be moved into its own subtree; `function` cannot be moved into a container; `start` / `entry` cannot be moved;
+  a `return` cannot be moved **out** of a function (outside one it would end the whole flow). The node keeps its id; without an
+  explicit `position` it is placed at a free spot inside the new container, so pass `position` when the default is not where you
+  want it.
 
 ## `delete_node`
 
@@ -86,16 +99,14 @@ Arguments: `flow`, `type`, `label?`, `config?`, `parent_node?`.
 - **Refused while referenced**, listing the referrers:
   - `config.inputs.<key>.source_ref`
   - `config.target` (the `call` target)
-  - `config.fork_node_id` (the concurrency group a `wait` joins)
 
   Change those references with `update_node` first, or the run fails to resolve values right after the delete.
 - `start` cannot be deleted (the whole graph could not run); `entry` cannot be deleted on its own (it goes with the container).
 
 ## Labels must be unique across the graph
 
-`label` is the **writable form** of `config.inputs.*.source_ref`, `call.config.target` and `wait.config.fork_node_id` (the tool
-replaces it with the real id), so a duplicate makes those references point at the wrong node. Labels must be unique within the
-whole flow graph:
+`label` is the **writable form** of `config.inputs.*.source_ref` and `call.config.target` (the tool replaces it with the real
+id), so a duplicate makes those references point at the wrong node. Labels must be unique within the whole flow graph:
 
 | Situation | What happens on a collision |
 |---|---|

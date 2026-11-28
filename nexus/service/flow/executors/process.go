@@ -51,9 +51,20 @@ func (e *ProcessExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proces
 	}
 	nr.AddLog("child processID: " + childPID)
 
-	// Execute the child node (passing 0 for depth is fine; the real depth comes from the debug stack's
-	// CurrentDepth)
-	err = execute(entryNode, ctx, childPID, 0)
+	// Execute the body under its scope, then join on every exit path: the end of a body is the join, whether the body
+	// succeeded, failed, was cancelled or received a control signal.
+	scope, bodyErr := runBody(node, ctx, childPID, entryNode)
+	joinErr := finishBody(nr, scope)
+	err = bodyErr
+	if joinErr != nil && errors.Is(joinErr, SignalExit) {
+		// A member's exit outranks a failure that happened in the same instant: stopping the whole run is the author's
+		// decision, and every node keeps its own outcome either way (nothing here rewrites a failed record).
+		err = joinErr
+	} else if err == nil && joinErr != nil {
+		// A member failed and the body's own chain did not: the join's aggregate code becomes the host's error, so a
+		// member failure is visible without any wait node.
+		err = joinErr
+	}
 	if err != nil {
 
 		if isControlSignal(err) {
@@ -78,7 +89,7 @@ func (e *ProcessExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proces
 		if errors.As(err, &ee) {
 			code = ee.Code
 		}
-		return failf(nr, code, err.Error())
+		return failf(nr, code, nodeMessage(err))
 	}
 
 	nr.Finish(flow.StatusSuccess, "", "")
@@ -88,7 +99,13 @@ func (e *ProcessExecutor) Execute(node *flow.Node, ctx *flow.ExecContext, proces
 func (e *ProcessExecutor) Capabilities() NodeCapabilities {
 	return NodeCapabilities{
 		ErrorCodes: []string{}, // empty: child-chain error codes are passed through, not validated
-		Actions:    []flow.ErrorAction{},
+		// skip: the scope is optional and a failed member must not stop the main chain; handler: the script may rewrite the
+		// error or turn it into a skip. No retry: re-running the whole body repeats every member's side
+		// effects, which is never what "retry the failed member" means.
+		Actions: []flow.ErrorAction{flow.ErrorActionSkip, flow.ErrorActionHandler},
+		// post: the one way a skipped host can still leave a marker behind (ok = false), because a handler cannot write
+		// outputs and the host's own outputs are otherwise whatever its members wrote before the failure.
+		HasPost: true,
 	}
 }
 

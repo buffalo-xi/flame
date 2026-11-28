@@ -68,7 +68,11 @@
 - **删除实体要求线上没有发布版本**：有 `is_current` 时删除被拒（`versions.ErrHasReleasedVersion`，
   带着版本号）—— 与「删版本」同一条规则，只是上升了一层，因为删除不该顺带停服；
 - **废弃态可以删**（智能体 / 技能以前要求「先切回正常再删」，那等于为了删除先把实体放回线上）；
-  废弃本身已经是明确的停服步骤，所以拦住删除的是发布版本，而不是状态。
+  废弃本身已经是明确的停服步骤，所以拦住删除的是发布版本，而不是状态；
+- **删除连派生数据一起带走**：工作流是端点、版本历史（`flow_versions`，外键 `ON DELETE CASCADE`）、运行记录
+  和断点（`flow_run_records` / `flow_node_records` / `flow_breakpoints`，没有外键，所以在同一事务里显式删除）。
+  流程行没了以后这些行从任何页面都不可达，而一份挂在已不存在的 `flow_id` 上的历史比没有历史更糟。
+  「保留流程、清掉旧运行」是运行历史页的清理，不是删除。
 
 ### 实体版本（智能体 / 技能 / 自定义工具）
 
@@ -140,14 +144,38 @@
 **别用**：`tenant_variables`（作用域已由 schema 表达）、`shared_vars`（`share` 专指跨租户分发，
 会撞词）、`vars` 作为表名（与 `env_vars` / `flow_vars` 的词根对不齐）。
 
-## 6. 生效范围
+## 6. 并发作用域（process / loop）
+
+一个 body 一个并发作用域，没有 `fork` / `wait` 节点，汇合是隐式的。完整模型见 `parallel-scope.md`。
+
+| 概念 | 界面 | 代码 | 数据库 |
+|---|---|---|---|
+| 持有作用域的宿主 | `process` / `loop` 的「并发作用域」块（并发上限 / 超时 / 汇合方式） | `config.parallel`、`ParallelConfig` | 节点 `config.parallel` |
+| 它跑的 body | — | 从宿主 `entry` 开始的那条链 | 同一个 `config` |
+| 该 body 的一次执行 | — | `BodyScope`（`loop` 每轮创建一个） | — |
+| 作用域成员 | 节点上的「在父节点中并发执行」勾选 | `data.concurrent`、`NodeData.Concurrent`、`create_node` / `insert_node` / `update_node` 的 `concurrent` 参数 | 节点 `data.concurrent` |
+| 收集成员 | 「汇合方式」（collect / drain / abort） | `ParallelResult`、`ProcessResult.Parallel` | `config.parallel.join` |
+
+`concurrent` 与 `parallel` **不可互换**：`concurrent` 是节点自身上的成员标记，`parallel` 是宿主的配置块与运行记录。
+校验码同此划分（`concurrent_*` 查标记，`parallel_*` 查作用域）。叙述（界面文案、帮助主题、本文件）一律说「并发」。
+
+成员必须是 body 主链上的**可执行**直接子节点：`entry`、控制信号（`break` / `continue` / `return` / `exit`）、
+注释类（`comment` / `layout`）、输出类（`result` / `progress`）、瞬时节点（`assign` / `memory`）都不能当成员；
+`process` 与 `loop` 是宿主，本身也可以当成员。读是静态的、不是尽力而为：成员不读兄弟成员，同一 body 的链上节点
+也不读成员 —— 成员的结果只能在宿主汇合后从宿主 outputs 读（`parallel_visibility`，error）；成员也只能写自己的
+变量与宿主的 outputs（`concurrent_member_write`，error）。
+
+**别用**：`fork` / `wait` / `mono`（已删除）；用 `parallel` 指成员标记、或用 `concurrent` 指宿主配置块；
+用 `group` / `thread` / `task` 指作用域。
+
+## 7. 生效范围
 
 - 新增文案、接口、表：按上表取词；
 - 存量标识符若与上表冲突，以本表为准，改的时候连带迁移脚本一起提；
 - 状态值（`'listed'` 等）是 DB CHECK 约束的一部分，改它必须同时改
   `nexus/platform/sql/shared_assets.sql`、迁移脚本与前后端。
 
-## 7. 注释与诊断文案的用词
+## 8. 注释与诊断文案的用词
 
 代码注释、内部错误串、`msg` 诊断文本与日志一律**英文**（2026-11 决定）。**用户可见文案不在此列**：它由 `error`
 码 + 前端语言包渲染，后端的那一句永远不决定中文用户还是英文用户读到什么。

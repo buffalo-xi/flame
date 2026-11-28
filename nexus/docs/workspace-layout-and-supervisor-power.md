@@ -191,12 +191,12 @@ what extra was given". Three consequences:
 | `builtin:shell` | `shell` | ✅ | resident session, schema with only 3 parameters |
 | `builtin:agent` | `list_agents`, `read_agent`, `call_agent` | ✅ | read-only + collaboration |
 | `builtin:skill` | `list_skills`, `read_skill`, `use_skill` | ✅ | see / use skills: `read_skill` gives the body + `tool_deps` (no activation), only `use_skill` activates dependencies |
-| `builtin:agent-admin` | create / update / delete agent + `bind_skill` / `unbind_skill` (5) | ✅ | **the supervisor's bootstrap ability** |
+| `builtin:agent-admin` | create / update / delete agent + `bind_skill` / `unbind_skill` + `*_agent_endpoint` (9) | ✅ | **the supervisor's bootstrap ability**; endpoint tools create / delete slots and flip `exposed` |
 | `builtin:skill-own` | `*_own_skill` (3) | ❌ | follows `skill-authoring` |
 | `builtin:skill-admin` | `*_shared_skill` + `*_agent_skill` (6) | ❌ | follows `skill-authoring` / `agent-authoring` |
 | `builtin:tool-grant` | `grant/revoke_agent_tool`, `allow/revoke_agent_call`, `search_tools` (5) | ❌ | follows `agent-authoring` |
 | `builtin:custom-tool` | `*_custom_tool` (4) | ❌ | follows `custom-tool-authoring` |
-| `builtin:flow-admin` | `create/list/read/delete_flow` (4) | ❌ | follows `flow-authoring` |
+| `builtin:flow-admin` | `create/list/read/delete_flow` + node / edge tools + `*_flow_endpoint` (20) | ❌ | follows `flow-authoring`; the endpoint tools handle the MCP slot, the RPC slot is managed by the flow |
 | `builtin:browser` | `browser` (1) | ❌ | follows no skill (see below) |
 
 **Why groups rather than individual tools**: a group is atomic — deleting one by mistake loses a whole class, visible at a

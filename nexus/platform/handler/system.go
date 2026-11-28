@@ -75,6 +75,7 @@ func GetSystemFlowConfigs(c *gin.Context) {
 			"max_loop_times":      fb.MaxLoopTimes,
 			"max_run_records":     fb.MaxRunRecords,
 			"max_session_records": fb.MaxSessionRecords,
+			"max_concurrency":     fb.MaxConcurrency,
 		},
 	}, "")
 }
@@ -96,6 +97,7 @@ func UpdateSystemFlowConfigs(c *gin.Context) {
 		{"max_loop_times", req.MaxLoopTimes},
 		{"max_run_records", req.MaxRunRecords},
 		{"max_session_records", req.MaxSessionRecords},
+		{"max_concurrency", req.MaxConcurrency},
 	}); err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, err.Error(), "")
 		return
@@ -110,6 +112,7 @@ func UpdateSystemFlowConfigs(c *gin.Context) {
 		MaxLoopTimes:      flowNullInt32(req.MaxLoopTimes),
 		MaxRunRecords:     flowNullInt32(req.MaxRunRecords),
 		MaxSessionRecords: flowNullInt32(req.MaxSessionRecords),
+		MaxConcurrency:    flowNullInt32(req.MaxConcurrency),
 	}
 	if err := flowRepo.Upsert(cfg); err != nil {
 		xhttp.ErrCode(c, "common.internal", nil, "failed to save system config: "+err.Error(), "")

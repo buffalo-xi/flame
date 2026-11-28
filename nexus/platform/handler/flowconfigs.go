@@ -48,6 +48,7 @@ func flowToJSON(cfg *flowrepo.FlowConfig) gin.H {
 		"max_loop_times":      flowNullable(cfg.MaxLoopTimes),
 		"max_run_records":     flowNullable(cfg.MaxRunRecords),
 		"max_session_records": flowNullable(cfg.MaxSessionRecords),
+		"max_concurrency":     flowNullable(cfg.MaxConcurrency),
 	}
 }
 
@@ -119,6 +120,7 @@ type updateFlowConfigsRequest struct {
 	MaxLoopTimes      *int32 `json:"max_loop_times"`
 	MaxRunRecords     *int32 `json:"max_run_records"`
 	MaxSessionRecords *int32 `json:"max_session_records"`
+	MaxConcurrency    *int32 `json:"max_concurrency"`
 }
 
 // flowNullInt32 maps nil -> NULL (unset).
@@ -141,7 +143,7 @@ func flowCheckNotExceed(field string, tenantValue, sysValue sql.NullInt32) error
 }
 
 // saveFlowConfigs validates (must not exceed the system level), writes and invalidates the cache.
-// All seven body fields may be null (null = unset, falls back to the system level).
+// Every body field may be null (null = unset, falls back to the system level).
 func saveFlowConfigs(schema string, req updateFlowConfigsRequest) (gin.H, error) {
 	// The system config is read-only here and only used for the upper-bound check
 	sysCfg, err := flowRepo.Get("")
@@ -162,6 +164,7 @@ func saveFlowConfigs(schema string, req updateFlowConfigsRequest) (gin.H, error)
 		MaxLoopTimes:      flowNullInt32(req.MaxLoopTimes),
 		MaxRunRecords:     flowNullInt32(req.MaxRunRecords),
 		MaxSessionRecords: flowNullInt32(req.MaxSessionRecords),
+		MaxConcurrency:    flowNullInt32(req.MaxConcurrency),
 	}
 
 	checks := []struct {
@@ -176,6 +179,7 @@ func saveFlowConfigs(schema string, req updateFlowConfigsRequest) (gin.H, error)
 		{"max_loop_times", cfg.MaxLoopTimes, sys.MaxLoopTimes},
 		{"max_run_records", cfg.MaxRunRecords, sys.MaxRunRecords},
 		{"max_session_records", cfg.MaxSessionRecords, sys.MaxSessionRecords},
+		{"max_concurrency", cfg.MaxConcurrency, sys.MaxConcurrency},
 	}
 	for _, chk := range checks {
 		if err := flowCheckNotExceed(chk.field, chk.tenantValue, chk.sysValue); err != nil {

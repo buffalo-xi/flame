@@ -191,6 +191,17 @@
       </el-tooltip>
       </template>
     </div>
+
+    <!-- No agent of the tenant's own in view: the preinstalled main may be the only card, or the list may be empty.
+         The title is a question, so it stays true whether you own none or just filtered them out. -->
+    <EmptyGuide v-if="showOwnGuide" class="agent-guide"
+                :title="$t('agent.guideTitle')"
+                :lead="$t('agent.guideLead')"
+                :steps="[$t('agent.guideStepChat'), $t('agent.guideStepManual')]">
+      <template #action>
+        <el-button size="small" type="primary" plain @click="emit('create')">{{ $t('agent.create') }}</el-button>
+      </template>
+    </EmptyGuide>
   </div>
 </template>
 
@@ -200,6 +211,7 @@ import { useI18n } from 'vue-i18n'
 import { Plus, Search, Delete, CircleCheck, CircleClose, Connection, ArrowDown, Close, Refresh, Upload, Download } from '@element-plus/icons-vue'
 import { useHeaderCompact } from '../../utils/useHeaderCompact.js'
 import HelpButton from '../../../help/HelpButton.vue'
+import EmptyGuide from '../EmptyGuide.vue'
 
 // 脚本侧文案（状态元信息、悬停提示、分组名、空态）要在切换语言后重算，
 // 所以它们都得走 t()，不能再用模块级常量存中文字符串。
@@ -301,6 +313,14 @@ const agentGroups = computed(() => {
   // 只剩这一组时（租户只有 main、或筛选后只剩它）也必须画，否则标识全无
   const headed = groups.length > 1 || groups[0]?.key === 'system'
   return groups.map(g => ({ ...g, headed }))
+})
+
+// Show the nudge whenever the list holds no agent of the tenant's own: with the system toggle off there are no cards
+// at all, with it on there may be only the preinstalled main. Judged on the visible groups, so a filter that hides
+// your own agents still gets the nudge (hence the question-shaped title).
+const showOwnGuide = computed(() => {
+  if (props.loading || searchQuery.value) return false
+  return !agentGroups.value.some(g => g.key === 'other')
 })
 
 // 空列表提示文案（区分「搜索无结果」与「该状态下暂无数据」）
@@ -597,6 +617,12 @@ const getEndpointTextColor = (p) => {
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 14px;
   align-content: start;
+}
+
+/* The shared guide sits under whatever the list shows: the cards, or the one-line empty hint */
+.agent-guide {
+  max-width: 620px;
+  margin-top: 14px;
 }
 
 /* 分组的段标题：跨满整行（列表本身是 grid），把「系统内置 / 其他智能体」切成两段。

@@ -11,6 +11,11 @@ Hovering a card reveals five actions: restore, deprecate, endpoints, export as a
 **Deleting a flow deletes its run history too** (it disappears from the run history screen), together with
 endpoints that are not exposed; retract any exposed endpoint first.
 
+With no workflow at all, the list area explains what a workflow is and offers a **Create a workflow** entry, so
+the top bar is not the only way in: ask the main agent in chat to build one ("build me a workflow that totals
+yesterday's orders by region and writes a short summary"), or draw it by hand from that button. A status filter
+or a search that matches nothing shows a single line instead.
+
 ## The editor has three regions
 
 A vertical toolbar on the left (add node, add comment, variable panel entry), the canvas in the middle,
@@ -20,11 +25,33 @@ floating panels on the right (properties, variables, run). Panels can be widened
 handle on an existing node → pick a type, and the new node is created to its right, already wired. Comments
 do not count against the node limit.
 
+The "+" panel has two tabs. **Nodes** builds an empty node of a type; **Tools** lists what is already wired up —
+the RPC endpoints this tenant exposes and the tools under its MCP / RPC connections. Picking one drops a node
+with the connection and tool already chosen, plus a sample of the arguments built from the interface's declared
+input schema (required fields only, values are type placeholders — replace them and it runs). The new node is
+selected and its properties panel opens on its own, with the sample already in the arguments box. Switching the tool in
+that panel replaces the arguments with the new tool's schema, and so does switching the endpoint on an RPC node.
+Anything already in the box is overwritten — copy what you want to keep first; an interface that declares no arguments
+leaves an empty `{}`. The "?" next to the tool dropdown opens the selected tool's details: its description, every
+argument with type, required flag and meaning, and the raw schema. It is greyed out until a tool is chosen. In endpoint
+mode an RPC node's endpoint dropdown carries the same "?", showing the endpoint's target type, exposure state and the
+same argument table. Connections stay
+collapsed in that list and load their tools on expand; an endpoint that points back at the flow you are editing
+is never listed (calling itself cannot work). When the list is empty, add a connection under Settings → Tools, or
+expose a flow as an endpoint.
+
+## ESC and leaving the editor
+
+ESC walks out one layer at a time: the context menu and dropdowns first, then the right-hand panels (properties, variables, run) and the version panel; only when none of them is open does it leave the editor for the list. While renaming in the header, ESC cancels just that rename and stays on the page.
+
+**Leaving with unsaved edits asks first** (the back button does the same) — unsaved edits are gone once you leave; the editor does not save them for you.
+
 ## Hard rules for connections
 
 Source and target handles of the same type cannot connect; no self-links, no cycles, no links across
 parent containers. And **a source handle keeps one outgoing edge, a target keeps one incoming edge** —
-reconnecting replaces the old edge instead of adding a second one.
+reconnecting replaces the old edge instead of adding a second one. Terminal nodes (`exit` / `break` / `continue` /
+`return` / raise error) take an incoming edge only: a raise always ends in failure, so a node wired after it would never run.
 
 ## The three variable sources
 
@@ -43,12 +70,54 @@ Before referencing one in a node's inputs, pick the right source — only then i
 the "execution result" sub-page of the variables panel, and the debug highlight on each node (running /
 done / skipped / error / breakpoint).
 
+When a node fails, "Error" is its own code and message. If the handler or the post-processing script it
+configured under error handling failed **on its own**, the execution result adds "Handler error" / "Post-processing
+error" lines — the node still fails with its original error, and its code is not rewritten.
+
+## Concurrent members
+
+A `process` / `loop` body is one concurrency scope. Tick **Run concurrently in the parent body** on one of its **direct
+children** and that node becomes a member: the body dispatches it, keeps walking the chain, and joins every member when the
+body ends. Only steps that can wait carry that tick: the entry, `break` / `continue` / `return` / `exit`, the comment /
+layout nodes, `result` / `progress`, `assign` / `memory` and the raise node do not — control flow stays on the chain (an `exit` written
+inside a member's own body still ends the run), result / progress append to this run in call order, so such a member would
+take whatever slot the scheduler gave it, and assign / memory never wait, so a slot buys nothing.
+
+Membership lives in the node's own data (`data.concurrent` — the tick and the tool argument both write it). On the canvas a
+member's card shows a small blue concurrency icon next to its title, with the tick's label on hover; the icon only surfaces
+the flag, changing it still happens in the properties panel.
+
+- The host sets the limit and the join mode under **Concurrency scope**: a new flow segment starts at 8; with the limit
+  switch off there is no author limit, but the runtime still queues behind the tenant ceiling (Settings → workflow run
+  limits → max concurrency, fallback 16), so members beyond it wait for a slot instead of failing. `collect` (the default)
+  lets every member run to its own end; `drain` stops starting new members after the first failure (queued members and
+  later chain nodes are recorded `skipped`).
+- `abort` adds to `drain`: the members still running are cancelled (recorded `cancelled`, reason `aborted by scope`), so a
+  host that has already failed stops paying for work nobody will read. The body's own chain is not interrupted — it stops
+  at the next node boundary.
+- **Concurrency scope** also takes a scope timeout in seconds: when it expires the members still running are cancelled, the
+  host is recorded `failed` with `err_code: timeout`, the message lists every member's state at that moment, and the
+  snapshot is marked `abandoned`. It is a different level from a node timeout — a node timeout ends that one node, a scope
+  timeout ends this body's concurrency.
+- A member failure fails the run on its own, without anything reading its result. To make a failed section survivable, use the
+  **host's own** error handling: **skip** continues the main chain past it (the host is recorded `skipped`, every member keeps
+  its own record, so the failure stays visible), **handler** may rewrite the error code / message or return skip, and
+  **post** writes the fallback values (`set_outputs`, e.g. `ok = false`) — a handler cannot write outputs. A host has
+  no retry — re-running the whole body would repeat every member's side effects, which is not "retry the failed member". A
+  member's own error handling runs first and is usually enough.
+- Members cannot read each other's results, and a chain node cannot read a member: to feed A's value into B, use two hosts
+  and read the first host's `outputs` in the second.
+- The top level, a `function` body and a `branch` lane are not scopes: ticking the box there is refused on save.
+
 ## The pre-save check
 
 Pressing Save (and the automatic save before a run) first hands the canvas to the backend for a static check. Nothing is
-executed: config-block shape, container entries, cross-container edges, dangling `source_ref` / `call.target` /
-`fork_node_id`, branch conditions with no outgoing edge, a `loop each` source the inputs do not declare, unreachable
-nodes, and `on_error` actions / error codes the node does not support or can never produce.
+executed: config-block shape, container entries, cross-container edges, dangling `source_ref` / `call.target`,
+branch conditions with no outgoing edge, a `loop each` source the inputs do not declare, unreachable
+nodes, `on_error` actions / error codes the node does not support or can never produce, a code listed under both skip and
+handler (skip matches first, so that handler never runs), and a step that skips without a
+fallback while a downstream node reads its outputs — a skipped node leaves an empty value that is indistinguishable from a
+real empty result, so that pair is reported as a warning.
 
 The result is listed as errors and warnings, each line naming the node and the config key:
 

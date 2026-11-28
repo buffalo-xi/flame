@@ -50,6 +50,18 @@
         <div class="nr-log nr-error">{{ nodeResult.err_msg }}</div>
         <div v-if="nodeResult.err_stack" class="nr-log nr-stack">{{ nodeResult.err_stack }}</div>
       </div>
+
+      <!-- The two on_error fallbacks failing on their own: neither changes the node's status or err_code above,
+           so without these rows the only trace would be a line inside the logs -->
+      <div v-if="nodeResult.handler_error" class="result-item">
+        <label class="result-label">{{ t('flow.node.run.handlerError') }}</label>
+        <div class="nr-log nr-error">{{ nodeResult.handler_error }}</div>
+      </div>
+
+      <div v-if="nodeResult.post_error" class="result-item">
+        <label class="result-label">{{ t('flow.node.run.postError') }}</label>
+        <div class="nr-log nr-error">{{ nodeResult.post_error }}</div>
+      </div>
     </div>
   </div>
 </template>

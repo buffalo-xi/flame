@@ -78,9 +78,15 @@ type ExecContext struct {
 
 	ProcessManager *ProcessManager
 
-	monoWG sync.WaitGroup // tracks independent mono concurrent nodes; Start waits before returning
+	// bodyScopes maps a body process id to its concurrency scope. Only a host (process / loop) registers one, so a
+	// node carrying data.concurrent outside a host body finds no scope and is rejected at run time.
+	bodyMu     sync.RWMutex
+	bodyScopes map[string]*BodyScope
 
-	VarsMu sync.RWMutex
+	// VarsMu guards the run's variable store. It is a pointer because a context derived for a concurrency member
+	// (WithContext) must share the same lock: two locks over one map is a data race. It is nil on a context built by
+	// hand (a unit test, a tool), where varsLock() hands out a package-level lock instead of panicking.
+	VarsMu *sync.RWMutex
 
 	// OutputBindingFire fires the matching output binding automatically once a node-type variable has been written through
 	// SetVariableWithFire. Injected by the executors package at initialisation.
@@ -116,6 +122,87 @@ func (e *ExecContext) Cancel() {
 // SetCancel injects the cancel function (called by NewFlow when constructing the context across packages).
 func (e *ExecContext) SetCancel(c context.CancelFunc) {
 	e.cancel = c
+}
+
+// handBuiltVarsLock is the lock a hand-built context borrows when VarsMu is nil. Correctness only needs "one lock per
+// variable store", and such a store is never shared with a derived context, so one package-level lock is enough.
+var handBuiltVarsLock sync.RWMutex
+
+func (ctx *ExecContext) varsLock() *sync.RWMutex {
+	if ctx.VarsMu != nil {
+		return ctx.VarsMu
+	}
+	return &handBuiltVarsLock
+}
+
+// WithContext returns the context one concurrency member runs under: the same run, the same variables, the same process
+// tree and the same output channels, but with its own cancellation tree. It is how `join: "abort"` cancels the members
+// still running without cancelling the body's own chain - the walk and every sibling keep their parent context.
+//
+// Per-context on purpose: StdCtx / cancel, the run output this context accumulates alone (Result / ProgressMsgs /
+// ResultMsgs / Error, folded back by MergeFrom once the member is done), and the body-scope registry (a host inside a
+// member registers its own scope and its own walk is the only reader).
+//
+// Shared by reference on purpose: the flow definition, the variable store and its lock, the process manager, the executed
+// maps, the channels, the limit snapshot and the debug controller. A member that could not see the chain's variables
+// would be running a different flow, and a second lock over one map is a data race.
+//
+// When this type gains a field, decide here which side it belongs to: a field copied by value that other contexts also
+// write is the defect this method exists to avoid.
+func (ctx *ExecContext) WithContext(stdCtx context.Context) *ExecContext {
+	return &ExecContext{
+		Flow:               ctx.Flow,
+		RunEnvVars:         ctx.RunEnvVars,
+		RunFlowVars:        ctx.RunFlowVars,
+		RunArguments:       ctx.RunArguments,
+		StdCtx:             stdCtx,
+		ReqID:              ctx.ReqID,
+		RunID:              ctx.RunID,
+		SessionID:          ctx.SessionID,
+		Language:           ctx.Language,
+		LanguagePinned:     ctx.LanguagePinned,
+		UserID:             ctx.UserID,
+		CallDepth:          ctx.CallDepth,
+		CallChain:          ctx.CallChain,
+		Schema:             ctx.Schema,
+		Limits:             ctx.Limits,
+		StartedAt:          ctx.StartedAt,
+		ProgressChan:       ctx.ProgressChan,
+		ResultChan:         ctx.ResultChan,
+		ExecutedProcessMap: ctx.ExecutedProcessMap,
+		ExecutedNodeMap:    ctx.ExecutedNodeMap,
+		ProcessManager:     ctx.ProcessManager,
+		VarsMu:             ctx.VarsMu,
+		OutputBindingFire:  ctx.OutputBindingFire,
+		Debug:              ctx.Debug,
+		DebugScope:         ctx.DebugScope,
+		OnFlowDone:         ctx.OnFlowDone,
+	}
+}
+
+// MergeFrom folds a derived context's run output back into this one. A member accumulates into its own record (a slice
+// header cannot be shared between two contexts), so its progress and result text have to be folded back for storage.
+func (ctx *ExecContext) MergeFrom(other *ExecContext) {
+	if other == nil || other == ctx {
+		return
+	}
+	mu := ctx.varsLock()
+	mu.Lock()
+	defer mu.Unlock()
+	// A derived context may carry the very same lock; taking it twice would deadlock (RWMutex is not reentrant).
+	if otherMu := other.varsLock(); otherMu != mu {
+		otherMu.RLock()
+		defer otherMu.RUnlock()
+	}
+	ctx.ProgressMsgs = append(ctx.ProgressMsgs, other.ProgressMsgs...)
+	ctx.ResultMsgs = append(ctx.ResultMsgs, other.ResultMsgs...)
+	ctx.Result += other.Result
+	if other.Error != "" {
+		if ctx.Error != "" {
+			ctx.Error += "; "
+		}
+		ctx.Error += other.Error
+	}
 }
 
 func (ctx *ExecContext) GetProgressChan() chan ProgressMsg {
@@ -176,49 +263,49 @@ func (ctx *ExecContext) EmitResult(result string, stream bool) {
 }
 
 func (ctx *ExecContext) GetResult() string {
-	ctx.VarsMu.RLock()
-	defer ctx.VarsMu.RUnlock()
+	ctx.varsLock().RLock()
+	defer ctx.varsLock().RUnlock()
 	return ctx.Result
 }
 func (ctx *ExecContext) HasResult() bool {
-	ctx.VarsMu.RLock()
-	defer ctx.VarsMu.RUnlock()
+	ctx.varsLock().RLock()
+	defer ctx.varsLock().RUnlock()
 	return ctx.Result != ""
 }
 func (ctx *ExecContext) AddResult(result string) {
-	ctx.VarsMu.Lock()
-	defer ctx.VarsMu.Unlock()
+	ctx.varsLock().Lock()
+	defer ctx.varsLock().Unlock()
 	ctx.Result += result
 }
 
 // AppendProgressMsg appends one progress message.
 func (ctx *ExecContext) AppendProgressMsg(msg string) {
-	ctx.VarsMu.Lock()
-	defer ctx.VarsMu.Unlock()
+	ctx.varsLock().Lock()
+	defer ctx.varsLock().Unlock()
 	ctx.ProgressMsgs = append(ctx.ProgressMsgs, msg)
 }
 
 // AppendResultMsg appends one result message.
 func (ctx *ExecContext) AppendResultMsg(msg string) {
-	ctx.VarsMu.Lock()
-	defer ctx.VarsMu.Unlock()
+	ctx.varsLock().Lock()
+	defer ctx.varsLock().Unlock()
 	ctx.ResultMsgs = append(ctx.ResultMsgs, msg)
 }
 
 func (ctx *ExecContext) SetResult(result string) {
-	ctx.VarsMu.Lock()
-	defer ctx.VarsMu.Unlock()
+	ctx.varsLock().Lock()
+	defer ctx.varsLock().Unlock()
 	ctx.Result = strings.Trim(result, " ")
 }
 
 func (ctx *ExecContext) GetError() string {
-	ctx.VarsMu.RLock()
-	defer ctx.VarsMu.RUnlock()
+	ctx.varsLock().RLock()
+	defer ctx.varsLock().RUnlock()
 	return ctx.Error
 }
 func (ctx *ExecContext) SetError(err string) {
-	ctx.VarsMu.Lock()
-	defer ctx.VarsMu.Unlock()
+	ctx.varsLock().Lock()
+	defer ctx.varsLock().Unlock()
 	ctx.Error = err
 }
 
@@ -235,21 +322,6 @@ func (ctx *ExecContext) SetReqID(reqID string) {
 	ctx.ReqID = reqID
 }
 
-// MonoWGAdd increments the count of independent mono concurrent nodes.
-func (ctx *ExecContext) MonoWGAdd(delta int) {
-	ctx.monoWG.Add(delta)
-}
-
-// MonoWGDone marks one independent mono concurrent node as finished.
-func (ctx *ExecContext) MonoWGDone() {
-	ctx.monoWG.Done()
-}
-
-// MonoWGWait waits for every independent mono concurrent node to finish.
-func (ctx *ExecContext) MonoWGWait() {
-	ctx.monoWG.Wait()
-}
-
 // limits returns the limit snapshot frozen for this run; when none was injected it resolves once as a fallback (only a unit
 // test or an abnormal construction gets here).
 func (ctx *ExecContext) limits() flowconfig.FlowLimits {
@@ -262,6 +334,13 @@ func (ctx *ExecContext) limits() flowconfig.FlowLimits {
 // ResolveMaxLoopTimes returns the maximum loop count actually in effect (for the loop executor).
 func (ctx *ExecContext) ResolveMaxLoopTimes() int {
 	return ctx.limits().MaxLoopTimes
+}
+
+// ResolveMaxConcurrency returns the per-scope ceiling on concurrent members actually in effect (for the process and loop
+// hosts). It is always a positive number: an "unlimited" configuration resolves to the built-in ceiling, see
+// flowconfig.ConcurrencyLimit.
+func (ctx *ExecContext) ResolveMaxConcurrency() int {
+	return ctx.limits().ConcurrencyLimit()
 }
 
 // ResolveTimeout resolves the timeout in seconds from the value the caller passed in.
@@ -408,6 +487,7 @@ func (ctx *ExecContext) ResolveRunLimits() map[string]any {
 		"max_exec_count":      ctx.ResolveMaxExecCount(),
 		"max_run_records":     ctx.ResolveMaxRunRecords(),
 		"max_session_records": ctx.ResolveMaxSessionRecords(),
+		"max_concurrency":     ctx.ResolveMaxConcurrency(),
 	}
 	limits["max_loop_times"] = ctx.limits().MaxLoopTimes
 	return limits
@@ -511,8 +591,8 @@ func (c *ExecContext) CloseResultChan() {
 }
 
 func (ctx *ExecContext) GetVariable(source map[string]interface{}, processID string) (interface{}, error) {
-	ctx.VarsMu.RLock()
-	defer ctx.VarsMu.RUnlock()
+	ctx.varsLock().RLock()
+	defer ctx.varsLock().RUnlock()
 	return ctx.getVariableNoLock(source, processID)
 }
 
@@ -571,8 +651,8 @@ func (ctx *ExecContext) getVariableNoLock(source map[string]interface{}, process
 // GetVariables resolves several variable values from a variable definition map.
 // Example of the variables definition: {"arg1": {"type": "string", "source_key": "input", "source_ref": "", "source_type": "argument"}}
 func (ctx *ExecContext) GetVariables(variables map[string]interface{}, processID string) (map[string]interface{}, error) {
-	ctx.VarsMu.RLock()
-	defer ctx.VarsMu.RUnlock()
+	ctx.varsLock().RLock()
+	defer ctx.varsLock().RUnlock()
 
 	results := make(map[string]interface{})
 
@@ -610,8 +690,8 @@ func (ctx *ExecContext) GetVariableSimple(source map[string]interface{}, process
 }
 
 func (ctx *ExecContext) SetFlowVar(path string, value interface{}) error {
-	ctx.VarsMu.Lock()
-	defer ctx.VarsMu.Unlock()
+	ctx.varsLock().Lock()
+	defer ctx.varsLock().Unlock()
 	return ctx.setFlowVarNoLock(path, value)
 }
 
@@ -624,8 +704,8 @@ func (ctx *ExecContext) setFlowVarNoLock(path string, value interface{}) error {
 // Example of the target definition: {"source_type": "flow", "source_key": "result", "source_ref": ""}
 // or {"source_type": "node", "source_key": "myVar", "source_ref": "nodeID"}
 func (ctx *ExecContext) SetVariable(target map[string]interface{}, value interface{}, processID string) error {
-	ctx.VarsMu.Lock()
-	defer ctx.VarsMu.Unlock()
+	ctx.varsLock().Lock()
+	defer ctx.varsLock().Unlock()
 	return ctx.setVariableNoLock(target, value, processID)
 }
 
@@ -669,8 +749,8 @@ func (ctx *ExecContext) setVariableNoLock(target map[string]interface{}, value i
 // SetVariables sets several values in one batch.
 // Example of the targets definition: {"w1": {"type": "string", "source_key": "result", "source_ref": "", "source_type": "flow"}}
 func (ctx *ExecContext) SetVariables(targets map[string]interface{}, values map[string]interface{}, processID string) error {
-	ctx.VarsMu.Lock()
-	defer ctx.VarsMu.Unlock()
+	ctx.varsLock().Lock()
+	defer ctx.varsLock().Unlock()
 
 	for key, targetDef := range targets {
 		target, ok := targetDef.(map[string]interface{})
@@ -721,8 +801,8 @@ func (ctx *ExecContext) SetVariableWithFire(target map[string]any, value any, pr
 }
 
 func (ctx *ExecContext) SetFlowVars(vars map[string]interface{}) error {
-	ctx.VarsMu.Lock()
-	defer ctx.VarsMu.Unlock()
+	ctx.varsLock().Lock()
+	defer ctx.varsLock().Unlock()
 	for path, value := range vars {
 		if err := SetVarByPath(ctx.RunFlowVars, path, value); err != nil {
 			return err

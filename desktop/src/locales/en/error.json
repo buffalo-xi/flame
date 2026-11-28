@@ -253,7 +253,8 @@
       "duplicate_label": "Node names must be unique: {names}. A name is used by source_ref / call.target references, so a duplicate points at the wrong node; rename before saving.",
       "node_limit_exceeded": "The diagram has {count} nodes, above this tenant's limit of {limit}. Split it into smaller workflows, or ask an administrator to raise the quota; comments do not count.",
       "description_required": "The workflow description must not be empty.",
-      "has_release": "v{version} is still live, so deleting it would stop production calls immediately. Unrelease it in the version panel first, then delete."
+      "has_release": "v{version} is still live, so deleting it would stop production calls immediately. Unrelease it in the version panel first, then delete.",
+      "endpoint_exposed": "This workflow still has exposed endpoints ({names}), so deleting it would cut external callers off immediately. Retract them first, then delete."
     },
     "agentconfig": {
       "invalid_value": "{field} must be an integer of at least 1 (these four settings do not accept -1 for unlimited)",

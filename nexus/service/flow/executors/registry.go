@@ -63,7 +63,7 @@ func RegisteredTypes() []string {
 }
 
 // GetNodeCapabilities returns the capability declarations of every registered node type plus the global
-// error codes
+// error codes and the raise node's raisable subset.
 func GetNodeCapabilities() map[string]interface{} {
 	mu.RLock()
 	defer mu.RUnlock()
@@ -72,5 +72,8 @@ func GetNodeCapabilities() map[string]interface{} {
 		result[nodeType] = executor.Capabilities()
 	}
 	result["all_error_codes"] = flow.AllErrorCodes()
+	// The raise node's picker reads this instead of keeping a fourth copy of the code table on the client: a code the
+	// runner refuses must not be offerable in the editor.
+	result["raisable_codes"] = RaisableCodeList()
 	return result
 }

@@ -2,6 +2,7 @@ package flowcheck
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -220,6 +221,234 @@ func TestStepBranchChildNeedsCondition(t *testing.T) {
 		map[string]any{"id": "i1", "label": "refund", "description": "a refund request"},
 	}}, nil); has(fs, SeverityWarning, CodeBranchCondition) {
 		t.Fatalf("intent children carry no condition and must not be reported: %v", codes(fs))
+	}
+}
+
+// The condition text used to be unchecked: a bare expression (no return) and a name config.inputs never declares both
+// passed with 0 findings and then failed the node on its first evaluation - lua reports a syntax error for the first, the
+// undeclared name is nil in the comparison for the second.
+func TestStepBranchConditionScripts(t *testing.T) {
+	score := map[string]any{"score": map[string]any{"type": "number", "source_type": "flow", "source_key": "score"}}
+	cases := []struct {
+		name      string
+		lang      string
+		condition string
+		inputs    map[string]any
+		wantSev   string // "" = no condition finding at all
+		wantCode  string
+	}{
+		{
+			name: "lua bare expression", condition: "input.score > 90", inputs: score,
+			wantSev: SeverityError, wantCode: CodeConditionReturn,
+		},
+		{
+			name: "lua with return", condition: "return input.score > 90", inputs: score,
+		},
+		{
+			// Valid js that returns nothing: the node runs, the condition is just never true.
+			name: "js returns nothing", lang: "js", condition: "input.score > 90", inputs: score,
+			wantSev: SeverityWarning, wantCode: CodeConditionReturn,
+		},
+		{
+			name: "python __return__", lang: "python", condition: "__return__ = input.score > 90", inputs: score,
+		},
+		{
+			name: "undeclared input", condition: "return input.missing > 0", inputs: score,
+			wantSev: SeverityError, wantCode: CodeConditionInput,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, err := Step("branch", map[string]any{
+				"branch":   map[string]any{"lang": tc.lang},
+				"children": []any{map[string]any{"id": "c1", "condition": tc.condition}},
+				"inputs":   tc.inputs,
+			}, nil)
+			if err != nil {
+				t.Fatalf("Step = %v", err)
+			}
+			if tc.wantCode == "" {
+				if len(fs) != 0 {
+					t.Fatalf("codes = %v, want no finding", codes(fs))
+				}
+				return
+			}
+			if !has(fs, tc.wantSev, tc.wantCode) {
+				t.Fatalf("codes = %v, want %s:%s", codes(fs), tc.wantSev, tc.wantCode)
+			}
+		})
+	}
+}
+
+// GetVariables resolves the whole input block at once, so one row that cannot be resolved fails the step before it runs:
+// the runner never reaches "input.score + 1" with a nil, it fails with "variable source is not selected". Judged in the
+// diagram check (validate_flow / pre-save), not in Step - a bare create_node fills placeholder rows on purpose.
+func TestDiagramInputSourceFindings(t *testing.T) {
+	cases := []struct {
+		name    string
+		row     string // raw JSON for inputs.x
+		wantErr bool
+	}{
+		{name: "not an object", row: `"text"`, wantErr: true},
+		{name: "no source_type", row: `{"type":"number"}`, wantErr: true},
+		{name: "unknown source_type", row: `{"source_type":"vault","source_key":"k"}`, wantErr: true},
+		{name: "no source_key", row: `{"source_type":"flow"}`, wantErr: true},
+		{name: "unknown builtin", row: `{"source_type":"builtin","source_key":"now"}`, wantErr: true},
+		{name: "node without ref", row: `{"source_type":"node","source_key":"out"}`, wantErr: true},
+		{name: "complete row", row: `{"source_type":"builtin","source_key":"run_id"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := checkDiagram(t, fmt.Sprintf(`{
+				"nodes": [
+					{"id": "1", "type": "start", "data": {"label": "开始"}},
+					{"id": "2", "type": "code", "data": {"label": "算", "config": {
+						"code": {"script": "return 1", "lang": "lua"},
+						"inputs": {"x": %s}
+					}}}
+				],
+				"edges": [
+					{"id": "e1", "source": "1", "target": "2", "source_handle": "source1right", "target_handle": "target2left"}
+				]
+			}`, tc.row))
+			if got := has(fs, SeverityError, CodeInputSource); got != tc.wantErr {
+				t.Fatalf("codes = %v, want input_source reported = %v", codes(fs), tc.wantErr)
+			}
+		})
+	}
+}
+
+// The entry-argument declaration is documentation until something compares it with the diagram: a node reading a name the
+// declaration does not have fails at run time with "var path X not found", and one declared but left out of required fails
+// whenever a caller omits the value (nothing rejects that call at the boundary).
+func TestArgumentsFindings(t *testing.T) {
+	diagram := json.RawMessage(`{
+		"nodes": [
+			{"id": "1", "type": "start", "data": {"label": "开始"}},
+			{"id": "2", "type": "code", "data": {"label": "答", "config": {
+				"code": {"script": "return input.question", "lang": "lua"},
+				"inputs": {"question": {"type": "string", "source_type": "argument", "source_key": "question"}}
+			}}}
+		],
+		"edges": []
+	}`)
+	cases := []struct {
+		name      string
+		arguments string
+		wantErr   bool
+		wantWarn  bool
+	}{
+		{
+			name:      "not declared",
+			arguments: `{"type":"object","properties":{"other":{"type":"string"}},"required":["other"]}`,
+			wantErr:   true,
+		},
+		{
+			name:      "declared but optional",
+			arguments: `{"type":"object","properties":{"question":{"type":"string"}}}`,
+			wantWarn:  true,
+		},
+		{
+			name:      "declared and required",
+			arguments: `{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := Arguments(diagram, json.RawMessage(tc.arguments))
+			if got := has(fs, SeverityError, CodeArgumentUndeclared); got != tc.wantErr {
+				t.Fatalf("findings = %v, want argument_undeclared reported = %v", fs, tc.wantErr)
+			}
+			if got := has(fs, SeverityWarning, CodeArgumentOptional); got != tc.wantWarn {
+				t.Fatalf("findings = %v, want argument_optional reported = %v", fs, tc.wantWarn)
+			}
+		})
+	}
+	// No declaration at all judges like an empty one: the row has nowhere to come from.
+	if fs := Arguments(diagram, nil); !has(fs, SeverityError, CodeArgumentUndeclared) {
+		t.Fatalf("findings = %v, want argument_undeclared when nothing is declared", fs)
+	}
+	// A diagram that reads no argument is left alone.
+	quiet := json.RawMessage(`{"nodes":[{"id":"1","type":"start","data":{"label":"开始"}}],"edges":[]}`)
+	if fs := Arguments(quiet, nil); len(fs) != 0 {
+		t.Fatalf("findings = %v, want none when nothing reads an argument", fs)
+	}
+}
+
+// An intent classification at a sampled temperature is not reproducible: the same input can route differently between runs.
+// Judged in the diagram check (a definition about to run), not in Step, so a bare create_node stays quiet.
+func TestDiagramIntentTemperature(t *testing.T) {
+	cases := []struct {
+		name   string
+		params string
+		want   bool
+	}{
+		{name: "unset", params: `{}`, want: true},
+		{name: "zero", params: `{"temperature":0}`, want: false},
+		{name: "sampled", params: `{"temperature":0.7}`, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := checkDiagram(t, fmt.Sprintf(`{
+				"nodes": [
+					{"id": "1", "type": "start", "data": {"label": "开始"}},
+					{"id": "2", "type": "intent", "data": {"label": "分流", "config": {
+						"llm": {"params": %s},
+						"children": [{"id": "a1", "label": "查单", "description": "check the order"}]
+					}}}
+				],
+				"edges": [
+					{"id": "e1", "source": "1", "target": "2", "source_handle": "source1right", "target_handle": "target2left"}
+				]
+			}`, tc.params))
+			if got := has(fs, SeverityWarning, CodeIntentTemperature); got != tc.want {
+				t.Fatalf("codes = %v, want intent_temperature = %v", codes(fs), tc.want)
+			}
+		})
+	}
+}
+
+// A while / do_while condition reads a wider set than branch: the runner merges inputs -> loop vars -> outputs -> locals
+// before every check, so a name that only exists in outputs must not be reported.
+func TestStepLoopConditionScripts(t *testing.T) {
+	fs, err := Step("loop", map[string]any{
+		"loop": map[string]any{"type": "while", "condition": "input.total < 10"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Step = %v", err)
+	}
+	if !has(fs, SeverityError, CodeConditionReturn) || !has(fs, SeverityError, CodeConditionInput) {
+		t.Fatalf("codes = %v, want both a missing return and an undeclared input", codes(fs))
+	}
+
+	fs, err = Step("loop", map[string]any{
+		"loop":    map[string]any{"type": "while", "lang": "python", "condition": "__return__ = input.total < 10"},
+		"outputs": map[string]any{"total": map[string]any{"type": "number"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Step = %v", err)
+	}
+	if len(fs) != 0 {
+		t.Fatalf("codes = %v, want no finding: total is declared in outputs", codes(fs))
+	}
+}
+
+// A declared child with no outgoing edge used to be a warning while the run reported success having executed nothing: it is
+// an error now, so validate_flow's error_count and the canvas badge both say "cannot run as written".
+func TestDiagramBranchChildWithoutEdgeIsError(t *testing.T) {
+	fs := checkDiagram(t, `{
+		"nodes": [
+			{"id": "1", "type": "start", "data": {"label": "开始"}},
+			{"id": "2", "type": "branch", "data": {"label": "判断", "config": {
+				"children": [{"id": "c1", "label": "是", "condition": "return true"}]
+			}}}
+		],
+		"edges": [
+			{"id": "e1", "source": "1", "target": "2", "source_handle": "source1right", "target_handle": "target2left"}
+		]
+	}`)
+	if !has(fs, SeverityError, CodeBranchEdge) {
+		t.Fatalf("codes = %v, want an error for a child with no outgoing edge", codes(fs))
 	}
 }
 
@@ -530,7 +759,7 @@ func TestLoopEachSourceKey(t *testing.T) {
 func TestFindingsAreStable(t *testing.T) {
 	body := `{"nodes":[
 		{"id":"1","type":"start"},
-		{"id":"2","type":"wait","data":{"config":{"fork_node_id":"ghost"}}},
+		{"id":"2","type":"call","data":{"config":{"target":"ghost"}}},
 		{"id":"3","type":"mystery"}
 	],"edges":[{"id":"e1","source":"1","target":"2"}]}`
 	first := checkDiagram(t, body)
@@ -543,8 +772,8 @@ func TestFindingsAreStable(t *testing.T) {
 			t.Fatalf("finding %d differs between runs: %v vs %v", i, first[i], second[i])
 		}
 	}
-	if !has(first, SeverityError, CodeWaitFork) || !has(first, SeverityError, CodeUnknownType) {
-		t.Fatalf("want wait_fork + unknown_type, got %v", codes(first))
+	if !has(first, SeverityError, CodeCallTarget) || !has(first, SeverityError, CodeUnknownType) {
+		t.Fatalf("want call_target + unknown_type, got %v", codes(first))
 	}
 }
 
@@ -613,9 +842,78 @@ func TestOnErrorValidPasses(t *testing.T) {
 	}, nil)
 	for _, f := range fs {
 		switch f.Code {
-		case CodeOnErrorAction, CodeOnErrorCode, CodeOnErrorPost:
+		case CodeOnErrorAction, CodeOnErrorCode, CodeOnErrorPost, CodeOnErrorShadowed:
 			t.Fatalf("a valid on_error block must not be reported: %v", f)
 		}
+	}
+}
+
+// skip runs before handler, so a code both rules list is a handler that never runs.
+func TestOnErrorShadowedCode(t *testing.T) {
+	fs, _ := Step("http", map[string]any{
+		"http": map[string]any{"url": "https://example.com"},
+		"on_error": map[string]any{
+			"skip":    map[string]any{"codes": []any{"not_found"}},
+			"handler": map[string]any{"codes": []any{"not_found", "timeout"}, "script": "return 'skip'"},
+		},
+	}, nil)
+	if !has(fs, SeverityWarning, CodeOnErrorShadowed) {
+		t.Fatalf("a code claimed by skip must be reported, got %v", codes(fs))
+	}
+}
+
+// `other` without skip-side patterns means "every other message", so the handler has nothing left there either.
+func TestOnErrorShadowedBareOther(t *testing.T) {
+	fs, _ := Step("http", map[string]any{
+		"http": map[string]any{"url": "https://example.com"},
+		"on_error": map[string]any{
+			"skip":    map[string]any{"codes": []any{"other"}},
+			"handler": map[string]any{"codes": []any{"other"}, "script": "return 'skip'"},
+		},
+	}, nil)
+	if !has(fs, SeverityWarning, CodeOnErrorShadowed) {
+		t.Fatalf("bare `other` on skip must be reported, got %v", codes(fs))
+	}
+}
+
+// Patterns narrow only `other`: disjoint patterns leave each rule its own messages, so reporting them would be a false
+// positive - and a checker that cries wolf is a checker authors learn to skip.
+func TestOnErrorShadowedPatternOnlyWhenOverlapping(t *testing.T) {
+	disjoint, _ := Step("http", map[string]any{
+		"http": map[string]any{"url": "https://example.com"},
+		"on_error": map[string]any{
+			"skip":    map[string]any{"codes": []any{"other"}, "patterns": []any{"%rate limit%"}},
+			"handler": map[string]any{"codes": []any{"other"}, "patterns": []any{"%quota%"}, "script": "return 'skip'"},
+		},
+	}, nil)
+	if has(disjoint, SeverityWarning, CodeOnErrorShadowed) {
+		t.Fatalf("disjoint patterns must not be reported, got %v", codes(disjoint))
+	}
+
+	overlapping, _ := Step("http", map[string]any{
+		"http": map[string]any{"url": "https://example.com"},
+		"on_error": map[string]any{
+			"skip":    map[string]any{"codes": []any{"other"}, "patterns": []any{"%timeout%"}},
+			"handler": map[string]any{"codes": []any{"other"}, "patterns": []any{"%timeout after 3 retries%"}, "script": "return 'skip'"},
+		},
+	}, nil)
+	if !has(overlapping, SeverityWarning, CodeOnErrorShadowed) {
+		t.Fatalf("overlapping patterns must be reported, got %v", codes(overlapping))
+	}
+}
+
+// A skip without a handler cannot shadow anything, and a handler without a script is already on_error_script: the new
+// rule must stay silent in both cases instead of restating a finding that is already there.
+func TestOnErrorShadowedNeedsBothScripts(t *testing.T) {
+	fs, _ := Step("http", map[string]any{
+		"http": map[string]any{"url": "https://example.com"},
+		"on_error": map[string]any{
+			"skip":    map[string]any{"codes": []any{"timeout"}},
+			"handler": map[string]any{"codes": []any{"timeout"}},
+		},
+	}, nil)
+	if has(fs, SeverityWarning, CodeOnErrorShadowed) {
+		t.Fatalf("a handler without a script must not also be reported as shadowed, got %v", codes(fs))
 	}
 }
 
@@ -695,6 +993,190 @@ func TestFunctionParamsReadableInsideBody(t *testing.T) {
 	],"edges":[{"id":"e1","source":"1","target":"4"}]}`)
 	if !has(outside, SeverityError, CodeSourceKey) {
 		t.Fatalf("reading a param from outside the body must be reported, got %v", codes(outside))
+	}
+}
+
+// A loop body reads the round's variables (index / item / total) through the loop node itself, exactly as a function body
+// reads its params. Outside the body they only hold the last round, so that reference stays an error.
+func TestLoopVarsReadableInsideBody(t *testing.T) {
+	inside := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"loop","data":{"config":{
+			"loop":{"type":"count","total_times":3},
+			"loop_vars":{"index":{"type":"number"},"total":{"type":"number"}}
+		}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","parent_node":"2","data":{"config":{
+			"code":{"script":"return { i = input.i }"},
+			"inputs":{"i":{"type":"number","source_type":"node","source_ref":"2","source_key":"index"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"3","target":"4"}]}`)
+	if has(inside, SeverityError, CodeSourceKey) {
+		t.Fatalf("a loop variable read inside the body must pass, got %v", codes(inside))
+	}
+
+	outside := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"loop","data":{"config":{
+			"loop":{"type":"count","total_times":3},
+			"loop_vars":{"index":{"type":"number"}}
+		}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","data":{"config":{
+			"code":{"script":"return { i = input.i }"},
+			"inputs":{"i":{"type":"number","source_type":"node","source_ref":"2","source_key":"index"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"2","target":"4"}]}`)
+	if !has(outside, SeverityError, CodeSourceKey) {
+		t.Fatalf("reading a loop variable from outside the body must be reported, got %v", codes(outside))
+	}
+}
+
+// A node never reads itself: inputs are resolved before it runs, so its own outputs / locals are still empty and
+// GetVariables fails the whole batch at run time.
+func TestSelfReferenceInInputsIsReported(t *testing.T) {
+	self := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"code","data":{"config":{
+			"code":{"script":"return { acc = 1 }"},
+			"outputs":{"acc":{"type":"number"}},
+			"inputs":{"x":{"type":"number","source_type":"node","source_ref":"2","source_key":"acc"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"}]}`)
+	if !has(self, SeverityError, CodeSelfRef) {
+		t.Fatalf("a self reference must be reported, got %v", codes(self))
+	}
+
+	// The same read from an upstream node stays legal: that is the shape the rule points authors at.
+	upstream := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"3","type":"code","data":{"config":{"code":{"script":"return { acc = 1 }"},"outputs":{"acc":{"type":"number"}}}}},
+		{"id":"2","type":"code","data":{"config":{
+			"code":{"script":"return { b = input.x }"},
+			"outputs":{"b":{"type":"number"}},
+			"inputs":{"x":{"type":"number","source_type":"node","source_ref":"3","source_key":"acc"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"3"},{"id":"e2","source":"3","target":"2"}]}`)
+	if has(upstream, SeverityError, CodeSelfRef) {
+		t.Fatalf("reading an upstream node must pass, got %v", codes(upstream))
+	}
+}
+
+// A while / do_while condition re-resolves config.inputs before every check (loop.go conditionInputs), so reading the
+// loop's own outputs is the documented accumulate pattern (references/nodes/loop.md) and the definition runs. Reporting it
+// as self_ref made a runnable flow look unrunnable, which is what this guards. count / each keep the startup snapshot, so
+// the same read there stays an error.
+func TestWhileConditionMayReadOwnValues(t *testing.T) {
+	const graph = `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"loop","data":{"config":{
+			"loop":{"type":"%s","condition":"return input.total < 3","total_times":3},
+			"outputs":{"total":{"type":"number"}},
+			"inputs":{"total":{"type":"number","source_type":"node","source_ref":"2","source_key":"total"}}
+		}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","parent_node":"2","data":{"config":{
+			"code":{"script":"return { total = 1 }"},
+			"targets":{"total":{"source_type":"node","source_ref":"2","source_key":"total"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"3","target":"4"}]}`
+
+	for _, mode := range []string{"while", "do_while"} {
+		fs := checkDiagram(t, fmt.Sprintf(graph, mode))
+		for _, code := range []string{CodeSelfRef, CodeSourceKey} {
+			if has(fs, SeverityError, code) {
+				t.Errorf("%s: %s must not fire when the condition reads the loop's own output, got %v", mode, code, codes(fs))
+			}
+		}
+	}
+
+	// count takes its inputs once, before the first round: the same read still cannot see what the body writes back.
+	if fs := checkDiagram(t, fmt.Sprintf(graph, "count")); !has(fs, SeverityError, CodeSelfRef) {
+		t.Errorf("count: a self read must stay an error, got %v", codes(fs))
+	}
+}
+
+// The same rule covers the names the loop keeps in locals / loop_vars: conditionInputs merges all of them, so a typo-free
+// read of one is not a source_key mistake.
+func TestWhileConditionMayReadOwnLocals(t *testing.T) {
+	const graph = `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"loop","data":{"config":{
+			"loop":{"type":"while","condition":"return input.%s < 3"},
+			"locals":{"acc":{"type":"number"}},
+			"loop_vars":{"index":{"type":"number"}},
+			"inputs":{"%s":{"type":"number","source_type":"node","source_ref":"2","source_key":"%s"}}
+		}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","parent_node":"2","data":{"config":{"code":{"script":"return {}"}}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"3","target":"4"}]}`
+
+	for _, name := range []string{"acc", "index"} {
+		fs := checkDiagram(t, fmt.Sprintf(graph, name, name, name))
+		for _, code := range []string{CodeSelfRef, CodeSourceKey} {
+			if has(fs, SeverityError, code) {
+				t.Errorf("%s: %s must not fire for a while condition reading the loop's own %s, got %v",
+					name, code, name, codes(fs))
+			}
+		}
+	}
+}
+
+// A loop's iterations is a readable name: NodeResult.GetVariable resolves it and the run record stores it as the node's
+// extra, so source_key: iterations must pass. Otherwise loop.md's "iterations records the actual round count" would be true
+// only for a human reading the run record, and a flow could not act on the count at all.
+func TestLoopIterationsIsReadable(t *testing.T) {
+	fs := checkDiagram(t, `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"2","type":"loop","data":{"config":{"loop":{"type":"count","total_times":3}}}},
+		{"id":"3","type":"entry","parent_node":"2"},
+		{"id":"4","type":"code","parent_node":"2","data":{"config":{"code":{"script":"return {}"}}}},
+		{"id":"5","type":"code","data":{"config":{
+			"code":{"script":"return { n = input.n }"},
+			"outputs":{"n":{"type":"number"}},
+			"inputs":{"n":{"type":"number","source_type":"node","source_ref":"2","source_key":"iterations"}}
+		}}}
+	],"edges":[{"id":"e1","source":"1","target":"2"},{"id":"e2","source":"3","target":"4"},{"id":"e3","source":"2","target":"5"}]}`)
+	if has(fs, SeverityError, CodeSourceKey) {
+		t.Fatalf("iterations is a readable loop output, got %v", codes(fs))
+	}
+}
+
+// A call node reads its arguments from config.args, so the same reference rules apply there: no self reference, no
+// dangling node, and a function is not a value producer outside its own body.
+func TestCallArgsReferenceRules(t *testing.T) {
+	const graph = `{"nodes":[
+		{"id":"1","type":"start"},
+		{"id":"7","type":"function","data":{"config":{"params":{"a":{"type":"number"}},"outputs":{"r":{"type":"number"}}}}},
+		{"id":"8","type":"entry","parent_node":"7"},
+		{"id":"3","type":"code","data":{"config":{"code":{"script":"return { v = 1 }"},"outputs":{"v":{"type":"number"}}}}},
+		{"id":"2","type":"call","data":{"config":{"target":"7","args":{"a":{"type":"number","source_type":"node","source_ref":"%s","source_key":"%s"}}}}}
+	],"edges":[{"id":"e1","source":"1","target":"3"},{"id":"e2","source":"3","target":"2"}]}`
+
+	for _, tc := range []struct {
+		name string
+		ref  string
+		key  string
+		want string
+	}{
+		{"self reference", "2", "r", CodeSelfRef},
+		{"dangling node", "999", "r", CodeDanglingRef},
+		{"function from outside", "7", "r", CodeFunctionRef},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := checkDiagram(t, fmt.Sprintf(graph, tc.ref, tc.key))
+			if !has(fs, SeverityError, tc.want) {
+				t.Fatalf("want %s, got %v", tc.want, codes(fs))
+			}
+		})
+	}
+
+	// The upstream read stays legal: that is what args is for.
+	ok := checkDiagram(t, fmt.Sprintf(graph, "3", "v"))
+	for _, code := range []string{CodeSelfRef, CodeDanglingRef, CodeFunctionRef} {
+		if has(ok, SeverityError, code) {
+			t.Fatalf("reading an upstream node must pass, got %v", codes(ok))
+		}
 	}
 }
 

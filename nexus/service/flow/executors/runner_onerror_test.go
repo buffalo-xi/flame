@@ -143,6 +143,9 @@ func TestExecuteNodeHandlerRewritesTheError(t *testing.T) {
 }
 
 // A handler that cannot run leaves the original failure in place and says so in the log.
+//
+// The reason goes into HandlerError rather than into ErrMsg: the code on_error matches on must stay the one the root
+// cause produced, and appending "handler failed: ..." would rewrite the message every rule above matches on.
 func TestExecuteNodeHandlerFailure(t *testing.T) {
 	node := brokenCodeNode(map[string]any{
 		"handler": map[string]any{"codes": []any{"script"}, "lang": "template", "script": "{{"},
@@ -156,8 +159,61 @@ func TestExecuteNodeHandlerFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "template") {
 		t.Errorf("error = %v, want the original script failure", err)
 	}
-	if rec := recordedNode(t, ctx, "2"); !strings.Contains(strings.Join(rec.RunLogs, "\n"), "failed to run the handler script") {
+	rec := recordedNode(t, ctx, "2")
+	if !strings.Contains(strings.Join(rec.RunLogs, "\n"), "failed to run the handler script") {
 		t.Errorf("logs = %v, want the handler failure logged", rec.RunLogs)
+	}
+	if rec.HandlerError == "" {
+		t.Error("HandlerError is empty, want the handler failure recorded")
+	}
+	if rec.ErrCode != flow.ErrCodeScript {
+		t.Errorf("ErrCode = %q, want the original script code", rec.ErrCode)
+	}
+}
+
+// "post always runs" has to include the path where the handler itself failed: that path used to return early, so a
+// cleanup configured for the failure was skipped exactly when the fallback proved unreliable.
+func TestExecuteNodeHandlerFailureStillRunsPost(t *testing.T) {
+	node := brokenCodeNode(map[string]any{
+		"handler": map[string]any{"codes": []any{"script"}, "lang": "template", "script": "{{"},
+		"post":    map[string]any{"set_outputs": map[string]any{"fixed": "from post"}},
+	})
+	ctx := newContainerContext(t, nil)
+
+	if err := executeNode(node, ctx, "1"); err == nil {
+		t.Fatal("executeNode must return the failure")
+	}
+	rec := recordedNode(t, ctx, "2")
+	if got, _ := rec.OutputVars["fixed"].(string); got != "from post" {
+		t.Errorf("fixed = %v, want post to run after the handler failed", rec.OutputVars["fixed"])
+	}
+	if rec.Status != flow.StatusFailed {
+		t.Errorf("status = %v, want failed: post is cleanup, not recovery", rec.Status)
+	}
+}
+
+// A host is where the post marker matters most: a skipped concurrent section has half-written outputs, and post is the
+// only way to say so (a handler script cannot write outputs).
+func TestExecuteNodeHostSkipKeepsPostMarker(t *testing.T) {
+	member := newExecNode("m1", "code", map[string]any{
+		"code": map[string]any{"lang": "template", "script": "{{"},
+	})
+	host, ctx := buildHost(t, "p1", nil, []*flow.Node{member})
+	host.Data.Config["outputs"] = map[string]any{"out": map[string]any{"type": "string"}}
+	host.Data.Config["on_error"] = map[string]any{
+		"skip": map[string]any{"codes": []any{"script"}},
+		"post": map[string]any{"set_outputs": map[string]any{"out": "partial"}},
+	}
+
+	if err := executeNode(host, ctx, "1"); err != nil {
+		t.Fatalf("executeNode = %v, want the host's skip to keep the chain going", err)
+	}
+	rec := recordedNode(t, ctx, "p1")
+	if rec.Status != flow.StatusSkipped {
+		t.Errorf("status = %v, want skipped", rec.Status)
+	}
+	if got, _ := rec.OutputVars["out"].(string); got != "partial" {
+		t.Errorf("out = %v, want the post marker on the skipped host", rec.OutputVars["out"])
 	}
 }
 

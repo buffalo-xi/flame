@@ -22,7 +22,10 @@
     "copy": "Copy",
     "copied": "Copied",
     "copyFailed": "Copy failed; select the text manually",
-    "listJoiner": ", "
+    "listJoiner": ", ",
+    "leaveUnsavedTitle": "Unsaved changes",
+    "leaveUnsavedConfirm": "Unsaved changes will be lost. Go back to the list?",
+    "leave": "Leave"
   },
   "login": {
     "title": "Flame Desk",
