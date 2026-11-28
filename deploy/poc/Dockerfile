@@ -43,7 +43,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # 2) Desktop bundle (builder only)
 # ---------------------------------------------------------------------------
-FROM node:20-bookworm AS webbuild
+FROM node:24-bookworm AS webbuild
 
 WORKDIR /src/desktop
 COPY desktop/package.json desktop/package-lock.json* ./
