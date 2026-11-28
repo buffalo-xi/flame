@@ -37,15 +37,15 @@ jobs:
       # One namespace for all five images, so compose needs one variable (FLAME_IMAGE_NS) rather than five.
       NS: ghcr.io/${{ github.repository_owner }}/flame
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The images contain the products, they do not compile them: nexus/base/gateway/web Dockerfiles COPY out/, and
       # sandboxd/Dockerfile COPYs sandboxd/bin/codehost-linux. Both are what this step writes.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: nexus/go.mod
           cache-dependency-path: nexus/go.sum
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
@@ -57,9 +57,9 @@ jobs:
         run: ./scripts/release.sh --tag "$TAG" --no-images
         working-directory: deploy/prod
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -68,7 +68,7 @@ jobs:
       # base goes first and is pushed before the others are built: they are FROM it, and building them against a local
       # base that was never pushed would produce images this registry cannot explain.
       - name: Build and push the base
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: deploy/prod/images
           file: deploy/prod/images/base.Dockerfile
@@ -77,7 +77,7 @@ jobs:
           tags: ${{ env.NS }}/base:${{ env.TAG }}
 
       - name: Build and push nexus
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: deploy/prod
           file: deploy/prod/images/nexus.Dockerfile
@@ -89,7 +89,7 @@ jobs:
             FLAME_BASE=${{ env.NS }}/base
 
       - name: Build and push gateway
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: deploy/prod
           file: deploy/prod/images/gateway.Dockerfile
@@ -98,7 +98,7 @@ jobs:
           tags: ${{ env.NS }}/gateway:${{ env.TAG }}
 
       - name: Build and push web
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: deploy/prod
           file: deploy/prod/images/web.Dockerfile
@@ -110,7 +110,7 @@ jobs:
       # Dockerfile COPYs bin/codehost-linux from it, and a build from the repository root would silently produce an
       # image without codehost.
       - name: Build and push sandbox
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: sandboxd
           file: sandboxd/Dockerfile
@@ -135,7 +135,7 @@ jobs:
 
       # Also on the run page, so a manual run (no tag, no release) still produces something downloadable.
       - name: Upload the host bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flame-prod-${{ env.TAG }}
           path: |
@@ -149,7 +149,7 @@ jobs:
       # tag republishes that release (the recovery path when the release step itself fails and the images are fine).
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           files: |
